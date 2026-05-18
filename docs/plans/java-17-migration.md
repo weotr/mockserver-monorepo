@@ -59,7 +59,7 @@ Note: `allowHostClassLookup` alone only controls class name resolution. `HostAcc
 |-----------|---------|--------|
 | Spring Core | 5.3.39 (EOL) | 6.x |
 | Servlet API | `javax.servlet:javax.servlet-api:4.0.1` | `jakarta.servlet-api:6.0` |
-| Tomcat | `tomcat-embed-core:9.0.117` | 10.x+ |
+| Tomcat | `tomcat-embed-core:9.0.118` | `11.x` (latest stable; 10.x is in maintenance) |
 
 **Files affected by `javax.servlet` → `jakarta.servlet` namespace migration (29 files):**
 - `mockserver-war/.../MockServerServlet.java`
@@ -228,7 +228,7 @@ Enabled by default in Java 14+. No code changes — purely a runtime debugging i
 - [ ] Replace Nashorn with GraalVM JS
 - [ ] Migrate `javax.servlet` → `jakarta.servlet`
 - [ ] Upgrade Spring 5.x → 6.x
-- [ ] Upgrade Tomcat 9.x → 10.x+
+- [ ] Upgrade Tomcat 9.x → 11.x (jumps past Tomcat 10 — both lines use the jakarta namespace, but 11.x is the active line and requires Java 17, which the migration delivers)
 - [ ] Run full test suite on Java 17
 - [ ] Update Docker base images to Java 17
 - [ ] Update consumer documentation

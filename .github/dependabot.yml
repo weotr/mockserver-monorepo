@@ -10,15 +10,35 @@ updates:
       - "dependencies"
       - "java"
     ignore:
-      # Java 11 compatibility - block upgrades requiring Java 17+
-      - dependency-name: "org.springframework:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "org.springframework.boot:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "org.apache.tomcat.embed:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "org.eclipse.jetty:*"
-        update-types: ["version-update:semver-major"]
+      # Java 11 / javax compatibility — block versions that require Java 17 or
+      # the jakarta namespace. `versions:` ignores apply to security updates too
+      # (unlike `update-types`, which security updates bypass).
+      - dependency-name: "org.springframework:*"          # Spring 6.x requires Java 17
+        versions: [">=6"]
+      - dependency-name: "org.springframework.boot:*"     # Spring Boot 3.x requires Java 17
+        versions: [">=3"]
+      - dependency-name: "org.apache.tomcat.embed:*"      # Tomcat 10+ = jakarta; Tomcat 11 = Java 17
+        versions: [">=10"]
+      - dependency-name: "org.eclipse.jetty:*"            # Jetty 10+ = jakarta; Jetty 12 = Java 17
+        versions: [">=10"]
+      - dependency-name: "org.junit.jupiter:*"            # JUnit 6.x (anticipated Java 17+ floor — review when released)
+        versions: [">=6"]
+      - dependency-name: "com.github.eirslett:frontend-maven-plugin"  # 2.x requires Java 17
+        versions: [">=2"]
+      # Defensive guard: javax.servlet:javax.servlet-api topped out at 4.0.1
+      # (the jakarta migration republished under jakarta.servlet:*), so a v5
+      # of this coordinate is not expected — block any future bump anyway.
+      - dependency-name: "javax.servlet:*"
+        versions: [">=5"]
+      # Block Jakarta EE 9+ namespace migration (javax → jakarta, incompatible
+      # with MockServer's javax codebase). Not a JVM requirement.
+      - dependency-name: "jakarta.xml.bind:*"
+        versions: [">=3"]
+      - dependency-name: "jakarta.activation:*"
+        versions: [">=2"]
+      - dependency-name: "jakarta.validation:*"
+        versions: [">=3"]
+      # Major-version bumps with non-Java-17 reasons to hold back (review individually)
       - dependency-name: "io.prometheus:*"
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.networknt:json-schema-validator"
@@ -29,24 +49,7 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.jayway.jsonpath:json-path"
         update-types: ["version-update:semver-major"]
-      # Block Jakarta EE 9+ (requires Java 17+)
-      - dependency-name: "jakarta.xml.bind:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "jakarta.activation:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "jakarta.validation:*"
-        update-types: ["version-update:semver-major"]
-      # Block java-uuid-generator 5.x (major version bump)
       - dependency-name: "com.fasterxml.uuid:java-uuid-generator"
-        update-types: ["version-update:semver-major"]
-      # Block JUnit 6.x (major version bump)
-      - dependency-name: "org.junit.jupiter:*"
-        update-types: ["version-update:semver-major"]
-      # Block frontend-maven-plugin 2.x (requires Java 17+)
-      - dependency-name: "com.github.eirslett:frontend-maven-plugin"
-        update-types: ["version-update:semver-major"]
-      # Block servlet namespace migration
-      - dependency-name: "javax.servlet:*"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "maven"
@@ -60,11 +63,12 @@ updates:
       - "java"
       - "maven-plugin"
     ignore:
-      # Java 11 compatibility - mirror /mockserver ignore rules
-      - dependency-name: "org.springframework:*"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "org.springframework.boot:*"
-        update-types: ["version-update:semver-major"]
+      # Java 11 / javax compatibility — mirror /mockserver ignore rules.
+      # `versions:` form applies to security updates too.
+      - dependency-name: "org.springframework:*"          # Spring 6.x requires Java 17
+        versions: [">=6"]
+      - dependency-name: "org.springframework.boot:*"     # Spring Boot 3.x requires Java 17
+        versions: [">=3"]
       - dependency-name: "io.prometheus:*"
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.puppycrawl.tools:checkstyle"
