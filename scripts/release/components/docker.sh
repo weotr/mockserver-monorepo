@@ -26,26 +26,38 @@ log_step "Publish Docker images $RELEASE_VERSION (dry-run=$DRY_RUN)"
 sync_to_origin_master
 
 # ---- Locate or fetch shaded JAR -------------------------------------------
+# Since the cbc7f92f8 refactor the shaded jar is the main artifact of the
+# mockserver-netty-no-dependencies sibling module, not a classifier on
+# mockserver-netty. Filter out -sources/-javadoc siblings.
 cd "$REPO_ROOT"
-SHADED_JAR=$(find mockserver/mockserver-netty/target -name 'mockserver-netty-*-shaded.jar' -print -quit 2>/dev/null || true)
+find_local_shaded() {
+  find mockserver/mockserver-netty-no-dependencies/target \
+    -name 'mockserver-netty-no-dependencies-*.jar' \
+    ! -name '*-sources.jar' \
+    ! -name '*-javadoc.jar' \
+    ! -name 'original-*' \
+    -print -quit 2>/dev/null || true
+}
+SHADED_JAR=$(find_local_shaded)
 if [[ -z "$SHADED_JAR" ]]; then
   log_info "Local shaded JAR not found — downloading from Maven Central"
-  mkdir -p mockserver/mockserver-netty/target
-  SHADED_JAR="mockserver/mockserver-netty/target/mockserver-netty-${RELEASE_VERSION}-shaded.jar"
-  if is_dry_run && ! curl -sf -I "https://repo1.maven.org/maven2/org/mock-server/mockserver-netty/${RELEASE_VERSION}/mockserver-netty-${RELEASE_VERSION}-shaded.jar" >/dev/null 2>&1; then
+  mkdir -p mockserver/mockserver-netty-no-dependencies/target
+  SHADED_JAR="mockserver/mockserver-netty-no-dependencies/target/mockserver-netty-no-dependencies-${RELEASE_VERSION}.jar"
+  CENTRAL_URL="https://repo1.maven.org/maven2/org/mock-server/mockserver-netty-no-dependencies/${RELEASE_VERSION}/mockserver-netty-no-dependencies-${RELEASE_VERSION}.jar"
+  if is_dry_run && ! curl -sf -I "$CENTRAL_URL" >/dev/null 2>&1; then
     log_dry "skip: download $RELEASE_VERSION JAR (not yet on Maven Central — would normally wait)"
-    # Use the current SNAPSHOT shaded jar as a stand-in for local docker build test.
-    SHADED_JAR=$(find mockserver/mockserver-netty/target -name 'mockserver-netty-*-shaded.jar' -print -quit 2>/dev/null || true)
+    # Use a locally-built shaded jar as a stand-in for local docker build test.
+    SHADED_JAR=$(find_local_shaded)
     if [[ -z "$SHADED_JAR" ]]; then
       log_dry "no local JAR available — running 'mvn package' to produce one"
       in_maven -w /build/mockserver \
-        -- mvn -DskipTests -pl mockserver-netty -am package
-      SHADED_JAR=$(find mockserver/mockserver-netty/target -name 'mockserver-netty-*-shaded.jar' -print -quit 2>/dev/null || true)
+        -- mvn -DskipTests -pl mockserver-netty-no-dependencies -am package
+      SHADED_JAR=$(find_local_shaded)
     fi
   else
     curl -fsSL --max-time 300 --connect-timeout 30 --retry 3 --retry-delay 5 \
       -o "$SHADED_JAR" \
-      "https://repo1.maven.org/maven2/org/mock-server/mockserver-netty/${RELEASE_VERSION}/mockserver-netty-${RELEASE_VERSION}-shaded.jar"
+      "$CENTRAL_URL"
   fi
 fi
 [[ -n "$SHADED_JAR" && -f "$SHADED_JAR" ]] || { log_error "No shaded JAR available"; exit 1; }

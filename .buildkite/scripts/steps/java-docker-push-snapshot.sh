@@ -2,9 +2,10 @@
 set -euo pipefail
 
 echo "--- :buildkite: Downloading shaded JAR artifact"
-buildkite-agent artifact download "mockserver/mockserver-netty/target/mockserver-netty-*-shaded.jar" .
+buildkite-agent artifact download "mockserver/mockserver-netty-no-dependencies/target/mockserver-netty-no-dependencies-*.jar" .
 
-SHADED_JAR=$(ls mockserver/mockserver-netty/target/mockserver-netty-*-shaded.jar 2>/dev/null | head -1)
+SHADED_JAR=$(ls mockserver/mockserver-netty-no-dependencies/target/mockserver-netty-no-dependencies-*.jar 2>/dev/null \
+  | grep -Ev -- '-(sources|javadoc)\.jar$|/original-mockserver-netty-no-dependencies-' | head -1)
 if [ -z "$SHADED_JAR" ]; then
   echo "Error: shaded JAR not found after artifact download"
   exit 1

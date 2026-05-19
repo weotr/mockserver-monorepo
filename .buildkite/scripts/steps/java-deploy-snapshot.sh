@@ -3,6 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Skip when the parent pom is not on a -SNAPSHOT version. Master sometimes
+# lands on a release version (e.g. between the release commit and the
+# follow-up next-SNAPSHOT bump) — deploying a non-SNAPSHOT to the snapshot
+# repository is invalid and surfaces as a misleading "Could not find
+# artifact" error from maven-deploy-plugin.
+POM_VERSION=$(grep -m1 -oE '<version>[^<]+</version>' mockserver/pom.xml | head -1 | sed -E 's#</?version>##g')
+if [[ "$POM_VERSION" != *-SNAPSHOT ]]; then
+  echo "--- :fast_forward: Skipping snapshot deploy — pom is on release version $POM_VERSION (not a -SNAPSHOT)"
+  exit 0
+fi
+
 echo "--- :aws: Fetching Sonatype Central Portal credentials from Secrets Manager"
 SECRET_JSON=$(aws secretsmanager get-secret-value \
   --secret-id "mockserver-build/sonatype" \

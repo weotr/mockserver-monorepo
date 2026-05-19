@@ -2,15 +2,23 @@
 set -euo pipefail
 
 JAR_DIR="mockserver/mockserver-netty/target"
+SHADED_DIR="mockserver/mockserver-netty-no-dependencies/target"
 
 echo "--- :buildkite: Downloading shaded JAR artifact"
-if command -v buildkite-agent &>/dev/null && buildkite-agent artifact download "mockserver/mockserver-netty/target/mockserver-netty-*-shaded.jar" . 2>/dev/null; then
-  SHADED_JAR=$(ls "${JAR_DIR}"/mockserver-netty-*-shaded.jar 2>/dev/null | head -1)
+if command -v buildkite-agent &>/dev/null && buildkite-agent artifact download "$SHADED_DIR/mockserver-netty-no-dependencies-*.jar" . 2>/dev/null; then
+  SHADED_JAR=$(ls "$SHADED_DIR"/mockserver-netty-no-dependencies-*.jar 2>/dev/null \
+    | grep -Ev -- '-(sources|javadoc)\.jar$|/original-mockserver-netty-no-dependencies-' | head -1)
   if [ -z "$SHADED_JAR" ]; then
     echo "Error: shaded JAR not found after artifact download"
     exit 1
   fi
-  JAR_NAME=$(basename "$SHADED_JAR" | sed 's/-shaded\.jar$/-jar-with-dependencies.jar/')
+  mkdir -p "$JAR_DIR"
+  VERSION=$(basename "$SHADED_JAR" | sed -E 's/^mockserver-netty-no-dependencies-(.+)\.jar$/\1/')
+  if [ -z "$VERSION" ] || [ "$VERSION" = "$(basename "$SHADED_JAR")" ]; then
+    echo "Error: could not extract version from $SHADED_JAR"
+    exit 1
+  fi
+  JAR_NAME="mockserver-netty-${VERSION}-jar-with-dependencies.jar"
   cp "$SHADED_JAR" "$JAR_DIR/$JAR_NAME"
 else
   echo "No artifact available — building JAR from source"
