@@ -47,6 +47,9 @@ tf() {
   done <<< "$aws_env"
   env_args+=(-e "AWS_DEFAULT_REGION=${AWS_REGION:-eu-west-2}")
   env_args+=(-e "AWS_REGION=${AWS_REGION:-eu-west-2}")
+  # The provider assumes the website-account role; the backend stays on the
+  # build-account creds materialised above.
+  env_args+=(-e "TF_VAR_website_role_arn=${WEBSITE_ROLE_ARN:-}")
   in_docker "$TERRAFORM_IMAGE" -w /build "${env_args[@]}" -- "$@"
 }
 
@@ -89,7 +92,12 @@ if is_dry_run; then
   exit 0
 fi
 
-assume_website_role
+# Terraform's S3 backend lives in the build account, so terraform runs with
+# the agent's own (build-account) credentials. Website-account resources are
+# reached via the provider's assume_role, fed the release-website role ARN
+# through TF_VAR_website_role_arn (see the tf() helper).
+WEBSITE_ROLE_ARN=$(load_secret "mockserver-release/website-role" "role_arn") \
+  || { log_error "Failed to load mockserver-release/website-role ARN from Secrets Manager"; exit 1; }
 
 trap 'rm -f "$TF_DIR/tfplan"' EXIT
 # backend.tf hard-codes `profile = "mockserver-build"` for human use. The

@@ -30,3 +30,9 @@ variable "acm_certificate_arn" {
   type        = string
   description = "ACM certificate ARN covering *.mock-server.com and mock-server.com (us-east-1)"
 }
+
+variable "website_role_arn" {
+  type        = string
+  default     = ""
+  description = "IAM role ARN the release pipeline assumes for website-account operations. Leave empty when running terraform manually (the AWS_PROFILE credential chain is used instead)."
+}
