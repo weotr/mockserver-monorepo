@@ -18,6 +18,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd docker
+require_cmd curl
+require_cmd jq
 require_release_inputs
 skip_unless_release_type "npm" full,post-maven
 
@@ -26,6 +28,16 @@ sync_to_origin_master
 
 publish_one() {
   local pkg="$1"
+  # Idempotent: if this package version is already on npm, an earlier run
+  # published it. The npm package name can differ from the directory name
+  # (mockserver-client-node publishes as "mockserver-client"), so read it.
+  local npm_name
+  npm_name=$(jq -r '.name' "$REPO_ROOT/$pkg/package.json")
+  if ! is_dry_run && curl -fsI --connect-timeout 10 --max-time 15 -o /dev/null \
+      "https://registry.npmjs.org/$npm_name/$RELEASE_VERSION" 2>/dev/null; then
+    log_info "[$pkg] $npm_name@$RELEASE_VERSION already on npm - skipping"
+    return 0
+  fi
   # In dry-run we still exercise the full "rm lockfile + npm install" path
   # so the test stays faithful to the real release, but we restore the
   # committed package-lock.json afterwards so the working tree is clean.
@@ -91,6 +103,25 @@ NPMRC
       npm whoami >/dev/null || { echo "npm authentication failed"; exit 1; }
       npm publish --access=public
     '
+
+  # npm is eventually consistent — block until the just-published version is
+  # actually resolvable from the registry before returning. mockserver-client-node
+  # is published second and depends on mockserver-node, so its `npm install`
+  # must not run until mockserver-node's new version is downloadable.
+  log_info "[$pkg] waiting for $npm_name@$RELEASE_VERSION to be installable from npm"
+  local waited=0
+  # 300s ceiling — npm global propagation is typically well under a minute.
+  until curl -fsI --connect-timeout 10 --max-time 15 -o /dev/null \
+      "https://registry.npmjs.org/$npm_name/$RELEASE_VERSION" 2>/dev/null; do
+    if [[ "$waited" -ge 300 ]]; then
+      log_error "[$pkg] $npm_name@$RELEASE_VERSION still not visible on npm after ${waited}s"
+      return 1
+    fi
+    log_info "[$pkg] not yet visible on npm (${waited}s elapsed), waiting..."
+    sleep 10
+    waited=$((waited + 10))
+  done
+  log_info "[$pkg] $npm_name@$RELEASE_VERSION is live on npm"
 }
 
 publish_one mockserver-node
