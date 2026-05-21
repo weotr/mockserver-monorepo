@@ -39,14 +39,20 @@ if is_dry_run; then
   log_dry "skip: gh release create mockserver-$RELEASE_VERSION"
 else
   GITHUB_TOKEN=$(load_secret "mockserver-release/github-token" "token")
-  log_info "Creating release mockserver-$RELEASE_VERSION"
-  in_docker "$GH_IMAGE" \
-    -w /build \
-    -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
-    -- release create "mockserver-$RELEASE_VERSION" \
-         --title "MockServer $RELEASE_VERSION" \
-         --notes-file ".tmp/changelog-extract.md" \
-         --latest
+  # Idempotent: a re-run must not fail because the release already exists.
+  if in_docker "$GH_IMAGE" -w /build -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
+       -- release view "mockserver-$RELEASE_VERSION" >/dev/null 2>&1; then
+    log_info "GitHub Release mockserver-$RELEASE_VERSION already exists - skipping"
+  else
+    log_info "Creating release mockserver-$RELEASE_VERSION"
+    in_docker "$GH_IMAGE" \
+      -w /build \
+      -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
+      -- release create "mockserver-$RELEASE_VERSION" \
+           --title "MockServer $RELEASE_VERSION" \
+           --notes-file ".tmp/changelog-extract.md" \
+           --latest
+  fi
 fi
 
 rm -f "$NOTES_FILE"

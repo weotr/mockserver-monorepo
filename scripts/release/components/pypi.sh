@@ -33,7 +33,8 @@ if ! is_dry_run; then
   log_info "Checking PyPI for existing version"
   http_code=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/mockserver-client/$VERSION/json")
   case "$http_code" in
-    200) log_error "$VERSION already on PyPI"; exit 1 ;;
+    # Idempotent: an already-published version means a prior run did this.
+    200) log_info "mockserver-client $VERSION already on PyPI - skipping"; exit 0 ;;
     404) ;;
     *)   log_error "PyPI returned HTTP $http_code"; exit 1 ;;
   esac

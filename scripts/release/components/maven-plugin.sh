@@ -24,11 +24,20 @@ done
 
 require_cmd docker
 require_cmd git
+require_cmd curl
 require_release_inputs
 skip_unless_release_type "maven-plugin" full,post-maven
 
 log_step "Release mockserver-maven-plugin $RELEASE_VERSION (dry-run=$DRY_RUN)"
 sync_to_origin_master
+
+# Idempotent: if this version is already on Maven Central the plugin release
+# is done. A re-run must not redeploy an existing version - Central rejects it.
+if ! is_dry_run && curl -fsI -o /dev/null \
+    "https://repo1.maven.org/maven2/org/mock-server/mockserver-maven-plugin/$RELEASE_VERSION/mockserver-maven-plugin-$RELEASE_VERSION.pom"; then
+  log_info "mockserver-maven-plugin $RELEASE_VERSION already on Maven Central - skipping"
+  exit 0
+fi
 
 log_info "Build core MockServer (in Docker)"
 in_maven -w /build/mockserver \

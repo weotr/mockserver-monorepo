@@ -42,8 +42,9 @@ if ! is_dry_run; then
     200)
       if curl -sf "https://rubygems.org/api/v1/versions/mockserver-client.json" \
            | jq -e ".[] | select(.number == \"$VERSION\")" >/dev/null 2>&1; then
-        log_error "Version $VERSION already on RubyGems"
-        exit 1
+        # Idempotent: an already-published version means a prior run did this.
+        log_info "mockserver-client $VERSION already on RubyGems - skipping"
+        exit 0
       fi ;;
     *) log_error "RubyGems returned HTTP $http_code"; exit 1 ;;
   esac
