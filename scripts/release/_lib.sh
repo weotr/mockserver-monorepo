@@ -414,6 +414,12 @@ git_commit_and_push() {
   fi
   configure_git_for_push
   git -C "$REPO_ROOT" add "${paths[@]}"
+  # Idempotent: a re-run may find the change already committed by an earlier
+  # run. `git commit` errors on an empty commit, so skip when nothing staged.
+  if git -C "$REPO_ROOT" diff --cached --quiet; then
+    log_info "Nothing to commit ($message) - already up to date"
+    return 0
+  fi
   git -C "$REPO_ROOT" commit -m "$message"
   # Retry on non-fast-forward: if someone pushed to master while we were
   # building, rebase the release commit on top of the new tip and retry.
@@ -447,6 +453,12 @@ git_tag_and_push() {
     return
   fi
   configure_git_for_push
+  # Idempotent: a re-run may find the tag already created by an earlier run.
+  if git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 \
+    || git -C "$REPO_ROOT" ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+    log_info "Tag $tag already exists - skipping"
+    return 0
+  fi
   git -C "$REPO_ROOT" tag "$tag"
   git -C "$REPO_ROOT" push origin "$tag"
 }
