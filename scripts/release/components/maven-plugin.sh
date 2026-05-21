@@ -5,7 +5,7 @@
 # ${project.version} for its internal mockserver-* dependency references, so
 # version bumps are handled by the main maven-central release component. This
 # script just builds the core mockserver (so the plugin can resolve it), then
-# tags and deploys the plugin.
+# tags, deploys and publishes the plugin to Maven Central.
 #
 # Dry-run: build + verify only; skip tag + deploy.
 
@@ -59,7 +59,7 @@ fi
 
 git_tag_and_push "maven-plugin-$RELEASE_VERSION"
 
-log_info "Deploy maven-plugin to Sonatype (GPG-sign in container)"
+log_info "Deploy + publish maven-plugin to Maven Central (GPG-sign in container)"
 GPG_KEY_B64=$(load_secret "mockserver-release/gpg-key" "key")
 GPG_PASSPHRASE=$(load_secret "mockserver-release/gpg-key" "passphrase")
 SONATYPE_USERNAME=$(load_secret "mockserver-build/sonatype" "username")
@@ -96,7 +96,15 @@ in_docker "$MAVEN_IMAGE" \
   </servers>
 </settings>
 SETTINGS
-    mvn deploy -P release -DskipTests \
+    # The parent pom configures central-publishing-maven-plugin with
+    # autoPublish=false / waitUntil=validated, so a plain `mvn deploy` only
+    # uploads and validates the deployment — it never promotes it, leaving the
+    # plugin stuck in VALIDATED and never reaching Maven Central. Override both
+    # here: autoPublish=true promotes once validation passes, waitUntil=published
+    # blocks until the Portal confirms PUBLISHED so a non-zero exit is a real
+    # publish failure. The maven-plugin has no need for the manual publish gate
+    # the core release deliberately keeps.
+    mvn deploy -P release -DskipTests -DautoPublish=true -DwaitUntil=published \
       -Dgpg.passphraseServerId=gpg.passphrase \
       -Dgpg.useagent=false \
       --settings /tmp/settings.xml
