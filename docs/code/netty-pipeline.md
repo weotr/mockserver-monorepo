@@ -311,6 +311,26 @@ Internal Channel"]
     DPR -->|writes responses to| CLIENT[Client Channel]
 ```
 
+### Relay Protocol Selection (HTTP/1.1 vs HTTP/2)
+
+`RelayConnectHandler.configurePipelines()` builds both relay pipelines to match the protocol
+negotiated with the proxy client (`http2EnabledDownstream`, derived from the proxy-client TLS
+ALPN result):
+
+- the **client-facing** pipeline uses an `HttpToHttp2ConnectionHandler` when the client negotiated
+  HTTP/2, otherwise an `HttpServerCodec`;
+- the **internal loopback** pipeline mirrors that choice — a client-mode `HttpToHttp2ConnectionHandler`
+  for HTTP/2, otherwise an `HttpClientCodec` — and its client TLS context advertises `h2` via ALPN
+  only when the loopback codec is HTTP/2.
+
+Keeping the loopback's TLS layer and codec in agreement makes the relay a transparent passthrough.
+Before this was fixed, the loopback hard-wired an HTTP/1.1 codec while its TLS could negotiate
+`h2`, so HTTP/2 requests through the CONNECT proxy were never decoded and hung (#2260).
+
+When the `http2Enabled` configuration property is `false`, `NettySslContextFactory` never advertises
+`h2` via ALPN and `PortUnificationHandler` ignores the h2c cleartext preface, so every connection —
+direct or relayed — falls back to HTTP/1.1.
+
 ## DNS UDP Server
 
 When `dnsEnabled=true`, `MockServer.bindDnsPort()` creates a separate Netty `Bootstrap` with `NioDatagramChannel` for UDP DNS:

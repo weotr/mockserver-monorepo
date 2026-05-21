@@ -253,7 +253,11 @@ public class NettySslContextFactory {
         }
     }
 
-    private static void configureALPN(SslContextBuilder sslContextBuilder) {
+    private void configureALPN(SslContextBuilder sslContextBuilder) {
+        // when HTTP/2 is disabled only advertise http/1.1 via ALPN so h2 capable clients fall back to HTTP/1.1
+        String[] applicationProtocols = configuration.http2Enabled()
+            ? new String[]{ApplicationProtocolNames.HTTP_2, ApplicationProtocolNames.HTTP_1_1}
+            : new String[]{ApplicationProtocolNames.HTTP_1_1};
         Consumer<SslContextBuilder> configureALPN = contextBuilder -> contextBuilder
             .ciphers(Http2SecurityUtil.CIPHERS, SupportedCipherSuiteFilter.INSTANCE)
             .applicationProtocolConfig(new ApplicationProtocolConfig(
@@ -262,8 +266,7 @@ public class NettySslContextFactory {
                 ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
                 // ACCEPT is currently the only mode supported by both OpenSsl and JDK providers.
                 ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                ApplicationProtocolNames.HTTP_2,
-                ApplicationProtocolNames.HTTP_1_1
+                applicationProtocols
             ));
         if (SslProvider.isAlpnSupported(SslContext.defaultServerProvider())) {
             configureALPN.accept(sslContextBuilder.sslProvider(SslContext.defaultServerProvider()));

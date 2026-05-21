@@ -184,6 +184,10 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                                    ChannelHandlerContext mockServerCtx, ChannelHandlerContext proxyClientCtx,
                                    boolean http2EnabledDownstream) {
         if (isSslEnabledDownstream(proxyClientCtx.channel())) {
+            // the loopback connection mirrors the protocol negotiated with the proxy client: it advertises
+            // h2 via ALPN only when the proxy client negotiated HTTP/2, so its TLS layer and its codec
+            // always agree and the relay is a transparent passthrough rather than converting between
+            // HTTP/1.1 and HTTP/2 (issue #2260)
             pipelineToMockServer.addLast(nettySslContextFactory(proxyClientCtx.channel()).createClientSslContext(true, http2EnabledDownstream).newHandler(mockServerCtx.alloc(), host, port));
         }
 
@@ -191,11 +195,11 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
             pipelineToMockServer.addLast(new LoggingHandler(RelayConnectHandler.class.getName() + "-downstream -->"));
         }
 
-        pipelineToMockServer.addLast(new HttpClientCodec(configuration.maxInitialLineLength(), configuration.maxHeaderSize(), configuration.maxChunkSize()));
-        pipelineToMockServer.addLast(new HttpContentDecompressor());
-        pipelineToMockServer.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
-
-        pipelineToMockServer.addLast(new DownstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel()));
+        if (http2EnabledDownstream) {
+            configureHttp2LoopbackPipeline(pipelineToMockServer, proxyClientCtx);
+        } else {
+            configureHttp1LoopbackPipeline(pipelineToMockServer, proxyClientCtx);
+        }
 
         if (mockServerLogger.isEnabledForInstance(TRACE)) {
             pipelineToProxyClient.addLast(new LoggingHandler(RelayConnectHandler.class.getName() + "-upstream <-- "));
@@ -225,6 +229,35 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
         }
 
         pipelineToProxyClient.addLast(new UpstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel(), mockServerCtx.channel()));
+    }
+
+    private void configureHttp1LoopbackPipeline(ChannelPipeline pipelineToMockServer, ChannelHandlerContext proxyClientCtx) {
+        pipelineToMockServer.addLast(new HttpClientCodec(configuration.maxInitialLineLength(), configuration.maxHeaderSize(), configuration.maxChunkSize()));
+        pipelineToMockServer.addLast(new HttpContentDecompressor());
+        pipelineToMockServer.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+        pipelineToMockServer.addLast(new DownstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel()));
+    }
+
+    private void configureHttp2LoopbackPipeline(ChannelPipeline pipelineToMockServer, ChannelHandlerContext proxyClientCtx) {
+        final Http2Connection connection = new DefaultHttp2Connection(false);
+        final HttpToHttp2ConnectionHandlerBuilder http2ConnectionHandlerBuilder = new HttpToHttp2ConnectionHandlerBuilder()
+            .frameListener(
+                new DelegatingDecompressorFrameListener(
+                    connection,
+                    new InboundHttp2ToHttpAdapterBuilder(connection)
+                        .maxContentLength(Integer.MAX_VALUE)
+                        .propagateSettings(true)
+                        .validateHttpHeaders(false)
+                        .build()
+                )
+            )
+            .connection(connection)
+            .flushPreface(true);
+        if (mockServerLogger.isEnabledForInstance(TRACE)) {
+            http2ConnectionHandlerBuilder.frameLogger(new Http2FrameLogger(LogLevel.TRACE, RelayConnectHandler.class.getName()));
+        }
+        pipelineToMockServer.addLast(http2ConnectionHandlerBuilder.build());
+        pipelineToMockServer.addLast(new DownstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel()));
     }
 
 }

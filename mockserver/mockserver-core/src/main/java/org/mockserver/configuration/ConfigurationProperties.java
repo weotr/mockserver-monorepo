@@ -84,6 +84,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_MAX_CHUNK_SIZE = "mockserver.maxChunkSize";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
+    private static final String MOCKSERVER_HTTP2_ENABLED = "mockserver.http2Enabled";
 
     // gRPC
     private static final String MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY = "mockserver.grpcDescriptorDirectory";
@@ -839,6 +840,22 @@ public class ConfigurationProperties {
 
     public static boolean assumeAllRequestsAreHttp() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP, "MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP", "false"));
+    }
+
+    /**
+     * If false HTTP/2 is disabled and ALPN no longer advertises h2, so HTTP/2 capable clients are
+     * forced to use HTTP/1.1 (and the HTTP/2 cleartext h2c upgrade is not detected)
+     * <p>
+     * The default is true
+     *
+     * @param http2Enabled if false HTTP/2 is disabled and clients are forced to use HTTP/1.1
+     */
+    public static void http2Enabled(boolean http2Enabled) {
+        setProperty(MOCKSERVER_HTTP2_ENABLED, "" + http2Enabled);
+    }
+
+    public static boolean http2Enabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_HTTP2_ENABLED, "MOCKSERVER_HTTP2_ENABLED", "true"));
     }
 
     /**

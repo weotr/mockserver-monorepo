@@ -76,6 +76,7 @@ public class Configuration {
     private Integer maxChunkSize;
     private Boolean useSemicolonAsQueryParameterSeparator;
     private Boolean assumeAllRequestsAreHttp;
+    private Boolean http2Enabled;
 
     // non http proxying
     private Boolean forwardBinaryRequestsWithoutWaitingForResponse;
@@ -816,6 +817,26 @@ public class Configuration {
      */
     public Configuration assumeAllRequestsAreHttp(Boolean assumeAllRequestsAreHttp) {
         this.assumeAllRequestsAreHttp = assumeAllRequestsAreHttp;
+        return this;
+    }
+
+    public Boolean http2Enabled() {
+        if (http2Enabled == null) {
+            return ConfigurationProperties.http2Enabled();
+        }
+        return http2Enabled;
+    }
+
+    /**
+     * If false HTTP/2 is disabled and ALPN no longer advertises h2, so HTTP/2 capable clients are
+     * forced to use HTTP/1.1 (and the HTTP/2 cleartext h2c upgrade is not detected)
+     * <p>
+     * The default is true
+     *
+     * @param http2Enabled if false HTTP/2 is disabled and clients are forced to use HTTP/1.1
+     */
+    public Configuration http2Enabled(Boolean http2Enabled) {
+        this.http2Enabled = http2Enabled;
         return this;
     }
 

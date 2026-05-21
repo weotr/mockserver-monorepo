@@ -744,6 +744,32 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetHttp2Enabled() {
+        boolean original = ConfigurationProperties.http2Enabled();
+        try {
+            // then - default value
+            assertThat(configuration.http2Enabled(), equalTo(true));
+
+            // when - system property setter
+            ConfigurationProperties.http2Enabled(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.http2Enabled(), equalTo(false));
+            assertThat(System.getProperty("mockserver.http2Enabled"), equalTo("false"));
+            assertThat(configuration.http2Enabled(), equalTo(false));
+            ConfigurationProperties.http2Enabled(original);
+
+            // when - setter
+            configuration.http2Enabled(false);
+
+            // then - getter
+            assertThat(configuration.http2Enabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.http2Enabled(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetForwardBinaryRequestsWithoutWaitingForResponse() {
         boolean original = ConfigurationProperties.forwardBinaryRequestsWithoutWaitingForResponse();
         try {

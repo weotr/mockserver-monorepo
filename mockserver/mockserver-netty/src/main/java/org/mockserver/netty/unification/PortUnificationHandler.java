@@ -183,10 +183,10 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
         } else if (isTls(msg)) {
             logStage(ctx, "adding TLS decoders");
             enableTls(ctx, msg);
-        } else if (HTTP_2.equals(getALPNProtocol(mockServerLogger, ctx))) {
+        } else if (configuration.http2Enabled() && HTTP_2.equals(getALPNProtocol(mockServerLogger, ctx))) {
             logStage(ctx, "adding HTTP2 decoders");
             switchToHttp2(ctx, msg);
-        } else if (isH2cPreface(msg)) {
+        } else if (configuration.http2Enabled() && isH2cPreface(msg)) {
             logStage(ctx, "adding HTTP2 cleartext (h2c) decoders");
             switchToH2c(ctx, msg);
         } else if (isHttp(msg)) {
