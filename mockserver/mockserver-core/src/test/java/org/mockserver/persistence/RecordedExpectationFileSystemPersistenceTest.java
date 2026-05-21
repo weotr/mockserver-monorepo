@@ -14,6 +14,7 @@ import org.mockserver.scheduler.Scheduler;
 import org.mockserver.time.EpochService;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -62,10 +63,13 @@ public class RecordedExpectationFileSystemPersistenceTest {
                     .setHttpResponse(response().withStatusCode(201).withReasonPhrase("Created").withBody("second response"))
                     .setExpectation(new Expectation(request("/api/second"), Times.once(), TimeToLive.unlimited(), 0).thenRespond(response().withStatusCode(201).withReasonPhrase("Created").withBody("second response")))
             );
-            MILLISECONDS.sleep(3000);
 
-            // then
-            String fileContents = new String(Files.readAllBytes(persistedFile.toPath()), StandardCharsets.UTF_8);
+            // then — persistence is asynchronous (event-log ring buffer ->
+            // listener -> file write), so poll for the expected content
+            // rather than relying on a fixed sleep, which is flaky on slow or
+            // loaded machines.
+            String fileContents = awaitFileContents(
+                persistedFile, 30_000, "/api/first", "first response", "/api/second", "second response");
             assertThat(fileContents, containsString("/api/first"));
             assertThat(fileContents, containsString("first response"));
             assertThat(fileContents, containsString("/api/second"));
@@ -108,6 +112,37 @@ public class RecordedExpectationFileSystemPersistenceTest {
             if (persistence != null) {
                 persistence.stop();
             }
+        }
+    }
+
+    /**
+     * Poll {@code file} until it contains every expected substring, or give up
+     * after {@code timeoutMillis}. Persistence is asynchronous (event-log ring
+     * buffer -> listener -> file write), so a fixed sleep is inherently flaky;
+     * polling returns as soon as the write lands and only times out if it
+     * genuinely never does. The last-read contents are returned either way so
+     * the caller's assertions produce a readable failure on timeout.
+     */
+    private static String awaitFileContents(File file, long timeoutMillis, String... expectedSubstrings) throws Exception {
+        long deadline = System.nanoTime() + MILLISECONDS.toNanos(timeoutMillis);
+        String contents = "";
+        while (true) {
+            try {
+                contents = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            } catch (IOException readWhileBeingWritten) {
+                contents = "";
+            }
+            boolean containsAll = true;
+            for (String expected : expectedSubstrings) {
+                if (!contents.contains(expected)) {
+                    containsAll = false;
+                    break;
+                }
+            }
+            if (containsAll || System.nanoTime() >= deadline) {
+                return contents;
+            }
+            MILLISECONDS.sleep(50);
         }
     }
 }
