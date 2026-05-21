@@ -32,6 +32,24 @@
             <optional>true</optional>
             <scope>compile</scope>
         </dependency>
+
+        <!-- mockserver-integration-testing's shaded base classes (e.g.
+             AbstractProxyIntegrationTest, AbstractBasicMockingIntegrationTest)
+             reference org.mockserver.test.Assert and org.mockserver.test.Retries
+             from mockserver-testing. mockserver-testing is a compile dependency
+             of mockserver-integration-testing, but the parent pom's
+             dependencyManagement forces it to test scope, so it never reaches
+             the shade classpath transitively and its classes would be missing
+             from this otherwise self-contained jar. Declare it directly with an
+             explicit compile scope so the shade plugin bundles it; optional, as
+             above, keeps it off the classpath of anything consuming this
+             artifact as a Maven dependency. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>mockserver-testing</artifactId>
+            <optional>true</optional>
+            <scope>compile</scope>
+        </dependency>
     </dependencies>
 
     <build>
