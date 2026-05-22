@@ -214,7 +214,7 @@ When `streamingResponsesEnabled` is `true` (default), the `HttpObjectAggregator`
 
 `StreamingAwareHttpObjectAggregator` is a subclass of `HttpObjectAggregator` (`mockserver-core` `org.mockserver.codec`). It inspects the first response head:
 
-- **Non-streaming response** (has `Content-Length`, or is not `text/event-stream`): delegates to `super` — behaviour is byte-for-byte identical to before.
+- **Non-streaming response** (does not have `Content-Type: text/event-stream`): delegates to `super` — behaviour is byte-for-byte identical to before. Ordinary chunked responses without SSE content type are always aggregated normally.
 - **Streaming response**: removes itself from the pipeline and installs `StreamingResponseRelayHandler` in its place, positioned before `MockServerHttpClientCodec`. The relay handler then processes unaggregated `HttpObject` events.
 
 ### StreamingResponseRelayHandler

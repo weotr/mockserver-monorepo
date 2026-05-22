@@ -303,9 +303,10 @@ public class StreamingProxyResponseIntegrationTest {
     }
 
     @Test
-    public void shouldStreamChunkedResponseIncrementally() throws Exception {
-        long startTime = System.currentTimeMillis();
-
+    public void shouldAggregateChunkedNonSseResponseNormally() throws Exception {
+        // A chunked response without text/event-stream should NOT be detected as streaming.
+        // It should be fully aggregated and returned with a complete body (regression guard
+        // for WAR deployment where Tomcat uses chunked encoding for all responses).
         List<String> receivedLines = new ArrayList<>();
         try (Socket socket = new Socket("localhost", mockServerPort)) {
             socket.setSoTimeout(10000);
@@ -323,16 +324,11 @@ public class StreamingProxyResponseIntegrationTest {
             }
         }
 
-        long elapsed = System.currentTimeMillis() - startTime;
-
         String fullResponse = String.join("\n", receivedLines);
         assertThat("response should contain HTTP 200", fullResponse, containsString("200"));
         assertThat("response should contain chunk1", fullResponse, containsString("{\"chunk\":1}"));
         assertThat("response should contain chunk2", fullResponse, containsString("{\"chunk\":2}"));
         assertThat("response should contain chunk3", fullResponse, containsString("{\"chunk\":3}"));
-
-        // Should take time because of delays
-        assertThat("response should take at least 200ms (proving streaming)", elapsed, greaterThanOrEqualTo(200L));
     }
 
     @Test
@@ -428,14 +424,19 @@ public class StreamingProxyResponseIntegrationTest {
     }
 
     @Test
-    public void shouldFullyAggregateChunkedForForwardReplaceWithResponseOverride() throws Exception {
-        // Same as above but with a chunked (non-SSE) upstream that would normally stream
+    public void shouldFullyAggregateSseForForwardReplaceWithResponseOverride() throws Exception {
+        // When a FORWARD_REPLACE expectation has a response override, even an SSE upstream
+        // that would normally be streamed must be fully aggregated so the override applies.
+        // Uses /sse to exercise the DISABLE_RESPONSE_STREAMING path for a genuinely
+        // streaming upstream.
         mockServerClient
-            .when(request().withPath("/chunked"))
+            .when(request().withPath("/sse-override-test"))
             .forward(
                 forwardOverriddenRequest(
-                    request().withHeader("Host", "localhost:" + upstreamPort),
-                    response().withHeader("X-Override-Chunked", "yes")
+                    request()
+                        .withPath("/sse")
+                        .withHeader("Host", "localhost:" + upstreamPort),
+                    response().withHeader("X-Override-SSE", "yes")
                 )
             );
 
@@ -443,7 +444,7 @@ public class StreamingProxyResponseIntegrationTest {
         try (Socket socket = new Socket("localhost", mockServerPort)) {
             socket.setSoTimeout(15000);
             OutputStream output = socket.getOutputStream();
-            output.write(("GET /chunked HTTP/1.1\r\n" +
+            output.write(("GET /sse-override-test HTTP/1.1\r\n" +
                 "Host: localhost:" + upstreamPort + "\r\n" +
                 "Connection: close\r\n" +
                 "\r\n").getBytes(StandardCharsets.UTF_8));
@@ -458,9 +459,9 @@ public class StreamingProxyResponseIntegrationTest {
 
         String fullResponse = String.join("\n", receivedLines);
         assertThat("response should contain override header",
-            fullResponse, containsString("X-Override-Chunked: yes"));
-        assertThat("response should contain chunk data",
-            fullResponse, containsString("{\"chunk\":1}"));
+            fullResponse, containsString("X-Override-SSE: yes"));
+        assertThat("response should contain SSE event data",
+            fullResponse, containsString("data: event1"));
         assertThat("response should contain HTTP 200", fullResponse, containsString("200"));
     }
 
@@ -506,8 +507,9 @@ public class StreamingProxyResponseIntegrationTest {
     }
 
     @Test
-    public void shouldLogJsonStreamingResponseAsStringBody() throws Exception {
-        // Send a chunked JSON request through the proxy
+    public void shouldLogChunkedNonSseResponseWithBody() throws Exception {
+        // Chunked JSON responses are NOT detected as streaming (only SSE is).
+        // They are aggregated normally and logged with their full body.
         try (Socket socket = new Socket("localhost", mockServerPort)) {
             socket.setSoTimeout(10000);
             OutputStream output = socket.getOutputStream();
@@ -534,20 +536,15 @@ public class StreamingProxyResponseIntegrationTest {
         assertThat("logged response should not be null", loggedResponse, notNullValue());
         assertThat("logged response should have a body", loggedResponse.getBody(), notNullValue());
 
-        // textual streaming body is logged as a plain STRING body (not BINARY, and not a
-        // structured JSON body - a structured body would fail to serialize when the
-        // captured stream is truncated and therefore incomplete JSON)
-        assertThat("JSON streaming body should be logged as STRING, not BINARY",
-            loggedResponse.getBody().getType(), is(Body.Type.STRING));
-
         String bodyString = loggedResponse.getBodyAsString();
         assertThat("logged body should contain JSON chunk text",
             bodyString, containsString("\"chunk\""));
     }
 
     @Test
-    public void shouldLogBinaryStreamingResponseAsBinaryBody() throws Exception {
-        // Send a binary stream request through the proxy
+    public void shouldLogBinaryChunkedResponseWithBody() throws Exception {
+        // Binary chunked responses (application/octet-stream) are NOT detected as
+        // streaming (only SSE is). They are aggregated normally and logged with their body.
         try (Socket socket = new Socket("localhost", mockServerPort)) {
             socket.setSoTimeout(10000);
             OutputStream output = socket.getOutputStream();
@@ -575,8 +572,8 @@ public class StreamingProxyResponseIntegrationTest {
         assertThat("logged response should not be null", loggedResponse, notNullValue());
         assertThat("logged response should have a body", loggedResponse.getBody(), notNullValue());
 
-        // Binary streaming body should remain as BINARY type
-        assertThat("binary streaming body should be logged as BINARY",
+        // Binary chunked body should be logged as BINARY type (standard aggregation)
+        assertThat("binary chunked body should be logged as BINARY",
             loggedResponse.getBody().getType(), is(Body.Type.BINARY));
     }
 }

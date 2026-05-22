@@ -209,7 +209,7 @@ client = openai.OpenAI(
 
 <p>LLM APIs stream completions as Server-Sent Events. MockServer relays each chunk immediately to the client (so the agent sees live output) and simultaneously captures up to <a href="/mock_server/configuration_properties.html#button_configuration_streaming_responses_enabled">256 KB</a> of the stream body in the event log. When a streamed response body exceeds this limit, the logged body is truncated and marked with the response header <code class="code inline">x-mockserver-stream-truncated: true</code>; the full stream still reaches the client.</p>
 
-<p>The streaming relay applies to HTTP/1.1 proxied responses only. Streaming is auto-detected from response headers (<code class="code inline">Content-Type: text/event-stream</code>, or <code class="code inline">Transfer-Encoding: chunked</code> with no <code class="code inline">Content-Length</code>). Non-streaming responses are handled identically to before — this feature adds no overhead for ordinary JSON responses.</p>
+<p>The streaming relay applies to HTTP/1.1 proxied responses only. Streaming is auto-detected from the <code class="code inline">Content-Type: text/event-stream</code> response header. Ordinary chunked responses (without <code class="code inline">text/event-stream</code>) are aggregated normally. Non-streaming responses are handled identically to before — this feature adds no overhead for ordinary JSON responses.</p>
 
 <p>Relevant configuration properties:</p>
 

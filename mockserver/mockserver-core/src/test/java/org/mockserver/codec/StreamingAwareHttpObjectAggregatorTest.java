@@ -32,12 +32,14 @@ public class StreamingAwareHttpObjectAggregatorTest {
     }
 
     @Test
-    public void shouldDetectChunkedResponseWithoutContentLength() {
+    public void shouldNotDetectChunkedResponseWithoutContentLengthWhenNotSse() {
+        // Regression guard for WAR deployment: Tomcat uses chunked encoding without
+        // Content-Length for all servlet responses. These must NOT be detected as streaming.
         DefaultHttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
         HttpUtil.setTransferEncodingChunked(response, true);
 
-        assertThat(StreamingAwareHttpObjectAggregator.isStreamingResponse(response), is(true));
+        assertThat(StreamingAwareHttpObjectAggregator.isStreamingResponse(response), is(false));
     }
 
     @Test
@@ -46,6 +48,25 @@ public class StreamingAwareHttpObjectAggregatorTest {
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
         HttpUtil.setTransferEncodingChunked(response, true);
         response.headers().set(HttpHeaderNames.CONTENT_LENGTH, 100);
+
+        assertThat(StreamingAwareHttpObjectAggregator.isStreamingResponse(response), is(false));
+    }
+
+    @Test
+    public void shouldDetectSseResponseWithoutChunkedEncoding() {
+        // SSE responses should be detected even without explicit chunked transfer-encoding
+        DefaultHttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/event-stream");
+
+        assertThat(StreamingAwareHttpObjectAggregator.isStreamingResponse(response), is(true));
+    }
+
+    @Test
+    public void shouldNotDetectOctetStreamAsStreaming() {
+        // application/octet-stream with chunked encoding should NOT be detected as streaming
+        DefaultHttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/octet-stream");
+        HttpUtil.setTransferEncodingChunked(response, true);
 
         assertThat(StreamingAwareHttpObjectAggregator.isStreamingResponse(response), is(false));
     }

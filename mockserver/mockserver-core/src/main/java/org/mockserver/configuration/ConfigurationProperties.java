@@ -760,9 +760,10 @@ public class ConfigurationProperties {
     }
 
     /**
-     * If true (the default) streaming responses (Server-Sent Events, or chunked responses with no Content-Length)
+     * If true (the default) streaming responses (Server-Sent Events with {@code Content-Type: text/event-stream})
      * received while proxying are relayed to the client incrementally as they arrive, instead of being fully
      * buffered before being forwarded. This keeps streaming APIs (such as LLM APIs) responsive when proxied.
+     * Only SSE responses are detected as streaming; ordinary chunked responses are aggregated normally.
      * <p>
      * Default is true
      *

@@ -10,11 +10,12 @@ import org.mockserver.httpclient.HttpClientHandler;
 import org.mockserver.httpclient.StreamingResponseRelayHandler;
 import org.mockserver.logging.MockServerLogger;
 
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 /**
- * An {@link HttpObjectAggregator} that can recognise streaming responses - Server-Sent
- * Events, or chunked responses with no fixed {@code Content-Length} - so that, when
+ * An {@link HttpObjectAggregator} that can recognise streaming responses — specifically
+ * Server-Sent Events ({@code Content-Type: text/event-stream}) — so that, when
  * MockServer is acting as a proxy, such responses can be relayed to the client
  * incrementally instead of being fully buffered in memory before being forwarded.
  * <p>
@@ -25,6 +26,10 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * When streaming is not detected (or not enabled), the handler delegates to
  * {@link HttpObjectAggregator} so the non-streaming path stays byte-identical.
+ * <p>
+ * Only the {@code text/event-stream} content type triggers streaming detection.
+ * Ordinary chunked responses (e.g. Tomcat/servlet responses that use chunked
+ * transfer-encoding without {@code Content-Length}) are aggregated normally.
  */
 public class StreamingAwareHttpObjectAggregator extends HttpObjectAggregator {
 
@@ -79,20 +84,20 @@ public class StreamingAwareHttpObjectAggregator extends HttpObjectAggregator {
 
     /**
      * A response should be relayed as a stream rather than aggregated when it is a
-     * Server-Sent Events stream ({@code Content-Type: text/event-stream}), or when it
-     * uses chunked transfer-encoding with no fixed {@code Content-Length} - both of
-     * which indicate a response whose body is produced incrementally over time.
+     * Server-Sent Events stream ({@code Content-Type: text/event-stream}).
+     * <p>
+     * Only SSE responses are detected as streaming. Ordinary chunked responses
+     * (e.g. those produced by servlet containers like Tomcat, which strip
+     * {@code Content-Length} and use chunked transfer-encoding for all responses)
+     * are aggregated normally. Real streaming APIs — Anthropic, OpenAI, and MCP
+     * streamable-HTTP — all use {@code text/event-stream}.
      *
      * @param response the response head (status line and headers)
      * @return true when the response body should be streamed through incrementally
      */
     public static boolean isStreamingResponse(HttpResponse response) {
         String contentType = response.headers().get(HttpHeaderNames.CONTENT_TYPE);
-        if (contentType != null && contentType.toLowerCase().contains("text/event-stream")) {
-            return true;
-        }
-        return HttpUtil.isTransferEncodingChunked(response)
-            && !response.headers().contains(HttpHeaderNames.CONTENT_LENGTH);
+        return contentType != null && contentType.toLowerCase(Locale.US).contains("text/event-stream");
     }
 
     /**
