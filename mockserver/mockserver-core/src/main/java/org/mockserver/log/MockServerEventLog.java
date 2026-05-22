@@ -501,6 +501,30 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         );
     }
 
+    /**
+     * Retrieves the most recent NO_MATCH_RESPONSE log entries (requests that hit the server
+     * and matched no expectation). Results are ordered most-recent-first and limited.
+     *
+     * @param limit       maximum number of entries to return (capped at 100)
+     * @param listConsumer callback receiving the list of matching log entries
+     */
+    public void retrieveUnmatchedRequests(int limit, Consumer<List<LogEntry>> listConsumer) {
+        drainDisruptor();
+        final int effectiveLimit = Math.max(1, Math.min(limit, 100));
+        disruptor.publishEvent(new LogEntry()
+            .setType(RUNNABLE)
+            .setConsumer(() -> {
+                List<LogEntry> entries = StreamSupport
+                    .stream(Spliterators.spliteratorUnknownSize(this.eventLog.descendingIterator(), 0), false)
+                    .filter(notDeletedPredicate)
+                    .filter(logItem -> logItem.getType() == NO_MATCH_RESPONSE)
+                    .limit(effectiveLimit)
+                    .collect(Collectors.toList());
+                listConsumer.accept(entries);
+            })
+        );
+    }
+
     public <T> void retrieveLogEntriesInReverseForUI(RequestDefinition requestDefinition, Predicate<LogEntry> logEntryPredicate, Function<LogEntry, T> logEntryMapper, Consumer<Stream<T>> consumer) {
         disruptor.publishEvent(new LogEntry()
             .setType(RUNNABLE)

@@ -17,6 +17,7 @@ import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.HttpRequestMatcher;
 import org.mockserver.matchers.MatchDifference;
+import org.mockserver.matchers.MismatchRemediation;
 import org.mockserver.memory.MemoryMonitoring;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.listeners.MockServerMatcherNotifier.Cause;
@@ -485,6 +486,179 @@ public class HttpState {
         }
     }
 
+    private static final int EXPLAIN_UNMATCHED_MAX_EXPECTATIONS = 50;
+    static final int EXPLAIN_UNMATCHED_EVALUATION_BUDGET = 500;
+
+    /**
+     * Retrieves recent requests that matched no expectation and, for each, computes
+     * ranked closest-expectation diagnostics with remediation hints.
+     *
+     * @param request the control-plane request (body may contain {@code {"limit":N}})
+     * @return a JSON response containing an array of unmatched requests with diagnostics
+     */
+    public HttpResponse explainUnmatched(HttpRequest request) {
+        final String correlationId = UUIDService.getUUID();
+        final String timestamp = java.time.Instant.now().toString();
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+
+            // parse optional limit from body
+            int limit = 10;
+            if (isNotBlank(request.getBodyAsString())) {
+                try {
+                    com.fasterxml.jackson.databind.JsonNode body = objectMapper.readTree(request.getBodyAsJsonOrXmlString());
+                    if (body.has("limit")) {
+                        limit = body.get("limit").asInt(10);
+                    }
+                } catch (Exception ignored) {
+                    // no valid JSON body -- use default
+                }
+            }
+
+            CompletableFuture<HttpResponse> responseFuture = new CompletableFuture<>();
+
+            mockServerLog.retrieveUnmatchedRequests(limit, unmatchedEntries -> {
+                try {
+                    com.fasterxml.jackson.databind.node.ArrayNode unmatchedArray = objectMapper.createArrayNode();
+                    int totalEvaluations = 0;
+                    boolean truncated = false;
+
+                    for (LogEntry entry : unmatchedEntries) {
+                        if (truncated) {
+                            break;
+                        }
+                        RequestDefinition requestDef = entry.getHttpRequest();
+                        if (!(requestDef instanceof HttpRequest)) {
+                            continue;
+                        }
+                        HttpRequest unmatchedRequest = (HttpRequest) requestDef;
+                        com.fasterxml.jackson.databind.node.ObjectNode requestNode = objectMapper.createObjectNode();
+                        requestNode.put("timestamp", entry.getTimestamp());
+                        requestNode.put("method", unmatchedRequest.getMethod() != null ? unmatchedRequest.getMethod().getValue() : "");
+                        requestNode.put("path", unmatchedRequest.getPath() != null ? unmatchedRequest.getPath().getValue() : "");
+
+                        // compute per-expectation diffs, ranked by closeness
+                        List<HttpRequestMatcher> matchers = requestMatchers.retrieveRequestMatchers(null);
+                        int totalFields = MatchDifference.Field.values().length;
+                        int evaluateCount = Math.min(matchers.size(), EXPLAIN_UNMATCHED_MAX_EXPECTATIONS);
+
+                        // collect results with their failure count for sorting
+                        List<com.fasterxml.jackson.databind.node.ObjectNode> expResults = new ArrayList<>();
+
+                        for (int i = 0; i < evaluateCount; i++) {
+                            if (totalEvaluations >= EXPLAIN_UNMATCHED_EVALUATION_BUDGET) {
+                                truncated = true;
+                                break;
+                            }
+                            HttpRequestMatcher matcher = matchers.get(i);
+                            Expectation expectation = matcher.getExpectation();
+                            if (expectation == null) {
+                                continue;
+                            }
+
+                            HttpRequest clonedRequest = unmatchedRequest.clone();
+                            MatchDifference matchDifference = new MatchDifference(true, clonedRequest);
+                            boolean matches = matcher.matches(matchDifference, clonedRequest);
+                            totalEvaluations++;
+
+                            com.fasterxml.jackson.databind.node.ObjectNode expResult = objectMapper.createObjectNode();
+                            expResult.put("expectationId", expectation.getId());
+                            if (expectation.getHttpRequest() instanceof HttpRequest) {
+                                HttpRequest expReq = (HttpRequest) expectation.getHttpRequest();
+                                expResult.put("expectationPath", expReq.getPath() != null ? expReq.getPath().getValue() : "");
+                                expResult.put("expectationMethod", expReq.getMethod() != null ? expReq.getMethod().getValue() : "");
+                            }
+                            expResult.put("matches", matches);
+
+                            java.util.Map<MatchDifference.Field, List<String>> allDifferences = matchDifference.getAllDifferences();
+                            int failures = matches ? 0 : allDifferences.size();
+                            int matchedFields = totalFields - failures;
+                            expResult.put("matchedFieldCount", matchedFields);
+                            expResult.put("totalFieldCount", totalFields);
+                            expResult.put("differingFieldCount", failures);
+
+                            if (!matches && !allDifferences.isEmpty()) {
+                                com.fasterxml.jackson.databind.node.ObjectNode differences = objectMapper.createObjectNode();
+                                for (java.util.Map.Entry<MatchDifference.Field, List<String>> diffEntry : allDifferences.entrySet()) {
+                                    com.fasterxml.jackson.databind.node.ArrayNode fieldDiffs = differences.putArray(diffEntry.getKey().getName());
+                                    for (String diff : diffEntry.getValue()) {
+                                        fieldDiffs.add(diff);
+                                    }
+                                }
+                                expResult.set("differences", differences);
+
+                                // add remediation hints
+                                java.util.Map<MatchDifference.Field, String> hints = MismatchRemediation.allHints(allDifferences);
+                                if (!hints.isEmpty()) {
+                                    com.fasterxml.jackson.databind.node.ObjectNode remediationNode = objectMapper.createObjectNode();
+                                    for (java.util.Map.Entry<MatchDifference.Field, String> hintEntry : hints.entrySet()) {
+                                        remediationNode.put(hintEntry.getKey().getName(), hintEntry.getValue());
+                                    }
+                                    expResult.set("remediation", remediationNode);
+                                }
+                            }
+
+                            expResults.add(expResult);
+                        }
+
+                        // sort by fewest differing fields first (closest match first)
+                        expResults.sort((a, b) -> Integer.compare(
+                            a.path("differingFieldCount").asInt(Integer.MAX_VALUE),
+                            b.path("differingFieldCount").asInt(Integer.MAX_VALUE)
+                        ));
+
+                        com.fasterxml.jackson.databind.node.ArrayNode closestExpectations = objectMapper.createArrayNode();
+                        for (com.fasterxml.jackson.databind.node.ObjectNode expResult : expResults) {
+                            closestExpectations.add(expResult);
+                        }
+                        requestNode.set("closestExpectations", closestExpectations);
+                        requestNode.put("totalExpectationsEvaluated", expResults.size());
+
+                        unmatchedArray.add(requestNode);
+                    }
+
+                    com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+                    resultNode.put("correlationId", correlationId);
+                    resultNode.put("timestamp", timestamp);
+                    resultNode.put("unmatchedRequestCount", unmatchedArray.size());
+                    resultNode.put("truncated", truncated);
+                    resultNode.set("unmatchedRequests", unmatchedArray);
+
+                    responseFuture.complete(response()
+                        .withStatusCode(OK.code())
+                        .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resultNode), MediaType.JSON_UTF_8));
+                } catch (Exception e) {
+                    responseFuture.completeExceptionally(e);
+                }
+            });
+
+            return responseFuture.get(configuration.maxFutureTimeoutInMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setCorrelationId(correlationId)
+                    .setMessageFormat("exception handling explainUnmatched request:{}error:{}")
+                    .setArguments(request, e.getMessage())
+                    .setThrowable(e)
+            );
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper errorMapper = ObjectMapperFactory.createObjectMapper();
+                com.fasterxml.jackson.databind.node.ObjectNode errorNode = errorMapper.createObjectNode();
+                errorNode.put("error", "failed to explain unmatched requests: " + e.getMessage());
+                errorNode.put("correlationId", correlationId);
+                errorNode.put("timestamp", timestamp);
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(errorMapper.writerWithDefaultPrettyPrinter().writeValueAsString(errorNode), MediaType.JSON_UTF_8);
+            } catch (Exception jsonError) {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"failed to explain unmatched requests\"}", MediaType.JSON_UTF_8);
+            }
+        }
+    }
+
     public void log(LogEntry logEntry) {
         if (mockServerLog != null) {
             mockServerLog.add(logEntry);
@@ -938,6 +1112,13 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, debugMismatch(request), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/explainUnmatched", "/explainUnmatched")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, explainUnmatched(request), true);
                 }
                 canHandle.complete(true);
 

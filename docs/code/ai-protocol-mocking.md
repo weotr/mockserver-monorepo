@@ -464,6 +464,121 @@ All four client libraries support the new action types and body matchers:
 | gRPC Descriptors Clear | `clearGrpcDescriptors()` | N/A (use REST API) | N/A (use REST API) | N/A (use REST API) |
 | Callback Support | Full (WebSocket) | Full (WebSocket) | Full (WebSocket) | Full (WebSocket) |
 
+## OpenAPI Contract Verification
+
+In addition to mocking AI protocols, MockServer's MCP control plane provides OpenAPI contract verification tools:
+
+### OpenApiTrafficValidator (`mockserver-core`)
+
+Validates recorded request/response pairs against an OpenAPI spec. For each pair, it locates the matching spec operation, validates the request with `OpenAPIRequestValidator`, and validates the response with `OpenAPIResponseValidator`. Exposed via the `verify_traffic_against_openapi` MCP tool.
+
+### OpenApiContractTest (`mockserver-core`)
+
+Builds representative example requests for each operation in an OpenAPI spec (resolving path parameters, query parameters, headers, and request bodies from spec examples and `ExampleBuilder`-generated values), sends them via an injected `Function<HttpRequest, HttpResponse>`, and validates responses with `OpenAPIResponseValidator`. The class is HTTP-client-agnostic; the MCP tool layer wires in the real HTTP transport.
+
+### OpenApiResiliencyTest (`mockserver-core`)
+
+Reuses `OpenApiContractTest.buildExampleRequest()` to generate a valid base request for each operation, then produces a bounded mutation catalogue:
+
+- **Omit required path/query parameter** -- only when the parameter is marked `required`
+- **Omit required body field** -- only when the schema lists `required` fields
+- **Type violation** -- sends a string where schema expects integer/boolean, or vice versa
+- **Numeric boundary violation** -- `minimum-1` and `maximum+1` when schema defines bounds
+- **String length violation** -- `minLength-1` and `maxLength+1` when schema defines length constraints
+- **Oversized string** -- 10,000-character string for string fields without explicit `maxLength`
+- **Malformed JSON body** -- unparseable JSON
+
+Each mutated request is sent via the injected `Function<HttpRequest, HttpResponse>` and the response is classified as `HANDLED` (4xx) or `UNEXPECTED` (5xx, 2xx, connection error). The class is HTTP-client-agnostic like `OpenApiContractTest`. Exposed via the `run_resiliency_test` MCP tool with a 5-second timeout per request.
+
+```mermaid
+flowchart TB
+    subgraph "MCP Tools"
+        VT["verify_traffic_against_openapi"]
+        CT["run_contract_test"]
+        RT["run_resiliency_test"]
+    end
+
+    subgraph "Core Validators"
+        OTV["OpenApiTrafficValidator"]
+        OCT["OpenApiContractTest"]
+        ORT["OpenApiResiliencyTest"]
+        RV["OpenAPIRequestValidator"]
+        RSV["OpenAPIResponseValidator"]
+        EB["ExampleBuilder"]
+    end
+
+    VT --> OTV
+    CT --> OCT
+    RT --> ORT
+    OTV --> RV
+    OTV --> RSV
+    OCT --> EB
+    OCT --> RSV
+    ORT --> OCT
+```
+
+## Deterministic LLM Record/Replay
+
+### Overview
+
+MockServer supports recording LLM API traffic (Anthropic Claude, OpenAI, MCP servers, etc.) through its forwarding proxy and replaying it deterministically from fixture files. This enables AI application tests that are offline, free (no metered API calls), and reproducible.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    subgraph "Record Phase"
+        App["AI Application"] -->|HTTP/SSE| Proxy["MockServer\n(forwarding proxy)"]
+        Proxy -->|Forward| LLM["Real LLM API\n(Anthropic, OpenAI)"]
+        Proxy -->|Log| EventLog["FORWARDED_REQUEST\nentries"]
+    end
+
+    subgraph "Snapshot Phase"
+        EventLog -->|record_llm_fixtures| Conv["SseAwareExpectationConverter"]
+        Conv --> Redact["FixtureRedactor"]
+        Redact -->|Write JSON| Fixture["fixture.json\n(committable)"]
+    end
+
+    subgraph "Replay Phase"
+        Fixture -->|load_expectations_from_file| Active["Active Expectations"]
+        App2["AI Application"] -->|HTTP| MockReplay["MockServer\n(mock mode)"]
+        MockReplay -->|SSE stream| App2
+    end
+```
+
+### Components
+
+| Class | Module | Purpose |
+|-------|--------|---------|
+| `FixtureRedactor` | core | Redacts sensitive headers (Authorization, api-key, Cookie, etc.) from expectations before writing to fixture files; operates on copies, never mutates live entries |
+| `SseBodyParser` | core | Parses raw `text/event-stream` bytes into `SseEvent` objects; applies a fixed inter-event delay (50ms default) since per-chunk timestamps are not captured |
+| `SseAwareExpectationConverter` | core | Detects SSE-streamed responses (via `x-mockserver-streamed` header or `text/event-stream` content type) and converts them to `HttpSseResponse` actions; falls back to static response with warning for truncated captures |
+
+### MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `record_llm_fixtures` | Snapshots recorded proxy traffic into a fixture file: retrieves FORWARDED_REQUEST entries, converts SSE responses, redacts secrets, writes to the specified path |
+| `load_expectations_from_file` | Loads a fixture file and adds its expectations as active mocks for replay |
+
+### SSE Timing
+
+Per-chunk timestamps are not captured by the streaming relay (`StreamingBody` captures bytes in a bounded buffer without timing metadata). On replay, SSE events are sent with a fixed 50ms inter-event delay. This is noted as a future enhancement: adding per-chunk timestamps to `StreamingBody` would enable faithful timing reproduction.
+
+### Secret Redaction
+
+The `FixtureRedactor` replaces header values for a configurable set of header names with `***REDACTED***`. Default sensitive headers:
+- `Authorization`
+- `x-api-key` / `api-key`
+- `Cookie` / `Set-Cookie`
+- `Proxy-Authorization`
+
+Custom header lists can be provided for application-specific secrets.
+
+### Truncation Handling
+
+When the captured SSE body exceeds `maxStreamingCaptureBytes`, the capture is truncated (`x-mockserver-stream-truncated` header). The converter falls back to a static response with an `x-mockserver-fixture-warning` header explaining the truncation. Increasing `maxStreamingCaptureBytes` ensures full capture.
+
 ## Related GitHub Issues
 
 - #2143 — SSE Streaming Support

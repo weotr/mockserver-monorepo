@@ -39,6 +39,29 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
     private static final String SERVER_NAME = "MockServer";
     private static final String SERVER_VERSION = Version.getVersion();
 
+    /**
+     * Sent in the 'initialize' result so an AI agent knows, up front, which MockServer tools to reach for.
+     * The MCP spec defines this 'instructions' field as guidance the client may pass to the language model.
+     */
+    private static final String SERVER_INSTRUCTIONS =
+        "MockServer is an HTTP(S) mock server and proxy for testing. Use these tools to mock APIs, " +
+            "debug failing requests, and verify implementations:\n" +
+            "- Mock APIs: 'create_expectation', 'create_expectation_from_openapi', and " +
+            "'create_expectations_from_recorded_traffic' (turn traffic already recorded via the proxy into mocks).\n" +
+            "- Debug a request that did not match: call 'explain_unmatched_requests' after a failed test run to see, " +
+            "for each request that hit the server, the closest expectations ranked by similarity with field-level " +
+            "diffs and a remediation hint — no need to reconstruct the request. 'debug_request_mismatch' does the " +
+            "same for a request you supply.\n" +
+            "- Verify an implementation: 'verify_request' / 'verify_request_sequence' check requests were made; " +
+            "'verify_traffic_against_openapi' checks recorded traffic conforms to an OpenAPI contract; " +
+            "'run_contract_test' sends spec-derived example requests to a running service and checks the responses; " +
+            "'run_resiliency_test' sends malformed and boundary-case requests and reports which inputs the service " +
+            "failed to handle gracefully.\n" +
+            "- Deterministic LLM testing: 'record_llm_fixtures' snapshots LLM/MCP traffic recorded through the proxy " +
+            "into a committable, secret-free fixture file; 'load_expectations_from_file' replays it.\n" +
+            "Readable resources expose live state: mockserver://expectations, mockserver://requests, " +
+            "mockserver://logs, mockserver://unmatched, mockserver://configuration.";
+
     private final HttpState httpState;
     private final LifeCycle server;
     private final McpSessionManager sessionManager;
@@ -406,6 +429,8 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
         ObjectNode serverInfo = result.putObject("serverInfo");
         serverInfo.put("name", SERVER_NAME);
         serverInfo.put("version", SERVER_VERSION);
+
+        result.put("instructions", SERVER_INSTRUCTIONS);
 
         return new InitializeResult(JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result), sessionId);
     }

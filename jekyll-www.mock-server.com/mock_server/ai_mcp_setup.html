@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-05-06T00:00:00+00:00
+  lastmod: 2026-05-22T00:00:00+00:00
 ---
 
 <p>MockServer includes a built-in <strong>MCP (Model Context Protocol)</strong> server that enables AI coding assistants to programmatically create mock expectations, verify requests, retrieve recorded traffic, and debug HTTP issues — all through natural language conversations.</p>
@@ -31,7 +31,7 @@ sitemap:
 
 <h2>Configuring Your AI Assistant</h2>
 
-<p>Choose your AI coding assistant below and follow the configuration instructions.</p>
+<p>Choose your AI coding assistant or client library below and follow the configuration instructions.</p>
 
 <a id="cursor" class="anchor" href="#cursor">&nbsp;</a>
 
@@ -119,6 +119,28 @@ url = "http://localhost:1080/mockserver/mcp"</code></pre>
 
 <p>OpenCode will detect the new MCP server on the next session.</p>
 
+<a id="programmatic" class="anchor" href="#programmatic">&nbsp;</a>
+
+<h3>Programmatic clients (LangChain, LangGraph, ...)</h3>
+
+<p>The assistants above are IDE and CLI tools configured through a file or command. You can also connect to the MCP endpoint programmatically — for example from an agent built with LangChain or LangGraph using the <a target="_blank" href="https://github.com/langchain-ai/langchain-mcp-adapters"><code class="code inline">langchain-mcp-adapters</code></a> library. The same approach applies to any MCP client library:</p>
+
+<pre class="prettyprint lang-python code"><code class="code">from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+
+client = MultiServerMCPClient({
+    "mockserver": {
+        "transport": "streamable_http",
+        "url": "http://localhost:1080/mockserver/mcp",
+    }
+})
+
+# MockServer's MCP tools are now available to the agent
+tools = await client.get_tools()
+agent = create_react_agent(model, tools)</code></pre>
+
+<p>The agent can now create expectations, verify requests, retrieve recorded traffic, and debug mismatches through the same MCP tools as the IDE assistants above.</p>
+
 <h2>Quick Test</h2>
 
 <p>Once configured, verify the integration by asking your AI assistant:</p>
@@ -138,5 +160,7 @@ url = "http://localhost:1080/mockserver/mcp"</code></pre>
 <ul>
     <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> — full documentation of all available MCP tools, parameters, and example requests</li>
     <li><a href="/mock_server/ai_debugging.html"><strong>Debugging with AI</strong></a> — workflows for using AI assistants to debug HTTP traffic</li>
+    <li><a href="/mock_server/ai_verification.html"><strong>Contract Verification</strong></a> — verify recorded traffic and run contract/resiliency tests against an OpenAPI spec</li>
+    <li><a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a> — inspect and record LLM/MCP traffic for debugging and deterministic replay</li>
     <li><a href="/mock_server/ai_openapi.html"><strong>OpenAPI for AI</strong></a> — using MockServer's OpenAPI spec as a fallback for AI tools without MCP support</li>
 </ul>

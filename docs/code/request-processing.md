@@ -85,6 +85,8 @@ required?"}
 | `PUT /mockserver/files/retrieve` | Retrieve a stored file by name |
 | `PUT /mockserver/files/list` | List all stored file names |
 | `PUT /mockserver/files/delete` | Delete a stored file by name |
+| `PUT /mockserver/debugMismatch` | Compare a request against all active expectations and return per-field diffs |
+| `PUT /mockserver/explainUnmatched` | Retrieve recent unmatched requests with ranked closest-expectation diagnostics and remediation hints |
 
 All control-plane requests go through `controlPlaneRequestAuthenticated()` which enforces mTLS and/or JWT authentication if configured.
 
@@ -154,7 +156,61 @@ A `MatchDifference` context is always created for each comparison (regardless of
 
 ### Debug Mismatch Endpoint
 
-The `PUT /mockserver/debugMismatch` endpoint (implemented in `HttpState.debugMismatch()`) provides programmatic access to match analysis. It accepts a `RequestDefinition` body and returns structured JSON showing per-expectation, per-field match results with the closest match highlighted. The MCP `debug_request_mismatch` tool delegates to this same implementation. The Java client exposes this via `MockServerClient.debugMismatch(RequestDefinition)`.
+The `PUT /mockserver/debugMismatch` endpoint (implemented in `HttpState.debugMismatch()`) provides programmatic access to match analysis. It accepts a `RequestDefinition` body and returns structured JSON showing per-expectation, per-field match results ranked by closeness (fewest differing fields first), with the closest match highlighted and actionable `remediation` hints for each mismatched field. The MCP `debug_request_mismatch` tool delegates to this same implementation and adds ranking/remediation post-processing. The Java client exposes this via `MockServerClient.debugMismatch(RequestDefinition)`.
+
+### Explain Unmatched Endpoint
+
+The `PUT /mockserver/explainUnmatched` endpoint (implemented in `HttpState.explainUnmatched()`) provides a post-hoc diagnostic for requests that have already been received and returned 404. It retrieves recent `NO_MATCH_RESPONSE` log entries from `MockServerEventLog.retrieveUnmatchedRequests()`, and for each, computes ranked closest-expectation diagnostics using `MatchDifference` with `MismatchRemediation` hints. The optional request body accepts `{"limit": N}` (default 10, max 100). The MCP `explain_unmatched_requests` tool and `mockserver://unmatched` resource both delegate to this implementation.
+
+### Record-to-Expectations (MCP)
+
+The `create_expectations_from_recorded_traffic` MCP tool converts `FORWARDED_REQUEST` log entries into active mock expectations. It reuses the existing `RECORDED_EXPECTATIONS` retrieve mechanism (`MockServerEventLog.retrieveRecordedExpectations()` which filters for `FORWARDED_REQUEST` entries and maps them to `Expectation` objects via `LogEntry.getExpectation()`). The tool deserializes the retrieved expectations, upgrades them from `Times.once()` to `Times.unlimited()` for persistent mocking, and adds them via `HttpState.add()`. Optional `method` and `path` parameters filter the recorded traffic, and `preview=true` returns the expectations as JSON without activating them.
+
+### LLM Record/Replay (MCP)
+
+The `record_llm_fixtures` MCP tool extends the record-to-expectations workflow for LLM/MCP traffic. After retrieving `RECORDED_EXPECTATIONS`, it applies two additional processing steps:
+
+1. **SSE-aware conversion** (`SseAwareExpectationConverter`) -- detects streaming responses (via `x-mockserver-streamed` header or `text/event-stream` content type) and converts them from static `HttpResponse` to `HttpSseResponse` actions by parsing the captured SSE body into `SseEvent` objects. Truncated captures fall back to static responses with a warning header.
+
+2. **Secret redaction** (`FixtureRedactor`) -- replaces sensitive header values (Authorization, api-key, Cookie, etc.) with `***REDACTED***` so fixture files are safe to commit to version control.
+
+The redacted, SSE-aware expectations are serialized to a JSON file that can be loaded with `load_expectations_from_file` or via `initializationJsonPath` for deterministic replay.
+
+### OpenAPI Contract Verification (MCP)
+
+Two MCP tools provide OpenAPI contract verification:
+
+- **`verify_traffic_against_openapi`** (passive) — retrieves recorded `REQUEST_RESPONSES` from the event log, then validates each request/response pair against an OpenAPI spec using `OpenApiTrafficValidator` (which delegates to `OpenAPIRequestValidator` and `OpenAPIResponseValidator`). Returns a structured per-pair conformance report with request and response validation errors.
+
+- **`run_contract_test`** (active) — parses the OpenAPI spec, builds example requests for each operation using `OpenApiContractTest` (path parameters resolved from spec examples/schema defaults, query parameters, headers, and request bodies generated via `ExampleBuilder`), sends them to a specified base URL via `java.net.HttpURLConnection`, and validates each response with `OpenAPIResponseValidator`. Returns per-operation pass/fail results.
+
+All three tools are registered in `McpToolRegistry` and support filtering (by method/path for traffic verification, by operationId for contract and resiliency tests).
+
+- **`run_resiliency_test`** (active, negative) -- parses the OpenAPI spec, builds valid example requests using `OpenApiContractTest.buildExampleRequest()`, then generates a bounded mutation catalogue per operation using `OpenApiResiliencyTest` (omitting required fields, type violations, numeric/string boundary violations, oversized strings, malformed JSON). Each mutated request is sent to the target service via `java.net.HttpURLConnection` with a 5-second timeout. Responses are classified as `HANDLED` (4xx) or `UNEXPECTED` (5xx, 2xx, connection error). Returns per-mutation results and per-operation/overall summaries.
+
+```mermaid
+flowchart LR
+    subgraph "Passive Verification"
+        LOG["Event Log\nREQUEST_RESPONSES"] --> TV["OpenApiTrafficValidator"]
+        TV --> RV["OpenAPIRequestValidator"]
+        TV --> RSV["OpenAPIResponseValidator"]
+    end
+
+    subgraph "Active Contract Testing"
+        SPEC["OpenAPI Spec"] --> CT["OpenApiContractTest"]
+        CT --> EB["ExampleBuilder\n(request generation)"]
+        CT --> HTTP["HttpURLConnection\n(send request)"]
+        HTTP --> RSV2["OpenAPIResponseValidator"]
+    end
+
+    subgraph "Resiliency Testing"
+        SPEC2["OpenAPI Spec"] --> RT["OpenApiResiliencyTest"]
+        RT --> CT2["OpenApiContractTest\n(example request)"]
+        RT --> MUT["Mutation Generator"]
+        MUT --> HTTP2["HttpURLConnection\n(send mutated request)"]
+        HTTP2 --> CLS["Classify: HANDLED vs UNEXPECTED"]
+    end
+```
 
 ### Correlation ID Retrieval
 
@@ -345,7 +401,7 @@ sequenceDiagram
 
 ### Streaming Forward Path
 
-When the upstream response is a streaming response (detected from `Content-Type: text/event-stream`, or `Transfer-Encoding: chunked` with no `Content-Length`), and `streamingResponsesEnabled` is `true` (default), MockServer relays chunks incrementally rather than buffering the entire body.
+When the upstream response is a streaming response (detected from `Content-Type: text/event-stream`), and `streamingResponsesEnabled` is `true` (default), MockServer relays chunks incrementally rather than buffering the entire body. Only SSE responses are detected as streaming; ordinary chunked responses are aggregated normally.
 
 ```mermaid
 sequenceDiagram
@@ -538,3 +594,4 @@ When no expectation matches and a 404 is returned, `HttpActionHandler.returnNotF
 | `MatchDifferenceFormatter` | `mockserver-core/.../matchers/` | Formats `MatchDifference` maps into human-readable text |
 | `MatchDifference` | `mockserver-core/.../matchers/` | Stores per-field match failure details (pre-existing) |
 | `MatchFailureHints` | `mockserver-core/.../matchers/` | Generates actionable suggestions for common mismatches (pre-existing) |
+| `MismatchRemediation` | `mockserver-core/.../matchers/` | Produces one-line remediation hints from `MatchDifference.Field` and diff messages (e.g., "use method POST not GET", "add trailing slash") |

@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.commons.lang3.tuple.Pair;
 import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.matchers.MismatchRemediation;
+import org.mockserver.matchers.MatchDifference;
 import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
@@ -15,16 +18,28 @@ import org.mockserver.mock.OpenAPIExpectation;
 import org.mockserver.model.HttpForward;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
+import org.mockserver.model.LogEventRequestAndResponse;
 import org.mockserver.model.MediaType;
+import org.mockserver.openapi.OpenApiContractTest;
+import org.mockserver.openapi.OpenApiResiliencyTest;
+import org.mockserver.openapi.OpenApiTrafficValidator;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.ExpectationSerializer;
+import org.mockserver.serialization.LogEventRequestAndResponseSerializer;
 import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.RequestDefinitionSerializer;
+import org.mockserver.fixture.FixtureRedactor;
+import org.mockserver.fixture.SseAwareExpectationConverter;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
 import org.mockserver.verify.VerificationTimes;
 import org.slf4j.event.Level;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -89,11 +104,18 @@ public class McpToolRegistry {
         registerRetrieveRequestResponses();
         registerCreateForwardExpectation();
         registerDebugRequestMismatch();
+        registerExplainUnmatchedRequests();
         registerCreateExpectationFromOpenApi();
+        registerCreateExpectationsFromRecordedTraffic();
         registerStopServer();
         registerRawExpectation();
         registerRawRetrieve();
         registerRawVerify();
+        registerVerifyTrafficAgainstOpenApi();
+        registerRunContractTest();
+        registerRunResiliencyTest();
+        registerRecordLlmFixtures();
+        registerLoadExpectationsFromFile();
     }
 
     private void registerCreateExpectation() {
@@ -744,9 +766,102 @@ public class McpToolRegistry {
                 .withMethod("PUT")
                 .withBody(getRequestDefinitionSerializer().serialize(httpRequest));
             HttpResponse response = httpState.debugMismatch(wrapperRequest);
-            return objectMapper.readTree(response.getBodyAsString());
+            JsonNode resultNode = objectMapper.readTree(response.getBodyAsString());
+
+            // enhance: sort results by closeness (fewest differing fields first) and add remediation hints
+            if (resultNode.has("results") && resultNode.get("results").isArray()) {
+                ArrayNode results = (ArrayNode) resultNode.get("results");
+                List<JsonNode> sortedResults = new ArrayList<>();
+                for (JsonNode node : results) {
+                    sortedResults.add(node);
+                }
+                sortedResults.sort((a, b) -> {
+                    int aDiff = a.path("totalFieldCount").asInt(0) - a.path("matchedFieldCount").asInt(0);
+                    int bDiff = b.path("totalFieldCount").asInt(0) - b.path("matchedFieldCount").asInt(0);
+                    return Integer.compare(aDiff, bDiff);
+                });
+
+                ArrayNode rankedResults = objectMapper.createArrayNode();
+                for (JsonNode node : sortedResults) {
+                    // add remediation hints to each result that has differences
+                    if (node.has("differences") && node.get("differences").isObject()) {
+                        ObjectNode resultWithRemediation = (ObjectNode) node;
+                        ObjectNode remediationNode = objectMapper.createObjectNode();
+                        Iterator<Map.Entry<String, JsonNode>> diffFields = node.get("differences").fields();
+                        while (diffFields.hasNext()) {
+                            Map.Entry<String, JsonNode> diffField = diffFields.next();
+                            MatchDifference.Field field = fieldFromName(diffField.getKey());
+                            if (field != null && diffField.getValue().isArray()) {
+                                List<String> diffs = new ArrayList<>();
+                                for (JsonNode d : diffField.getValue()) {
+                                    diffs.add(d.asText());
+                                }
+                                String hint = MismatchRemediation.hint(field, diffs);
+                                if (!hint.isEmpty()) {
+                                    remediationNode.put(diffField.getKey(), hint);
+                                }
+                            }
+                        }
+                        if (remediationNode.size() > 0) {
+                            resultWithRemediation.set("remediation", remediationNode);
+                        }
+                    }
+                    rankedResults.add(node);
+                }
+                ((ObjectNode) resultNode).set("results", rankedResults);
+
+                // add remediation hint to closestMatch if present and is a JSON object
+                if (resultNode.has("closestMatch") && resultNode.get("closestMatch").isObject() && rankedResults.size() > 0) {
+                    JsonNode closest = rankedResults.get(0);
+                    if (closest.has("remediation")) {
+                        ((ObjectNode) resultNode.get("closestMatch")).set("remediation", closest.get("remediation"));
+                    }
+                }
+            }
+
+            return resultNode;
         } catch (Exception e) {
             return errorResult("Failed to debug request mismatch", e);
+        }
+    }
+
+    private static MatchDifference.Field fieldFromName(String name) {
+        for (MatchDifference.Field field : MatchDifference.Field.values()) {
+            if (field.getName().equals(name)) {
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private void registerExplainUnmatchedRequests() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("limit").put("type", "integer").put("description", "Maximum number of unmatched requests to return (default 10, max 100)");
+
+        tools.put("explain_unmatched_requests", new ToolDefinition(
+            "explain_unmatched_requests",
+            "Returns recent requests that hit MockServer and matched no expectation, with ranked closest-expectation diagnostics and actionable remediation hints for each mismatch. Use after a failed test run to understand why requests got 404s without needing to reconstruct the request.",
+            schema,
+            this::handleExplainUnmatchedRequests
+        ));
+    }
+
+    private JsonNode handleExplainUnmatchedRequests(JsonNode params) {
+        try {
+            int limit = params.path("limit").asInt(10);
+            if (limit < 1 || limit > 100) {
+                return errorResult("'limit' must be between 1 and 100");
+            }
+
+            HttpRequest wrapperRequest = request()
+                .withMethod("PUT")
+                .withBody("{\"limit\":" + limit + "}");
+            HttpResponse response = httpState.explainUnmatched(wrapperRequest);
+            return objectMapper.readTree(response.getBodyAsString());
+        } catch (Exception e) {
+            return errorResult("Failed to explain unmatched requests", e);
         }
     }
 
@@ -813,6 +928,109 @@ public class McpToolRegistry {
             return resultNode;
         } catch (Exception e) {
             return errorResult("Failed to create expectations from OpenAPI", e);
+        }
+    }
+
+    private void registerCreateExpectationsFromRecordedTraffic() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("method").put("type", "string").put("description", "Filter recorded traffic by HTTP method (e.g. GET, POST)");
+        properties.putObject("path").put("type", "string").put("description", "Filter recorded traffic by request path (e.g. /api/users)");
+        properties.putObject("preview").put("type", "boolean").put("description", "When true, return the generated expectations as JSON without adding them. Defaults to false.");
+
+        tools.put("create_expectations_from_recorded_traffic", new ToolDefinition(
+            "create_expectations_from_recorded_traffic",
+            "Converts traffic already recorded by MockServer's forwarding/proxy mode into active mock expectations in one step. "
+                + "After observing a real API via a forwarding proxy, call this tool to generate expectations that replay the recorded responses. "
+                + "Use preview=true to inspect the expectations before committing, or leave it false (default) to activate them immediately.",
+            schema,
+            this::handleCreateExpectationsFromRecordedTraffic
+        ));
+    }
+
+    private JsonNode handleCreateExpectationsFromRecordedTraffic(JsonNode params) {
+        try {
+            // Build a filter request to retrieve RECORDED_EXPECTATIONS
+            HttpRequest filterRequest = request();
+            JsonNode methodNode = params.path("method");
+            if (!methodNode.isMissingNode() && !methodNode.isNull()) {
+                filterRequest.withMethod(methodNode.asText());
+            }
+            JsonNode pathNode = params.path("path");
+            if (!pathNode.isMissingNode() && !pathNode.isNull()) {
+                filterRequest.withPath(pathNode.asText());
+            }
+
+            boolean preview = params.path("preview").asBoolean(false);
+
+            // Use the existing retrieve mechanism with RECORDED_EXPECTATIONS type
+            HttpRequest retrieveRequest = request()
+                .withMethod("PUT")
+                .withPath("/mockserver/retrieve")
+                .withQueryStringParameter("type", "RECORDED_EXPECTATIONS")
+                .withQueryStringParameter("format", "JSON")
+                .withBody(getRequestDefinitionSerializer().serialize(filterRequest));
+
+            HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+            String body = retrieveResponse.getBodyAsString();
+
+            if (body == null || body.isEmpty() || "[]".equals(body.trim())) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "no_recorded_traffic");
+                resultNode.put("message", "No recorded traffic found matching the filter. "
+                    + "Ensure MockServer has forwarded requests (e.g. via create_forward_expectation) before calling this tool.");
+                resultNode.put("count", 0);
+                return resultNode;
+            }
+
+            // Deserialize the recorded expectations
+            Expectation[] recordedExpectations = getExpectationSerializer().deserializeArray(body, false);
+
+            if (recordedExpectations.length == 0) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "no_recorded_traffic");
+                resultNode.put("message", "No recorded traffic found matching the filter.");
+                resultNode.put("count", 0);
+                return resultNode;
+            }
+
+            if (preview) {
+                // Return the expectations as JSON without adding them
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "preview");
+                resultNode.put("count", recordedExpectations.length);
+                resultNode.put("message", "Preview of expectations that would be created. Call again with preview=false to activate them.");
+                ArrayNode expectationsArray = resultNode.putArray("expectations");
+                for (Expectation exp : recordedExpectations) {
+                    JsonNode expNode = objectMapper.readTree(getExpectationSerializer().serialize(exp));
+                    expectationsArray.add(expNode);
+                }
+                return resultNode;
+            } else {
+                // Make expectations persistent: use unlimited times and TTL
+                List<Expectation> addedExpectations = new ArrayList<>();
+                for (Expectation recordedExp : recordedExpectations) {
+                    Expectation persistentExp = new Expectation(
+                        recordedExp.getHttpRequest(),
+                        Times.unlimited(),
+                        TimeToLive.unlimited(),
+                        0
+                    ).thenRespond(recordedExp.getHttpResponse());
+                    addedExpectations.addAll(httpState.add(persistentExp));
+                }
+
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "created");
+                resultNode.put("count", addedExpectations.size());
+                ArrayNode ids = resultNode.putArray("ids");
+                for (Expectation exp : addedExpectations) {
+                    ids.add(exp.getId());
+                }
+                return resultNode;
+            }
+        } catch (Exception e) {
+            return errorResult("Failed to create expectations from recorded traffic", e);
         }
     }
 
@@ -1001,6 +1219,735 @@ public class McpToolRegistry {
         } catch (Exception e) {
             return errorResult("Raw verification failed", e);
         }
+    }
+
+    private void registerVerifyTrafficAgainstOpenApi() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("specUrlOrPayload").put("type", "string").put("description", "OpenAPI spec as a URL, file path, or inline JSON/YAML payload");
+        properties.putObject("method").put("type", "string").put("description", "Filter recorded traffic by HTTP method (e.g. GET, POST)");
+        properties.putObject("path").put("type", "string").put("description", "Filter recorded traffic by request path (e.g. /api/users)");
+        schema.putArray("required").add("specUrlOrPayload");
+
+        tools.put("verify_traffic_against_openapi", new ToolDefinition(
+            "verify_traffic_against_openapi",
+            "Verify the API calls already recorded by MockServer conform to an OpenAPI contract. "
+                + "Pulls recorded request-response pairs from the event log, validates each against the spec, "
+                + "and returns a per-pair conformance report with request and response validation errors.",
+            schema,
+            this::handleVerifyTrafficAgainstOpenApi
+        ));
+    }
+
+    private JsonNode handleVerifyTrafficAgainstOpenApi(JsonNode params) {
+        try {
+            String specUrlOrPayload = params.path("specUrlOrPayload").asText(null);
+            if (specUrlOrPayload == null || specUrlOrPayload.trim().isEmpty()) {
+                return errorResult("'specUrlOrPayload' is required and must not be blank");
+            }
+
+            // Retrieve recorded request-response pairs
+            HttpRequest filterRequest = request();
+            JsonNode methodNode = params.path("method");
+            if (!methodNode.isMissingNode() && !methodNode.isNull()) {
+                filterRequest.withMethod(methodNode.asText());
+            }
+            JsonNode pathNode = params.path("path");
+            if (!pathNode.isMissingNode() && !pathNode.isNull()) {
+                filterRequest.withPath(pathNode.asText());
+            }
+
+            HttpRequest retrieveRequest = request()
+                .withMethod("PUT")
+                .withPath("/mockserver/retrieve")
+                .withQueryStringParameter("type", "REQUEST_RESPONSES")
+                .withQueryStringParameter("format", "JSON")
+                .withBody(getRequestDefinitionSerializer().serialize(filterRequest));
+
+            HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+            String body = retrieveResponse.getBodyAsString();
+
+            if (body == null || body.isEmpty() || "[]".equals(body.trim())) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "no_traffic");
+                resultNode.put("message", "No recorded request-response pairs found matching the filter.");
+                resultNode.put("totalPairs", 0);
+                resultNode.put("passed", 0);
+                resultNode.put("failed", 0);
+                return resultNode;
+            }
+
+            // Parse request-response pairs using the standard serializer to preserve
+            // all fields (cookies, query parameters, multi-value headers, etc.)
+            LogEventRequestAndResponseSerializer requestAndResponseSerializer =
+                new LogEventRequestAndResponseSerializer(mockServerLogger);
+            LogEventRequestAndResponse[] parsed = requestAndResponseSerializer.deserializeArray(body);
+            List<Pair<HttpRequest, HttpResponse>> pairs = new ArrayList<>();
+            for (LogEventRequestAndResponse entry : parsed) {
+                pairs.add(Pair.of(entry.getHttpRequest(), entry.getHttpResponse()));
+            }
+
+            // Validate
+            OpenApiTrafficValidator validator = new OpenApiTrafficValidator(mockServerLogger);
+            List<OpenApiTrafficValidator.TrafficValidationResult> results = validator.validate(specUrlOrPayload, pairs);
+
+            // Build response
+            int passedCount = 0;
+            int failedCount = 0;
+            ArrayNode resultsArray = objectMapper.createArrayNode();
+            for (OpenApiTrafficValidator.TrafficValidationResult result : results) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("method", result.getRequestMethod());
+                resultNode.put("path", result.getRequestPath());
+                if (result.getMatchedOperation() != null) {
+                    resultNode.put("matchedOperation", result.getMatchedOperation());
+                } else {
+                    resultNode.putNull("matchedOperation");
+                }
+                resultNode.put("passed", result.isPassed());
+
+                if (!result.getRequestErrors().isEmpty()) {
+                    ArrayNode reqErrors = resultNode.putArray("requestErrors");
+                    for (String error : result.getRequestErrors()) {
+                        reqErrors.add(error);
+                    }
+                }
+                if (!result.getResponseErrors().isEmpty()) {
+                    ArrayNode respErrors = resultNode.putArray("responseErrors");
+                    for (String error : result.getResponseErrors()) {
+                        respErrors.add(error);
+                    }
+                }
+
+                if (result.isPassed()) {
+                    passedCount++;
+                } else {
+                    failedCount++;
+                }
+                resultsArray.add(resultNode);
+            }
+
+            ObjectNode responseNode = objectMapper.createObjectNode();
+            responseNode.put("status", failedCount == 0 ? "conformant" : "non_conformant");
+            responseNode.put("totalPairs", results.size());
+            responseNode.put("passed", passedCount);
+            responseNode.put("failed", failedCount);
+            responseNode.set("results", resultsArray);
+            return responseNode;
+        } catch (Exception e) {
+            return errorResult("Failed to verify traffic against OpenAPI", e);
+        }
+    }
+
+    private void registerRunContractTest() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("specUrlOrPayload").put("type", "string").put("description", "OpenAPI spec as a URL, file path, or inline JSON/YAML payload");
+        properties.putObject("baseUrl").put("type", "string").put("description", "Base URL of the service under test (e.g. http://localhost:8080)");
+        properties.putObject("operationId").put("type", "string").put("description", "Optional filter to test only a specific operation by operationId");
+        ArrayNode required = schema.putArray("required");
+        required.add("specUrlOrPayload");
+        required.add("baseUrl");
+
+        tools.put("run_contract_test", new ToolDefinition(
+            "run_contract_test",
+            "Send example requests derived from an OpenAPI spec to a running service and check the responses conform — "
+                + "use this to verify a service you just built or changed. Builds representative requests for each "
+                + "operation (path parameters, query parameters, headers, request body) from spec examples and schema defaults, "
+                + "sends them to the specified base URL, and validates each response against the spec. "
+                + "Each request has a 10-second timeout.",
+            schema,
+            this::handleRunContractTest
+        ));
+    }
+
+    private JsonNode handleRunContractTest(JsonNode params) {
+        try {
+            String specUrlOrPayload = params.path("specUrlOrPayload").asText(null);
+            if (specUrlOrPayload == null || specUrlOrPayload.trim().isEmpty()) {
+                return errorResult("'specUrlOrPayload' is required and must not be blank");
+            }
+            String baseUrl = params.path("baseUrl").asText(null);
+            if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                return errorResult("'baseUrl' is required and must not be blank");
+            }
+
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("MCP run_contract_test sending requests to external target:{}")
+                    .setArguments(baseUrl)
+            );
+
+            String operationIdFilter = params.path("operationId").asText(null);
+
+            // Parse baseUrl into host, port, scheme
+            java.net.URI uri;
+            try {
+                uri = new java.net.URI(baseUrl);
+            } catch (Exception e) {
+                return errorResult("'baseUrl' is not a valid URL: " + baseUrl);
+            }
+            String host = uri.getHost();
+            if (host == null || host.isEmpty()) {
+                return errorResult("'baseUrl' must be an absolute HTTP/HTTPS URL with a hostname: " + baseUrl);
+            }
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return errorResult("'baseUrl' must use the http or https scheme: " + baseUrl);
+            }
+            int port = uri.getPort();
+            boolean secure = "https".equalsIgnoreCase(uri.getScheme());
+            if (port == -1) {
+                port = secure ? 443 : 80;
+            }
+            String basePath = uri.getPath() != null ? uri.getPath() : "";
+            if (basePath.endsWith("/")) {
+                basePath = basePath.substring(0, basePath.length() - 1);
+            }
+            final String effectiveBasePath = basePath;
+            final java.net.InetSocketAddress remoteAddress = new java.net.InetSocketAddress(host, port);
+            final boolean isSecure = secure;
+
+            OpenApiContractTest contractTest = new OpenApiContractTest(mockServerLogger);
+            List<OpenApiContractTest.ContractTestResult> results = contractTest.runContractTests(
+                specUrlOrPayload,
+                baseUrl,
+                operationIdFilter,
+                request -> {
+                    try {
+                        // Prepend base path to request path
+                        String requestPath = request.getPath() != null ? request.getPath().getValue() : "/";
+                        if (!effectiveBasePath.isEmpty() && !requestPath.startsWith(effectiveBasePath)) {
+                            request.withPath(effectiveBasePath + requestPath);
+                        }
+                        request.withHeader("Host", host + ":" + remoteAddress.getPort());
+                        request.withSecure(isSecure);
+
+                        // 10s timeout: contract tests expect a healthy endpoint that responds
+                        // promptly; a longer timeout avoids false failures on slow cold-start services
+                        return sendHttpRequest(request, remoteAddress, isSecure);
+                    } catch (Exception e) {
+                        return HttpResponse.response()
+                            .withStatusCode(0)
+                            .withBody("connection error: " + e.getMessage());
+                    }
+                }
+            );
+
+            // Build response
+            int passedCount = 0;
+            int failedCount = 0;
+            ArrayNode resultsArray = objectMapper.createArrayNode();
+            for (OpenApiContractTest.ContractTestResult result : results) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("operationId", result.getOperationId());
+                resultNode.put("method", result.getMethod());
+                resultNode.put("path", result.getPath());
+                resultNode.put("statusCode", result.getStatusCodeReceived());
+                resultNode.put("passed", result.isPassed());
+
+                if (!result.getValidationErrors().isEmpty()) {
+                    ArrayNode errors = resultNode.putArray("validationErrors");
+                    for (String error : result.getValidationErrors()) {
+                        errors.add(error);
+                    }
+                }
+
+                if (result.isPassed()) {
+                    passedCount++;
+                } else {
+                    failedCount++;
+                }
+                resultsArray.add(resultNode);
+            }
+
+            ObjectNode responseNode = objectMapper.createObjectNode();
+            responseNode.put("status", failedCount == 0 ? "all_passed" : "failures_detected");
+            responseNode.put("totalOperations", results.size());
+            responseNode.put("passed", passedCount);
+            responseNode.put("failed", failedCount);
+            responseNode.set("results", resultsArray);
+            return responseNode;
+        } catch (Exception e) {
+            return errorResult("Failed to run contract test", e);
+        }
+    }
+
+    private void registerRunResiliencyTest() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("specUrlOrPayload").put("type", "string").put("description", "OpenAPI spec as a URL, file path, or inline JSON/YAML payload");
+        properties.putObject("baseUrl").put("type", "string").put("description", "Base URL of the service under test (e.g. http://localhost:8080)");
+        properties.putObject("operationId").put("type", "string").put("description", "Optional filter to test only a specific operation by operationId");
+        ArrayNode required = schema.putArray("required");
+        required.add("specUrlOrPayload");
+        required.add("baseUrl");
+
+        tools.put("run_resiliency_test", new ToolDefinition(
+            "run_resiliency_test",
+            "Send malformed and boundary-case requests derived from an OpenAPI spec to a running service "
+                + "and report which inputs it failed to handle gracefully — use this to verify the error handling "
+                + "of a service you built or changed. Generates mutations such as omitting required fields, "
+                + "type violations, numeric and string boundary violations, and malformed JSON bodies. "
+                + "Each request has a 5-second timeout so unresponsive endpoints are classified as UNEXPECTED promptly.",
+            schema,
+            this::handleRunResiliencyTest
+        ));
+    }
+
+    private JsonNode handleRunResiliencyTest(JsonNode params) {
+        try {
+            String specUrlOrPayload = params.path("specUrlOrPayload").asText(null);
+            if (specUrlOrPayload == null || specUrlOrPayload.trim().isEmpty()) {
+                return errorResult("'specUrlOrPayload' is required and must not be blank");
+            }
+            String baseUrl = params.path("baseUrl").asText(null);
+            if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                return errorResult("'baseUrl' is required and must not be blank");
+            }
+
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("MCP run_resiliency_test sending requests to external target:{}")
+                    .setArguments(baseUrl)
+            );
+
+            String operationIdFilter = params.path("operationId").asText(null);
+
+            // Parse baseUrl into host, port, scheme
+            java.net.URI uri;
+            try {
+                uri = new java.net.URI(baseUrl);
+            } catch (Exception e) {
+                return errorResult("'baseUrl' is not a valid URL: " + baseUrl);
+            }
+            String host = uri.getHost();
+            if (host == null || host.isEmpty()) {
+                return errorResult("'baseUrl' must be an absolute HTTP/HTTPS URL with a hostname: " + baseUrl);
+            }
+            String scheme = uri.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return errorResult("'baseUrl' must use the http or https scheme: " + baseUrl);
+            }
+            int port = uri.getPort();
+            boolean secure = "https".equalsIgnoreCase(uri.getScheme());
+            if (port == -1) {
+                port = secure ? 443 : 80;
+            }
+            String basePath = uri.getPath() != null ? uri.getPath() : "";
+            if (basePath.endsWith("/")) {
+                basePath = basePath.substring(0, basePath.length() - 1);
+            }
+            final String effectiveBasePath = basePath;
+            final java.net.InetSocketAddress remoteAddress = new java.net.InetSocketAddress(host, port);
+            final boolean isSecure = secure;
+
+            OpenApiResiliencyTest resiliencyTest = new OpenApiResiliencyTest(mockServerLogger);
+            OpenApiResiliencyTest.ResiliencyTestReport report = resiliencyTest.runResiliencyTests(
+                specUrlOrPayload,
+                baseUrl,
+                operationIdFilter,
+                request -> {
+                    try {
+                        String requestPath = request.getPath() != null ? request.getPath().getValue() : "/";
+                        if (!effectiveBasePath.isEmpty() && !requestPath.startsWith(effectiveBasePath)) {
+                            request.withPath(effectiveBasePath + requestPath);
+                        }
+                        request.withHeader("Host", host + ":" + remoteAddress.getPort());
+                        request.withSecure(isSecure);
+                        // 5s timeout: resiliency tests deliberately send malformed input, so an
+                        // unresponsive endpoint should be classified as UNEXPECTED promptly
+                        return sendHttpRequest(request, remoteAddress, isSecure, 5000);
+                    } catch (Exception e) {
+                        return HttpResponse.response()
+                            .withStatusCode(0)
+                            .withBody("connection error: " + e.getMessage());
+                    }
+                }
+            );
+
+            // Build response
+            ArrayNode resultsArray = objectMapper.createArrayNode();
+            for (OpenApiResiliencyTest.MutationResult result : report.getResults()) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("operationId", result.getOperationId());
+                resultNode.put("method", result.getMethod());
+                resultNode.put("path", result.getPath());
+                resultNode.put("mutationType", result.getMutationType().name());
+                resultNode.put("mutationDescription", result.getMutationDescription());
+                resultNode.put("statusCode", result.getStatusCode());
+                resultNode.put("classification", result.getClassification().name());
+                resultsArray.add(resultNode);
+            }
+
+            // Per-operation summaries
+            ArrayNode operationSummaries = objectMapper.createArrayNode();
+            for (OpenApiResiliencyTest.OperationSummary summary : report.getOperationSummaries().values()) {
+                ObjectNode summaryNode = objectMapper.createObjectNode();
+                summaryNode.put("operationId", summary.getOperationId());
+                summaryNode.put("method", summary.getMethod());
+                summaryNode.put("path", summary.getPath());
+                summaryNode.put("handled", summary.getHandled());
+                summaryNode.put("unexpected", summary.getUnexpected());
+                operationSummaries.add(summaryNode);
+            }
+
+            ObjectNode responseNode = objectMapper.createObjectNode();
+            responseNode.put("status", report.getUnexpectedCount() == 0 ? "all_handled" : "failures_detected");
+            responseNode.put("totalMutations", report.getTotalMutations());
+            responseNode.put("handled", report.getHandledCount());
+            responseNode.put("unexpected", report.getUnexpectedCount());
+            responseNode.set("operationSummaries", operationSummaries);
+            responseNode.set("results", resultsArray);
+            return responseNode;
+        } catch (Exception e) {
+            return errorResult("Failed to run resiliency test", e);
+        }
+    }
+
+    /**
+     * Send an HTTP request using java.net.HttpURLConnection for simplicity and client-agnosticism.
+     * This avoids the need to construct a NettyHttpClient which requires an EventLoopGroup.
+     */
+    private HttpResponse sendHttpRequest(HttpRequest request, java.net.InetSocketAddress remoteAddress, boolean secure) {
+        return sendHttpRequest(request, remoteAddress, secure, 10000);
+    }
+
+    /**
+     * Maximum response body size (10 MB). Responses exceeding this limit are truncated.
+     */
+    private static final int MAX_RESPONSE_BODY_SIZE = 10 * 1024 * 1024;
+
+    /**
+     * Maximum fixture file size (50 MB). Files exceeding this limit are rejected to prevent OOM.
+     */
+    static final long MAX_FIXTURE_FILE_SIZE = 50L * 1024 * 1024;
+
+    private HttpResponse sendHttpRequest(HttpRequest request, java.net.InetSocketAddress remoteAddress, boolean secure, int timeoutMillis) {
+        java.net.HttpURLConnection connection = null;
+        try {
+            String scheme = secure ? "https" : "http";
+            String path = request.getPath() != null ? request.getPath().getValue() : "/";
+
+            // Build query string from query parameters
+            StringBuilder queryString = new StringBuilder();
+            if (request.getQueryStringParameterList() != null) {
+                for (org.mockserver.model.Parameter param : request.getQueryStringParameterList()) {
+                    if (param.getName() != null && param.getValues() != null) {
+                        for (org.mockserver.model.NottableString value : param.getValues()) {
+                            if (queryString.length() > 0) {
+                                queryString.append("&");
+                            } else {
+                                queryString.append("?");
+                            }
+                            queryString.append(java.net.URLEncoder.encode(param.getName().getValue(), "UTF-8"));
+                            queryString.append("=");
+                            queryString.append(java.net.URLEncoder.encode(value.getValue(), "UTF-8"));
+                        }
+                    }
+                }
+            }
+
+            String urlString = scheme + "://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + path + queryString;
+            java.net.URL url = new java.net.URL(urlString);
+            connection = (java.net.HttpURLConnection) url.openConnection();
+            connection.setRequestMethod(request.getMethod() != null ? request.getMethod().getValue() : "GET");
+            connection.setConnectTimeout(timeoutMillis);
+            connection.setReadTimeout(timeoutMillis);
+
+            // Set headers
+            if (request.getHeaderList() != null) {
+                for (org.mockserver.model.Header header : request.getHeaderList()) {
+                    if (header.getName() != null && header.getValues() != null && !header.getValues().isEmpty()) {
+                        connection.setRequestProperty(header.getName().getValue(), header.getValues().get(0).getValue());
+                    }
+                }
+            }
+
+            // Set body
+            String bodyString = request.getBodyAsString();
+            if (bodyString != null && !bodyString.isEmpty()) {
+                connection.setDoOutput(true);
+                try (java.io.OutputStream os = connection.getOutputStream()) {
+                    os.write(bodyString.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+
+            int statusCode = connection.getResponseCode();
+            HttpResponse response = HttpResponse.response().withStatusCode(statusCode);
+
+            // Read response headers
+            Map<String, java.util.List<String>> responseHeaders = connection.getHeaderFields();
+            if (responseHeaders != null) {
+                for (Map.Entry<String, java.util.List<String>> entry : responseHeaders.entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null && !entry.getValue().isEmpty()) {
+                        response.withHeader(entry.getKey(), entry.getValue().toArray(new String[0]));
+                    }
+                }
+            }
+
+            // Read response body with size cap
+            java.io.InputStream rawStream;
+            try {
+                rawStream = connection.getInputStream();
+            } catch (java.io.IOException e) {
+                rawStream = connection.getErrorStream();
+            }
+            if (rawStream != null) {
+                try (java.io.InputStream inputStream = rawStream) {
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[4096];
+                    int bytesRead;
+                    long totalRead = 0;
+                    boolean truncated = false;
+                    while ((bytesRead = inputStream.read(buffer)) != -1) {
+                        long remaining = MAX_RESPONSE_BODY_SIZE - totalRead;
+                        if (remaining <= 0) {
+                            truncated = true;
+                            break;
+                        }
+                        int toWrite = (int) Math.min(bytesRead, remaining);
+                        baos.write(buffer, 0, toWrite);
+                        totalRead += toWrite;
+                        if (toWrite < bytesRead) {
+                            truncated = true;
+                            break;
+                        }
+                    }
+                    String bodyContent = baos.toString("UTF-8");
+                    if (truncated) {
+                        bodyContent += "\n[TRUNCATED: response body exceeded " + MAX_RESPONSE_BODY_SIZE + " bytes]";
+                    }
+                    response.withBody(bodyContent);
+                }
+            }
+
+            return response;
+        } catch (Exception e) {
+            return HttpResponse.response()
+                .withStatusCode(0)
+                .withBody("connection error: " + e.getMessage());
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private void registerRecordLlmFixtures() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("path").put("type", "string").put("description",
+            "File path to write the fixture JSON to. The directory must exist.");
+        properties.putObject("host").put("type", "string").put("description",
+            "Optional filter: only include recorded traffic whose request host matches this value");
+        properties.putObject("requestPath").put("type", "string").put("description",
+            "Optional filter: only include recorded traffic whose request path matches this value");
+        schema.putArray("required").add("path");
+
+        tools.put("record_llm_fixtures", new ToolDefinition(
+            "record_llm_fixtures",
+            "Snapshots LLM/MCP traffic recorded through MockServer's forwarding proxy into a committable, secret-free "
+                + "fixture file for deterministic replay. Converts recorded request-response pairs (including SSE streaming "
+                + "responses from APIs like Anthropic Claude, OpenAI, etc.) into MockServer expectations with secrets "
+                + "(Authorization, api-key, etc.) automatically redacted from headers. Note: request and response bodies "
+                + "are NOT redacted — if your application places credentials in bodies, review fixture files before "
+                + "committing. The output file uses MockServer's standard expectation JSON format and can be loaded "
+                + "with load_expectations_from_file or via initializationJsonPath.",
+            schema,
+            this::handleRecordLlmFixtures
+        ));
+    }
+
+    private JsonNode handleRecordLlmFixtures(JsonNode params) {
+        try {
+            String filePath = params.path("path").asText(null);
+            if (filePath == null || filePath.trim().isEmpty()) {
+                return errorResult("'path' is required and must not be blank");
+            }
+
+            // Validate the file path is inside allowed directories
+            Path outputPath = Paths.get(filePath).toAbsolutePath().normalize();
+            ObjectNode pathError = validateFilePath(outputPath, objectMapper);
+            if (pathError != null) {
+                return pathError;
+            }
+
+            File parentDir = outputPath.getParent().toFile();
+            if (!parentDir.exists()) {
+                return errorResult("Directory does not exist: " + parentDir.getAbsolutePath());
+            }
+
+            // Build a filter request to retrieve RECORDED_EXPECTATIONS
+            HttpRequest filterRequest = request();
+            JsonNode hostNode = params.path("host");
+            if (!hostNode.isMissingNode() && !hostNode.isNull() && hostNode.isTextual()) {
+                filterRequest.withHeader("Host", hostNode.asText());
+            }
+            JsonNode requestPathNode = params.path("requestPath");
+            if (!requestPathNode.isMissingNode() && !requestPathNode.isNull() && requestPathNode.isTextual()) {
+                filterRequest.withPath(requestPathNode.asText());
+            }
+
+            // Retrieve recorded expectations
+            HttpRequest retrieveRequest = request()
+                .withMethod("PUT")
+                .withPath("/mockserver/retrieve")
+                .withQueryStringParameter("type", "RECORDED_EXPECTATIONS")
+                .withQueryStringParameter("format", "JSON")
+                .withBody(getRequestDefinitionSerializer().serialize(filterRequest));
+
+            HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+            String body = retrieveResponse.getBodyAsString();
+
+            if (body == null || body.isEmpty() || "[]".equals(body.trim())) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "no_recorded_traffic");
+                resultNode.put("message", "No recorded traffic found matching the filter. "
+                    + "Ensure MockServer has forwarded requests (e.g. via create_forward_expectation or proxy mode) before calling this tool.");
+                resultNode.put("count", 0);
+                return resultNode;
+            }
+
+            // Deserialize the recorded expectations
+            Expectation[] recordedExpectations = getExpectationSerializer().deserializeArray(body, false);
+
+            if (recordedExpectations.length == 0) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "no_recorded_traffic");
+                resultNode.put("message", "No recorded traffic found matching the filter.");
+                resultNode.put("count", 0);
+                return resultNode;
+            }
+
+            // Convert SSE-streamed responses to HttpSseResponse expectations
+            SseAwareExpectationConverter sseConverter = new SseAwareExpectationConverter();
+            Expectation[] sseAwareExpectations = sseConverter.convert(recordedExpectations);
+
+            // Redact sensitive headers
+            FixtureRedactor redactor = new FixtureRedactor();
+            Expectation[] redactedExpectations = redactor.redact(sseAwareExpectations);
+
+            // Serialize to the fixture file
+            String json = getExpectationSerializer().serialize(redactedExpectations);
+            Files.write(outputPath, json.getBytes(StandardCharsets.UTF_8));
+
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "written");
+            resultNode.put("count", redactedExpectations.length);
+            resultNode.put("file", outputPath.toString());
+            resultNode.put("message", "Wrote " + redactedExpectations.length + " expectation(s) to " + outputPath
+                + ". Secrets have been redacted. Load with load_expectations_from_file or initializationJsonPath for replay.");
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to record LLM fixtures", e);
+        }
+    }
+
+    private void registerLoadExpectationsFromFile() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("path").put("type", "string").put("description",
+            "File path to the fixture JSON file to load. Must be a valid MockServer expectations JSON file.");
+        schema.putArray("required").add("path");
+
+        tools.put("load_expectations_from_file", new ToolDefinition(
+            "load_expectations_from_file",
+            "Loads expectations from a JSON fixture file and adds them as active mock expectations in MockServer. "
+                + "Use this to replay LLM/MCP traffic previously recorded with record_llm_fixtures. "
+                + "The file must contain expectations in MockServer's standard JSON format (an array of expectation objects). "
+                + "SSE streaming responses in the fixture are replayed with Server-Sent Events.",
+            schema,
+            this::handleLoadExpectationsFromFile
+        ));
+    }
+
+    private JsonNode handleLoadExpectationsFromFile(JsonNode params) {
+        try {
+            String filePath = params.path("path").asText(null);
+            if (filePath == null || filePath.trim().isEmpty()) {
+                return errorResult("'path' is required and must not be blank");
+            }
+
+            Path inputPath = Paths.get(filePath).toAbsolutePath().normalize();
+            ObjectNode pathError = validateFilePath(inputPath, objectMapper);
+            if (pathError != null) {
+                return pathError;
+            }
+
+            if (!Files.exists(inputPath)) {
+                return errorResult("File does not exist: " + inputPath);
+            }
+            if (!Files.isReadable(inputPath)) {
+                return errorResult("File is not readable: " + inputPath);
+            }
+
+            long fileSize = Files.size(inputPath);
+            if (fileSize > MAX_FIXTURE_FILE_SIZE) {
+                return errorResult("File exceeds the maximum allowed size of "
+                    + (MAX_FIXTURE_FILE_SIZE / (1024 * 1024)) + " MB: " + inputPath);
+            }
+
+            String json = new String(Files.readAllBytes(inputPath), StandardCharsets.UTF_8);
+            if (json.trim().isEmpty()) {
+                return errorResult("File is empty: " + inputPath);
+            }
+
+            Expectation[] expectations = getExpectationSerializer().deserializeArray(json, false);
+
+            if (expectations.length == 0) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("status", "empty");
+                resultNode.put("message", "File contained no expectations.");
+                resultNode.put("count", 0);
+                return resultNode;
+            }
+
+            // Add expectations with unlimited times and TTL for replay
+            List<Expectation> addedExpectations = new ArrayList<>();
+            for (Expectation exp : expectations) {
+                addedExpectations.addAll(httpState.add(exp));
+            }
+
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "loaded");
+            resultNode.put("count", addedExpectations.size());
+            resultNode.put("file", inputPath.toString());
+            ArrayNode ids = resultNode.putArray("ids");
+            for (Expectation exp : addedExpectations) {
+                ids.add(exp.getId());
+            }
+            resultNode.put("message", "Loaded " + addedExpectations.size() + " expectation(s) from " + inputPath
+                + ". They are now active and will match incoming requests.");
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to load expectations from file", e);
+        }
+    }
+
+    /**
+     * Validates that a file path is inside the process working directory or the system temp directory.
+     * Returns null if the path is allowed, or an error result if it is not.
+     */
+    static ObjectNode validateFilePath(Path filePath, com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        Path normalised = filePath.toAbsolutePath().normalize();
+        Path workingDir = Paths.get("").toAbsolutePath().normalize();
+        Path tempDir = Paths.get(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize();
+        if (!normalised.startsWith(workingDir) && !normalised.startsWith(tempDir)) {
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("error", true);
+            resultNode.put("message", "Path is outside allowed directories. Files must be inside the working directory ("
+                + workingDir + ") or the system temp directory (" + tempDir + ")");
+            return resultNode;
+        }
+        return null;
     }
 
     private ObjectNode errorResult(String message) {

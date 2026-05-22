@@ -146,6 +146,24 @@ public class McpStreamableHttpHandlerTest {
     }
 
     @Test
+    public void shouldIncludeAgentInstructionsInInitializeResult() throws Exception {
+        String requestBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"clientInfo\":{\"name\":\"test\"}}}";
+        FullHttpResponse response = sendPost(requestBody);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+
+        JsonNode json = parseResponse(response);
+        String instructions = json.path("result").path("instructions").asText();
+        assertThat(instructions, containsString("MockServer is an HTTP(S) mock server and proxy"));
+        assertThat(instructions, containsString("explain_unmatched_requests"));
+        assertThat(instructions, containsString("run_contract_test"));
+        assertThat(instructions, containsString("run_resiliency_test"));
+        assertThat(instructions, containsString("record_llm_fixtures"));
+
+        response.release();
+    }
+
+    @Test
     public void shouldReturnSessionIdOnInitialize() throws Exception {
         String requestBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
         FullHttpResponse response = sendPost(requestBody);
@@ -320,7 +338,7 @@ public class McpStreamableHttpHandlerTest {
         JsonNode json = parseResponse(response);
         JsonNode resources = json.path("result").path("resources");
         assertThat(resources.isArray(), is(true));
-        assertThat(resources.size(), is(4));
+        assertThat(resources.size(), is(5));
 
         response.release();
     }

@@ -72,6 +72,14 @@ public class McpResourceRegistry {
             "application/json",
             this::readConfiguration
         ));
+
+        resources.put("mockserver://unmatched", new ResourceDefinition(
+            "mockserver://unmatched",
+            "Unmatched Requests",
+            "Recent requests that matched no expectation, with ranked closest-expectation diagnostics and remediation hints",
+            "application/json",
+            this::readUnmatched
+        ));
     }
 
     private JsonNode readExpectations() {
@@ -153,6 +161,27 @@ public class McpResourceRegistry {
         } catch (Exception e) {
             ObjectNode error = objectMapper.createObjectNode();
             error.put("error", "Failed to read configuration");
+            return error;
+        }
+    }
+
+    private JsonNode readUnmatched() {
+        try {
+            HttpRequest explainRequest = request()
+                .withMethod("PUT")
+                .withBody("{\"limit\":20}");
+            HttpResponse response = httpState.explainUnmatched(explainRequest);
+            String body = response.getBodyAsString();
+            if (body != null && !body.isEmpty()) {
+                return objectMapper.readTree(body);
+            }
+            ObjectNode empty = objectMapper.createObjectNode();
+            empty.put("unmatchedRequestCount", 0);
+            empty.set("unmatchedRequests", objectMapper.createArrayNode());
+            return empty;
+        } catch (Exception e) {
+            ObjectNode error = objectMapper.createObjectNode();
+            error.put("error", "Failed to read unmatched requests");
             return error;
         }
     }

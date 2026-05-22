@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-05-06T00:00:00+00:00
+  lastmod: 2026-05-22T00:00:00+00:00
 ---
 
 <p>One of the most powerful uses of MockServer's MCP integration is <strong>AI-assisted HTTP debugging</strong>. By combining MockServer's traffic recording capabilities with an AI assistant's ability to analyse data and suggest fixes, you can quickly diagnose and resolve HTTP integration issues.</p>
@@ -24,7 +24,7 @@ sitemap:
     <li><a href="#step4">Diagnose mismatches</a> when requests don't match expectations</li>
 </ol>
 
-<p>Throughout this workflow, your AI assistant uses MockServer's MCP tools to interact with the server — you describe the problem in natural language and the assistant handles the API calls.</p>
+<p>Throughout this workflow, your AI assistant — such as <a href="/mock_server/ai_mcp_setup.html">Claude Code or OpenCode</a>, or any other MCP-capable coding agent — uses MockServer's MCP tools to interact with the server. You describe the problem in natural language and the assistant handles the API calls.</p>
 
 <a id="step1" class="anchor" href="#step1">&nbsp;</a>
 
@@ -63,6 +63,40 @@ API_BASE_URL=https://api.example.com
 
 # After (through MockServer)
 API_BASE_URL=http://localhost:1080</code></pre>
+
+<p>For AI applications, point the LLM client's base URL at MockServer so every model call is recorded. The examples below use LangChain and LangGraph, but the same approach works for any agent framework, LLM SDK, or HTTP client that lets you override the base URL. They assume a forwarding proxy is already in place for the provider (Step 1) — for example forwarding <code class="code inline">/v1/.*</code> to <code class="code inline">api.openai.com</code> or <code class="code inline">api.anthropic.com</code>.</p>
+
+<h3>LangChain</h3>
+
+<p>LangChain chat model clients accept a base URL override — set it to MockServer:</p>
+
+<pre class="prettyprint code"><code class="code">from langchain_openai import ChatOpenAI
+
+# Route the model client through MockServer instead of calling the provider directly
+llm = ChatOpenAI(
+    model="gpt-4o",
+    base_url="http://localhost:1080/v1",
+    api_key="sk-...",
+)</code></pre>
+
+<p>The same applies to other providers — for example <code class="code inline">ChatAnthropic(model="claude-sonnet-4-20250514", base_url="http://localhost:1080")</code>.</p>
+
+<h3>LangGraph</h3>
+
+<p>A LangGraph graph makes its HTTP calls through the LangChain model objects bound to its nodes, so the same base URL override applies. Configure the model before building the graph:</p>
+
+<pre class="prettyprint code"><code class="code">from langchain_anthropic import ChatAnthropic
+from langgraph.prebuilt import create_react_agent
+
+model = ChatAnthropic(
+    model="claude-sonnet-4-20250514",
+    base_url="http://localhost:1080",
+)
+
+# Every model call made by the agent's nodes is now recorded by MockServer
+agent = create_react_agent(model, tools=tools)</code></pre>
+
+<p>If your AI agent or SDK does not allow the base URL to be changed, use MockServer as an HTTPS proxy instead — see <a href="/mock_server/ai_traffic_inspection.html">AI Traffic Inspection</a>.</p>
 
 <p>Then run your application or test scenario as normal. MockServer will forward all requests and record the traffic.</p>
 
@@ -149,6 +183,39 @@ API_BASE_URL=http://localhost:1080</code></pre>
 
 <p>This is particularly useful for intermittent failures where you need to understand exactly what happened for a specific request.</p>
 
+<h3>"Why are my test requests getting 404s?"</h3>
+
+<p>After a failed test run where requests returned 404 (no matching expectation), the assistant can diagnose all mismatches at once:</p>
+
+<p>The assistant will:</p>
+<ol>
+    <li>Use <code class="code inline">explain_unmatched_requests</code> to retrieve all recent requests that matched no expectation</li>
+    <li>For each unmatched request, show the ranked closest expectations with field-level diffs</li>
+    <li>Provide actionable remediation hints such as "use method POST not GET", "add trailing slash", or "add missing header Authorization"</li>
+    <li>Suggest specific fixes to either the expectations or the test code</li>
+</ol>
+
+<p>This is the fastest way to diagnose mismatches after a test failure. Unlike <code class="code inline">debug_request_mismatch</code> (which requires you to reconstruct the failing request), <code class="code inline">explain_unmatched_requests</code> works from MockServer's own traffic log, so there is nothing to reconstruct.</p>
+
+<p>The tool is also available as a REST endpoint (<code class="code inline">PUT /mockserver/explainUnmatched</code>) and as an MCP resource (<code class="code inline">mockserver://unmatched</code>).</p>
+
+<h2>Observe Then Mock: From Live Traffic to Active Expectations</h2>
+
+<p>Once you have recorded live traffic through a forwarding proxy (steps 1-3 above), you can convert that recorded traffic into active mock expectations in a single step using <a href="/mock_server/ai_mcp_tools.html#create_expectations_from_recorded_traffic"><code class="code inline">create_expectations_from_recorded_traffic</code></a>. This "observe then mock" workflow lets you point MockServer at a real API once, record the responses, and then switch to mocked responses for repeatable offline testing.</p>
+
+<p><strong>Example prompt:</strong></p>
+
+<blockquote>
+<p><em>"Convert all the traffic you just recorded into mock expectations so I can run tests offline"</em></p>
+</blockquote>
+
+<p>The assistant will:</p>
+<ol>
+    <li>Use <code class="code inline">create_expectations_from_recorded_traffic</code> with <code>preview=true</code> to show you the expectations that would be created</li>
+    <li>After your confirmation, call it again with <code>preview=false</code> to activate them</li>
+    <li>Optionally filter by method or path if you only want to mock a subset of the traffic</li>
+</ol>
+
 <h2>Tips for Effective AI-Assisted Debugging</h2>
 
 <ul>
@@ -165,6 +232,7 @@ API_BASE_URL=http://localhost:1080</code></pre>
     <li><a href="/mock_server/ai_mcp_setup.html"><strong>MCP Setup</strong></a> — how to connect your AI assistant to MockServer</li>
     <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> — full documentation of all MCP tools</li>
     <li><a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a> — use MockServer as an HTTPS proxy to inspect the raw LLM API and MCP calls your AI agent makes (prompts, tokens, tool calls, streamed responses)</li>
+    <li><a href="/mock_server/ai_verification.html"><strong>Contract Verification</strong></a> — verify recorded traffic and run contract/resiliency tests against an OpenAPI spec</li>
     <li><a href="/mock_server/debugging_issues.html"><strong>Logging &amp; Debugging</strong></a> — traditional (non-AI) debugging approaches</li>
     <li><a href="/mock_server/troubleshooting_matching.html"><strong>Troubleshooting Matching</strong></a> — step-by-step checklist, common pitfalls, and the debug mismatch endpoint</li>
 </ul>

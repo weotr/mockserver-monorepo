@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-05-06T00:00:00+00:00
+  lastmod: 2026-05-22T00:00:00+00:00
 ---
 
 <p>MockServer's MCP server exposes a comprehensive set of tools that AI assistants can use to interact with MockServer. Tools are divided into <strong>high-level tools</strong> (simplified parameters for common tasks) and <strong>low-level tools</strong> (full JSON passthrough for advanced use cases).</p>
@@ -34,8 +34,15 @@ sitemap:
         <tr><td><a href="#get_status"><code>get_status</code></a></td><td>Server status and ports</td><td>High</td></tr>
         <tr><td><a href="#create_forward_expectation"><code>create_forward_expectation</code></a></td><td>Create a forwarding proxy expectation</td><td>High</td></tr>
         <tr><td><a href="#debug_request_mismatch"><code>debug_request_mismatch</code></a></td><td>Diagnose why a request did not match</td><td>High</td></tr>
+        <tr><td><a href="#explain_unmatched_requests"><code>explain_unmatched_requests</code></a></td><td>Explain recent unmatched requests with ranked diagnostics</td><td>High</td></tr>
         <tr><td><a href="#stop_server"><code>stop_server</code></a></td><td>Stop the MockServer instance</td><td>High</td></tr>
         <tr><td><a href="#create_expectation_from_openapi"><code>create_expectation_from_openapi</code></a></td><td>Generate expectations from an OpenAPI spec</td><td>High</td></tr>
+        <tr><td><a href="#create_expectations_from_recorded_traffic"><code>create_expectations_from_recorded_traffic</code></a></td><td>Convert recorded proxy traffic into mock expectations</td><td>High</td></tr>
+        <tr><td><a href="#verify_traffic_against_openapi"><code>verify_traffic_against_openapi</code></a></td><td>Verify recorded traffic conforms to an OpenAPI spec</td><td>High</td></tr>
+        <tr><td><a href="#run_contract_test"><code>run_contract_test</code></a></td><td>Send example requests from an OpenAPI spec and validate responses</td><td>High</td></tr>
+        <tr><td><a href="#run_resiliency_test"><code>run_resiliency_test</code></a></td><td>Send malformed and boundary-case requests to verify error handling</td><td>High</td></tr>
+        <tr><td><a href="#record_llm_fixtures"><code>record_llm_fixtures</code></a></td><td>Snapshot recorded LLM/MCP traffic into a committable fixture file</td><td>High</td></tr>
+        <tr><td><a href="#load_expectations_from_file"><code>load_expectations_from_file</code></a></td><td>Load expectations from a fixture file for replay</td><td>High</td></tr>
         <tr><td><a href="#raw_expectation"><code>raw_expectation</code></a></td><td>Full expectation JSON passthrough</td><td>Low</td></tr>
         <tr><td><a href="#raw_retrieve"><code>raw_retrieve</code></a></td><td>Full retrieve with correlation ID filtering</td><td>Low</td></tr>
         <tr><td><a href="#raw_verify"><code>raw_verify</code></a></td><td>Full verification JSON</td><td>Low</td></tr>
@@ -390,9 +397,11 @@ sitemap:
 
 <h3>debug_request_mismatch</h3>
 
-<p>Diagnose why a request did not match any expectation. This tool compares the provided request details against active expectations and returns detailed mismatch information.</p>
+<p>Diagnose why a request did not match any expectation. This tool compares the provided request details against active expectations and returns detailed mismatch information. Results are ranked by closeness (fewest differing fields first), and each mismatched field includes an actionable remediation hint.</p>
 
 <p><strong>Note:</strong> This functionality is also available as a REST API endpoint (<code>PUT /mockserver/debugMismatch</code>) and via the Java client (<code>mockServerClient.debugMismatch(request)</code>). See <a href="/mock_server/troubleshooting_matching.html#debug_mismatch_endpoint">Troubleshooting Matching</a> for details.</p>
+
+<p><strong>Tip:</strong> If you want to diagnose mismatches after a test run without reconstructing requests, use <a href="#explain_unmatched_requests"><code>explain_unmatched_requests</code></a> instead, which works from MockServer's traffic log.</p>
 
 <table>
     <thead>
@@ -424,6 +433,84 @@ sitemap:
     }
   }
 }</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"totalExpectations\":2,\"results\":[{\"expectationId\":\"abc-123\",\"expectationPath\":\"/api/users\",\"expectationMethod\":\"POST\",\"matches\":false,\"matchedFieldCount\":15,\"totalFieldCount\":16,\"differingFieldCount\":1,\"differences\":{\"body\":[\"expected JSON body but was XML\"]},\"remediation\":{\"body\":\"check the Content-Type header and body format\"}},{\"expectationId\":\"def-456\",\"expectationPath\":\"/api/orders\",\"expectationMethod\":\"GET\",\"matches\":false,\"matchedFieldCount\":12,\"totalFieldCount\":16,\"differingFieldCount\":4,\"differences\":{\"method\":[\"expected GET but was POST\"],\"path\":[\"expected /api/orders but was /api/users\"]},\"remediation\":{\"method\":\"use method GET not POST\",\"path\":\"use path /api/orders not /api/users\"}}],\"closestMatch\":{\"expectationId\":\"abc-123\",\"expectationPath\":\"/api/users\",\"expectationMethod\":\"POST\",\"remediation\":{\"body\":\"check the Content-Type header and body format\"}}}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p>The <code>results</code> array is sorted by closeness (fewest differing fields first). Each entry includes:</p>
+<ul>
+    <li><code>differences</code> &mdash; per-field mismatch details explaining what did not match</li>
+    <li><code>remediation</code> &mdash; actionable hints for each mismatched field, such as "use method POST not GET" or "check the Content-Type header and body format"</li>
+    <li><code>matchedFieldCount</code> / <code>totalFieldCount</code> &mdash; numeric closeness ranking</li>
+    <li><code>closestMatch</code> &mdash; the top-ranked result (at the root level) with its remediation hints</li>
+</ul>
+
+<a id="explain_unmatched_requests" class="anchor" href="#explain_unmatched_requests">&nbsp;</a>
+
+<h3>explain_unmatched_requests</h3>
+
+<p>Returns recent requests that hit MockServer and matched no expectation, with ranked closest-expectation diagnostics and actionable remediation hints. Use this after a failed test run to understand why requests received 404 responses, without needing to reconstruct each failing request.</p>
+
+<p><strong>Note:</strong> This functionality is also available as a REST API endpoint (<code>PUT /mockserver/explainUnmatched</code>) and as an MCP resource (<code>mockserver://unmatched</code>).</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>limit</code></td><td>integer</td><td>No</td><td>Maximum number of unmatched requests to return. Defaults to 10, maximum 100.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "method": "tools/call",
+  "params": {
+    "name": "explain_unmatched_requests",
+    "arguments": {
+      "limit": 5
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"unmatchedRequestCount\":1,\"unmatchedRequests\":[{\"timestamp\":\"2026-05-21 12:00:00.000\",\"method\":\"GET\",\"path\":\"/api/users\",\"closestExpectations\":[{\"expectationId\":\"abc123\",\"expectationPath\":\"/api/users\",\"expectationMethod\":\"POST\",\"matches\":false,\"matchedFieldCount\":15,\"totalFieldCount\":16,\"differingFieldCount\":1,\"differences\":{\"method\":[\"expected POST but was GET\"]},\"remediation\":{\"method\":\"use method POST not GET\"}}]}]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p>Each unmatched request includes a <code>closestExpectations</code> array ranked by closeness (fewest differing fields first). Each expectation entry includes:</p>
+<ul>
+    <li><code>differences</code> &mdash; per-field mismatch details</li>
+    <li><code>remediation</code> &mdash; actionable hints such as "use method POST not GET" or "add missing header Authorization"</li>
+    <li><code>differingFieldCount</code> / <code>matchedFieldCount</code> &mdash; numeric closeness ranking</li>
+</ul>
 
 <a id="stop_server" class="anchor" href="#stop_server">&nbsp;</a>
 
@@ -474,6 +561,323 @@ sitemap:
         "getPetById": "200"
       }
     }
+  }
+}</code></pre>
+
+<a id="create_expectations_from_recorded_traffic" class="anchor" href="#create_expectations_from_recorded_traffic">&nbsp;</a>
+
+<h3>create_expectations_from_recorded_traffic</h3>
+
+<p>Converts traffic already recorded by MockServer's forwarding/proxy mode into active mock expectations in one step. After observing a real API via a forwarding proxy (e.g. using <a href="#create_forward_expectation"><code>create_forward_expectation</code></a>), call this tool to generate expectations that replay the recorded responses. This enables an "observe then mock" workflow: point MockServer at a real API once, record the traffic, then switch to mocked responses.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>method</code></td><td>string</td><td>No</td><td>Filter recorded traffic by HTTP method (e.g. <code>GET</code>, <code>POST</code>)</td></tr>
+        <tr><td><code>path</code></td><td>string</td><td>No</td><td>Filter recorded traffic by request path (e.g. <code>/api/users</code>)</td></tr>
+        <tr><td><code>preview</code></td><td>boolean</td><td>No</td><td>When <code>true</code>, return the generated expectations as JSON without adding them. Defaults to <code>false</code>.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request (preview):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 16,
+  "method": "tools/call",
+  "params": {
+    "name": "create_expectations_from_recorded_traffic",
+    "arguments": {
+      "path": "/api/users",
+      "preview": true
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response (preview):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 16,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"preview\",\"count\":1,\"message\":\"Preview of expectations that would be created. Call again with preview=false to activate them.\",\"expectations\":[{\"httpRequest\":{\"method\":\"GET\",\"path\":\"/api/users\"},\"httpResponse\":{\"statusCode\":200,\"body\":\"[{\\\"id\\\":1}]\"}}]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p><strong>Example request (create):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 17,
+  "method": "tools/call",
+  "params": {
+    "name": "create_expectations_from_recorded_traffic",
+    "arguments": {
+      "method": "GET"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response (create):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 17,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"created\",\"count\":2,\"ids\":[\"abc-123\",\"def-456\"]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p>When no recorded traffic is found, the tool returns a helpful message suggesting you set up a forwarding proxy first.</p>
+
+<a id="verify_traffic_against_openapi" class="anchor" href="#verify_traffic_against_openapi">&nbsp;</a>
+
+<h3>verify_traffic_against_openapi</h3>
+
+<p>Verify the API calls already recorded by MockServer conform to an OpenAPI contract. Pulls recorded request-response pairs from the event log, validates each request and response against the spec, and returns a per-pair conformance report. See <a href="/mock_server/ai_verification.html">Contract Verification</a> for workflow details.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>specUrlOrPayload</code></td><td>string</td><td>Yes</td><td>OpenAPI spec as a URL, file path, or inline JSON/YAML payload</td></tr>
+        <tr><td><code>method</code></td><td>string</td><td>No</td><td>Filter recorded traffic by HTTP method (e.g. <code>GET</code>, <code>POST</code>)</td></tr>
+        <tr><td><code>path</code></td><td>string</td><td>No</td><td>Filter recorded traffic by request path (e.g. <code>/api/users</code>)</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 18,
+  "method": "tools/call",
+  "params": {
+    "name": "verify_traffic_against_openapi",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml",
+      "method": "GET"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 18,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"conformant\",\"totalPairs\":2,\"passed\":2,\"failed\":0,\"results\":[{\"method\":\"GET\",\"path\":\"/api/users\",\"matchedOperation\":\"GET /api/users\",\"passed\":true},{\"method\":\"GET\",\"path\":\"/api/orders\",\"matchedOperation\":\"GET /api/orders\",\"passed\":true}]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<a id="run_contract_test" class="anchor" href="#run_contract_test">&nbsp;</a>
+
+<h3>run_contract_test</h3>
+
+<p>Send example requests derived from an OpenAPI spec to a running service and check the responses conform. For each operation in the spec, the tool builds a representative request (with path parameters, query parameters, headers, and request body derived from examples and schema defaults), sends it to the specified base URL, and validates the response. See <a href="/mock_server/ai_verification.html">Contract Verification</a> for workflow details.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>specUrlOrPayload</code></td><td>string</td><td>Yes</td><td>OpenAPI spec as a URL, file path, or inline JSON/YAML payload</td></tr>
+        <tr><td><code>baseUrl</code></td><td>string</td><td>Yes</td><td>Base URL of the service under test (e.g. <code>http://localhost:8080</code>)</td></tr>
+        <tr><td><code>operationId</code></td><td>string</td><td>No</td><td>Optional filter to test only a specific operation by operationId</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 19,
+  "method": "tools/call",
+  "params": {
+    "name": "run_contract_test",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml",
+      "baseUrl": "http://localhost:3000"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 19,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"all_passed\",\"totalOperations\":3,\"passed\":3,\"failed\":0,\"results\":[{\"operationId\":\"listUsers\",\"method\":\"GET\",\"path\":\"/api/users\",\"statusCode\":200,\"passed\":true},{\"operationId\":\"createUser\",\"method\":\"POST\",\"path\":\"/api/users\",\"statusCode\":201,\"passed\":true},{\"operationId\":\"getUser\",\"method\":\"GET\",\"path\":\"/api/users/{userId}\",\"statusCode\":200,\"passed\":true}]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<a id="run_resiliency_test" class="anchor" href="#run_resiliency_test">&nbsp;</a>
+
+<h3>run_resiliency_test</h3>
+
+<p>Send malformed and boundary-case requests derived from an OpenAPI spec to a running service and report which inputs it failed to handle gracefully. For each operation, the tool generates a bounded mutation catalogue (omitting required fields, type violations, numeric and string boundary violations, oversized strings, and malformed JSON) and classifies each response as HANDLED (4xx) or UNEXPECTED (5xx, 2xx, or connection error). See <a href="/mock_server/ai_verification.html#resiliency">Resiliency Testing</a> for workflow details.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>specUrlOrPayload</code></td><td>string</td><td>Yes</td><td>OpenAPI spec as a URL, file path, or inline JSON/YAML payload</td></tr>
+        <tr><td><code>baseUrl</code></td><td>string</td><td>Yes</td><td>Base URL of the service under test (e.g. <code>http://localhost:8080</code>)</td></tr>
+        <tr><td><code>operationId</code></td><td>string</td><td>No</td><td>Optional filter to test only a specific operation by operationId</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "method": "tools/call",
+  "params": {
+    "name": "run_resiliency_test",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml",
+      "baseUrl": "http://localhost:3000"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"failures_detected\",\"totalMutations\":10,\"handled\":7,\"unexpected\":3,\"operationSummaries\":[{\"operationId\":\"createUser\",\"method\":\"POST\",\"path\":\"/api/users\",\"handled\":7,\"unexpected\":3}],\"results\":[{\"operationId\":\"createUser\",\"method\":\"POST\",\"path\":\"/api/users\",\"mutationType\":\"OMIT_REQUIRED_BODY_FIELD\",\"mutationDescription\":\"omit required body field 'name'\",\"statusCode\":400,\"classification\":\"HANDLED\"},{\"operationId\":\"createUser\",\"method\":\"POST\",\"path\":\"/api/users\",\"mutationType\":\"TYPE_VIOLATION\",\"mutationDescription\":\"type violation on field 'age' (expected integer)\",\"statusCode\":500,\"classification\":\"UNEXPECTED\"}]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<a id="record_llm_fixtures" class="anchor" href="#record_llm_fixtures">&nbsp;</a>
+
+<h3>record_llm_fixtures</h3>
+
+<p>Snapshots LLM/MCP traffic recorded through MockServer's forwarding proxy into a committable, secret-free fixture file for deterministic replay. Converts SSE streaming responses (from APIs like Anthropic Claude, OpenAI, etc.) into MockServer's SSE response format for faithful event-by-event replay. Sensitive headers (Authorization, api-key, Cookie, etc.) are automatically redacted. Note that request and response bodies are <strong>not</strong> redacted &mdash; if your application places credentials in a request or response body, review fixture files before committing them to version control.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>path</code></td><td>string</td><td>Yes</td><td>File path to write the fixture JSON to. The directory must exist.</td></tr>
+        <tr><td><code>host</code></td><td>string</td><td>No</td><td>Only include recorded traffic whose request host matches this value</td></tr>
+        <tr><td><code>requestPath</code></td><td>string</td><td>No</td><td>Only include recorded traffic whose request path matches this value</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "method": "tools/call",
+  "params": {
+    "name": "record_llm_fixtures",
+    "arguments": {
+      "path": "./fixtures/anthropic-chat.json",
+      "requestPath": "/v1/messages"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"written\",\"count\":3,\"file\":\"/absolute/path/to/fixtures/anthropic-chat.json\",\"message\":\"Wrote 3 expectation(s) to /absolute/path/to/fixtures/anthropic-chat.json. Secrets have been redacted. Load with load_expectations_from_file or initializationJsonPath for replay.\"}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<a id="load_expectations_from_file" class="anchor" href="#load_expectations_from_file">&nbsp;</a>
+
+<h3>load_expectations_from_file</h3>
+
+<p>Loads expectations from a JSON fixture file and adds them as active mock expectations in MockServer. Use this to replay LLM/MCP traffic previously recorded with <code class="code inline">record_llm_fixtures</code>. SSE streaming responses in the fixture are replayed with Server-Sent Events.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>path</code></td><td>string</td><td>Yes</td><td>File path to the fixture JSON file to load. Must contain expectations in MockServer's standard JSON format.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "method": "tools/call",
+  "params": {
+    "name": "load_expectations_from_file",
+    "arguments": {
+      "path": "./fixtures/anthropic-chat.json"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"loaded\",\"count\":3,\"file\":\"/absolute/path/to/fixtures/anthropic-chat.json\",\"ids\":[\"abc-123\",\"def-456\",\"ghi-789\"],\"message\":\"Loaded 3 expectation(s) from /absolute/path/to/fixtures/anthropic-chat.json. They are now active and will match incoming requests.\"}"
+      }
+    ],
+    "isError": false
   }
 }</code></pre>
 
@@ -626,6 +1030,7 @@ sitemap:
         <tr><td><code>mockserver://requests</code></td><td>All recorded requests received by MockServer</td></tr>
         <tr><td><code>mockserver://logs</code></td><td>Server logs including request matching, expectation creation, and errors</td></tr>
         <tr><td><code>mockserver://configuration</code></td><td>Current MockServer configuration properties</td></tr>
+        <tr><td><code>mockserver://unmatched</code></td><td>Recent requests that matched no expectation, with ranked closest-expectation diagnostics and remediation hints</td></tr>
     </tbody>
 </table>
 

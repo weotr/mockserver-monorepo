@@ -11,7 +11,7 @@ sitemap:
   lastmod: 2026-05-21T00:00:00+00:00
 ---
 
-<p>When you use an AI coding agent such as Claude Code or OpenCode, or an AI library such as LangChain, you often have no visibility into the HTTPS traffic it sends to LLM APIs (Anthropic, OpenAI, etc.) and MCP servers. Running MockServer as an HTTPS proxy gives you a complete record of every request and response — including model selection, token counts, tool calls, and streamed completions — with no changes to application code.</p>
+<p>When you use an AI coding agent such as Claude Code or OpenCode, or an AI library such as LangChain or LangGraph, you often have no visibility into the HTTPS traffic it sends to LLM APIs (Anthropic, OpenAI, etc.) and MCP servers. Running MockServer as an HTTPS proxy gives you a complete record of every request and response — including model selection, token counts, tool calls, and streamed completions — with no changes to application code.</p>
 
 <p>Because MockServer performs TLS man-in-the-middle (MITM) interception, it can decrypt and log HTTPS traffic while forwarding it transparently. Streaming responses (Server-Sent Events used by LLM APIs) are relayed incrementally so the agent remains fully responsive — there is no buffering delay.</p>
 
@@ -97,7 +97,7 @@ export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem</code></pre>
     <p>Alternatively, set them in your OpenCode launch configuration or shell profile to apply them globally.</p>
 </div>
 
-<button id="button_langchain_proxy" class="accordion">LangChain / Python AI SDKs</button>
+<button id="button_langchain_proxy" class="accordion">LangChain / LangGraph / Python AI SDKs</button>
 <div class="panel">
     <p>Python's <code class="code inline">httpx</code> and <code class="code inline">requests</code> libraries (used by the Anthropic and OpenAI Python SDKs) honour <code class="code inline">HTTPS_PROXY</code> and <code class="code inline">SSL_CERT_FILE</code>:</p>
     <pre class="prettyprint code"><code class="code">export HTTPS_PROXY=http://localhost:1080
@@ -122,7 +122,7 @@ client = openai.OpenAI(
         verify="/path/to/mockserver-ca.pem",
     )
 )</code></pre>
-    <p>LangChain uses whatever HTTP client the underlying SDK uses, so setting <code class="code inline">HTTPS_PROXY</code> and <code class="code inline">SSL_CERT_FILE</code> at the process level is normally sufficient.</p>
+    <p>LangChain and LangGraph applications use whatever HTTP client the underlying SDK uses, so setting <code class="code inline">HTTPS_PROXY</code> and <code class="code inline">SSL_CERT_FILE</code> at the process level is normally sufficient. The same applies to any other Python AI framework or SDK.</p>
 </div>
 
 <a id="view-traffic" class="anchor" href="#view-traffic">&nbsp;</a>
@@ -227,6 +227,93 @@ client = openai.OpenAI(
     <p><strong>stdio MCP servers cannot be proxied.</strong> MCP servers running over the <strong>stdio</strong> transport communicate through local process pipes, not over the network. There is no HTTP traffic to intercept.</p>
     <p>MCP servers using the <strong>HTTP</strong> or <strong>streamable-HTTP</strong> transport communicate over HTTPS and will be captured by MockServer exactly like any other HTTPS call. If you want to inspect MCP traffic, choose an MCP server that supports HTTP or streamable-HTTP transport, or connect to a remote MCP server over HTTPS.</p>
 </div>
+
+<a id="record-replay" class="anchor" href="#record-replay">&nbsp;</a>
+
+<h2>LLM Record &amp; Replay</h2>
+
+<p>After capturing LLM/MCP traffic through MockServer's proxy, you can snapshot it into a <strong>fixture file</strong> for deterministic, offline replay. This enables AI application tests that are free (no metered API calls), fast, and reproducible.</p>
+
+<h3>How It Works</h3>
+
+<ol>
+    <li><strong>Record</strong> &mdash; run your AI application through MockServer's proxy as described above. MockServer logs every forwarded request/response pair, including SSE streaming responses.</li>
+    <li><strong>Snapshot</strong> &mdash; call the <code class="code inline">record_llm_fixtures</code> MCP tool (or REST API equivalent) to write the captured traffic to a JSON fixture file. Secrets (API keys, auth tokens, cookies) are automatically redacted. SSE streaming responses are converted to MockServer's SSE response format for faithful event-by-event replay.</li>
+    <li><strong>Commit</strong> &mdash; add the fixture file to version control. It contains no secrets and uses MockServer's standard expectation JSON format.</li>
+    <li><strong>Replay</strong> &mdash; in your test suite, start MockServer and load the fixture file with <code class="code inline">load_expectations_from_file</code> or via the <code class="code inline">initializationJsonPath</code> configuration property. Your application now talks to MockServer instead of the real API and receives the same responses (including SSE streaming) deterministically.</li>
+</ol>
+
+<h3>Recording via MCP</h3>
+
+<p>If you have an AI agent connected to MockServer's MCP control plane, use the <code class="code inline">record_llm_fixtures</code> tool:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "method": "tools/call",
+  "params": {
+    "name": "record_llm_fixtures",
+    "arguments": {
+      "path": "./fixtures/anthropic-chat.json",
+      "requestPath": "/v1/messages"
+    }
+  }
+}</code></pre>
+
+<p>Optional filters:</p>
+<ul>
+    <li><code class="code inline">requestPath</code> &mdash; only include traffic matching this request path</li>
+    <li><code class="code inline">host</code> &mdash; only include traffic matching this host header</li>
+</ul>
+
+<h3>Loading Fixtures for Replay</h3>
+
+<p>Load the fixture file into MockServer at test startup:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "method": "tools/call",
+  "params": {
+    "name": "load_expectations_from_file",
+    "arguments": {
+      "path": "./fixtures/anthropic-chat.json"
+    }
+  }
+}</code></pre>
+
+<p>Alternatively, use MockServer's <code class="code inline">initializationJsonPath</code> configuration property to load fixtures automatically on startup:</p>
+
+<pre class="prettyprint code"><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar \
+  -serverPort 1080 \
+  -initializationJsonPath ./fixtures/anthropic-chat.json</code></pre>
+
+<h3>Secret Redaction</h3>
+
+<p>The <code class="code inline">record_llm_fixtures</code> tool automatically redacts the following sensitive headers in both requests and responses, replacing their values with <code class="code inline">***REDACTED***</code>:</p>
+
+<ul>
+    <li><code class="code inline">Authorization</code> (Bearer tokens, Basic auth)</li>
+    <li><code class="code inline">x-api-key</code> / <code class="code inline">api-key</code></li>
+    <li><code class="code inline">Cookie</code> / <code class="code inline">Set-Cookie</code></li>
+    <li><code class="code inline">Proxy-Authorization</code></li>
+</ul>
+
+<p>This means fixture files are safe to commit to public or shared repositories without leaking credentials stored in headers.</p>
+
+<div class="alert" style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 16px 0;">
+    <p><strong>Request and response bodies are not redacted.</strong> The automatic redaction covers sensitive headers only. If your application places credentials, API keys, or other secrets in request or response bodies (for example, in a JSON login payload or an OAuth token response), those values will appear in the fixture file. Review fixture files before committing them to version control to ensure no secrets remain in body content.</p>
+</div>
+
+<h3>SSE Streaming Replay</h3>
+
+<p>When the recorded response was an SSE stream (from APIs like Anthropic Claude or OpenAI's streaming mode), the fixture converter automatically:</p>
+
+<ul>
+    <li>Detects the stream via the <code class="code inline">Content-Type: text/event-stream</code> response header</li>
+    <li>Parses the captured SSE body into individual events (event type, data, id, retry)</li>
+    <li>Produces an <code class="code inline">HttpSseResponse</code> action that replays each event with a small inter-event delay (50ms)</li>
+</ul>
+
+<p>On replay, your application receives SSE events one by one, just like from the real API. This is important for testing streaming token rendering, progress indicators, and partial-response handling.</p>
+
+<p>If the SSE body was truncated during capture (when it exceeded <code class="code inline">maxStreamingCaptureBytes</code>), the fixture falls back to a static response with a warning header. Increase <code class="code inline">maxStreamingCaptureBytes</code> to capture longer streams.</p>
 
 <h2>Related Pages</h2>
 

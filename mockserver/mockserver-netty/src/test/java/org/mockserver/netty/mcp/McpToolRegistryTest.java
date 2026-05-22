@@ -20,8 +20,10 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.log.model.LogEntry.LogMessageType.FORWARDED_REQUEST;
 import static org.mockserver.log.model.LogEntry.LogMessageType.RECEIVED_REQUEST;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
 
 public class McpToolRegistryTest {
 
@@ -60,7 +62,14 @@ public class McpToolRegistryTest {
         assertThat(tools.containsKey("raw_expectation"), is(true));
         assertThat(tools.containsKey("raw_retrieve"), is(true));
         assertThat(tools.containsKey("raw_verify"), is(true));
-        assertThat(tools.size(), is(15));
+        assertThat(tools.containsKey("explain_unmatched_requests"), is(true));
+        assertThat(tools.containsKey("create_expectations_from_recorded_traffic"), is(true));
+        assertThat(tools.containsKey("verify_traffic_against_openapi"), is(true));
+        assertThat(tools.containsKey("run_contract_test"), is(true));
+        assertThat(tools.containsKey("run_resiliency_test"), is(true));
+        assertThat(tools.containsKey("record_llm_fixtures"), is(true));
+        assertThat(tools.containsKey("load_expectations_from_file"), is(true));
+        assertThat(tools.size(), is(22));
     }
 
     @Test
@@ -811,5 +820,662 @@ public class McpToolRegistryTest {
         JsonNode result = toolRegistry.callTool("create_expectation", params);
         assertThat(result.path("error").asBoolean(), is(true));
         assertThat(result.path("message").asText(), is("'timeToLive' must be a string in format '<number> <UNIT>' (e.g., '60 SECONDS')"));
+    }
+
+    // --- explain_unmatched_requests tool tests ---
+
+    @Test
+    public void shouldExplainUnmatchedRequestsWithNoHistory() {
+        // given
+        ObjectNode params = objectMapper.createObjectNode();
+
+        // when
+        JsonNode result = toolRegistry.callTool("explain_unmatched_requests", params);
+
+        // then
+        assertThat(result.path("unmatchedRequestCount").asInt(), is(0));
+        assertThat(result.path("unmatchedRequests").isArray(), is(true));
+    }
+
+    @Test
+    public void shouldExplainUnmatchedRequestsWithLimit() {
+        // given
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 5);
+
+        // when
+        JsonNode result = toolRegistry.callTool("explain_unmatched_requests", params);
+
+        // then
+        assertThat(result.has("unmatchedRequestCount"), is(true));
+        assertThat(result.path("unmatchedRequests").isArray(), is(true));
+    }
+
+    @Test
+    public void shouldRejectInvalidLimitForExplainUnmatched() {
+        // given
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 0);
+
+        // when
+        JsonNode result = toolRegistry.callTool("explain_unmatched_requests", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'limit' must be between 1 and 100"));
+    }
+
+    @Test
+    public void shouldRejectLimitAboveMaxForExplainUnmatched() {
+        // given
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 101);
+
+        // when
+        JsonNode result = toolRegistry.callTool("explain_unmatched_requests", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'limit' must be between 1 and 100"));
+    }
+
+    @Test
+    public void shouldExplainUnmatchedRequestsToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("explain_unmatched_requests");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("matched no expectation"));
+        assertThat(tool.getInputSchema().path("properties").has("limit"), is(true));
+    }
+
+    // --- debug_request_mismatch ranking and remediation tests ---
+
+    @Test
+    public void shouldDebugRequestMismatchWithRankedResultsAndRemediation() {
+        // given - create two expectations with different paths
+        ObjectNode createParams1 = objectMapper.createObjectNode();
+        createParams1.put("method", "GET");
+        createParams1.put("path", "/close-match");
+        createParams1.put("statusCode", 200);
+        toolRegistry.callTool("create_expectation", createParams1);
+
+        ObjectNode createParams2 = objectMapper.createObjectNode();
+        createParams2.put("method", "POST");
+        createParams2.put("path", "/far-match");
+        createParams2.put("statusCode", 201);
+        toolRegistry.callTool("create_expectation", createParams2);
+
+        // when - debug with a request that matches method of first but not path
+        ObjectNode debugParams = objectMapper.createObjectNode();
+        debugParams.put("method", "GET");
+        debugParams.put("path", "/wrong-path");
+
+        JsonNode result = toolRegistry.callTool("debug_request_mismatch", debugParams);
+
+        // then
+        assertThat(result.path("totalExpectations").asInt(), is(2));
+        assertThat(result.path("results").isArray(), is(true));
+        // results should be ranked - first result should have more matched fields
+        JsonNode firstResult = result.path("results").get(0);
+        JsonNode secondResult = result.path("results").get(1);
+        int firstDiffering = firstResult.path("totalFieldCount").asInt() - firstResult.path("matchedFieldCount").asInt();
+        int secondDiffering = secondResult.path("totalFieldCount").asInt() - secondResult.path("matchedFieldCount").asInt();
+        assertThat("results should be ranked with closest match first", firstDiffering <= secondDiffering, is(true));
+    }
+
+    // --- create_expectations_from_recorded_traffic tool tests ---
+
+    @Test
+    public void shouldCreateExpectationsFromRecordedTrafficToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("create_expectations_from_recorded_traffic");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("recorded"));
+        assertThat(tool.getDescription(), containsString("forwarding"));
+        assertThat(tool.getInputSchema().path("properties").has("method"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("path"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("preview"), is(true));
+    }
+
+    @Test
+    public void shouldReturnNoRecordedTrafficWhenNoneExists() {
+        // given
+        ObjectNode params = objectMapper.createObjectNode();
+
+        // when
+        JsonNode result = toolRegistry.callTool("create_expectations_from_recorded_traffic", params);
+
+        // then
+        assertThat(result.path("status").asText(), is("no_recorded_traffic"));
+        assertThat(result.path("count").asInt(), is(0));
+    }
+
+    @Test
+    public void shouldPreviewRecordedExpectationsWithoutAdding() throws Exception {
+        // given - simulate FORWARDED_REQUEST log entries (what proxy mode creates)
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/users"))
+            .setHttpResponse(response().withStatusCode(200).withBody("[{\"id\":1}]"))
+            .setExpectation(request().withMethod("GET").withPath("/api/users"),
+                response().withStatusCode(200).withBody("[{\"id\":1}]"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200).withBody("[{\"id\":1}]"))
+        );
+
+        Thread.sleep(500);
+
+        // when - call with preview=true
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("preview", true);
+        JsonNode result = toolRegistry.callTool("create_expectations_from_recorded_traffic", params);
+
+        // then
+        assertThat(result.path("status").asText(), is("preview"));
+        assertThat(result.path("count").asInt() >= 1, is(true));
+        assertThat(result.path("expectations").isArray(), is(true));
+        assertThat(result.path("expectations").size() >= 1, is(true));
+
+        // verify no active expectations were added (only the forwarding, not from this tool)
+        ObjectNode retrieveParams = objectMapper.createObjectNode();
+        retrieveParams.put("type", "ACTIVE_EXPECTATIONS");
+        retrieveParams.put("format", "JSON");
+        JsonNode activeResult = toolRegistry.callTool("raw_retrieve", retrieveParams);
+        // should have no active expectations (the recorded ones were just previewed)
+        String data = activeResult.path("data").toString();
+        assertThat("no active expectations should be added in preview mode",
+            data.equals("\"\"") || data.equals("[]"), is(true));
+    }
+
+    @Test
+    public void shouldCreateExpectationsFromRecordedTraffic() throws Exception {
+        // given - simulate FORWARDED_REQUEST log entries
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("POST").withPath("/api/orders"))
+            .setHttpResponse(response().withStatusCode(201).withBody("{\"orderId\":42}"))
+            .setExpectation(request().withMethod("POST").withPath("/api/orders"),
+                response().withStatusCode(201).withBody("{\"orderId\":42}"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(201).withBody("{\"orderId\":42}"))
+        );
+
+        Thread.sleep(500);
+
+        // when - call with preview=false (default)
+        ObjectNode params = objectMapper.createObjectNode();
+        JsonNode result = toolRegistry.callTool("create_expectations_from_recorded_traffic", params);
+
+        // then
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt() >= 1, is(true));
+        assertThat(result.path("ids").isArray(), is(true));
+        assertThat(result.path("ids").size() >= 1, is(true));
+
+        // verify active expectations now exist
+        ObjectNode retrieveParams = objectMapper.createObjectNode();
+        retrieveParams.put("type", "ACTIVE_EXPECTATIONS");
+        retrieveParams.put("format", "JSON");
+        JsonNode activeResult = toolRegistry.callTool("raw_retrieve", retrieveParams);
+        assertThat(activeResult.path("data").isArray(), is(true));
+        assertThat(activeResult.path("data").size() >= 1, is(true));
+    }
+
+    @Test
+    public void shouldFilterRecordedTrafficByMethod() throws Exception {
+        // given - simulate two FORWARDED_REQUEST log entries with different methods
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/items"))
+            .setHttpResponse(response().withStatusCode(200).withBody("[]"))
+            .setExpectation(request().withMethod("GET").withPath("/api/items"),
+                response().withStatusCode(200).withBody("[]"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200).withBody("[]"))
+        );
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("DELETE").withPath("/api/items/1"))
+            .setHttpResponse(response().withStatusCode(204))
+            .setExpectation(request().withMethod("DELETE").withPath("/api/items/1"),
+                response().withStatusCode(204))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(204))
+        );
+
+        Thread.sleep(500);
+
+        // when - filter by GET method only
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("method", "GET");
+        params.put("preview", true);
+        JsonNode result = toolRegistry.callTool("create_expectations_from_recorded_traffic", params);
+
+        // then - should only return GET expectations
+        assertThat(result.path("status").asText(), is("preview"));
+        assertThat(result.path("count").asInt(), is(1));
+    }
+
+    // --- verify_traffic_against_openapi tool tests ---
+
+    @Test
+    public void shouldVerifyTrafficAgainstOpenApiToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("verify_traffic_against_openapi");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("recorded by MockServer"));
+        assertThat(tool.getInputSchema().path("properties").has("specUrlOrPayload"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("method"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("path"), is(true));
+    }
+
+    @Test
+    public void shouldRejectBlankSpecForVerifyTraffic() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "");
+
+        JsonNode result = toolRegistry.callTool("verify_traffic_against_openapi", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'specUrlOrPayload' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldReturnNoTrafficWhenNoneExists() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+
+        JsonNode result = toolRegistry.callTool("verify_traffic_against_openapi", params);
+        assertThat(result.path("status").asText(), is("no_traffic"));
+        assertThat(result.path("totalPairs").asInt(), is(0));
+    }
+
+    // --- run_contract_test tool tests ---
+
+    @Test
+    public void shouldRunContractTestToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("run_contract_test");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("example requests"));
+        assertThat(tool.getDescription(), containsString("OpenAPI"));
+        assertThat(tool.getInputSchema().path("properties").has("specUrlOrPayload"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("baseUrl"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("operationId"), is(true));
+    }
+
+    @Test
+    public void shouldRejectBlankSpecForContractTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "");
+        params.put("baseUrl", "http://localhost:8080");
+
+        JsonNode result = toolRegistry.callTool("run_contract_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'specUrlOrPayload' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldRejectBlankBaseUrlForContractTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "");
+
+        JsonNode result = toolRegistry.callTool("run_contract_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'baseUrl' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldRejectInvalidBaseUrlForContractTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "not a url");
+
+        JsonNode result = toolRegistry.callTool("run_contract_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("'baseUrl' is not a valid URL"));
+    }
+
+    // --- run_resiliency_test tool tests ---
+
+    @Test
+    public void shouldRunResiliencyTestToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("run_resiliency_test");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("malformed"));
+        assertThat(tool.getDescription(), containsString("boundary"));
+        assertThat(tool.getDescription(), containsString("OpenAPI"));
+        assertThat(tool.getInputSchema().path("properties").has("specUrlOrPayload"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("baseUrl"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("operationId"), is(true));
+    }
+
+    @Test
+    public void shouldRejectBlankSpecForResiliencyTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "");
+        params.put("baseUrl", "http://localhost:8080");
+
+        JsonNode result = toolRegistry.callTool("run_resiliency_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'specUrlOrPayload' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldRejectBlankBaseUrlForResiliencyTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "");
+
+        JsonNode result = toolRegistry.callTool("run_resiliency_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'baseUrl' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldRejectInvalidBaseUrlForResiliencyTest() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "not a url");
+
+        JsonNode result = toolRegistry.callTool("run_resiliency_test", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("'baseUrl' is not a valid URL"));
+    }
+
+    // --- record_llm_fixtures tool tests ---
+
+    @Test
+    public void shouldRecordLlmFixturesToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("record_llm_fixtures");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("fixture"));
+        assertThat(tool.getDescription(), containsString("redacted"));
+        assertThat(tool.getInputSchema().path("properties").has("path"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("host"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("requestPath"), is(true));
+    }
+
+    @Test
+    public void shouldRejectBlankPathForRecordLlmFixtures() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "");
+
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'path' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldReturnNoRecordedTrafficForRecordLlmFixtures() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", System.getProperty("java.io.tmpdir") + "/test-fixture.json");
+
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+        assertThat(result.path("status").asText(), is("no_recorded_traffic"));
+        assertThat(result.path("count").asInt(), is(0));
+    }
+
+    // --- load_expectations_from_file tool tests ---
+
+    @Test
+    public void shouldLoadExpectationsFromFileToolHasSchema() {
+        // given
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("load_expectations_from_file");
+
+        // then
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("fixture file"));
+        assertThat(tool.getDescription(), containsString("replay"));
+        assertThat(tool.getInputSchema().path("properties").has("path"), is(true));
+    }
+
+    @Test
+    public void shouldRejectBlankPathForLoadExpectationsFromFile() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "");
+
+        JsonNode result = toolRegistry.callTool("load_expectations_from_file", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'path' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldRejectNonExistentFileForLoad() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", System.getProperty("java.io.tmpdir") + "/nonexistent-fixture-12345.json");
+
+        JsonNode result = toolRegistry.callTool("load_expectations_from_file", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("does not exist"));
+    }
+
+    @Test
+    public void shouldFilterRecordedTrafficByPath() throws Exception {
+        // given
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/users"))
+            .setHttpResponse(response().withStatusCode(200).withBody("[]"))
+            .setExpectation(request().withMethod("GET").withPath("/api/users"),
+                response().withStatusCode(200).withBody("[]"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200).withBody("[]"))
+        );
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/products"))
+            .setHttpResponse(response().withStatusCode(200).withBody("[]"))
+            .setExpectation(request().withMethod("GET").withPath("/api/products"),
+                response().withStatusCode(200).withBody("[]"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200).withBody("[]"))
+        );
+
+        Thread.sleep(500);
+
+        // when - filter by path
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "/api/users");
+        params.put("preview", true);
+        JsonNode result = toolRegistry.callTool("create_expectations_from_recorded_traffic", params);
+
+        // then - should only return /api/users expectations
+        assertThat(result.path("status").asText(), is("preview"));
+        assertThat(result.path("count").asInt(), is(1));
+    }
+
+    // --- path traversal rejection tests ---
+
+    @Test
+    public void shouldRejectPathTraversalForRecordLlmFixtures() {
+        // given - path outside allowed directories
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "/etc/passwd");
+
+        // when
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("Path is outside allowed directories"));
+    }
+
+    @Test
+    public void shouldRejectDotDotPathTraversalForRecordLlmFixtures() {
+        // given - path with ../ that escapes allowed roots
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", System.getProperty("java.io.tmpdir") + "/../../etc/shadow");
+
+        // when
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("Path is outside allowed directories"));
+    }
+
+    @Test
+    public void shouldRejectPathTraversalForLoadExpectationsFromFile() {
+        // given - path outside allowed directories
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "/etc/passwd");
+
+        // when
+        JsonNode result = toolRegistry.callTool("load_expectations_from_file", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("Path is outside allowed directories"));
+    }
+
+    @Test
+    public void shouldRejectDotDotPathTraversalForLoadExpectationsFromFile() {
+        // given - path with ../ that escapes allowed roots
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", System.getProperty("java.io.tmpdir") + "/../../etc/shadow");
+
+        // when
+        JsonNode result = toolRegistry.callTool("load_expectations_from_file", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("Path is outside allowed directories"));
+    }
+
+    // --- M2: null host validation ---
+
+    @Test
+    public void shouldRejectBaseUrlWithNoHostForContractTest() {
+        // given - a file:// URI has no host
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "file:///some/path");
+
+        // when
+        JsonNode result = toolRegistry.callTool("run_contract_test", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("must be an absolute HTTP/HTTPS URL with a hostname"));
+    }
+
+    @Test
+    public void shouldRejectBaseUrlWithNoHostForResiliencyTest() {
+        // given - a file:// URI has no host
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "file:///some/path");
+
+        // when
+        JsonNode result = toolRegistry.callTool("run_resiliency_test", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("must be an absolute HTTP/HTTPS URL with a hostname"));
+    }
+
+    @Test
+    public void shouldRejectNonHttpSchemeForContractTest() {
+        // given - a URL with a host but a non-HTTP scheme
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "ftp://example.com/path");
+
+        // when
+        JsonNode result = toolRegistry.callTool("run_contract_test", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("must use the http or https scheme"));
+    }
+
+    @Test
+    public void shouldRejectNonHttpSchemeForResiliencyTest() {
+        // given - a URL with a host but a non-HTTP scheme
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("specUrlOrPayload", "org/mockserver/openapi/openapi_simple_example.json");
+        params.put("baseUrl", "ftp://example.com/path");
+
+        // when
+        JsonNode result = toolRegistry.callTool("run_resiliency_test", params);
+
+        // then
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("must use the http or https scheme"));
+    }
+
+    // --- M3: file size limit for load_expectations_from_file ---
+
+    @Test
+    public void shouldLoadSmallValidFixtureFile() throws Exception {
+        // given - create a small valid fixture file
+        String tmpDir = System.getProperty("java.io.tmpdir");
+        java.nio.file.Path fixturePath = java.nio.file.Paths.get(tmpDir, "mcp-test-small-fixture.json");
+        String fixtureContent = "[{\"httpRequest\":{\"method\":\"GET\",\"path\":\"/test\"},\"httpResponse\":{\"statusCode\":200,\"body\":\"ok\"}}]";
+        java.nio.file.Files.write(fixturePath, fixtureContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            ObjectNode params = objectMapper.createObjectNode();
+            params.put("path", fixturePath.toString());
+
+            // when
+            JsonNode result = toolRegistry.callTool("load_expectations_from_file", params);
+
+            // then - should load successfully (not hit size limit)
+            assertThat(result.has("error"), is(false));
+            assertThat(result.path("status").asText(), is("loaded"));
+            assertThat(result.path("count").asInt(), is(1));
+        } finally {
+            java.nio.file.Files.deleteIfExists(fixturePath);
+        }
+    }
+
+    @Test
+    public void shouldAcceptPathInsideTempDirForRecordLlmFixtures() {
+        // given - valid path inside the system temp directory (no recorded traffic, but path should pass validation)
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", System.getProperty("java.io.tmpdir") + "/valid-fixture.json");
+
+        // when
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+
+        // then - should not get path error, should get "no recorded traffic" instead
+        assertThat(result.has("error"), is(false));
+        assertThat(result.path("status").asText(), is("no_recorded_traffic"));
+    }
+
+    @Test
+    public void shouldAcceptPathInsideWorkingDirForRecordLlmFixtures() {
+        // given - valid path inside the working directory (no recorded traffic, but path should pass validation)
+        String workingDir = System.getProperty("user.dir");
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", workingDir + "/test-output-fixture.json");
+
+        // when
+        JsonNode result = toolRegistry.callTool("record_llm_fixtures", params);
+
+        // then - should not get path error, should get "no recorded traffic" instead
+        assertThat(result.has("error"), is(false));
+        assertThat(result.path("status").asText(), is("no_recorded_traffic"));
     }
 }

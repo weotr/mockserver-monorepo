@@ -32,11 +32,12 @@ public class McpResourceRegistryTest {
     @Test
     public void shouldRegisterAllResources() {
         Map<String, McpResourceRegistry.ResourceDefinition> resources = resourceRegistry.getResources();
-        assertThat(resources.size(), is(4));
+        assertThat(resources.size(), is(5));
         assertThat(resources.containsKey("mockserver://expectations"), is(true));
         assertThat(resources.containsKey("mockserver://requests"), is(true));
         assertThat(resources.containsKey("mockserver://logs"), is(true));
         assertThat(resources.containsKey("mockserver://configuration"), is(true));
+        assertThat(resources.containsKey("mockserver://unmatched"), is(true));
     }
 
     @Test
@@ -91,5 +92,19 @@ public class McpResourceRegistryTest {
         assertThat(resources.get("mockserver://requests").getMimeType(), is("application/json"));
         assertThat(resources.get("mockserver://logs").getMimeType(), is("text/plain"));
         assertThat(resources.get("mockserver://configuration").getMimeType(), is("application/json"));
+        assertThat(resources.get("mockserver://unmatched").getMimeType(), is("application/json"));
+    }
+
+    @Test
+    public void shouldReadUnmatchedResource() {
+        // given / when
+        JsonNode result = resourceRegistry.readResource("mockserver://unmatched");
+
+        // then
+        assertThat(result, notNullValue());
+        assertThat(result.has("unmatchedRequestCount"), is(true));
+        assertThat(result.path("unmatchedRequestCount").asInt(), is(0));
+        assertThat(result.has("unmatchedRequests"), is(true));
+        assertThat(result.path("unmatchedRequests").isArray(), is(true));
     }
 }

@@ -1,0 +1,359 @@
+---
+title: OpenAPI Contract Verification with AI
+shortTitle: Contract Verification
+layout: page
+pageOrder: 3.5
+section: 'AI Integration'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-05-22T00:00:00+00:00
+---
+
+<p>MockServer's MCP integration provides two powerful tools for verifying that HTTP traffic conforms to an OpenAPI specification. These tools enable both <strong>passive verification</strong> of already-recorded traffic and <strong>active contract testing</strong> of a running service.</p>
+
+<h2>Overview</h2>
+
+<p>There are three verification workflows:</p>
+
+<ol>
+    <li><a href="#passive"><strong>Passive verification</strong></a> (<code>verify_traffic_against_openapi</code>) &mdash; validate the API calls already recorded by MockServer against an OpenAPI spec</li>
+    <li><a href="#active"><strong>Active contract testing</strong></a> (<code>run_contract_test</code>) &mdash; send example requests derived from an OpenAPI spec to a running service and check the responses conform</li>
+    <li><a href="#resiliency"><strong>Resiliency testing</strong></a> (<code>run_resiliency_test</code>) &mdash; send deliberately malformed and boundary-case requests to a running service and verify it rejects them gracefully</li>
+</ol>
+
+<p>All tools produce structured per-operation results with pass/fail status and detailed validation errors, making them ideal for AI-assisted development workflows where an agent needs machine-enforceable conformance guardrails.</p>
+
+<a id="passive" class="anchor" href="#passive">&nbsp;</a>
+
+<h2>Passive Verification: Recorded Traffic</h2>
+
+<p>After capturing traffic through MockServer (e.g. via a forwarding proxy), use <a href="/mock_server/ai_mcp_tools.html#verify_traffic_against_openapi"><code class="code inline">verify_traffic_against_openapi</code></a> to check that every recorded request-response pair conforms to a given OpenAPI specification.</p>
+
+<h3>Workflow</h3>
+
+<ol>
+    <li>Set up MockServer as a forwarding proxy (using <code>create_forward_expectation</code>)</li>
+    <li>Run your application's tests or trigger API calls through MockServer</li>
+    <li>Call <code>verify_traffic_against_openapi</code> with the OpenAPI spec</li>
+    <li>Review the per-pair conformance report</li>
+</ol>
+
+<p><strong>Example prompt:</strong></p>
+
+<blockquote>
+<p><em>"Verify that the traffic recorded by MockServer conforms to our API specification at /specs/api.yaml"</em></p>
+</blockquote>
+
+<p>The AI assistant will use the <code>verify_traffic_against_openapi</code> tool:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "verify_traffic_against_openapi",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response (conformant):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"conformant\",\"totalPairs\":3,\"passed\":3,\"failed\":0,\"results\":[...]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p><strong>Example response (non-conformant):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "status": "non_conformant",
+  "totalPairs": 3,
+  "passed": 2,
+  "failed": 1,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/api/users",
+      "matchedOperation": "GET /api/users",
+      "passed": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/users",
+      "matchedOperation": "POST /api/users",
+      "passed": false,
+      "responseErrors": [
+        "response body validation error: ..."
+      ]
+    }
+  ]
+}</code></pre>
+
+<h3>Filtering</h3>
+
+<p>Use the optional <code>method</code> and <code>path</code> parameters to verify only a subset of the recorded traffic:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "name": "verify_traffic_against_openapi",
+  "arguments": {
+    "specUrlOrPayload": "/specs/api.yaml",
+    "method": "POST",
+    "path": "/api/orders"
+  }
+}</code></pre>
+
+<a id="active" class="anchor" href="#active">&nbsp;</a>
+
+<h2>Active Contract Testing: Running Service</h2>
+
+<p>Use <a href="/mock_server/ai_mcp_tools.html#run_contract_test"><code class="code inline">run_contract_test</code></a> to actively test a running service by sending example requests derived from an OpenAPI spec and validating the responses.</p>
+
+<h3>How it works</h3>
+
+<ol>
+    <li>The tool parses the OpenAPI spec and enumerates all operations</li>
+    <li>For each operation, it builds a representative example request:
+        <ul>
+            <li>Path parameters are resolved from spec examples, schema defaults, or generated values</li>
+            <li>Required query parameters and headers are included</li>
+            <li>Request bodies are generated from spec examples or schema-derived values</li>
+        </ul>
+    </li>
+    <li>Each request is sent to the specified base URL</li>
+    <li>Each response is validated against the spec (status code, response body schema, required headers)</li>
+</ol>
+
+<p><strong>Example prompt:</strong></p>
+
+<blockquote>
+<p><em>"Run contract tests against my service at localhost:3000 using our OpenAPI spec"</em></p>
+</blockquote>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "run_contract_test",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml",
+      "baseUrl": "http://localhost:3000"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "status": "all_passed",
+  "totalOperations": 4,
+  "passed": 4,
+  "failed": 0,
+  "results": [
+    {
+      "operationId": "listUsers",
+      "method": "GET",
+      "path": "/api/users",
+      "statusCode": 200,
+      "passed": true
+    },
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "statusCode": 201,
+      "passed": true
+    }
+  ]
+}</code></pre>
+
+<h3>Filtering by Operation</h3>
+
+<p>Use the optional <code>operationId</code> parameter to test only a specific operation:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "name": "run_contract_test",
+  "arguments": {
+    "specUrlOrPayload": "/specs/api.yaml",
+    "baseUrl": "http://localhost:3000",
+    "operationId": "createUser"
+  }
+}</code></pre>
+
+<a id="resiliency" class="anchor" href="#resiliency">&nbsp;</a>
+
+<h2>Resiliency Testing: Error Handling Verification</h2>
+
+<p>Use <a href="/mock_server/ai_mcp_tools.html#run_resiliency_test"><code class="code inline">run_resiliency_test</code></a> to verify that a running service handles malformed input gracefully. The tool derives a bounded mutation catalogue from each operation in an OpenAPI spec, sends each mutated request to the service, and classifies the outcome.</p>
+
+<h3>How it works</h3>
+
+<ol>
+    <li>The tool parses the OpenAPI spec and builds a valid example request for each operation (reusing the same logic as <code>run_contract_test</code>)</li>
+    <li>For each operation, it generates a catalogue of mutations that actually apply:
+        <ul>
+            <li><strong>Omit required path or query parameter</strong></li>
+            <li><strong>Omit required request body field</strong></li>
+            <li><strong>Type violation</strong> &mdash; string where the schema requires integer/boolean, etc.</li>
+            <li><strong>Numeric boundary violation</strong> &mdash; minimum&minus;1, maximum+1 (only when the schema defines bounds)</li>
+            <li><strong>String length violation</strong> &mdash; minLength&minus;1, maxLength+1 (only when the schema defines length constraints)</li>
+            <li><strong>Oversized string field</strong> &mdash; a 10,000-character string for string fields without an explicit maxLength</li>
+            <li><strong>Malformed JSON body</strong> &mdash; unparseable JSON</li>
+        </ul>
+    </li>
+    <li>Each mutated request is sent to the service</li>
+    <li>Each response is classified:
+        <ul>
+            <li><strong>HANDLED</strong> &mdash; the service returned a 4xx response (it rejected the bad input cleanly)</li>
+            <li><strong>UNEXPECTED</strong> &mdash; the service returned 5xx, 2xx, or a connection error (it failed to handle the bad input)</li>
+        </ul>
+    </li>
+</ol>
+
+<p><strong>Example prompt:</strong></p>
+
+<blockquote>
+<p><em>"Run a resiliency test against my service at localhost:3000 using our OpenAPI spec to check that it rejects bad input properly"</em></p>
+</blockquote>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "run_resiliency_test",
+    "arguments": {
+      "specUrlOrPayload": "/specs/api.yaml",
+      "baseUrl": "http://localhost:3000"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response (all handled):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "status": "all_handled",
+  "totalMutations": 12,
+  "handled": 12,
+  "unexpected": 0,
+  "operationSummaries": [
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "handled": 12,
+      "unexpected": 0
+    }
+  ],
+  "results": [
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "mutationType": "OMIT_REQUIRED_BODY_FIELD",
+      "mutationDescription": "omit required body field 'name'",
+      "statusCode": 400,
+      "classification": "HANDLED"
+    }
+  ]
+}</code></pre>
+
+<p><strong>Example response (failures detected):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "status": "failures_detected",
+  "totalMutations": 12,
+  "handled": 8,
+  "unexpected": 4,
+  "operationSummaries": [
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "handled": 8,
+      "unexpected": 4
+    }
+  ],
+  "results": [
+    {
+      "operationId": "createUser",
+      "method": "POST",
+      "path": "/api/users",
+      "mutationType": "TYPE_VIOLATION",
+      "mutationDescription": "type violation on field 'age' (expected integer)",
+      "statusCode": 500,
+      "classification": "UNEXPECTED"
+    }
+  ]
+}</code></pre>
+
+<h3>Filtering by Operation</h3>
+
+<p>Use the optional <code>operationId</code> parameter to test only a specific operation:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "name": "run_resiliency_test",
+  "arguments": {
+    "specUrlOrPayload": "/specs/api.yaml",
+    "baseUrl": "http://localhost:3000",
+    "operationId": "createUser"
+  }
+}</code></pre>
+
+<a id="use_cases" class="anchor" href="#use_cases">&nbsp;</a>
+
+<h2>Use Cases</h2>
+
+<h3>Verifying code you just wrote</h3>
+
+<p>After implementing a new API endpoint, ask your AI assistant to run a contract test against your local server. The assistant will derive example requests from the spec and verify your implementation returns conforming responses.</p>
+
+<h3>Continuous conformance checking</h3>
+
+<p>After a test run that routes traffic through MockServer, verify that all recorded request-response pairs conform to the spec. This catches both request-side issues (your code sending malformed requests) and response-side issues (the service returning non-conforming responses).</p>
+
+<h3>Spec-first development</h3>
+
+<p>Write your OpenAPI spec first, then use <code>run_contract_test</code> as a guardrail while implementing. The AI assistant can run the contract test after each change, telling you exactly which operations still fail and what the validation errors are.</p>
+
+<h3>Verifying error handling</h3>
+
+<p>After implementing an API endpoint, use <code>run_resiliency_test</code> to verify that your service rejects bad input with appropriate 4xx responses rather than crashing with 5xx or silently accepting invalid data. The tool generates boundary-case and malformed inputs automatically from the spec, so you do not need to write negative test cases by hand.</p>
+
+<a id="security" class="anchor" href="#security">&nbsp;</a>
+
+<h2>Security Considerations</h2>
+
+<p>The <code>run_contract_test</code> and <code>run_resiliency_test</code> tools send HTTP requests to the <code>baseUrl</code> provided by the caller. This is intentional &mdash; they are designed to test arbitrary services &mdash; but it means an MCP client can direct MockServer to make outbound requests to any reachable host.</p>
+
+<p>When MockServer is exposed beyond localhost, secure the MCP control plane to prevent unauthorized use:</p>
+
+<ul>
+    <li>Enable <strong>control plane JWT authentication</strong> via the <code>controlPlaneJWTAuthenticationRequired</code> configuration property so that only authenticated clients can invoke MCP tools.</li>
+    <li>Enable <strong>mutual TLS (mTLS)</strong> on the control plane so that only clients presenting a trusted certificate can connect.</li>
+    <li>Restrict network access to the MockServer control plane port using firewall rules or network policies.</li>
+</ul>
+
+<p>All outbound requests made by these tools are logged at INFO level, including the target URL, so that unexpected external traffic is visible in the MockServer log.</p>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> &mdash; full parameter documentation for both tools</li>
+    <li><a href="/mock_server/ai_mcp_setup.html"><strong>MCP Setup</strong></a> &mdash; how to connect your AI assistant to MockServer</li>
+    <li><a href="/mock_server/ai_debugging.html"><strong>Debugging with AI</strong></a> &mdash; using AI assistants to analyse captured traffic</li>
+    <li><a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a> &mdash; inspect and record LLM/MCP traffic for debugging and deterministic replay</li>
+</ul>
