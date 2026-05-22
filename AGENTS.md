@@ -37,6 +37,7 @@ Comprehensive internal documentation is maintained in `docs/`. **Always consult 
 | [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md) | Before modifying Buildkite or GitHub Actions pipelines |
 | [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) | Before investigating AWS, Terraform, or Buildkite agent issues |
 | [docs/infrastructure/docker.md](docs/infrastructure/docker.md) | Before modifying Dockerfiles, images, or Compose configs |
+| [docs/infrastructure/aws-ses-email-forwarding.md](docs/infrastructure/aws-ses-email-forwarding.md) | Before modifying SES email forwarding, DNS mail records, or the Lambda forwarder |
 | [docs/infrastructure/helm.md](docs/infrastructure/helm.md) | Before modifying Helm charts or Kubernetes deployment |
 | [docs/operations/website.md](docs/operations/website.md) | Before modifying the Jekyll documentation site |
 | [docs/operations/security.md](docs/operations/security.md) | Before adding, removing, or upgrading dependencies (Java 11 constraints, version ceilings, CodeQL, Dependabot, Snyk) |

@@ -8,12 +8,15 @@ graph TB
         direction TB
         BA["buildkite-agents/"]
         BP["buildkite-pipelines/"]
+        SES["ses-email-forwarding/"]
     end
 
     BA -->|provisions| AWS["AWS eu-west-2
 Build Agent Account"]
     BP -->|manages| BK["Buildkite
 Pipeline Definitions"]
+    SES -->|provisions| AWSWEB["AWS us-east-1
+Website Account"]
 
     subgraph AWS
         direction TB
@@ -35,10 +38,11 @@ Spot instances, 0-10"]
 |-----------|---------|----------|
 | [`buildkite-agents/`](buildkite-agents/) | Buildkite CI build agent cluster | AWS (`eu-west-2`) |
 | [`buildkite-pipelines/`](buildkite-pipelines/) | Buildkite pipeline definitions | Buildkite + AWS |
+| [`ses-email-forwarding/`](ses-email-forwarding/) | SES catch-all email forwarding for `mock-server.com` | AWS (`us-east-1`) |
 
 ## Prerequisites
 
-- [Terraform](https://www.terraform.io/downloads) >= 1.5
+- [Terraform](https://www.terraform.io/downloads) >= 1.15
 - [AWS CLI](https://aws.amazon.com/cli/) with SSO profile `mockserver-build`
 - AWS build agent account (see `~/mockserver-aws-ids.md`)
 

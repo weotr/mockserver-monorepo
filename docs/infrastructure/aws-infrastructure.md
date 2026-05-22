@@ -425,6 +425,8 @@ Main distribution config: `PriceClass_All`, HTTP/2+3, TLSv1.2_2021 minimum, redi
 
 `mock-server.com` DNS records: apex → CloudFront (main), `www` → alias to apex, `org` → alias to apex, plus 15 versioned subdomain A records (`4-0` through `5-14`) each pointing to their respective CloudFront distribution. ACM validation CNAME records for certificate renewal.
 
+SES email forwarding DNS records (managed by `terraform/ses-email-forwarding/`): apex MX record routing to `inbound-smtp.us-east-1.amazonaws.com`, `_amazonses` TXT for domain verification, 3 DKIM CNAME records (`<token>._domainkey`), and `_dmarc` TXT. See [AWS SES Email Forwarding](aws-ses-email-forwarding.md) for full details.
+
 ### ACM Certificates (us-east-1)
 
 | Domain | Expires | Renewal |

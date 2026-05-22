@@ -1,0 +1,25 @@
+# Copy this to terraform.tfvars and adjust values as needed.
+# NEVER commit terraform.tfvars -- it is gitignored.
+
+# region = "us-east-1"
+# domain = "mock-server.com"
+
+# Email addresses to forward inbound mail to
+# forward_to = ["jamesdbloom@gmail.com"]
+
+# Verified sender address used in the rewritten From header
+# from_address = "noreply@mock-server.com"
+
+# Number of days to keep raw emails in S3
+# email_retention_days = 30
+
+# Email address for Lambda error alarm notifications (defaults to the first
+# address in forward_to). The SNS subscription must be confirmed once via the
+# email AWS sends after the first apply.
+# alarm_email = "jamesdbloom@gmail.com"
+
+# Set to false to skip creating the SNS alarm topic, email subscription, and
+# CloudWatch error alarm. Useful when the SNS management API is unreachable
+# (e.g. behind a corporate TLS-inspection proxy). Monitoring can be applied
+# later from a network where SNS is reachable (such as AWS CloudShell).
+# enable_monitoring = true

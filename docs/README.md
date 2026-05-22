@@ -32,6 +32,7 @@ AWS accounts, CI/CD pipelines, container images, and Kubernetes deployment.
 | [CI/CD](infrastructure/ci-cd.md) | Buildkite pipelines and GitHub Actions workflows |
 | [Docker](infrastructure/docker.md) | Docker images, variants, multi-arch builds, and Compose examples |
 | [Helm & Kubernetes](infrastructure/helm.md) | Helm charts, deployment templates, and Kind-based testing |
+| [AWS SES Email Forwarding](infrastructure/aws-ses-email-forwarding.md) | SES catch-all email forwarding for mock-server.com |
 
 ### Operations
 

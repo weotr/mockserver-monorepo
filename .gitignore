@@ -134,6 +134,8 @@ terraform/**/*.tfvars
 # contain real tokens and stay ignored.
 !terraform/website/terraform.tfvars
 terraform/**/.terraform.lock.hcl
+terraform/**/tfplan
+terraform/**/*.tfplan
 
 # Buildkite CLI config (local only) #
 ######################################
