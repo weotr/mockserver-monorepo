@@ -1,5 +1,13 @@
 # Build Optimisation Plan
 
+> **Status (2026-05-25):** Phase 1 quick wins largely DONE; Phase 2 partially DONE; Phase 3 still PENDING.
+>
+> - **DONE:** 1.1 parallel module builds (`-T 1C` in `scripts/buildkite_quick_build.sh`); 1.3 test listener quiet/verbose modes (`mockserver.testOutput` system property, default `verbose`, CI uses `quiet`); 2.3 skipShade (`<skipShade>` in root pom and all 6 shade modules); 2.4 skipAssembly (`<skipAssembly>` in mockserver-netty); 2.1 partial — Surefire 3.5.5 with `parallel=classes`, `threadCount=4` for `mockserver-core` only (other modules deferred due to shared static state).
+> - **PARTIAL:** 3.4 Buildkite test analytics — XML reports collected via `**/target/surefire-reports/TEST-*.xml`, junit-annotate plugin active; 3.5 timeouts — Buildkite step timeouts and Surefire `forkedProcessTimeoutInSeconds=1800` set.
+> - **PENDING:** 1.2 `.mvn/maven.config` + `.mvn/jvm.config` (directory does not exist); 1.4 Buildkite group annotations (`BuildkiteEventSpy`); 2.2 Maven build caching (`maven-build-cache-extension`); 3.1 pipeline split into parallel steps (still monolithic `:maven: build`); 3.2 Buildkite artifact caching; 3.3 extract shade config to parent POM.
+>
+> Phase 3 work (parallel integration test groups, artifact caching, shade extraction) is the biggest remaining lever.
+
 ## Current State
 
 | Metric | Local Build | Buildkite CI |

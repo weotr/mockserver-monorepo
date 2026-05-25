@@ -1,10 +1,25 @@
 # Testing Improvements Plan
 
-**Status:** Active
+**Status:** Active — Phase 1.1, 3.4 (MockServerClientTest), 3.5, 4.4, 4.6 DONE; Phase 5 container/Helm work largely DONE; remainder PENDING.
 
 Maximise test coverage within reason, without excessive complexity or build delay.
 
 See [docs/testing.md](../testing.md) for comprehensive documentation of the current testing approach.
+
+## Status Snapshot (2026-05-25)
+
+| Phase | DONE | PARTIAL | PENDING |
+|-------|------|---------|---------|
+| 1 Measure | 1.1 JaCoCo (`jacoco-maven-plugin.version=0.8.14`) | 1.3 Test Analytics (XML collected but `<disableXmlReport>true</disableXmlReport>` still set) | 1.2 enable XML reports |
+| 2 Quick Wins | — | — | 2.1–2.4 schema serializer, ClientConfiguration, WebSocketClient, WebSocketClientRegistry unit tests |
+| 3 Structural | 3.4 MockServerClient mocking reduced, 3.5 ignored tests re-enabled | 3.3 mega-method splits ongoing | 3.1 Surefire parallel mode, 3.2 test categories/tags |
+| 4 Coverage | 4.4 listeners, 4.6 file persistence | 4.1 TLS, 4.2 JSON schema validators, 4.3 mappers, 4.5 JWT | — |
+| 5a Container CI | 5a.1 Docker Compose tests, 5a.2 helm lint, 5a.3 helm test | — | — |
+| 5b K3d | 5b.1–5b.3 all DONE | — | — |
+| 5c Docker Coverage | — | — | 5c.1–5c.4 graceful shutdown, JVM_OPTIONS, /libs/, variants |
+| 5d Helm Coverage | — | — | 5d.1–5d.5 ingress, ConfigMap, LoadBalancer, mockserver-config chart, multi-replica |
+
+**Highest-leverage remaining work:** flip `<disableXmlReport>` to `false`, add the Phase 2 quick-win unit tests, and close Phase 5c/5d Docker + Helm coverage gaps.
 
 ## Phase 1: Measure (Foundation) — ~1 day
 

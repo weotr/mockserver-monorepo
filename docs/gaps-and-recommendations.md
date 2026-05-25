@@ -20,16 +20,13 @@ This document identifies missing documentation, undocumented areas, and recommen
 
 **Resolution:** `backend.tf` uses `use_lockfile = true` (S3-native locking), not DynamoDB. Docs updated to reflect this.
 
-### 2. No Automated Release Pipeline
+### ~~2. No Automated Release Pipeline~~ (Resolved)
 
-**Status:** The release process is a manual 13-step checklist (`scripts/release_steps.md`) spanning 7 artifact registries and multiple AWS services. All source code is now in the monorepo, but the release process still has significant risk of human error, inconsistency, or partial releases.
+**Status:** ~~The release process is a manual 13-step checklist (`scripts/release_steps.md`) spanning 7 artifact registries and multiple AWS services.~~
 
-**Impact:** Releases are slow, error-prone, and cannot be delegated. The process includes force-push recovery steps, suggesting failures are not uncommon.
+**Resolution:** An end-to-end Buildkite release pipeline now exists (`.buildkite/release-pipeline.yml`, `.buildkite/release-preflight-pipeline.yml`) backed by per-component scripts under `scripts/release/` (`release.sh` orchestrator, `preflight.sh`, `prepare.sh`, `finalize.sh`, `test-all.sh`, and component scripts in `scripts/release/components/`). The legacy `scripts/release_steps.md` is retained for reference but is no longer the primary path. See [Release Process](operations/release-process.md) and [Release Principles](operations/release-principles.md).
 
-**Recommendation:**
-- Automate the release pipeline (at minimum: Maven Central release, Docker image build, Helm chart publish, website deploy)
-- Use GitHub Actions release workflows triggered by version tags
-- Add release verification tests (smoke tests against published artifacts)
+**Remaining:** Consider deleting or clearly archiving `scripts/release_steps.md` so contributors are not tempted to follow the manual sequence.
 
 ### 3. Missing API Documentation
 
@@ -55,22 +52,21 @@ This document identifies missing documentation, undocumented areas, and recommen
 
 ### 5. Inconsistent Version References
 
-**Status:** Version numbers are hardcoded in multiple locations:
+**Status:** Version numbers are still hardcoded in multiple locations (current values as of 2026-05-25):
 
-| Location | Example |
-|----------|---------|
-| `pom.xml` | `5.16.0-SNAPSHOT` |
-| `_config.yml` | `6.0.0` |
-| `Chart.yaml` | `6.0.0` |
-| `values.yaml` | image tag defaults |
-| `Dockerfiles` | `VERSION=RELEASE` or `5.16.0-SNAPSHOT` |
-| `release_steps.md` | `5.16.0`, `5.16.0-SNAPSHOT` |
-| `mockserver-client-python/pyproject.toml` | `5.16.0` |
-| `mockserver-client-ruby/lib/mockserver/version.rb` | `5.16.0` |
+| Location | Current value |
+|----------|---------------|
+| `mockserver/pom.xml` | `6.0.1-SNAPSHOT` |
+| `jekyll-www.mock-server.com/_config.yml` | `6.0.0` (released) / `6.0.1-SNAPSHOT` |
+| `helm/mockserver/Chart.yaml` | `6.0.0` (must match app version per Helm chart policy) |
+| `helm/mockserver/values.yaml` | image tag defaults |
+| Dockerfiles | `VERSION=RELEASE` or `6.0.1-SNAPSHOT` |
+| `mockserver-client-python/pyproject.toml` | `6.0.0` |
+| `mockserver-client-ruby/lib/mockserver/version.rb` | `6.0.0` |
 
 **Recommendation:**
-- Document all locations that need version updates during release (add to `docs/operations/release-process.md`)
-- Consider scripting the version bump (`scripts/bump_version.sh`)
+- The new release pipeline (`scripts/release/release.sh --version`) updates all of these as a unit; no standalone `bump_version.sh` is needed if releases always run through it. Verify the pipeline covers every location above and add any missing ones to `scripts/release/components/`.
+- Add a release-process doc section enumerating every file the pipeline touches, so a human can sanity-check before promotion.
 
 ### 6. No Contributor Architecture Guide
 
@@ -92,13 +88,12 @@ This document identifies missing documentation, undocumented areas, and recommen
 
 **Resolution:** `docs/code/tls-and-security.md` now comprehensively covers BouncyCastle CA, SNI, mTLS, JWT auth (with all 15 supported JWS algorithms), control plane security, and authentication classes (8 classes documented).
 
-### 9. Helm Chart Repo Hosting
+### 9. Helm Chart Repo Hosting (Partial)
 
-**Status:** Helm charts are hosted on the same S3 bucket as the website. The chart repository index (`index.yaml`) is manually regenerated and uploaded.
+**Status:** Helm charts are hosted on the same S3 bucket as the website. `index.yaml` regeneration is now automated by the release pipeline — `scripts/release/components/helm.sh` rebuilds and uploads the index — but the choice of hosting is unchanged.
 
 **Recommendation:**
-- Consider using GitHub Releases or OCI registry for chart hosting
-- Automate chart packaging and index regeneration in CI
+- Optional: consider publishing to an OCI registry as a parallel channel (the S3 channel remains the primary published location).
 
 ### 10. ~~Build Image Staleness~~ (Resolved)
 
@@ -114,19 +109,17 @@ This document identifies missing documentation, undocumented areas, and recommen
 
 The 10 Docker Compose examples in `mockserver-examples/docker_compose_examples/` duplicate the integration test configurations in `container_integration_tests/`. Changes in one are not automatically reflected in the other.
 
-### 12. Deprecated Packaging Formats
+### ~~12. Deprecated Packaging Formats~~ (Resolved)
 
-The Debian package (`dput.sh`) and Upstart init script suggest legacy Linux distribution support that may no longer be maintained. Consider documenting the supported deployment targets.
+**Resolution:** `dput.sh` and Upstart artefacts have been removed from the repo.
 
-### 13. Missing `.gitignore` Entries
+### ~~13. Missing `.gitignore` Entries~~ (Resolved)
 
-The `docs/` directory should be tracked in git. Verify that `.gitignore` does not exclude it.
+**Resolution:** `docs/` is tracked; `.gitignore` does not exclude it.
 
-### 14. No Dependency Update Automation
+### ~~14. No Dependency Update Automation~~ (Resolved)
 
-No Dependabot or Renovate configuration exists for automated dependency update PRs (although `.github/dependabot.yml` may exist for GitHub Actions only).
-
-**Recommendation:** Enable Dependabot for Maven dependencies with conservative update policy.
+**Resolution:** `.github/dependabot.yml` covers the Maven ecosystem (both `/mockserver` and `/mockserver/mockserver-maven-plugin`) with conservative Java 11 compatibility guards. Snyk is wired up — see [Snyk Security](operations/snyk-security.md). Triage workflow for both is documented in [Security](operations/security.md), with skills `dependabot-snyk-pr-management` and `pr-monitor` automating review and auto-merge of green builds.
 
 ## Documentation Coverage Matrix
 

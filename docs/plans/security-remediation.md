@@ -1,9 +1,28 @@
 # Security Remediation Plan
 
-**Status:** Active Implementation Plan  
-**Created:** May 4, 2026  
-**Priority:** CRITICAL - All items are security vulnerabilities  
+**Status:** Partial — 3 of 12 items shipped; Phase 2 breaking changes deferred past v6.0.0 release (2026-05-21).
+**Created:** May 4, 2026 (updated 2026-05-25)
+**Priority:** CRITICAL - All items are security vulnerabilities
 **Estimated Total Effort:** 17-22 days
+
+## Implementation Status (2026-05-25)
+
+| ID | Item | Status | Evidence |
+|----|------|--------|----------|
+| SEC-1 | SSRF in forward handlers | PENDING | No `InetAddressValidator` in mockserver-core |
+| SEC-2 | ReDoS in regex matcher | PARTIAL | `splitHostPort()` fixed (commit `e14a3b13c`); generic regex timeout missing |
+| SEC-3 | Trust-all TLS default | PENDING | `ConfigurationProperties` still defaults to `"ANY"` — deferred past v6.0.0 |
+| SEC-4 | Velocity class loading | PENDING | Default still `false` (unsafe) — deferred past v6.0.0 |
+| SEC-5 | JsonPath DoS | DONE | Patched via json-path 2.10.0 upgrade (commit `c9ef6ad30`); CVE-2024-57699 mitigated |
+| SEC-6 | XPath DoS | PENDING | No timeout mechanism |
+| SEC-7 | XXE attack vector | DONE | Fixed in `StringToXmlDocumentParser` (commit `bcb4869f0`); `disallow-doctype-decl` + external-entity blocks enabled |
+| SEC-8 | JavaScript class access | PENDING | No `javascriptAllowedClasses` property |
+| SEC-9 | Weak random | DONE | `SecureRandom` used throughout `BCKeyAndCertificateFactory` |
+| SEC-10 | Weak TLS versions | PENDING | Default still `"TLSv1,TLSv1.1,TLSv1.2"` — deferred past v6.0.0 |
+| SEC-11 | Unbounded bodies | PENDING | No size-limit properties |
+| PER-1 | Ring buffer docs | PENDING | Status unknown |
+
+**Action:** Phase 2 breaking changes (SEC-3/4/10) need a firm v6.1 or v7.0 deadline so deprecated defaults do not persist indefinitely. Critical SSRF (SEC-1) and remaining ReDoS work (SEC-2) should be unblocked separately from the breaking-change batch.
 
 ---
 

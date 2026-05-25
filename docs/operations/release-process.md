@@ -59,7 +59,7 @@ After the form, Buildkite immediately hits a `block` step asking for a 6-digit T
 
 ### 5. Manual gate 1 — enter the TOTP
 
-The TOTP seed lives in Secrets Manager under `mockserver-release/totp-seed`. Use the same authenticator app you set up for previous releases. If you've lost the seed, see [release-pipeline-next-steps.md](../plans/release-pipeline-next-steps.md) for rotation.
+The TOTP seed lives in Secrets Manager under `mockserver-release/totp-seed`. Use the same authenticator app you set up for previous releases. If you've lost the seed, rotate it: generate a new seed (e.g. `python3 -c "import secrets, base64; print(base64.b32encode(secrets.token_bytes(20)).decode())"`), update the secret in AWS Secrets Manager, and re-enroll it in your authenticator (issuer `MockServer Release`).
 
 After this gate the pipeline runs `Prepare` (pom bump + tag + push) and then `Maven Central` (mvn deploy + Sonatype publish + sync wait). Maven Central typically takes 15–25 min.
 
