@@ -14,6 +14,10 @@
     <description>A JUnit4 Rule for MockServer</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.junit.rule</module.name>
+    </properties>
+
     <dependencies>
         <!-- mockserver -->
         <dependency>

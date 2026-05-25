@@ -14,6 +14,10 @@
     <description>MockServer integration testing components with all dependencies shaded</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.testing</module.name>
+    </properties>
+
     <dependencies>
         <!-- optional: shade bundles the source module's classes into this
              self-contained jar, so consumers of this no-dependencies artifact
@@ -73,6 +77,11 @@
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
                                     <resource>META-INF/LICENSE</resource>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Automatic-Module-Name>${module.name}</Automatic-Module-Name>
+                                    </manifestEntries>
                                 </transformer>
                             </transformers>
                             <createSourcesJar>true</createSourcesJar>

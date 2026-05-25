@@ -14,6 +14,10 @@
     <description>A JUnit5 Extension for MockServer</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.junit.jupiter</module.name>
+    </properties>
+
     <dependencies>
         <!-- mockserver -->
         <dependency>

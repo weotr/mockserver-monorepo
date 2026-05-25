@@ -14,6 +14,10 @@
     <description>A module used to simplify integration testing of all MockServer versions by sharing commons integration testing components</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.testing</module.name>
+    </properties>
+
     <dependencies>
         <!-- MockServer -->
         <dependency>

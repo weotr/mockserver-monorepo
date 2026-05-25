@@ -14,6 +14,10 @@
     <description>Functionality used by all MockServer modules for matching and expectations</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.core</module.name>
+    </properties>
+
     <dependencies>
         <!-- mockserver -->
         <dependency>

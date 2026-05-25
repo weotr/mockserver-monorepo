@@ -13,6 +13,10 @@
     <description>A module used for common testing code of all MockServer modules</description>
     <url>https://www.mock-server.com</url>
 
+    <properties>
+        <module.name>org.mockserver.test</module.name>
+    </properties>
+
     <dependencies>
         <!-- test -->
         <dependency>
