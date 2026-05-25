@@ -50,31 +50,13 @@ This document identifies missing documentation, undocumented areas, and recommen
 
 ## Moderate Gaps
 
-### 5. Inconsistent Version References
+### ~~5. Inconsistent Version References~~ (Resolved)
 
-**Status:** Version numbers are still hardcoded in multiple locations (current values as of 2026-05-25):
+**Resolution:** Every version-bearing file in the repo is now enumerated in [docs/operations/release-process.md → "Version-bearing files updated by the release pipeline"](operations/release-process.md#version-bearing-files-updated-by-the-release-pipeline). The release pipeline (`scripts/release/prepare.sh` + `finalize.sh`) writes all of them; contributors should not maintain version literals by hand. The table doubles as a sanity check — `git diff` after a dry-run should touch every file listed and no others.
 
-| Location | Current value |
-|----------|---------------|
-| `mockserver/pom.xml` | `6.0.1-SNAPSHOT` |
-| `jekyll-www.mock-server.com/_config.yml` | `6.0.0` (released) / `6.0.1-SNAPSHOT` |
-| `helm/mockserver/Chart.yaml` | `6.0.0` (must match app version per Helm chart policy) |
-| `helm/mockserver/values.yaml` | image tag defaults |
-| Dockerfiles | `VERSION=RELEASE` or `6.0.1-SNAPSHOT` |
-| `mockserver-client-python/pyproject.toml` | `6.0.0` |
-| `mockserver-client-ruby/lib/mockserver/version.rb` | `6.0.0` |
+### ~~6. No Contributor Architecture Guide~~ (Resolved)
 
-**Recommendation:**
-- The new release pipeline (`scripts/release/release.sh --version`) updates all of these as a unit; no standalone `bump_version.sh` is needed if releases always run through it. Verify the pipeline covers every location above and add any missing ones to `scripts/release/components/`.
-- Add a release-process doc section enumerating every file the pipeline touches, so a human can sanity-check before promotion.
-
-### 6. No Contributor Architecture Guide
-
-**Status:** `CONTRIBUTING.md` exists but does not explain the codebase architecture, module relationships, or where to make changes for different types of contributions.
-
-**Recommendation:**
-- Link to `docs/architecture.md` from `CONTRIBUTING.md`
-- Add a "Where to make changes" section mapping feature types to modules
+**Resolution:** `CONTRIBUTING.md` now links to [docs/code/overview.md](code/overview.md) and [docs/architecture.md](architecture.md) and includes a "Where to make changes" section mapping common change types (new matcher, new action, Netty pipeline, TLS, configuration property, Dashboard UI, client, Helm, CI, release) to the right module and reference doc.
 
 ### ~~7. No Testing Documentation~~ (Resolved)
 
@@ -138,8 +120,8 @@ This document identifies missing documentation, undocumented areas, and recommen
 | Security architecture | Documented | [code/tls-and-security.md](code/tls-and-security.md) |
 | Metrics & monitoring | Documented | [code/metrics.md](code/metrics.md) |
 | Agent starvation fix | **Resolved** | Separate `trigger` queue on cheap t3 instances; see [ci-cd.md](infrastructure/ci-cd.md#agent-starvation-from-script-based-triggers-resolved) |
-| Operational runbook | **Missing** | Recommended: `docs/runbook.md` |
+| Operational runbook | **Open** | Symptom-first triage guide for agents/CI/website/registries — deferred until there's a recurring incident pattern worth codifying |
 | Infrastructure as Code | **Partial** | `terraform/buildkite-agents/` (website IaC still missing) |
-| API documentation | **Partial** | OpenAPI spec exists, not integrated |
-| Performance tuning | **Partial** | Website covers it, no internal docs |
-| Configuration reference | **Partial** | `mockserver.example.properties` exists |
+| API documentation | **Open** | OpenAPI spec exists but only published to SwaggerHub manually — no auto-generated rendering on the website |
+| Performance tuning | Documented | [operations/performance-tuning.md](operations/performance-tuning.md) |
+| Configuration reference | Documented | [code/configuration-reference.md](code/configuration-reference.md) (mechanism + how-to-add) and `mockserver.example.properties` (authoritative property list) |

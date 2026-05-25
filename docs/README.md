@@ -21,6 +21,7 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [Memory Management](code/memory-management.md) | Medium | Log entry and expectation memory analysis, default limit calculation, tuning guide |
 | [Metrics & Monitoring](code/metrics.md) | Low | Prometheus metrics, memory monitoring, CSV export |
 | [AI & RPC Protocol Mocking](code/ai-protocol-mocking.md) | Medium | SSE streaming, JSON-RPC matching, MCP and A2A mock builders, gRPC mocking |
+| [Configuration Reference](code/configuration-reference.md) | Low | Property mechanism, resolution order, four equivalent forms, how to add a property |
 
 ### Infrastructure
 
@@ -46,6 +47,7 @@ Build process, releases, dependencies, security scanning, and the documentation 
 | [Snyk Security](operations/snyk-security.md) | Vulnerability scanning, CLI usage, Java 11 constraints, triage workflow |
 | [Website](operations/website.md) | Jekyll documentation site structure and publishing |
 | [Testing](testing.md) | Test frameworks, module inventory, architecture, configuration, coverage gaps, CI execution |
+| [Performance Tuning](operations/performance-tuning.md) | Internal companion to the website performance page: where the budget goes, rules of thumb, JVM flags, measuring, regression triage |
 | [AI-Native SDLC Principles](operations/ai-native-sdlc-principles.md) | Principles for working with AI across the SDLC: spec-first, verification, context, guardrails, the lethal trifecta |
 | [AI-Assisted Development](operations/ai-assisted-development.md) | AI development approach, adversarial review, testing backstop, structural safety |
 | [OpenCode Configuration](operations/opencode-configuration.md) | AI harness: config, agents, rules, skills, commands, plugins |
@@ -97,9 +99,9 @@ mockserver-monorepo/
 ├── terraform/                      # Terraform IaC (Buildkite agents + pipelines)
 ├── scripts/                        # Build, deploy, and utility scripts
 └── docs/                           # This documentation (you are here)
-    ├── code/                       #   Code architecture (11 docs)
+    ├── code/                       #   Code architecture (12 docs)
     ├── infrastructure/             #   AWS, CI/CD, Docker, Helm (5 docs)
-    ├── operations/                 #   Build, release, deps, security, website (10 docs)
+    ├── operations/                 #   Build, release, deps, security, website, perf (11 docs)
     ├── plans/                      #   Active plans and RFCs (4 docs)
     └── testing.md                  #   Test frameworks, architecture, config, coverage, CI
 ```
