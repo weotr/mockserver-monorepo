@@ -22,6 +22,7 @@ import java.util.Set;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.Assert.assertThrows;
 import static org.mockserver.configuration.ConfigurationProperties.logLevel;
@@ -2516,6 +2517,66 @@ public class ConfigurationTest {
                 );
             }
         }
+    }
+
+    @Test
+    public void certificateAuthorityPrivateKeySetterValidatesFileExists() {
+        String missing = "/does/not/exist/ca-key.pem";
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> configuration.certificateAuthorityPrivateKey(missing));
+        assertThat(ex.getMessage(), containsString(missing));
+        assertThat(ex.getMessage(), containsString("does not exist or is not accessible"));
+
+        configuration.certificateAuthorityPrivateKey(null);
+        configuration.certificateAuthorityPrivateKey("");
+
+        String valid = tempFilePath();
+        configuration.certificateAuthorityPrivateKey(valid);
+        assertThat(configuration.certificateAuthorityPrivateKey(), equalTo(valid));
+    }
+
+    @Test
+    public void certificateAuthorityCertificateSetterValidatesFileExists() {
+        String missing = "/does/not/exist/ca.pem";
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> configuration.certificateAuthorityCertificate(missing));
+        assertThat(ex.getMessage(), containsString(missing));
+        assertThat(ex.getMessage(), containsString("does not exist or is not accessible"));
+
+        configuration.certificateAuthorityCertificate(null);
+        configuration.certificateAuthorityCertificate("");
+
+        String valid = tempFilePath();
+        configuration.certificateAuthorityCertificate(valid);
+        assertThat(configuration.certificateAuthorityCertificate(), equalTo(valid));
+    }
+
+    @Test
+    public void privateKeyPathSetterValidatesFileExists() {
+        String missing = "/does/not/exist/private-key.pem";
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> configuration.privateKeyPath(missing));
+        assertThat(ex.getMessage(), containsString(missing));
+        assertThat(ex.getMessage(), containsString("does not exist or is not accessible"));
+
+        configuration.privateKeyPath(null);
+        configuration.privateKeyPath("");
+
+        String valid = tempFilePath();
+        configuration.privateKeyPath(valid);
+        assertThat(configuration.privateKeyPath(), equalTo(valid));
+    }
+
+    @Test
+    public void x509CertificatePathSetterValidatesFileExists() {
+        String missing = "/does/not/exist/cert.pem";
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> configuration.x509CertificatePath(missing));
+        assertThat(ex.getMessage(), containsString(missing));
+        assertThat(ex.getMessage(), containsString("does not exist or is not accessible"));
+
+        configuration.x509CertificatePath(null);
+        configuration.x509CertificatePath("");
+
+        String valid = tempFilePath();
+        configuration.x509CertificatePath(valid);
+        assertThat(configuration.x509CertificatePath(), equalTo(valid));
     }
 
 }
