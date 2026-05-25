@@ -12,6 +12,7 @@ import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static junit.framework.TestCase.fail;
@@ -575,19 +576,19 @@ public class MockServerEventLogRequestLogEntryVerificationTest {
         );
 
         // when
+        CountDownLatch concurrentAddComplete = new CountDownLatch(1);
         new Thread(() -> {
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException ignore) {
-            }
             mockServerEventLog.add(
                 new LogEntry()
                     .setHttpRequest(httpRequest)
                     .setType(RECEIVED_REQUEST)
             );
+            concurrentAddComplete.countDown();
         }).start();
 
-        Thread.sleep(100);
+        if (!concurrentAddComplete.await(10, SECONDS)) {
+            fail("Background add() did not complete within 10 seconds");
+        }
 
         // then
         assertThat(verify(verification().withRequest(httpRequest).withTimes(exactly(2))), is(""));
