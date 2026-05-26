@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -228,25 +230,52 @@ public class LlmConversationMatcher {
      * keyed by an ID that maps to the given tool name.
      */
     private boolean hasToolResultForName(List<ParsedMessage> messages, String toolName) {
-        // First pass: build id -> name map from assistant tool calls
+        // First pass: build id -> name map from assistant tool calls and collect the
+        // distinct tool names called across the conversation. The distinct-name count
+        // is needed to disambiguate the positional fallback used by providers that
+        // emit tool results without correlatable IDs (Ollama emits empty-string keys).
         Map<String, String> idToName = new HashMap<>();
+        Set<String> distinctToolCallNames = new HashSet<>();
+        boolean hasToolCallWithName = false;
         for (ParsedMessage msg : messages) {
             if (msg.getRole() == ParsedMessage.Role.ASSISTANT && !msg.getToolCalls().isEmpty()) {
                 for (ToolUse tc : msg.getToolCalls()) {
                     if (tc.getId() != null) {
                         idToName.put(tc.getId(), tc.getName());
                     }
+                    if (tc.getName() != null) {
+                        distinctToolCallNames.add(tc.getName());
+                    }
+                    if (toolName.equals(tc.getName())) {
+                        hasToolCallWithName = true;
+                    }
                 }
             }
         }
 
-        // Second pass: check TOOL messages for results correlated to the named tool
+        // Second pass: check TOOL messages for results correlated to the named tool.
         for (ParsedMessage msg : messages) {
             if (msg.getRole() == ParsedMessage.Role.TOOL && !msg.getToolResults().isEmpty()) {
                 for (String resultId : msg.getToolResults().keySet()) {
+                    // ID-based correlation (Anthropic, OpenAI Chat Completions, OpenAI Responses).
                     if (toolName.equals(idToName.get(resultId))) {
                         return true;
                     }
+                    // Name-keyed correlation (Gemini's functionResponse uses the tool name as the
+                    // map key — see GeminiCodec.decode).
+                    if (toolName.equals(resultId)) {
+                        return true;
+                    }
+                }
+                // Positional fallback for providers that emit anonymous tool results
+                // (Ollama uses empty-string keys). Only safe when the entire conversation
+                // has called exactly one tool name AND that name is the one we're matching;
+                // otherwise correlation is ambiguous and we must fail closed.
+                if (hasToolCallWithName
+                    && idToName.isEmpty()
+                    && distinctToolCallNames.size() == 1
+                    && distinctToolCallNames.contains(toolName)) {
+                    return true;
                 }
             }
         }

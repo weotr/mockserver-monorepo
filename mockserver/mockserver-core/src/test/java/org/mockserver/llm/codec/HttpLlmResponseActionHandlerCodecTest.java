@@ -59,37 +59,24 @@ public class HttpLlmResponseActionHandlerCodecTest {
     }
 
     @Test
-    public void shouldReturn400ForMissingCodec() throws Exception {
-        // given — GEMINI codec is not registered in M1
+    public void shouldReturn200ForEveryRegisteredProvider() throws Exception {
+        // After M4 every Provider enum value has a registered codec; the codec-missing
+        // 400 path remains in the handler for safety but is not reachable through any
+        // current production code path. This positive test pins the post-M4 contract:
+        // every Provider value resolves to a codec and returns 200.
         HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
-        HttpLlmResponse llmResponse = llmResponse()
-            .withProvider(Provider.GEMINI)
-            .withCompletion(completion().withText("test"));
         HttpRequest request = request().withPath("/test");
 
-        // when
-        HttpResponse response = handler.handle(llmResponse, request);
+        for (Provider provider : Provider.values()) {
+            HttpLlmResponse llmResponse = llmResponse()
+                .withProvider(provider)
+                .withCompletion(completion().withText("hello"));
 
-        // then — should be 400 with supported providers list
-        assertThat(response.getStatusCode(), is(400));
-        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
-        assertThat(root.get("error").asText(), containsString("GEMINI"));
-        assertThat(root.has("supported"), is(true));
-        JsonNode supported = root.get("supported");
-        assertThat(supported.isArray(), is(true));
-        // Should include ANTHROPIC and OPENAI
-        boolean hasAnthropic = false;
-        boolean hasOpenai = false;
-        for (JsonNode p : supported) {
-            if ("ANTHROPIC".equals(p.asText())) {
-                hasAnthropic = true;
-            }
-            if ("OPENAI".equals(p.asText())) {
-                hasOpenai = true;
-            }
+            HttpResponse response = handler.handle(llmResponse, request);
+
+            assertThat("expected 200 for provider " + provider,
+                response.getStatusCode(), is(200));
         }
-        assertThat(hasAnthropic, is(true));
-        assertThat(hasOpenai, is(true));
     }
 
     @Test

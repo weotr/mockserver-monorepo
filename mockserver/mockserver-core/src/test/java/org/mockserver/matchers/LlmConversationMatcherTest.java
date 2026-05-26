@@ -491,4 +491,83 @@ public class LlmConversationMatcherTest {
 
         assertThat(matcher.matches(null), is(false));
     }
+
+    // --- Gemini containsToolResultFor ---
+
+    @Test
+    public void shouldMatchContainsToolResultForGemini() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.GEMINI)
+            .withContainsToolResultFor("get_weather");
+
+        HttpRequest request = request().withBody("{\"contents\":["
+            + "{\"role\":\"user\",\"parts\":[{\"text\":\"What is the weather?\"}]},"
+            + "{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"}}}]},"
+            + "{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"get_weather\",\"response\":\"18C and sunny\"}}]}"
+            + "]}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    @Test
+    public void shouldMatchContainsToolResultForGeminiWithJsonBody() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.GEMINI)
+            .withContainsToolResultFor("get_weather");
+
+        String json = "{\"contents\":["
+            + "{\"role\":\"user\",\"parts\":[{\"text\":\"What is the weather?\"}]},"
+            + "{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"}}}]},"
+            + "{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"get_weather\",\"response\":\"18C and sunny\"}}]}"
+            + "]}";
+
+        // Use JsonBody to simulate what MockServer Netty pipeline does
+        HttpRequest request = request().withBody(
+            new org.mockserver.model.JsonBody(json)
+        );
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    // --- Ollama containsToolResultFor ---
+
+    @Test
+    public void shouldMatchContainsToolResultForOllama() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.OLLAMA)
+            .withContainsToolResultFor("get_weather");
+
+        HttpRequest request = request().withBody("{\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather?\"},"
+            + "{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":["
+            + "{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}}"
+            + "]},"
+            + "{\"role\":\"tool\",\"content\":\"18C and sunny\"}"
+            + "]}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    @Test
+    public void shouldNotMatchOllamaContainsToolResultForWhenMultipleToolsCalled() {
+        // Ollama tool results are keyed by empty string (no tool_call_id), so the
+        // positional fallback cannot disambiguate between calls. When the assistant
+        // turn called BOTH "search" and "calculate", a containsToolResultFor("search")
+        // predicate must fail closed because the TOOL message could be the response
+        // for either tool.
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.OLLAMA)
+            .withContainsToolResultFor("search");
+
+        HttpRequest request = request().withBody("{\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"search and compute\"},"
+            + "{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":["
+            + "{\"function\":{\"name\":\"search\",\"arguments\":{\"q\":\"x\"}}},"
+            + "{\"function\":{\"name\":\"calculate\",\"arguments\":{\"expr\":\"2+2\"}}}"
+            + "]},"
+            + "{\"role\":\"tool\",\"content\":\"42\"}"
+            + "]}");
+
+        assertThat(matcher.matches(request), is(false));
+    }
 }

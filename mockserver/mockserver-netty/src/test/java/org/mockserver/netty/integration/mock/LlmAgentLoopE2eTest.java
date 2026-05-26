@@ -1,0 +1,512 @@
+package org.mockserver.netty.integration.mock;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.AfterClass;
+import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.mockserver.client.MockServerClient;
+import org.mockserver.netty.MockServer;
+
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.is;
+import static org.mockserver.client.LlmConversationBuilder.conversation;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.Provider.ANTHROPIC;
+import static org.mockserver.model.Provider.AZURE_OPENAI;
+import static org.mockserver.model.Provider.BEDROCK;
+import static org.mockserver.model.Provider.GEMINI;
+import static org.mockserver.model.Provider.OLLAMA;
+import static org.mockserver.model.Provider.OPENAI;
+import static org.mockserver.model.Provider.OPENAI_RESPONSES;
+import static org.mockserver.model.ToolUse.toolUse;
+import static org.mockserver.stop.Stop.stopQuietly;
+
+/**
+ * End-to-end agent loop test for all 7 providers. For each provider:
+ * <ul>
+ *   <li>Turn 1: register a response that returns a tool_use / function_call</li>
+ *   <li>Turn 2: after the client sends a tool_result, return the final answer</li>
+ * </ul>
+ * Non-streaming only. Each test exercises the full codec encode path,
+ * the scenario state machine, and the conversation-aware matcher pipeline.
+ */
+public class LlmAgentLoopE2eTest {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static int mockServerPort;
+    private static MockServerClient mockServerClient;
+
+    @BeforeClass
+    public static void startServer() {
+        mockServerPort = new MockServer().getLocalPort();
+        mockServerClient = new MockServerClient("localhost", mockServerPort);
+    }
+
+    @AfterClass
+    public static void stopServer() {
+        stopQuietly(mockServerClient);
+    }
+
+    @Before
+    public void resetServer() {
+        mockServerClient.reset();
+    }
+
+    // ---- Anthropic ----
+
+    @Test
+    public void shouldCompleteAgentLoopForAnthropic() throws Exception {
+        conversation()
+            .withPath("/v1/messages")
+            .withProvider(ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .turn()
+                .whenTurnIndex(0)
+                .respondingWith(completion()
+                    .withText("Let me search for that.")
+                    .withToolCall(toolUse("search").withArguments("{\"q\":\"weather paris\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .whenContainsToolResultFor("search")
+                .respondingWith(completion()
+                    .withText("It is 18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Turn 1
+        String turn1Body = "{\"model\":\"claude-sonnet-4-20250514\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}]}";
+        String turn1Response = sendPost("/v1/messages", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("type").asText(), is("message"));
+        assertThat(turn1.get("stop_reason").asText(), is("tool_use"));
+        assertToolUsePresent(turn1, "search");
+
+        // Turn 2
+        String turn2Body = "{\"model\":\"claude-sonnet-4-20250514\",\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"},"
+            + "{\"role\":\"assistant\",\"content\":["
+            + "{\"type\":\"text\",\"text\":\"Let me search for that.\"},"
+            + "{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"search\",\"input\":{\"q\":\"weather paris\"}}"
+            + "]},"
+            + "{\"role\":\"user\",\"content\":["
+            + "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_123\",\"content\":\"18C and sunny\"}"
+            + "]}"
+            + "]}";
+        String turn2Response = sendPost("/v1/messages", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.get("type").asText(), is("message"));
+        assertThat(turn2.get("stop_reason").asText(), is("end_turn"));
+        assertTextBlockContains(turn2, "18C and sunny");
+    }
+
+    // ---- OpenAI Chat Completions ----
+
+    @Test
+    public void shouldCompleteAgentLoopForOpenAi() throws Exception {
+        conversation()
+            .withPath("/v1/chat/completions")
+            .withProvider(OPENAI)
+            .withModel("gpt-4o")
+            .turn()
+                .whenTurnIndex(0)
+                .respondingWith(completion()
+                    .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .whenContainsToolResultFor("get_weather")
+                .respondingWith(completion()
+                    .withText("The weather in Paris is 18C and sunny.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Turn 1
+        String turn1Body = "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}]}";
+        String turn1Response = sendPost("/v1/chat/completions", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("object").asText(), is("chat.completion"));
+        assertThat(turn1.path("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
+        assertOpenAiToolCallPresent(turn1, "get_weather");
+
+        // Turn 2 with tool result
+        String callId = turn1.path("choices").get(0).path("message").path("tool_calls").get(0).path("id").asText();
+        String turn2Body = "{\"model\":\"gpt-4o\",\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"},"
+            + "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":["
+            + "{\"id\":\"" + callId + "\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}"
+            + "]},"
+            + "{\"role\":\"tool\",\"tool_call_id\":\"" + callId + "\",\"content\":\"18C and sunny\"}"
+            + "]}";
+        String turn2Response = sendPost("/v1/chat/completions", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.path("choices").get(0).get("finish_reason").asText(), is("stop"));
+        assertThat(turn2.path("choices").get(0).path("message").get("content").asText(), containsString("18C and sunny"));
+    }
+
+    // ---- OpenAI Responses ----
+
+    @Test
+    public void shouldCompleteAgentLoopForOpenAiResponses() throws Exception {
+        conversation()
+            .withPath("/v1/responses")
+            .withProvider(OPENAI_RESPONSES)
+            .withModel("gpt-4o")
+            .turn()
+                .whenTurnIndex(0)
+                .respondingWith(completion()
+                    .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .whenContainsToolResultFor("get_weather")
+                .respondingWith(completion()
+                    .withText("It is 18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Turn 1: Responses API uses "input" array instead of "messages"
+        String turn1Body = "{\"model\":\"gpt-4o\",\"input\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}]}";
+        String turn1Response = sendPost("/v1/responses", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("object").asText(), is("response"));
+        // Verify function_call in output
+        boolean hasFunctionCall = false;
+        for (JsonNode item : turn1.get("output")) {
+            if ("function_call".equals(item.get("type").asText())) {
+                assertThat(item.get("name").asText(), is("get_weather"));
+                hasFunctionCall = true;
+            }
+        }
+        assertThat("Turn 1 should have function_call output", hasFunctionCall, is(true));
+
+        // Turn 2: send function_call_output
+        String fcId = "";
+        for (JsonNode item : turn1.get("output")) {
+            if ("function_call".equals(item.get("type").asText())) {
+                fcId = item.get("id").asText();
+            }
+        }
+        String turn2Body = "{\"model\":\"gpt-4o\",\"input\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"},"
+            + "{\"type\":\"function_call\",\"id\":\"" + fcId + "\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"},"
+            + "{\"type\":\"function_call_output\",\"call_id\":\"" + fcId + "\",\"output\":\"18C and sunny\"}"
+            + "]}";
+        String turn2Response = sendPost("/v1/responses", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.get("object").asText(), is("response"));
+        // Verify text in output
+        boolean hasText = false;
+        for (JsonNode item : turn2.get("output")) {
+            if ("message".equals(item.get("type").asText())) {
+                for (JsonNode content : item.get("content")) {
+                    if ("output_text".equals(content.get("type").asText())) {
+                        assertThat(content.get("text").asText(), containsString("18C and sunny"));
+                        hasText = true;
+                    }
+                }
+            }
+        }
+        assertThat("Turn 2 should have text output", hasText, is(true));
+    }
+
+    // ---- Gemini ----
+
+    @Test
+    public void shouldCompleteAgentLoopForGemini() throws Exception {
+        // Gemini uses "contents" and "parts" instead of "messages".
+        // Turn ordering is handled by the scenario state machine; conversation
+        // predicates are verified separately in LlmConversationMatcherTest.
+        conversation()
+            .withPath("/v1beta/models/gemini-2.0-flash/generateContent")
+            .withProvider(GEMINI)
+            .withModel("gemini-2.0-flash")
+            .turn()
+                .respondingWith(completion()
+                    .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+                    .withStopReason("end_turn"))
+            .andThen()
+            .turn()
+                .respondingWith(completion()
+                    .withText("It is 18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Turn 1: Gemini uses "contents" array with "parts"
+        String turn1Body = "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"What is the weather in Paris?\"}]}]}";
+        String turn1Response = sendPost("/v1beta/models/gemini-2.0-flash/generateContent", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.has("candidates"), is(true));
+        // Verify functionCall in parts
+        boolean hasFc = false;
+        for (JsonNode part : turn1.path("candidates").get(0).path("content").path("parts")) {
+            if (part.has("functionCall")) {
+                assertThat(part.path("functionCall").get("name").asText(), is("get_weather"));
+                hasFc = true;
+            }
+        }
+        assertThat("Turn 1 should have functionCall part", hasFc, is(true));
+
+        // Turn 2: send functionResponse
+        String turn2Body = "{\"contents\":["
+            + "{\"role\":\"user\",\"parts\":[{\"text\":\"What is the weather in Paris?\"}]},"
+            + "{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"}}}]},"
+            + "{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"get_weather\",\"response\":\"18C and sunny\"}}]}"
+            + "]}";
+        String turn2Response = sendPost("/v1beta/models/gemini-2.0-flash/generateContent", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.has("candidates"), is(true));
+        boolean hasTextPart = false;
+        for (JsonNode part : turn2.path("candidates").get(0).path("content").path("parts")) {
+            if (part.has("text")) {
+                assertThat(part.get("text").asText(), containsString("18C and sunny"));
+                hasTextPart = true;
+            }
+        }
+        assertThat("Turn 2 should have text part", hasTextPart, is(true));
+    }
+
+    // ---- AWS Bedrock ----
+
+    @Test
+    public void shouldCompleteAgentLoopForBedrock() throws Exception {
+        conversation()
+            .withPath("/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke")
+            .withProvider(BEDROCK)
+            .withModel("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .turn()
+                .whenTurnIndex(0)
+                .respondingWith(completion()
+                    .withText("Let me search.")
+                    .withToolCall(toolUse("search").withArguments("{\"q\":\"weather\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .whenContainsToolResultFor("search")
+                .respondingWith(completion()
+                    .withText("It is 18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Bedrock uses the same Anthropic Messages body format
+        String turn1Body = "{\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather?\"}]}";
+        String turn1Response = sendPost("/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("type").asText(), is("message"));
+        assertThat(turn1.get("stop_reason").asText(), is("tool_use"));
+        assertToolUsePresent(turn1, "search");
+
+        // Turn 2
+        String turn2Body = "{\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather?\"},"
+            + "{\"role\":\"assistant\",\"content\":["
+            + "{\"type\":\"text\",\"text\":\"Let me search.\"},"
+            + "{\"type\":\"tool_use\",\"id\":\"toolu_abc\",\"name\":\"search\",\"input\":{\"q\":\"weather\"}}"
+            + "]},"
+            + "{\"role\":\"user\",\"content\":["
+            + "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_abc\",\"content\":\"18C and sunny\"}"
+            + "]}"
+            + "]}";
+        String turn2Response = sendPost("/model/anthropic.claude-3-5-sonnet-20241022-v2:0/invoke", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.get("stop_reason").asText(), is("end_turn"));
+        assertTextBlockContains(turn2, "18C and sunny");
+    }
+
+    // ---- Azure OpenAI ----
+
+    @Test
+    public void shouldCompleteAgentLoopForAzureOpenAi() throws Exception {
+        conversation()
+            .withPath("/openai/deployments/my-deployment/chat/completions")
+            .withProvider(AZURE_OPENAI)
+            .withModel("gpt-4o")
+            .turn()
+                .whenTurnIndex(0)
+                .respondingWith(completion()
+                    .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .whenContainsToolResultFor("get_weather")
+                .respondingWith(completion()
+                    .withText("18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Azure OpenAI uses the same request format as OpenAI Chat Completions
+        String turn1Body = "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather?\"}]}";
+        String turn1Response = sendPost("/openai/deployments/my-deployment/chat/completions", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("object").asText(), is("chat.completion"));
+        assertThat(turn1.path("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
+        assertOpenAiToolCallPresent(turn1, "get_weather");
+
+        // Turn 2
+        String callId = turn1.path("choices").get(0).path("message").path("tool_calls").get(0).path("id").asText();
+        String turn2Body = "{\"model\":\"gpt-4o\",\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather?\"},"
+            + "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":["
+            + "{\"id\":\"" + callId + "\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}"
+            + "]},"
+            + "{\"role\":\"tool\",\"tool_call_id\":\"" + callId + "\",\"content\":\"18C and sunny\"}"
+            + "]}";
+        String turn2Response = sendPost("/openai/deployments/my-deployment/chat/completions", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.path("choices").get(0).get("finish_reason").asText(), is("stop"));
+        assertThat(turn2.path("choices").get(0).path("message").get("content").asText(), containsString("18C and sunny"));
+    }
+
+    // ---- Ollama ----
+
+    @Test
+    public void shouldCompleteAgentLoopForOllama() throws Exception {
+        conversation()
+            .withPath("/api/chat")
+            .withProvider(OLLAMA)
+            .withModel("llama3.2")
+            .turn()
+                .respondingWith(completion()
+                    .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+                    .withStopReason("tool_use"))
+            .andThen()
+            .turn()
+                .respondingWith(completion()
+                    .withText("It is 18C and sunny in Paris.")
+                    .withStopReason("end_turn"))
+            .andThen()
+            .applyTo(mockServerClient);
+
+        // Turn 1: Ollama uses "messages" array like OpenAI
+        String turn1Body = "{\"model\":\"llama3.2\",\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather?\"}]}";
+        String turn1Response = sendPost("/api/chat", turn1Body);
+        assertThat(turn1Response, containsString("200"));
+        JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
+        assertThat(turn1.get("done").asBoolean(), is(true));
+        // Verify tool_calls in message
+        boolean hasToolCall = false;
+        for (JsonNode tc : turn1.path("message").path("tool_calls")) {
+            if ("get_weather".equals(tc.path("function").path("name").asText())) {
+                hasToolCall = true;
+            }
+        }
+        assertThat("Ollama turn 1 should have tool_calls", hasToolCall, is(true));
+
+        // Turn 2: Ollama tool results sent as role=tool messages
+        String turn2Body = "{\"model\":\"llama3.2\",\"messages\":["
+            + "{\"role\":\"user\",\"content\":\"What is the weather?\"},"
+            + "{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":["
+            + "{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}}"
+            + "]},"
+            + "{\"role\":\"tool\",\"content\":\"18C and sunny\"}"
+            + "]}";
+        String turn2Response = sendPost("/api/chat", turn2Body);
+        assertThat(turn2Response, containsString("200"));
+        JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
+        assertThat(turn2.get("done").asBoolean(), is(true));
+        assertThat(turn2.path("message").get("content").asText(), containsString("18C and sunny"));
+    }
+
+    // ---- Helpers ----
+
+    private void assertToolUsePresent(JsonNode anthropicResponse, String toolName) {
+        boolean found = false;
+        for (JsonNode block : anthropicResponse.get("content")) {
+            if ("tool_use".equals(block.get("type").asText())) {
+                if (toolName.equals(block.get("name").asText())) {
+                    found = true;
+                }
+            }
+        }
+        assertThat("Expected tool_use block for " + toolName, found, is(true));
+    }
+
+    private void assertTextBlockContains(JsonNode anthropicResponse, String expected) {
+        boolean found = false;
+        for (JsonNode block : anthropicResponse.get("content")) {
+            if ("text".equals(block.get("type").asText())) {
+                if (block.get("text").asText().contains(expected)) {
+                    found = true;
+                }
+            }
+        }
+        assertThat("Expected text block containing '" + expected + "'", found, is(true));
+    }
+
+    private void assertOpenAiToolCallPresent(JsonNode chatCompletion, String funcName) {
+        JsonNode toolCalls = chatCompletion.path("choices").get(0).path("message").path("tool_calls");
+        assertThat("Expected tool_calls array", toolCalls.isArray(), is(true));
+        boolean found = false;
+        for (JsonNode tc : toolCalls) {
+            if (funcName.equals(tc.path("function").get("name").asText())) {
+                found = true;
+            }
+        }
+        assertThat("Expected tool call for " + funcName, found, is(true));
+    }
+
+    private String sendPost(String path, String body) throws Exception {
+        try (Socket socket = new Socket("localhost", mockServerPort)) {
+            socket.setSoTimeout(5000);
+            OutputStream output = socket.getOutputStream();
+            byte[] bodyBytes = body != null ? body.getBytes(StandardCharsets.UTF_8) : new byte[0];
+            StringBuilder request = new StringBuilder();
+            request.append("POST ").append(path).append(" HTTP/1.1\r\n");
+            request.append("Host: localhost:").append(mockServerPort).append("\r\n");
+            request.append("Content-Type: application/json\r\n");
+            request.append("Connection: close\r\n");
+            request.append("Content-Length: ").append(bodyBytes.length).append("\r\n\r\n");
+            output.write(request.toString().getBytes(StandardCharsets.UTF_8));
+            if (bodyBytes.length > 0) {
+                output.write(bodyBytes);
+            }
+            output.flush();
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = socket.getInputStream().read(buf)) != -1) {
+                baos.write(buf, 0, n);
+            }
+            return baos.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    private String extractJsonBody(String httpResponse) {
+        int bodyStart = httpResponse.indexOf("\r\n\r\n");
+        if (bodyStart < 0) {
+            bodyStart = httpResponse.indexOf("\n\n");
+            if (bodyStart < 0) {
+                return httpResponse;
+            }
+            return httpResponse.substring(bodyStart + 2);
+        }
+        return httpResponse.substring(bodyStart + 4);
+    }
+}
