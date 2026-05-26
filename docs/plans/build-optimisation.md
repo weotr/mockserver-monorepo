@@ -1,581 +1,200 @@
 # Build Optimisation Plan
 
-> **Status (2026-05-25):** Phase 1 quick wins largely DONE; Phase 2 partially DONE; Phase 3 still PENDING.
->
-> - **DONE:** 1.1 parallel module builds (`-T 1C` in `scripts/buildkite_quick_build.sh`); 1.3 test listener quiet/verbose modes (`mockserver.testOutput` system property, default `verbose`, CI uses `quiet`); 2.3 skipShade (`<skipShade>` in root pom and all 6 shade modules); 2.4 skipAssembly (`<skipAssembly>` in mockserver-netty); 2.1 partial — Surefire 3.5.5 with `parallel=classes`, `threadCount=4` for `mockserver-core` only (other modules deferred due to shared static state).
-> - **PARTIAL:** 3.4 Buildkite test analytics — XML reports collected via `**/target/surefire-reports/TEST-*.xml`, junit-annotate plugin active; 3.5 timeouts — Buildkite step timeouts and Surefire `forkedProcessTimeoutInSeconds=1800` set.
-> - **PENDING:** 1.2 `.mvn/maven.config` + `.mvn/jvm.config` (directory does not exist); 1.4 Buildkite group annotations (`BuildkiteEventSpy`); 2.2 Maven build caching (`maven-build-cache-extension`); 3.1 pipeline split into parallel steps (still monolithic `:maven: build`); 3.2 Buildkite artifact caching; 3.3 extract shade config to parent POM.
->
-> Phase 3 work (parallel integration test groups, artifact caching, shade extraction) is the biggest remaining lever.
+> **Status (2026-05-26):** Plan trimmed after adversarial review. Several items from the original plan have been dropped because their complexity-to-payoff ratio was poor or because they would widen local-vs-CI divergence. See [Dropped Items](#dropped-items-and-why) for what was considered and rejected.
+
+## Guiding Principles
+
+1. **Local and CI must stay reproducible from each other.** Today, `scripts/local_buildkite_build.sh` runs the CI script verbatim inside the CI Docker image. That parity is the single most valuable debugging asset we have. Any optimisation that splits the build into shapes that exist only in CI (parallel pipeline steps, artifact hand-offs, S3 caches) needs to clear a high bar.
+2. **Prefer Maven-native and shell-native solutions over custom Java extensions.** A 3-line sed filter beats a 200-line `EventSpy`. A `-q` flag beats a custom JUnit `RunListener`.
+3. **Don't pay for caching at the cost of correctness.** Stale artifacts that silently look fresh are worse than slow clean builds. The shade plugin in particular has a poor track record with Maven build-cache reconciliation.
+4. **Cut wall-clock where the wall-clock actually is.** With `-T 1C` already shipped, most remaining wall-clock is integration tests that genuinely can't run in parallel due to port allocation and shared static state. Don't optimise compile/package when test execution dominates.
 
 ## Current State
 
 | Metric | Local Build | Buildkite CI |
 |--------|------------|--------------|
-| Parallelism | `-T 3C` (3 threads/core) | None (single-threaded reactor) |
-| Test parallelism | None (sequential within each fork) | None |
+| Parallelism | `-T 3C` | `-T 1C` (matches t3.large vCPU count) |
+| Test parallelism | None | None |
 | Surefire/Failsafe version | 3.5.5 | 3.5.5 |
 | Build caching | None | None (deps pre-warmed in Docker image) |
-| JVM config | Per-script `MAVEN_OPTS` | Per-script `MAVEN_OPTS` |
+| JVM heap | `-Xmx8192m` | `-Xmx6144m` |
+| Test output | verbose | `mockserver.testOutput=quiet` + `redirectTestOutputToFile=true` |
 | Maven version | 3.9.0 (wrapper) | 3.9.15 (Docker image) |
-| Log output | Full (STARTED/FINISHED per test) | Full (STARTED/FINISHED per test) |
-| Shade plugin | Runs on 6 modules (~230 lines duplicated config each) | Same |
-| Assembly plugin | Fat JAR + brew tar on mockserver-netty | Same |
+| Shade plugin | Runs on 6 modules (~230 LOC duplicated config each) | Same |
+| Assembly plugin | Fat JAR + brew tar on `mockserver-netty` | Same |
 | Invoker plugin | 3 Maven sub-builds + Gradle tests | Same |
 
-### Key Bottlenecks
+### Local vs CI Divergence (audit)
 
-1. **CI runs single-threaded** - all 11 modules build sequentially
-2. **No test parallelism** - tests run sequentially within each forked JVM
-3. **415 test files** (306 unit + 109 integration) all run sequentially
-4. **Shade plugin runs 6 times** - each execution processes the entire dependency tree with ~35 relocations
-5. **Invoker plugin** spawns 3 separate Maven builds + Gradle builds during `mockserver-netty` integration tests
-6. **No build caching** - every build recompiles everything from scratch
-7. **No `.mvn/maven.config` or `.mvn/jvm.config`** - JVM settings only applied when using specific scripts
-8. **Test listener prints 2 lines per test** (STARTED + FINISHED) - for 415+ tests this produces enormous log volume in Buildkite
+| Flag | Local (`local_quick_build.sh`) | CI (`buildkite_quick_build.sh`) | Justified? |
+|------|-------------------------------|---------------------------------|------------|
+| Parallelism | `-T 3C` | `-T 1C` | Yes — agent vCPU count |
+| Heap | `-Xmx8192m` | `-Xmx6144m` | Yes — agent RAM ceiling |
+| Test output mode | verbose | quiet | Yes — log volume |
+| XML reports | default | `disableXmlReport=false` | Yes — Buildkite junit-annotate |
+| Test stdout | console | `redirectTestOutputToFile=true` | Yes — log volume |
+| Test log level | default | `mockserver.testLogLevel=INFO` | Yes — failure diagnostics |
+| Test arg line | default | custom `maxLogEntries`/`maxExpectations` | Yes — CI-specific load |
+| JDK | Java 17 (forced) | container default | Acceptable |
 
-### Log Volume Problem
-
-The `PrintOutCurrentTestRunListener` prints for every test:
-```
-STARTED: shouldReturnResponseByMatchingPath
-FINISHED: shouldReturnResponseByMatchingPath duration: 234
-```
-
-With 415+ test files containing hundreds of test methods each (especially the deep integration test hierarchy where `ExtendedNettyMockingIntegrationTest` alone inherits ~200+ test methods), plus Maven's own module lifecycle output, the total log volume easily exceeds what Buildkite can render efficiently.
+**Rule:** any new CI-only flag added by this plan must be reproducible locally via `scripts/local_buildkite_build.sh`. Anything beyond the table above requires a written justification.
 
 ---
 
-## Phase 1: Quick Wins (Estimated: 1-2 days)
+## Phase 1: Already Done
 
-### 1.1 Enable Parallel Module Builds in CI
+These items are complete and have been validated in production.
 
-**Change:** Add `-T 1C` to the CI Maven invocation.
+### 1.1 Parallel module builds in CI (`-T 1C`) — DONE
 
-**File:** `scripts/buildkite_quick_build.sh`
+Added to `scripts/buildkite_quick_build.sh`. Modules without inter-dependencies (e.g., `mockserver-war` + `mockserver-proxy-war`, the three JUnit/Spring modules) build in parallel. ~30-40% faster overall build. `-T 1C` (not `-T 3C`) matches the t3.large's 2 vCPUs.
 
-```bash
-# Before
-./mvnw clean install ${1:-} -Djava.security.egd=file:/dev/./urandom
+### 1.2 Skip shade/assembly for local development — DONE
 
-# After
-./mvnw -T 1C clean install ${1:-} -Djava.security.egd=file:/dev/./urandom
-```
+`<skipShade>` and `<skipAssembly>` properties added to root `pom.xml`. `skipShade` is wired into the 6 `*-no-dependencies` modules (`mockserver-netty-no-dependencies`, `mockserver-client-java-no-dependencies`, `mockserver-junit-jupiter-no-dependencies`, `mockserver-junit-rule-no-dependencies`, `mockserver-spring-test-listener-no-dependencies`, `mockserver-integration-testing-no-dependencies`). `skipAssembly` is wired into `mockserver-netty` (the only module running the assembly plugin). Used as `./mvnw clean install -DskipShade=true -DskipAssembly=true` for local iteration. **Cannot be used in CI** — `mockserver-netty` invoker tests depend on shaded artifacts.
 
-**Why `-T 1C` not `-T 3C`:** The CI agent is a `t3.large` (2 vCPUs, 8GB RAM). With `-T 1C` we get 2 parallel module builds, which matches the available cores. `-T 3C` would over-subscribe CPU. Local builds with more cores can continue using `-T 3C`.
+### 1.3 Quiet test output in CI — DONE
 
-**Expected impact:** ~30-40% faster overall build. Modules without inter-dependencies (e.g., `mockserver-war` + `mockserver-proxy-war`, `mockserver-junit-rule` + `mockserver-junit-jupiter` + `mockserver-spring-test-listener`) will build in parallel.
+`mockserver.testOutput=quiet` system property + `redirectTestOutputToFile=true` route per-test STARTED/FINISHED lines to per-test files (uploaded as artifacts) rather than the Buildkite log. ~90% log volume reduction without writing a custom listener.
 
-**Risk:** Low. The reactor already respects module dependency ordering. The main risk is memory pressure from concurrent shade plugin executions, but 8GB heap should accommodate this.
+### 1.4 Surefire/Failsafe 3.5.5 — DONE
 
-### 1.2 Create `.mvn/maven.config` and `.mvn/jvm.config`
+Upgraded from 2.x. Better JUnit 5 support, improved fork management, deprecation warnings resolved.
 
-Centralise Maven and JVM settings so that `./mvnw clean install` works correctly even without wrapper scripts.
+### 1.5 Test XML reports + junit-annotate plugin — DONE
+
+`**/target/surefire-reports/TEST-*.xml` and `**/target/failsafe-reports/TEST-*.xml` collected as Buildkite artifacts; `junit-annotate#v2.4.1` posts annotations on failures.
+
+### 1.6 Step and fork timeouts — DONE
+
+Buildkite `timeout_in_minutes` on each step; Surefire `forkedProcessTimeoutInSeconds=1800`.
+
+---
+
+## Phase 2: Active Work
+
+The remaining items, in priority order. All are low-complexity and either zero-divergence or already-justified divergence.
+
+### 2.1 Extract shade configuration to parent POM (was 3.3) — HIGH PRIORITY
+
+**Why first:** pure deduplication. Roughly 1,400 LOC of duplicated XML across the 6 `*-no-dependencies` modules collapses to ~250 LOC in `<pluginManagement>` (LOC figures are estimates pending implementation). Zero runtime impact, zero local-vs-CI divergence, makes the existing `skipShade` property easier to maintain.
+
+**Affected modules:** `mockserver-netty-no-dependencies`, `mockserver-client-java-no-dependencies`, `mockserver-junit-jupiter-no-dependencies`, `mockserver-junit-rule-no-dependencies`, `mockserver-spring-test-listener-no-dependencies`, `mockserver-integration-testing-no-dependencies`.
+
+**Approach:**
+1. Move the full shade plugin config (relocations, transformers, filters, manifest entries) into the root `mockserver/pom.xml`'s `<pluginManagement>` block.
+2. Each `*-no-dependencies` module replaces its inline config with a bare `<plugin><artifactId>maven-shade-plugin</artifactId></plugin>` reference.
+3. `mockserver-netty-no-dependencies` overrides only its `ManifestResourceTransformer` mainClass attribute (the others either inherit a default or have no main class).
+4. Verify by running `./mvnw clean install` and comparing `jar tf` output of each produced shaded JAR against the pre-change baseline.
+
+**Acceptance criterion:** for every `*-no-dependencies` module, `jar tf` on the new shaded JAR matches the baseline JAR's entry list exactly. JAR size may differ by trivial amounts (manifest line ordering); entry contents must not.
+
+**Risk:** low, but the JAR diff is the gating check — relocations are subtle and a missing rule produces a JAR that compiles fine but breaks at runtime when consumers shade us.
+
+### 2.2 `.mvn/maven.config` + `.mvn/jvm.config` (was 1.2)
+
+Centralise Maven and JVM defaults so `./mvnw clean install` works without wrapper scripts.
 
 **File:** `.mvn/maven.config`
 ```
 -Djava.security.egd=file:/dev/./urandom
 ```
 
+> **Note:** `local_quick_build.sh` currently passes `file:/dev/urandom` (single slash) while `buildkite_quick_build.sh` passes `file:/dev/./urandom` (double slash). The `.mvn/maven.config` value above adopts the CI form. Once shipped, local builds via bare `./mvnw` will normalise to the CI form. Both forms are functionally equivalent on Linux; the double-slash form is the historically recommended one for forcing the JVM to use `/dev/urandom` as the non-blocking entropy source. Drop the explicit flag from `local_quick_build.sh` once `.mvn/maven.config` is in place.
+
 **File:** `.mvn/jvm.config`
 ```
 -Xms2048m
--Xmx8192m
+-Xmx6144m
 ```
 
-**Impact:** Consistent behaviour regardless of which script is used. Eliminates the need for `MAVEN_OPTS` in every script.
+**Audit before shipping:** every wrapper script under `scripts/` that currently sets `MAVEN_OPTS` or `-Xmx` must be reviewed. If `.mvn/jvm.config` sets `-Xmx6144m` and `local_quick_build.sh` also sets `-Xmx8192m`, the wrapper wins, but double-flag situations can surprise on flag changes. Either:
+- Drop the heap flag from `local_quick_build.sh` and let `.mvn/jvm.config` own it (but local has more RAM, so a local-only override may still be wanted), or
+- Make `.mvn/jvm.config` set the CI value (6G) and have local scripts override upward.
 
-### 1.3 Replace Test Listener with Quiet/Verbose Modes
+**Impact:** consistent behaviour for bare `./mvnw` invocations (IDE, ad-hoc command line) without needing a wrapper script.
 
-**Current:** `PrintOutCurrentTestRunListener` prints 2 lines per test (STARTED + FINISHED with duration) regardless of outcome.
+### 2.3 Buildkite Test Analytics token (was 3.4, partial)
 
-**Proposed:** Create a new `BuildkiteTestRunListener` that:
-- Prints a **single dot** (`.`) for each passing test (on the same line, wrapping at 80 chars)
-- Prints **full details** (test name, duration, stack trace) only for **failures and errors**
-- Prints a **summary line** at the end of each test class: `ClassName: 45 tests, 0 failures (2.3s)`
-- Controlled by a system property `mockserver.testOutput` with values:
-  - `verbose` (current behaviour - for local debugging)
-  - `quiet` (dots + failure details - for CI)
-  - `summary` (class summaries only - minimal output)
-
-**Implementation:**
-
-```java
-package org.mockserver.test;
-
-import org.junit.runner.Description;
-import org.junit.runner.notification.Failure;
-import org.junit.runner.notification.RunListener;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
-public class BuildkiteTestRunListener extends RunListener {
-
-    private static final String MODE = System.getProperty("mockserver.testOutput", "verbose");
-    private static final Map<String, Long> START_TIMES = new ConcurrentHashMap<>();
-    private static final List<Failure> FAILURES = new ArrayList<>();
-    private static final AtomicInteger PASS_COUNT = new AtomicInteger();
-    private static final AtomicInteger FAIL_COUNT = new AtomicInteger();
-    private static final AtomicInteger DOT_COUNT = new AtomicInteger();
-    private static String currentClass = "";
-    private static long classStartTime = 0;
-
-    @Override
-    public void testStarted(Description description) {
-        String className = description.getClassName();
-        if (!className.equals(currentClass)) {
-            if (!currentClass.isEmpty()) {
-                printClassSummary();
-            }
-            currentClass = className;
-            classStartTime = System.currentTimeMillis();
-            PASS_COUNT.set(0);
-            FAIL_COUNT.set(0);
-            DOT_COUNT.set(0);
-            FAILURES.clear();
-            if ("quiet".equals(MODE)) {
-                System.out.print("\n" + simpleClassName(className) + ": ");
-            }
-        }
-        START_TIMES.put(description.getMethodName(), System.currentTimeMillis());
-        if ("verbose".equals(MODE)) {
-            System.out.println("STARTED: " + description.getMethodName());
-        }
-    }
-
-    @Override
-    public void testFinished(Description description) {
-        PASS_COUNT.incrementAndGet();
-        if ("verbose".equals(MODE)) {
-            Long startTime = START_TIMES.get(description.getMethodName());
-            Long duration = startTime != null
-                ? System.currentTimeMillis() - startTime : null;
-            System.out.println("FINISHED: " + description.getMethodName()
-                + (duration != null ? " duration: " + duration : ""));
-        } else if ("quiet".equals(MODE)) {
-            System.out.print(".");
-            if (DOT_COUNT.incrementAndGet() % 80 == 0) {
-                System.out.print("\n  ");
-            }
-        }
-    }
-
-    @Override
-    public void testFailure(Failure failure) {
-        FAIL_COUNT.incrementAndGet();
-        FAILURES.add(failure);
-        if ("quiet".equals(MODE)) {
-            System.out.print("F");
-        }
-        // Always print failure details in quiet and summary modes
-        if (!"verbose".equals(MODE)) {
-            System.out.println("\n  FAILED: "
-                + failure.getDescription().getMethodName());
-            System.out.println("  " + failure.getMessage());
-            System.out.println(indent(failure.getTrace(), "    "));
-        } else {
-            System.out.println("FAILED: "
-                + failure.getDescription().getMethodName());
-        }
-    }
-
-    // ...summary printing helpers
-}
-```
-
-**Configuration change in `pom.xml`:**
-
-```xml
-<systemProperties>
-    <mockserver.logLevel>ERROR</mockserver.logLevel>
-    <mockserver.testOutput>${mockserver.testOutput}</mockserver.testOutput>
-</systemProperties>
-```
-
-**CI invocation:**
-```bash
-./mvnw -T 1C clean install -Dmockserver.testOutput=quiet ...
-```
-
-**Expected impact:** ~90% reduction in test log output for passing builds. Failures will still show full details.
-
-### 1.4 Add Buildkite Group Annotations
-
-Use Buildkite's `---` group markers to collapse Maven module output into collapsible sections.
-
-**Option A: Maven Event Spy**
-
-Create a custom Maven `EventSpy` that emits Buildkite group markers:
-
-```java
-@Named("buildkite")
-public class BuildkiteEventSpy extends AbstractEventSpy {
-    @Override
-    public void onEvent(Object event) {
-        if (event instanceof ExecutionEvent) {
-            ExecutionEvent ee = (ExecutionEvent) event;
-            if (ee.getType() == ExecutionEvent.Type.ProjectStarted) {
-                System.out.println("--- " + ee.getProject().getArtifactId());
-            }
-        }
-    }
-}
-```
-
-**Option B: Wrapper script with sed**
-
-Post-process Maven output to inject Buildkite group markers before each `[INFO] Building mockserver-*` line. Simpler but less robust.
-
-**Expected impact:** Buildkite UI will show collapsible groups per module, making it much easier to navigate to the failing module.
+XML reports are already collected. The remaining step is wiring `BUILDKITE_ANALYTICS_TOKEN` so the reports flow into the Test Analytics tab (historical durations, flaky test detection). One-time setup; no code changes.
 
 ---
 
-## Phase 2: Medium Effort (Estimated: 3-5 days)
+## Dropped Items and Why
 
-### 2.1 Upgrade Surefire/Failsafe to 3.x and Enable Parallel Tests
+The following items from earlier versions of this plan were considered and rejected. Recorded here so future planners don't redo the analysis.
 
-**Current:** `maven-surefire-plugin` and `maven-failsafe-plugin` upgraded to 3.5.5.
+### ❌ Custom `BuildkiteTestRunListener` (~190 LOC of new Java)
 
-**Proposed:** Enable parallel test execution for unit tests.
+`scripts/buildkite_quick_build.sh` already sets `redirectTestOutputToFile=true`, which sends STARTED/FINISHED output to per-test files attached as artifacts. The "90% log volume reduction" the listener was designed for is already achieved by that flag plus `mockserver.testOutput=quiet`. Writing a stateful listener with `ConcurrentHashMap`, atomic counters, and three output modes — to format log output — is complexity that pays back nothing maintainable.
 
-```xml
-<plugin>
-    <artifactId>maven-surefire-plugin</artifactId>
-    <version>3.5.5</version>
-    <configuration>
-        <parallel>classes</parallel>
-        <threadCount>4</threadCount>
-        <perCoreThreadCount>false</perCoreThreadCount>
-        <includes>
-            <include>**/*Test.java</include>
-        </includes>
-        <excludes>
-            <exclude>**/*IntegrationTest.java</exclude>
-        </excludes>
-        <!-- ... rest unchanged ... -->
-    </configuration>
-</plugin>
-```
+### ❌ Custom `BuildkiteEventSpy` for `--- module-name` group markers
 
-**Why `parallel=classes` not `parallel=methods`:** Many test classes in MockServer share static state or start embedded servers in `@BeforeClass`. Running methods from the same class in parallel would cause port conflicts and shared state corruption. Running entire classes in parallel is safer as each class gets its own server lifecycle.
+Same shape: ~30 LOC of Java to emit text the shell could emit. If group markers are wanted, a sed pre-filter on Maven output (`sed 's/^\[INFO\] Building \(mockserver-[^ ]*\).*/--- \1/'`) does the job in one line. Avoid baking a Maven extension into the build for log formatting.
 
-**Why NOT for integration tests (failsafe):** Integration tests start MockServer instances on specific ports. Running multiple integration test classes in parallel would cause port conflicts. This should remain sequential unless port allocation is refactored.
+### ❌ Parallel Surefire (`parallel=classes`, `threadCount=4`)
 
-**Expected impact:** 2-4x faster unit test execution (267 unit tests in `mockserver-core` alone). Integration tests remain sequential for safety.
+Attempted previously; caused **48 test failures** in `mockserver-core` due to shared static state in `ConfigurationProperties` and `MockServerLogger`. The fix path is "refactor 400+ tests to avoid shared mutable statics" — a multi-week rework with significant flake risk. The wall-clock saving is small compared to what `-T 1C` already delivered, and integration tests (where most wall-clock lives) can't be parallelised anyway because they bind ports.
 
-**Risk:** Medium. Some unit tests may have hidden shared state. Will need a test run to verify no flaky failures are introduced.
+### ❌ Maven Build Cache Extension (`maven-build-cache-extension`)
 
-**Implementation note:** Surefire/Failsafe upgraded to 3.5.5. Parallel test execution was attempted with `parallel=classes, threadCount=4` but caused 48 test failures in `mockserver-core` due to shared static state in `ConfigurationProperties` and `MockServerLogger`. Parallel execution is deferred until tests are refactored to avoid shared mutable statics. The surefire upgrade alone still provides benefits: better JUnit 5 support, improved fork management, and the deprecated `systemProperties` warning is resolved.
+Three problems compound:
+1. Known reliability issues interacting with the shade plugin, which we use on 6 modules.
+2. Cache is local; in CI each Docker container starts fresh, so the cache rarely hits.
+3. When the cache fails, it fails by silently shipping stale artifacts. That class of bug is much worse than slow clean builds.
 
-### 2.2 Add Maven Build Caching
+For 11 modules, not worth the operational risk.
 
-**Option A: Maven Build Cache Extension (Recommended)**
+### ❌ Split Buildkite pipeline into parallel compile/test/package steps
 
-Create `.mvn/extensions.xml`:
-```xml
-<extensions>
-    <extension>
-        <groupId>org.apache.maven.extensions</groupId>
-        <artifactId>maven-build-cache-extension</artifactId>
-        <version>1.2.0</version>
-    </extension>
-</extensions>
-```
+Directly conflicts with Guiding Principle #1. Today `./mvnw clean install` works the same locally and in CI; `local_buildkite_build.sh` runs the CI script verbatim. Splitting CI into multiple steps with artifact hand-offs:
+- Reimplements Maven reactor in YAML.
+- Pays upload/download overhead per step that often exceeds the parallelism gain for small modules.
+- Pays Docker pull + JVM warmup per step.
+- Breaks "reproduce CI locally with one command."
+- For 11 modules where the reactor already parallelises module builds via `-T`, the realistic win is small.
 
-Create `.mvn/maven-build-cache-config.xml`:
-```xml
-<cache xmlns="http://maven.apache.org/BUILD-CACHE-CONFIG/1.0.0">
-    <configuration>
-        <enabled>true</enabled>
-        <hashAlgorithm>SHA-256</hashAlgorithm>
-        <local>
-            <maxBuildsCached>3</maxBuildsCached>
-        </local>
-    </configuration>
-    <executionControl>
-        <reconcile>
-            <plugins>
-                <plugin artifactId="maven-shade-plugin" goal="shade">
-                    <reconciles>
-                        <reconcile propertyName="shadedArtifactAttached"/>
-                    </reconciles>
-                </plugin>
-            </plugins>
-        </reconcile>
-        <goalsToTrack>
-            <goal>org.apache.maven.plugins:maven-surefire-plugin:test</goal>
-            <goal>org.apache.maven.plugins:maven-failsafe-plugin:integration-test</goal>
-        </goalsToTrack>
-    </executionControl>
-</cache>
-```
+### ❌ S3-backed Maven dependency cache
 
-**Impact:** Modules whose source hasn't changed will skip compilation, testing, and packaging entirely. Particularly valuable for:
-- `mockserver-testing` (rarely changes)
-- `mockserver-war` and `mockserver-proxy-war` (thin wrappers)
-- `mockserver-examples` (documentation code)
+`mockserver/mockserver:maven` Docker image already pre-warms `~/.m2`. Adding an S3 cache layer on top adds a bucket, IAM, plugin version churn, and a cross-account dependency for marginal benefit. If dependency cache freshness becomes a problem, rebuild the Docker base image more frequently — same outcome, less operational surface area.
 
-**Limitation:** The cache is local to the machine/container. In CI, each build starts fresh in a new Docker container, so the cache won't persist between builds unless we also add a cache volume (see Phase 3).
+### ❌ Incremental compilation (`install` without `clean`) for non-master CI
 
-**Risk:** Medium. Shade plugin and assembly plugin are complex goals that need cache reconciliation testing.
+Inevitably leads to "works in CI, doesn't reproduce locally" debugging sessions when stale `.class` files mask real failures. Clean builds in CI are cheap insurance.
 
-**Option B: Skip Unchanged Modules via `-pl` flag**
+### ❌ GraalVM native-image as shade plugin alternative
 
-For CI, detect changed files and only build affected modules:
+Speculative; would require a major build-system rework for unclear benefit. Out of scope.
 
-```bash
-CHANGED_MODULES=$(git diff --name-only HEAD~1 | grep -oP 'mockserver-[^/]+' | sort -u | paste -sd, -)
-./mvnw clean install -pl "$CHANGED_MODULES" -amd
-```
+### ❌ Maven Wrapper upgrade (3.9.0 → 3.9.15)
 
-**Risk:** Higher - misses transitive dependency changes. Better suited as a PR-only optimisation, not for master builds.
-
-### 2.3 Skip Shade Plugin for Local Development Only
-
-The shade plugin is the most expensive packaging step, running on 6 modules. A `skipShade` property has been added to allow skipping shade during local development iteration.
-
-**Approach:** Added a `skipShade` property wired into all 6 shade plugin modules:
-
-```xml
-<!-- In root pom.xml -->
-<properties>
-    <skipShade>false</skipShade>
-</properties>
-
-<!-- In each module's shade plugin config -->
-<plugin>
-    <groupId>org.apache.maven.plugins</groupId>
-    <artifactId>maven-shade-plugin</artifactId>
-    <configuration>
-        <skip>${skipShade}</skip>
-        <!-- ... existing config ... -->
-    </configuration>
-</plugin>
-```
-
-**Local invocation only:**
-```bash
-./mvnw clean install -DskipShade=true -DskipAssembly=true ...
-```
-
-**IMPORTANT: Cannot be used in CI.** The `mockserver-netty` module has Maven invoker and Gradle integration tests that depend on the shaded artifacts (`*-shaded` classifier JARs, `*-no-dependencies` artifacts, and `jar-with-dependencies`). Skipping shade/assembly in CI would cause these integration tests to fail or silently test stale artifacts.
-
-**Use case:** Local development when iterating on code changes where you only need to verify compilation and unit tests pass, not the full packaging pipeline.
-
-### 2.4 Skip Assembly Plugin for Local Development Only
-
-Similarly, the assembly plugin in `mockserver-netty` creates a fat JAR and Homebrew tarball. The `skipAssembly` property exists and can be used for local development.
-
-**IMPORTANT: Cannot be used in CI** for the same reason as `skipShade` — the `maven-netty-jar-with-dependencies-dependency` invoker test depends on the `jar-with-dependencies` classifier artifact produced by the assembly plugin.
+Worth doing as routine hygiene, not as part of a build-optimisation plan. The current wrapper works; CI uses 3.9.15 from the Docker image; the wrapper version mismatch has not caused observable problems.
 
 ---
-
-## Phase 3: Larger Changes (Estimated: 1-2 weeks)
-
-### 3.1 Split Buildkite Pipeline into Parallel Steps
-
-**Current:** Single monolithic build step runs everything sequentially.
-
-**Proposed:** Split into parallel steps with dependency caching:
-
-```yaml
-steps:
-  - label: ":docker: Pull build image"
-    command: "docker pull mockserver/mockserver:maven"
-
-  - wait
-
-  - label: ":maven: Compile & Unit Tests"
-    command: "scripts/ci/compile-and-test.sh"
-    artifact_paths:
-      - ".m2-cache.tar.gz"
-    timeout_in_minutes: 30
-
-  - wait
-
-  - group: ":test_tube: Integration Tests"
-    steps:
-      - label: ":java: mockserver-netty integration"
-        command: "scripts/ci/integration-test-netty.sh"
-        timeout_in_minutes: 30
-      - label: ":java: mockserver-war integration"
-        command: "scripts/ci/integration-test-war.sh"
-        timeout_in_minutes: 15
-      - label: ":java: mockserver-examples"
-        command: "scripts/ci/integration-test-examples.sh"
-        timeout_in_minutes: 15
-
-  - wait
-
-  - label: ":package: Package (shade + assembly)"
-    command: "scripts/ci/package.sh"
-    timeout_in_minutes: 20
-```
-
-**Benefits:**
-- Integration tests for different modules run in parallel
-- Compile-once, test-many pattern
-- Timeouts prevent runaway builds
-- Buildkite UI shows clear progress per stage
-- Failing module is immediately visible
-
-**Complexity:** Requires splitting the Maven build into phases and sharing compiled artifacts between steps (via Buildkite artifacts or a cache volume).
-
-### 3.2 Buildkite Artifact Caching
-
-Use the Buildkite cache plugin or S3-backed artifact sharing to persist the Maven local repository between builds:
-
-```yaml
-plugins:
-  - cache#v1.2.0:
-      backend: s3
-      key: "maven-{{ checksum 'pom.xml' }}"
-      paths:
-        - "/root/.m2/repository"
-      s3:
-        bucket: "mockserver-buildkite-cache"
-        region: "eu-west-2"
-```
-
-**Expected impact:** First build populates the cache; subsequent builds skip dependency resolution entirely (even if the Docker image's pre-warmed cache is stale).
-
-### 3.3 Extract Shade Configuration to Parent POM
-
-Move the ~230 lines of duplicated shade configuration into the parent POM's `<pluginManagement>` section. Child modules would then only need:
-
-```xml
-<plugin>
-    <groupId>org.apache.maven.plugins</groupId>
-    <artifactId>maven-shade-plugin</artifactId>
-</plugin>
-```
-
-With `mockserver-netty` adding only its `ManifestResourceTransformer` override.
-
-**Impact:** Reduces 1,400+ lines of duplicated XML to ~250 lines in one place. Not a speed improvement directly, but reduces maintenance burden and makes the skip property easier to manage.
-
-### 3.4 Buildkite Test Analytics Integration
-
-Re-enable JUnit XML report generation for CI builds and upload to Buildkite Test Analytics:
-
-```xml
-<!-- CI override -->
-<disableXmlReport>${disableXmlReport}</disableXmlReport>
-```
-
-```bash
-# In CI script
-./mvnw ... -DdisableXmlReport=false
-
-# After build
-find . -name "TEST-*.xml" -path "*/surefire-reports/*" \
-  | xargs buildkite-agent artifact upload
-```
-
-**Benefits:**
-- Buildkite shows test results tab with pass/fail counts
-- Historical test duration trends
-- Automatic flaky test detection
-- Per-test timing data for identifying slow tests
-
-### 3.5 Add Timeouts to Pipeline and Tests
-
-```yaml
-# Pipeline level
-steps:
-  - label: "build"
-    timeout_in_minutes: 45
-    retry:
-      automatic:
-        - exit_status: -1  # Agent lost
-          limit: 1
-```
-
-```xml
-<!-- Surefire level -->
-<forkedProcessTimeoutInSeconds>600</forkedProcessTimeoutInSeconds>
-```
-
----
-
-## Phase 4: Advanced (Estimated: 2-4 weeks)
-
-### 4.1 Incremental Compilation
-
-**Current:** `clean install` deletes all compiled classes and rebuilds from scratch.
-
-**Proposed:** For CI builds on non-master branches, use `install` (without `clean`) combined with the build cache extension. The cache extension's hash-based invalidation handles staleness detection.
-
-**For master:** Continue using `clean install` for guaranteed clean builds.
-
-### 4.2 GraalVM Native Build Cache
-
-For the shade plugin specifically, investigate using GraalVM's native-image as a faster alternative to the shade plugin's bytecode relocation. This is a longer-term investigation.
-
-### 4.3 Upgrade Maven Wrapper
-
-**Current:** Wrapper 0.5.6 with Maven 3.9.0.
-**Proposed:** Upgrade to Maven Wrapper 3.x with Maven 3.9.x (matching the CI Docker image version).
-
-```bash
-./mvnw wrapper:wrapper -Dmaven=3.9.15
-```
-
----
-
-## Implementation Priority
-
-```mermaid
-gantt
-    title Build Optimisation Roadmap
-    dateFormat YYYY-MM-DD
-    axisFormat %b %d
-
-    section Phase 1 - Quick Wins
-    1.1 Parallel CI builds        :p1_1, 2026-05-03, 1d
-    1.2 maven.config + jvm.config :p1_2, 2026-05-03, 1d
-    1.3 Quiet test listener        :p1_3, 2026-05-03, 2d
-    1.4 Buildkite group markers    :p1_4, after p1_3, 1d
-
-    section Phase 2 - Medium Effort
-    2.1 Surefire 3.x + parallel   :p2_1, after p1_4, 3d
-    2.2 Build cache extension      :p2_2, after p2_1, 2d
-    2.3 Skip shade for local dev    :p2_3, after p1_4, 1d
-    2.4 Skip assembly for local dev :p2_4, after p2_3, 1d
-
-    section Phase 3 - Larger Changes
-    3.1 Split pipeline             :p3_1, after p2_2, 5d
-    3.2 Artifact caching           :p3_2, after p3_1, 2d
-    3.3 Extract shade config       :p3_3, after p2_3, 2d
-    3.4 Test analytics             :p3_4, after p3_2, 2d
-    3.5 Timeouts                   :p3_5, after p3_4, 1d
-```
 
 ## Expected Cumulative Impact
 
-| Phase | Local Build Improvement | CI Build Improvement | Log Volume Reduction |
-|-------|------------------------|---------------------|---------------------|
-| Phase 1 | 10-15% | 30-40% | ~90% |
-| Phase 2 | 30-50% | 50-60% | Same (already reduced) |
-| Phase 3 | 50-60% (with caching) | 60-75% | Further reduction via grouping |
-| Phase 4 | Incremental only | Incremental only | N/A |
+| Item | Local Build | CI Build | Risk |
+|------|------------|---------|------|
+| 1.1–1.6 (DONE) | ~10% | ~35% | Validated in production |
+| 2.1 Shade extract to parent POM | 0% | 0% | Low — verify shaded JAR diff |
+| 2.2 `.mvn/maven.config` + `jvm.config` | 0% | 0% | Low — audit wrapper scripts |
+| 2.3 Test Analytics token | 0% | 0% | None |
 
-## Summary of Changes by File
+The remaining work is **maintenance and visibility**, not raw speed. The big speed wins were the items shipped in Phase 1.
 
-| File | Changes |
-|------|---------|
-| `scripts/buildkite_quick_build.sh` | Add `-T 1C`, `-Dmockserver.testOutput=quiet` |
-| `.mvn/maven.config` | New file: common Maven flags |
-| `.mvn/jvm.config` | New file: JVM memory settings |
-| `.mvn/extensions.xml` | New file: build cache extension (Phase 2) |
-| `.mvn/maven-build-cache-config.xml` | New file: cache configuration (Phase 2) |
-| `pom.xml` | Upgrade surefire/failsafe to 3.5.5, add `skipShade` property, add parallel config, add `mockserver.testOutput` property |
-| `mockserver-testing/.../BuildkiteTestRunListener.java` | New file: quiet test output listener |
-| `mockserver-testing/.../PrintOutCurrentTestRunListener.java` | Keep as-is (used for `verbose` mode) |
-| `mockserver-testing/.../BuildkiteEventSpy.java` | New file: Buildkite group markers (Phase 1.4) |
-| `.buildkite/pipeline.yml` | Add timeouts (Phase 3), split steps (Phase 3) |
-| `6x module pom.xml` (shade plugin) | Add `<skip>${skipShade}</skip>`, extract to parent pluginManagement (Phase 3) |
+## Summary of Files Touched by Remaining Work
+
+| File | Change |
+|------|--------|
+| `mockserver/pom.xml` | Move shade plugin config to `<pluginManagement>` |
+| `mockserver/mockserver-netty-no-dependencies/pom.xml` | Strip inline shade config except `ManifestResourceTransformer` override |
+| `mockserver/mockserver-client-java-no-dependencies/pom.xml` | Strip inline shade config entirely |
+| `mockserver/mockserver-junit-jupiter-no-dependencies/pom.xml` | Strip inline shade config entirely |
+| `mockserver/mockserver-junit-rule-no-dependencies/pom.xml` | Strip inline shade config entirely |
+| `mockserver/mockserver-spring-test-listener-no-dependencies/pom.xml` | Strip inline shade config entirely |
+| `mockserver/mockserver-integration-testing-no-dependencies/pom.xml` | Strip inline shade config entirely |
+| `.mvn/maven.config` | New file (Maven flags) |
+| `.mvn/jvm.config` | New file (JVM heap defaults) |
+| `scripts/*.sh` | Audit `MAVEN_OPTS`/`-Xmx` overlap with `.mvn/jvm.config`; drop explicit `-Djava.security.egd` flags |
+| `.buildkite/pipeline-java.yml` | Add `BUILDKITE_ANALYTICS_TOKEN` env (via Buildkite secret) |
