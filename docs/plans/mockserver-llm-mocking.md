@@ -1,8 +1,16 @@
 # RFC: First-Class LLM & Agent Mocking for MockServer
 
-**Status:** Draft for discussion (updated 2026-05-25 after codebase fact-check)
-**Scope:** Two detailed feature designs (LLM Response Builder, Stateful Conversations) + competitive gap analysis and a revised priority list.
+**Status:** Draft for discussion (updated 2026-05-26 after adversarial spec review)
+**Scope:** Two detailed feature designs (LLM Response Builder, Stateful Conversations) + competitive gap analysis, revised priority list, failure-mode contracts, and an affected-artifacts inventory.
 **Audience:** MockServer maintainers / platform engineering.
+
+**Revision notes (2026-05-26):**
+- §2.1 / §2.2 corrected: LLM format knowledge currently lives in the **TypeScript UI** (`mockserver-ui/src/lib/llmTraffic.ts`), not in Java. The proposed `ProviderCodec` is net-new Java work, not a refactor of an existing decoder.
+- §2.3 pins down `deterministicFromInput()`, jitter distribution, and the SSE engine integration for streaming physics.
+- §2.4 commits to `httpLlmResponse` as a **first-class action type** (new `Action.Type.LLM_RESPONSE`, new `Expectation` field, new DTO, dashboard rendering).
+- §2.7 (new) — Failure modes.
+- §3.3 specifies provider detection (inherited from the expectation's `withProvider(...)`), parse-failure semantics, body-size limits, and conversation isolation via `isolateBy(...)`.
+- §7 (new) — Affected artifacts inventory.
 
 ---
 
@@ -24,14 +32,22 @@ A strategic note up front: a class of narrow, single-language LLM-mock tools has
 
 ### 2.1 Problem
 
-To return an Anthropic Messages or OpenAI Chat Completions response today, you hand-craft either a JSON body or — for streaming — the exact event sequence (`message_start`, `content_block_start`, *N*× `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop` for Anthropic; `chat.completion.chunk` role/content deltas then `finish_reason` for OpenAI). This is fiddly, provider-specific, and drifts as formats change. Yet MockServer **already owns this format knowledge** — the Traffic Inspector decodes these formats. This RFC inverts that decoder into a response *encoder*.
+To return an Anthropic Messages or OpenAI Chat Completions response today, you hand-craft either a JSON body or — for streaming — the exact event sequence (`message_start`, `content_block_start`, *N*× `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop` for Anthropic; `chat.completion.chunk` role/content deltas then `finish_reason` for OpenAI). This is fiddly, provider-specific, and drifts as formats change.
+
+MockServer has partial format knowledge **on the UI side** — the Traffic Inspector parses Anthropic and OpenAI request/response shapes in `mockserver-ui/src/lib/llmTraffic.ts` (TypeScript) for the Conversation view, token counts, and SSE timeline. There is currently **no Java-side LLM format code** in `mockserver-core` or `mockserver-netty`. This RFC introduces that Java-side format code in both directions (encode for the builder, decode for conversation-aware matchers in RFC-2 Layer B) and identifies the TS-vs-Java parser duplication as a deliberate, time-limited compromise (see §2.2).
 
 ### 2.2 Design principles
 
-- **One codec, both directions.** A single `ProviderCodec` interface (`encode(Completion) → wire`, `decode(wire) → Completion`) is the single source of truth, shared by the Traffic Inspector and the new builder. Implementations are dependency-injected so providers can be added/tested in isolation (consistent with MockServer's existing DI-for-testability approach).
+- **One Java codec, both directions — within Java.** A single `ProviderCodec` interface in `mockserver-core` exposes both:
+  - `encode(Completion, EncodingHints) → HttpResponse | List<SseEvent>` — used by `httpLlmResponse` to produce the wire form.
+  - `decode(HttpRequest) → ParsedConversation` — used by RFC-2 Layer B conversation-aware matchers to read the inbound `messages` array.
+
+  Implementations are registered via a `ProviderCodecRegistry` (DI-friendly, consistent with MockServer's existing patterns) and unit-testable in isolation per provider.
+- **Glossary:** `Completion` is a **MockServer-specific, provider-neutral abstraction** of a single model turn. It is not the OpenAI `completion` object. It maps to Anthropic `Message`, OpenAI `ChatCompletion`, OpenAI Responses `output`, etc. via the codec. See §7.4 for the canonical class.
+- **TS-vs-Java parser duplication is accepted, time-limited.** The existing TypeScript parser (`mockserver-ui/src/lib/llmTraffic.ts`) is kept as-is for now; the Java decoder is independent. Convergence (either porting the TS parser to call a `/api/llm/parse` endpoint backed by the Java decoder, or generating both from a shared JSON Schema) is tracked as a follow-up task in §7.
 - **High-level intent in, correct wire format out.** The caller describes *what* the model says (text, tool calls, usage, stop reason); the codec produces the byte-correct streaming or non-streaming representation.
-- **Reuse the SSE engine.** Streaming responses are emitted through the existing `httpSseResponse` machinery, so no new transport code.
-- **Mirror existing builders.** Same fluent style as `mcpMock(...)` / `a2aMock(...)`.
+- **Reuse the SSE engine.** Streaming responses are emitted through the existing `httpSseResponse` machinery (`HttpSseResponseActionHandler`), so no new transport code. See §2.3.4 for the explicit mapping from streaming-physics parameters to `SseEvent.delay`.
+- **Mirror existing builders.** Same fluent style as `mcpMock(...)` / `a2aMock(...)` — both already live in `mockserver-client-java`, so `LlmMockBuilder` belongs in the same package (`org.mockserver.client`).
 
 ### 2.3 Java builder API
 
@@ -85,9 +101,33 @@ llmMock("/v1/embeddings")
         embedding()
             .withDimensions(1536)
             .deterministicFromInput()        // same input text → same vector, every run
+            // optional: .withSeed(42)       // additional salt; default 0
     )
     .applyTo(mockServerClient);
 ```
+
+### 2.3.1 `deterministicFromInput()` — algorithm
+
+Pinned to remove cross-JVM flakiness:
+
+1. Normalise input: UTF-8 bytes of the raw input text (no trimming, no case folding).
+2. Compute `hash = SHA-256(seedBytes ++ inputBytes)` where `seedBytes = UTF-8(String.valueOf(seed))` (default `seed=0`).
+3. Seed `java.util.Random` with the first 8 bytes of `hash` interpreted as a big-endian long.
+4. Generate `dimensions` floats in `[-1.0, 1.0]` via `random.nextDouble() * 2 - 1`.
+5. L2-normalise the vector to unit length.
+
+This produces reproducible, plausible-looking vectors across JVMs and JDK versions. It is a test utility, not a real embedding model. Same input + same `dimensions` + same `seed` → identical vector. Different `dimensions` values produce **independent** vectors (not prefix-compatible).
+
+### 2.3.2 Streaming physics — units, distribution, and SSE engine integration
+
+| Parameter | Type | Units / range | Default | Semantics |
+|---|---|---|---|---|
+| `timeToFirstToken` | `Delay` | any `TimeUnit` | `0 ms` | The first SSE event MUST be emitted after `Action.getDelay()` has elapsed AND then a further `timeToFirstToken` delay — total wall-clock delay = `Action.getDelay() + timeToFirstToken` from when the request is received. The two are sequential, not parallel. |
+| `tokensPerSecond` | int | `1..10_000` | `50` | Base inter-event rate. Each SSE event represents one token (chunking strategy: one token per `content_block_delta` for Anthropic, one token per `chat.completion.chunk` for OpenAI). Per-event base delay = `1000 / tokensPerSecond` ms. |
+| `jitter` | double | `[0.0, 1.0]` | `0.0` | Fractional uniform deviation. Per-event delay = `baseDelay * (1 + Uniform(-jitter, +jitter))`. `0.0` ⇒ deterministic timing. |
+| `seed` | long | any | system nanos | Seed for the jitter PRNG. Pin to a fixed value for reproducible tests. |
+
+**Implementation contract:** the LLM codec expands a streaming `Completion` into a `List<SseEvent>` where each event's `Delay` is pre-computed using the formulas above before the list is handed to `HttpSseResponseActionHandler` (verified to honour per-event delay at `HttpSseResponseActionHandler.java:68`). No changes to the SSE handler are required.
 
 ### 2.4 REST / JSON form
 
@@ -111,6 +151,15 @@ A new `httpLlmResponse` action, sibling to `httpSseResponse`:
 
 When `streaming: true`, MockServer expands the completion into provider-correct SSE events internally — the user never authors chunk-level detail.
 
+**`httpLlmResponse` is a first-class action type.** Implementation:
+- New `Action.Type.LLM_RESPONSE` enum value in `mockserver/mockserver-core/src/main/java/org/mockserver/model/Action.java`.
+- New `HttpLlmResponse` model class in `org.mockserver.model` (sibling to `HttpSseResponse`).
+- New `httpLlmResponse` field on `Expectation`, `ExpectationDTO`, and JSON Schema.
+- New `HttpLlmResponseActionHandler` in `org.mockserver.mock.action.http` that delegates to the codec and reuses `HttpSseResponseActionHandler` for the streaming path.
+- Dashboard renders an "LLM Response" badge with provider + model + text preview in the expectation row.
+
+The persisted form preserves intent so `verify_tool_call` (Tier 1 #3) and `explain_agent_run` (Tier 1 #4) can introspect provider/model/tool-call structure without re-parsing SSE.
+
 ### 2.5 MCP tool
 
 ```
@@ -127,10 +176,31 @@ mock_llm_completion (High)
 
 This lets a coding agent set up a deterministic mock LLM purely from natural language ("make a mock Anthropic endpoint that calls the `search` tool then answers").
 
-### 2.6 Out of scope / open questions
+### 2.6 Provider scope and resolved questions
 
-- Provider coverage at launch: Anthropic + OpenAI (Chat Completions) cover the majority; Gemini/Bedrock/Azure/Ollama as fast-followers.
-- Should `usage` auto-estimate token counts from text when omitted (tokenizer dependency) or stay explicit? Recommend explicit by default, optional estimate behind a flag to avoid a heavy tokenizer dependency in the core.
+- **Provider coverage at launch: all 7 from §2.3.** ANTHROPIC, OPENAI (Chat Completions), OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA. Implementation phasing within RFC-1 — Phase 1: ANTHROPIC + OPENAI; Phase 2: OPENAI_RESPONSES (separate `Completion` variant since `output`/`reasoning` blocks differ materially from Chat Completions); Phase 3: GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA. AZURE_OPENAI is mostly an OpenAI codec with header/path differences. All phases ship before declaring RFC-1 "done."
+- **Provider version pinning:** each codec targets a single API version at launch, declared in `ProviderCodec.apiVersion()`. Anthropic: `2024-10-22`. OpenAI Chat Completions: 2025 stable. Mismatched `anthropic-version` headers on inbound requests log a warning but do not fail matching; outbound responses are emitted in the codec's pinned version.
+- **Token-count auto-estimation:** `usage` stays **explicit by default**. Optional `.withEstimatedUsage()` enables a heuristic estimator (≈ `text.length / 4`, no tokenizer dependency in core). A real tokenizer integration is out of scope.
+- **Multi-modal content (images, audio, documents):** **out of scope for RFC-1.** `Completion` carries text + tool calls + usage only. Multi-modal is tracked as a Tier 3 follow-up.
+- **Tool definitions and system prompts:** matchers in §3.3 operate on the `messages` array. `whenSystemPromptContains(...)` and `whenToolDefined(...)` are deferred to RFC-2 Layer C (post-Layer-B).
+
+### 2.7 Failure modes
+
+| Failure | When | Behaviour |
+|---|---|---|
+| Unsupported `provider` value | At expectation registration (`PUT /mockserver/expectation`) | `400 Bad Request` with body `{"error": "unsupported LLM provider: <name>", "supported": [...]}`. Fail-fast — never registered. |
+| Provider not yet implemented in this phase | At registration | Same as above. Registry reports only providers with shipped codecs. |
+| `toolCalls[].arguments` is malformed JSON when declared as object | At registration | `400` with field path. String form is always allowed. |
+| Negative or out-of-range `usage` (`inputTokens < 0`, `> Integer.MAX_VALUE`) | At registration | `400` with field path. |
+| `tokensPerSecond` outside `[1, 10_000]` or `jitter` outside `[0.0, 1.0]` | At registration | `400` with field path. Prevents division-by-zero in the per-event delay formula and contains unbounded jitter. |
+| Streaming client disconnects mid-stream | Runtime | Existing SSE handler closes the channel cleanly (verified in `HttpSseResponseActionHandler`); no new code. Pending `SseEvent` delays are cancelled. |
+| Codec internal failure during encode (defensive) | Runtime | Return `502 Bad Gateway` with `{"error": "llm codec encode failed", "provider": "..."}`; log full stack at WARN. Action is not retried. |
+| Conversation request body fails to parse (RFC-2 §3.3) | Runtime, during matching | Treat as **no match** (fail-closed). Log at DEBUG with truncated body sample. Subsequent expectations are tried normally. |
+| Conversation request body exceeds `mockserver.maxLlmConversationBodySize` (default `1048576` bytes = 1 MiB) | Runtime, during matching | Treat as **no match**, log at INFO. Prevents DoS via crafted huge JSON. |
+| `whenLatestMessageContains(...)` regex throws | At registration | `400` with regex compile error. |
+| `isolateBy(...)` attribute missing on inbound request | Runtime | Falls back to the shared scenario key (same as not declaring `isolateBy`). Log at DEBUG. |
+
+All `400`s are deterministic — clients can rely on early validation rather than runtime failure.
 
 ---
 
@@ -180,26 +250,58 @@ llmMock("/v1/messages")
 
 ### 3.3 Conversation-aware matching
 
-The matcher operates on the parsed `messages` array of the inbound request body (already parsed for the Conversation view). New predicates:
+The matcher operates on the parsed `messages` array of the inbound request body. Parsing is done by the same Java `ProviderCodec.decode()` introduced for RFC-1 — there is no separate parser.
 
-- `whenTurnIndex(n)` — match the n-th model call in the conversation.
-- `whenLatestMessageContains(text|regex)` — match on the most recent message.
-- `whenLatestMessageRole(USER|TOOL)` — branch on whether a tool result just arrived.
-- `whenContainsToolResultFor("search")` — match when a specific tool's result is present.
+**Provider detection — inherited from the expectation.** The provider is taken from the `llmMock(...).withProvider(...)` setter on the enclosing expectation. The matcher does **not** sniff the request body or path to guess the provider. If the inbound request does not conform to the declared provider's schema, the codec's `decode()` returns an empty `ParsedConversation` and the matcher treats this as **no match** (fail-closed) — the next expectation is tried. This means one expectation per `(path, provider)` combination is the normal pattern; multi-provider endpoints register multiple expectations.
 
-These compose with the scenario state machine: each `turn()` implicitly advances scenario state, so the common agent loop needs no explicit state names.
+**Matcher predicates (operate on the parsed `messages` array):**
+
+- `whenTurnIndex(n)` — match the n-th model call in the conversation. Composes with the scenario state machine (AND).
+- `whenLatestMessageContains(text|regex)` — substring/regex match against the *serialised string content* of the most recent message's text blocks (Anthropic: concatenated `content[].text`; OpenAI: `messages[-1].content` string or concatenated content parts).
+- `whenLatestMessageRole(USER|TOOL|ASSISTANT)` — branch on the most recent message's `role`.
+- `whenContainsToolResultFor("search")` — match when the inbound history contains a `tool_result` block (Anthropic) or `tool` role message (OpenAI) whose `tool_use_id` / `tool_call_id` refers to a prior call of the named tool.
+
+All predicates compose with AND. The scenario state machine acts as an additional AND-gate: each `turn()` block implicitly sets `scenarioState`/`newScenarioState` to auto-generated values of the form `__llm_conv_<expectationId>_turn_<n>`. Users who need explicit state names can drop down to Layer A directly.
+
+**Parse failure semantics:** if the request body is not valid JSON, exceeds the configured body-size limit, or does not satisfy the declared provider's schema, the matcher treats the predicate as failing. Errors are logged at DEBUG with a 256-byte body sample. Matching never throws.
+
+**Concurrency / isolation — `isolateBy(...)`.** By default, two agents calling the same mocked endpoint share scenario state (current `ScenarioManager` behaviour, keyed on scenario name alone — verified in `ScenarioManager.java:9,37`). To isolate per-agent or per-session conversations, declare an isolation key:
+
+```java
+llmMock("/v1/messages")
+    .withProvider(ANTHROPIC)
+    .conversation()
+        .isolateBy(header("x-session-id"))            // or: queryParameter("agent"), cookie("sid")
+        .turn()…
+```
+
+This extends `ScenarioManager` with a composite key `(scenarioName, isolationValue)` while remaining backward-compatible (no `isolateBy` ⇒ old single-string key). When the configured attribute is absent on an inbound request, the matcher falls back to the shared key (no-isolation fallback — see §2.7) so a missing header degrades gracefully rather than failing match.
+
+**Body-size limit:** matchers consult the new `mockserver.maxLlmConversationBodySize` configuration property. The value is an **integer number of bytes** (consistent with other MockServer size properties); default `1048576` (1 MiB); accepted range `[16384, 67108864]` (16 KiB – 64 MiB, values outside the range are clamped at startup). Env-var form: `MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE`. Bodies larger than this skip conversation-aware parsing entirely and are treated as no-match.
+
+**Atomic state transitions:** the composite-keyed `ScenarioManager` implementation MUST preserve the existing per-key atomic read-modify-write contract (the current code uses `ConcurrentHashMap.compute()` at `ScenarioManager.java:37`). A coarser global lock is not acceptable — it would serialise all concurrent conversations.
+
+**Lifecycle / clear semantics:** `ScenarioManager.reset()` clears all composite-keyed state. `ScenarioManager.clear(scenarioName)` clears **every isolation variant** for the given scenario name. The existing REST `PUT /mockserver/reset` and `PUT /mockserver/clear` endpoints retain their current contracts. The `clear_expectations` MCP tool also clears the associated scenario state for any LLM expectations it removes.
+
+**Operability note:** because parse failures (wrong-provider body, malformed JSON) produce a no-match, an LLM expectation that is the only registered match for a path will return `404` to the caller. Users debugging unexpected 404s should enable DEBUG logging on `org.mockserver.matchers.LlmConversationMatcher`. Parseable JSON that fails the provider-schema check is logged at INFO (not DEBUG) because it is almost always a user configuration error worth surfacing.
 
 ### 3.4 MCP tool
 
 ```
 create_llm_conversation (High)
-  provider   string  required
-  path       string  required
-  turns      array   required   ordered list of {
-                                   match:    { latestMessageContains?, latestMessageRole?, containsToolResultFor? },
-                                   response: { text?, toolCalls?, stopReason?, usage? }
-                                 }
+  provider     string  required
+  path         string  required
+  isolateBy    object  optional   { source: "header"|"queryParameter"|"cookie", name: string }
+  turns        array   required   ordered list of {
+                                     match:    { turnIndex?, latestMessageContains?, latestMessageRole?, containsToolResultFor? },
+                                     response: { text?, toolCalls?, stopReason?, usage?, streaming?, streamingPhysics? }
+                                   }
 ```
+
+Notes:
+- `provider` is inherited by every `match` predicate in `turns`; no per-turn provider override at launch.
+- `isolateBy` is optional; omitting it preserves the legacy shared-scenario behaviour.
+- The MCP tool returns the generated scenario name and per-turn scenario state values so an agent can subsequently call `clear_scenario` or `reset_scenario` if it exists, or `clear` with appropriate filter.
 
 ### 3.5 Why this ordering (RFC-1 before RFC-2 Layer B)
 
@@ -287,3 +389,115 @@ Tiering updated to fold in the competitive findings. Items 1–12 carry over fro
 3. Tool-call assertions (#3) and `explain_agent_run` (#4) — both read the parsed message/tool structures introduced by RFC-1 + Layer B.
 4. VCR/strict/redaction (#7), then cost (#5) and chaos (#6).
 5. Drift detection (#13) and bisection (#14) on top of the mature record/replay + analysis foundation.
+
+---
+
+## 7. Affected Artifacts Inventory
+
+Enumerates every file/area that must change for RFC-1 + RFC-2 Layer B. Modelled on the existing `httpSseResponse` implementation as a baseline — anything that pattern touches, the LLM action type must touch too.
+
+### 7.1 Java core — new files
+
+| Path | Purpose |
+|---|---|
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/HttpLlmResponse.java` | Action payload — provider, model, completion, streaming flag, streamingPhysics |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/Completion.java` | Provider-neutral completion abstraction (text, toolCalls, stopReason, usage) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/ToolUse.java` | Tool-call sub-model (name, arguments) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/EmbeddingResponse.java` | Embedding payload (dimensions, deterministicFromInput, seed) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/StreamingPhysics.java` | timeToFirstToken, tokensPerSecond, jitter, seed |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/ProviderCodec.java` | Interface — `encode`, `decode`, `apiVersion`, `provider` |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/ProviderCodecRegistry.java` | Registry + lookup by `Provider` enum |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/ParsedConversation.java` | Decoder output — list of `ParsedMessage` (role, contentBlocks, toolCalls, toolResults) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/AnthropicCodec.java` | Phase 1 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/OpenAiChatCompletionsCodec.java` | Phase 1 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/OpenAiResponsesCodec.java` | Phase 2 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/GeminiCodec.java` | Phase 3 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/BedrockCodec.java` | Phase 3 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/AzureOpenAiCodec.java` | Phase 3 (mostly delegates to OpenAI codec) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/llm/codec/OllamaCodec.java` | Phase 3 |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/mock/action/http/HttpLlmResponseActionHandler.java` | Dispatch — encode via codec, delegate streaming to `HttpSseResponseActionHandler` |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/serialization/model/HttpLlmResponseDTO.java` | DTO |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/serialization/serializers/response/HttpLlmResponseSerializer.java` | Jackson serializer |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/serialization/deserializers/response/HttpLlmResponseDeserializer.java` | Jackson deserializer |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/matchers/LlmConversationMatcher.java` | Predicate evaluation against `ParsedConversation` |
+
+### 7.2 Java core — modified files
+
+| Path | Change |
+|---|---|
+| `mockserver/mockserver-core/src/main/java/org/mockserver/model/Action.java` | Add `LLM_RESPONSE` to `Type` enum (currently 16 values) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/mock/Expectation.java` | Add `httpLlmResponse` field + fluent setters/getters; include in `equals`/`hashCode` (~16 action fields today, see line 901) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/serialization/model/ExpectationDTO.java` | Add corresponding DTO field |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/mock/ScenarioManager.java` | Composite key support `(scenarioName, isolationValue)`; backward-compatible when isolation null |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/configuration/ConfigurationProperties.java` | New property `mockserver.maxLlmConversationBodySize` (default 1 MiB) |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/configuration/Configuration.java` | Fluent setter for the above |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/matchers/HttpRequestPropertiesMatcher.java` | Wire `LlmConversationMatcher` into match pipeline when the expectation declares LLM matchers |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/mock/HttpState.java` | Register the new action with the expectation lifecycle |
+| `mockserver/mockserver-core/src/main/java/org/mockserver/mock/action/http/HttpActionHandler.java` | Add the dispatch branch from `Action.Type.LLM_RESPONSE` to `HttpLlmResponseActionHandler` |
+| `mockserver/mockserver-core/src/main/resources/org/mockserver/model/schema/expectations.json` | Add `httpLlmResponse` to the expectation schema |
+| `mockserver/mockserver-core/src/main/resources/org/mockserver/model/schema/httpLlmResponse.json` | **New** — JSON Schema definition for the new action payload (sibling to `httpResponse.json`) |
+
+### 7.3 Java client
+
+| Path | Change |
+|---|---|
+| `mockserver/mockserver-client-java/src/main/java/org/mockserver/client/LlmMockBuilder.java` | **New** — fluent builder mirroring `McpMockBuilder`/`A2aMockBuilder` |
+| `mockserver/mockserver-client-java/src/main/java/org/mockserver/client/LlmConversationBuilder.java` | **New** — `turn()` chain |
+| `mockserver/mockserver-client-java/src/main/java/org/mockserver/client/MockServerClient.java` | Wire up the LLM expectation flow |
+
+### 7.4 MCP control plane
+
+| Path | Change |
+|---|---|
+| `mockserver/mockserver-netty/src/main/java/org/mockserver/netty/mcp/McpToolRegistry.java` | **+2 tools** delivered in two phases: `mock_llm_completion` lands with M1 (tool count 22 → 23, depends on the response builder); `create_llm_conversation` lands with M2 (tool count 23 → 24, depends on conversation matchers). See impl-plan T30/T31 |
+
+### 7.5 Dashboard UI
+
+| Path | Change |
+|---|---|
+| `mockserver-ui/src/components/ExpectationRow.tsx` (or equivalent) | Render "LLM Response" badge with provider + model + text preview |
+| `mockserver-ui/src/components/ConversationView.tsx` | Extend to render expectation-side conversation scripts alongside captured traffic |
+| `mockserver-ui/src/lib/llmTraffic.ts` | No change required at launch; convergence with Java decoder is a follow-up |
+
+### 7.6 Non-Java client libraries
+
+REST is the primary cross-language contract. The JSON form in §2.4 is reachable via the existing `PUT /mockserver/expectation` endpoint with no transport changes. Native helpers are scheduled per language:
+
+| Path | Change |
+|---|---|
+| `mockserver-client-python/` | Add `llm_mock()` helper — phase 2 (post Java client) |
+| `mockserver-client-ruby/` | Add `llm_mock` helper — phase 2 |
+| `mockserver-client-typescript/` | Add `llmMock()` helper — phase 2 |
+
+### 7.7 Consumer documentation
+
+| Path | Change |
+|---|---|
+| `jekyll-www.mock-server.com/mock_server/_includes/creating_expectations.html` | New "LLM Response" subsection; Stateful Scenarios extended with isolation example |
+| `jekyll-www.mock-server.com/mock_server/configuration_properties.html` | Add `maxLlmConversationBodySize` (with `MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE` env-var equivalent) |
+| `jekyll-www.mock-server.com/mock_server/_includes/performance_configuration.html` | Note conversation matcher cost vs body-size limit |
+| `jekyll-www.mock-server.com/mock_server/ai_mcp_tools.html` | Add `mock_llm_completion` and `create_llm_conversation` entries with their parameter tables |
+| `jekyll-www.mock-server.com/mock_server/_includes/running_docker_container.html` | Add `MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE` example if env-var docs are not auto-generated |
+
+### 7.8 Internal documentation
+
+| Path | Change |
+|---|---|
+| `docs/code/request-processing.md` | New "LLM action" section in dispatch flow |
+| `docs/code/domain-model.md` | Add `HttpLlmResponse`, `Completion`, codec model |
+| `docs/code/event-system.md` | Note that LLM expectations participate in standard event logging |
+| `docs/README.md` | Index updates |
+
+### 7.9 Tests
+
+| Area | Coverage |
+|---|---|
+| `ProviderCodec` per provider | Wire-level golden-file tests against real captured Anthropic/OpenAI responses to prevent format drift |
+| `HttpLlmResponseActionHandler` | Streaming and non-streaming dispatch; failure modes from §2.7 |
+| `LlmConversationMatcher` | Each predicate, AND composition, parse-failure fail-closed, body-size limit, isolation by header/cookie/query |
+| `ScenarioManager` composite key | Backward compatibility (null isolation), concurrent multi-agent test |
+| End-to-end | Full agent loop — tool_use → tool_result → final answer — across all matchers |
+
+### 7.10 Convergence follow-up (not RFC-1 scope)
+
+Track separately: port `mockserver-ui/src/lib/llmTraffic.ts` to either (a) call a new `POST /api/llm/parse` endpoint backed by the Java `ProviderCodec`, or (b) generate both TS and Java parsers from a shared JSON Schema. Choosing (a) is simpler; (b) is purer. Decide once both sides are stable.
