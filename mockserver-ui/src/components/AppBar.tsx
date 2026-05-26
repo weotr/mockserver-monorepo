@@ -10,6 +10,7 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import ToggleButton from '@mui/material/ToggleButton';
+import Button from '@mui/material/Button';
 import Box from '@mui/material/Box';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
@@ -21,8 +22,10 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import TrafficIcon from '@mui/icons-material/Traffic';
 import DownloadIcon from '@mui/icons-material/Download';
+import ChatIcon from '@mui/icons-material/Chat';
 import { useState, useCallback } from 'react';
 import { useDashboardStore, type ViewMode } from '../store';
+import ConversationWizard from './ConversationWizard';
 import type { ConnectionStatus } from '../types';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 
@@ -56,6 +59,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const setView = useDashboardStore((s) => s.setView);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [downloading, setDownloading] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const handleDownloadHar = useCallback(async () => {
     setDownloading(true);
@@ -124,6 +128,15 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             Traffic
           </ToggleButton>
         </ToggleButtonGroup>
+        <Button
+          size="small"
+          color="inherit"
+          startIcon={<ChatIcon sx={{ fontSize: '0.875rem' }} />}
+          onClick={() => setWizardOpen(true)}
+          sx={{ ml: 1, fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap' }}
+        >
+          New LLM Conversation Mock
+        </Button>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
           ⌘K search · ⌘L clear · Esc filter
@@ -188,6 +201,11 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           </MenuItem>
         </Menu>
       </Toolbar>
+      <ConversationWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        connectionParams={connectionParams}
+      />
     </MuiAppBar>
   );
 }

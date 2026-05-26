@@ -8,12 +8,17 @@ import Chip from '@mui/material/Chip';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Divider from '@mui/material/Divider';
+import Button from '@mui/material/Button';
 import SearchIcon from '@mui/icons-material/Search';
+import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { useDashboardStore } from '../store';
+import { useConnectionParams } from '../hooks/useConnectionParams';
 import JsonViewer from './JsonViewer';
+import CaptureAsMockDialog from './CaptureAsMockDialog';
 import { AnthropicConversationView, OpenAiConversationView, ScriptedTurnsPanel } from './ConversationView';
 import type { ScriptedTurn } from './ConversationView';
 import type { JsonListItem } from '../types';
+import { isLlmTraffic } from '../lib/expectationFromCapture';
 import {
   summarizeTraffic,
   getModelLabel,
@@ -554,6 +559,7 @@ interface DetailPaneProps {
   item: JsonListItem;
   summary: TrafficSummary;
   scriptedTurns: ScriptedTurn[];
+  onCaptureAsMock?: () => void;
 }
 
 /** Build the tab list dynamically from the traffic kind. */
@@ -583,9 +589,10 @@ function buildTabs(parsed: ParsedTraffic, hasScriptedTurns: boolean): string[] {
   }
 }
 
-function DetailPane({ item, summary, scriptedTurns }: DetailPaneProps) {
+function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPaneProps) {
   const tabs = buildTabs(summary.parsed, scriptedTurns.length > 0);
   const [detailTab, setDetailTab] = useState(0);
+  const canCapture = isLlmTraffic(summary.parsed);
 
   // For generic traffic, render Raw JSON directly — no tab bar needed
   if (tabs.length === 0) {
@@ -610,17 +617,29 @@ function DetailPane({ item, summary, scriptedTurns }: DetailPaneProps) {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <Tabs
-        value={safeTab}
-        onChange={(_, v: number) => setDetailTab(v)}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{ flexShrink: 0, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, fontSize: '0.75rem' } }}
-      >
-        {tabs.map((label) => (
-          <Tab key={label} label={label} />
-        ))}
-      </Tabs>
+      <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+        <Tabs
+          value={safeTab}
+          onChange={(_, v: number) => setDetailTab(v)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ flexGrow: 1, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, fontSize: '0.75rem' } }}
+        >
+          {tabs.map((label) => (
+            <Tab key={label} label={label} />
+          ))}
+        </Tabs>
+        {canCapture && onCaptureAsMock && (
+          <Button
+            size="small"
+            startIcon={<SaveAltIcon sx={{ fontSize: '0.875rem' }} />}
+            onClick={onCaptureAsMock}
+            sx={{ mr: 0.5, fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            Capture as mock
+          </Button>
+        )}
+      </Box>
       <Divider />
       <Box sx={{ flex: 1, overflowY: 'auto', p: 1, minHeight: 0 }}>
         {activeLabel === 'Messages' && summary.parsed.kind === 'anthropic' && (
@@ -672,6 +691,8 @@ export default function TrafficInspector() {
   const setTrafficSearch = useDashboardStore((s) => s.setTrafficSearch);
   const selectedIndex = useDashboardStore((s) => s.selectedTrafficIndex);
   const setSelectedIndex = useDashboardStore((s) => s.setSelectedTrafficIndex);
+  const connectionParams = useConnectionParams();
+  const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
 
   // Gather scripted turns from active expectations
   const scriptedTurns = useMemo(
@@ -806,8 +827,25 @@ export default function TrafficInspector() {
             minWidth: 0,
           }}
         >
-          <DetailPane key={selectedEntry.item.key} item={selectedEntry.item} summary={selectedEntry.summary} scriptedTurns={scriptedTurns} />
+          <DetailPane
+            key={selectedEntry.item.key}
+            item={selectedEntry.item}
+            summary={selectedEntry.summary}
+            scriptedTurns={scriptedTurns}
+            onCaptureAsMock={() => setCaptureDialogOpen(true)}
+          />
         </Paper>
+      )}
+
+      {/* Capture as mock dialog */}
+      {selectedEntry && isLlmTraffic(selectedEntry.summary.parsed) && (
+        <CaptureAsMockDialog
+          open={captureDialogOpen}
+          onClose={() => setCaptureDialogOpen(false)}
+          parsed={selectedEntry.summary.parsed}
+          path={selectedEntry.summary.path ?? ''}
+          connectionParams={connectionParams}
+        />
       )}
     </Box>
   );
