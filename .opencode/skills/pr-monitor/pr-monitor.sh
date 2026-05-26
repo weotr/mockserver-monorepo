@@ -151,8 +151,8 @@ check_and_merge_prs() {
             echo "  PR #$pr_number: ✅ PASSING - Attempting to merge..."
             echo "             $title"
             
-            if gh pr merge "$pr_number" --squash --auto 2>&1; then
-                echo "             🎉 MERGE QUEUED/COMPLETED"
+            if gh pr merge "$pr_number" --squash 2>&1; then
+                echo "             🎉 MERGED"
                 prs_merged=$((prs_merged + 1))
             else
                 echo "             ⚠️  MERGE FAILED - Will retry"
