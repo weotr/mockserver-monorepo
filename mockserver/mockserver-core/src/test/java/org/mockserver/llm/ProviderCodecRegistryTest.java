@@ -4,6 +4,7 @@ import org.junit.Test;
 import org.mockserver.model.Provider;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -12,6 +13,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.core.Is.is;
 
 public class ProviderCodecRegistryTest {
@@ -111,6 +114,39 @@ public class ProviderCodecRegistryTest {
         }
 
         executor.shutdown();
+    }
+
+    @Test
+    public void shouldHaveAllSevenProvidersRegisteredInSingletonInstance() {
+        // given
+        ProviderCodecRegistry registry = ProviderCodecRegistry.getInstance();
+
+        // when
+        List<String> names = registry.supportedProviderNames();
+
+        // then — all 7 providers should be registered
+        assertThat(names, hasSize(7));
+        assertThat(names, containsInAnyOrder(
+            "ANTHROPIC",
+            "OPENAI",
+            "OPENAI_RESPONSES",
+            "GEMINI",
+            "BEDROCK",
+            "AZURE_OPENAI",
+            "OLLAMA"
+        ));
+    }
+
+    @Test
+    public void shouldLookUpAllSevenRegisteredProviders() {
+        // given
+        ProviderCodecRegistry registry = ProviderCodecRegistry.getInstance();
+
+        // then — each provider should be present
+        for (Provider provider : Provider.values()) {
+            assertThat("codec should be registered for " + provider,
+                registry.lookup(provider).isPresent(), is(true));
+        }
     }
 
     private static class StubCodec implements ProviderCodec {

@@ -1959,7 +1959,7 @@ public class McpToolRegistry {
         schema.put("type", "object");
         ObjectNode properties = schema.putObject("properties");
         ObjectNode providerProp = properties.putObject("provider");
-        providerProp.put("type", "string").put("description", "LLM provider with a registered codec. Other providers from the Provider enum (OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA) are planned and will be added when their codecs land.");
+        providerProp.put("type", "string").put("description", "LLM provider with a registered codec (ANTHROPIC, OPENAI, OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA).");
         ArrayNode providerEnum = providerProp.putArray("enum");
         for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
             providerEnum.add(name);
@@ -2121,7 +2121,7 @@ public class McpToolRegistry {
         schema.put("type", "object");
         ObjectNode properties = schema.putObject("properties");
         ObjectNode providerProp = properties.putObject("provider");
-        providerProp.put("type", "string").put("description", "LLM provider with a registered codec. Other providers from the Provider enum (OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA) are planned and will be added when their codecs land.");
+        providerProp.put("type", "string").put("description", "LLM provider with a registered codec (ANTHROPIC, OPENAI, OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA).");
         ArrayNode providerEnum = providerProp.putArray("enum");
         for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
             providerEnum.add(name);

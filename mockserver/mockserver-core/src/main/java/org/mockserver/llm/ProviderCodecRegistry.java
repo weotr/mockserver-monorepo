@@ -1,7 +1,12 @@
 package org.mockserver.llm;
 
 import org.mockserver.llm.codec.AnthropicCodec;
+import org.mockserver.llm.codec.AzureOpenAiCodec;
+import org.mockserver.llm.codec.BedrockCodec;
+import org.mockserver.llm.codec.GeminiCodec;
+import org.mockserver.llm.codec.OllamaCodec;
 import org.mockserver.llm.codec.OpenAiChatCompletionsCodec;
+import org.mockserver.llm.codec.OpenAiResponsesCodec;
 import org.mockserver.model.Provider;
 
 import java.util.ArrayList;
@@ -18,6 +23,11 @@ public class ProviderCodecRegistry {
     static {
         INSTANCE.register(new AnthropicCodec());
         INSTANCE.register(new OpenAiChatCompletionsCodec());
+        INSTANCE.register(new OpenAiResponsesCodec());
+        INSTANCE.register(new GeminiCodec());
+        INSTANCE.register(new BedrockCodec());
+        INSTANCE.register(new AzureOpenAiCodec());
+        INSTANCE.register(new OllamaCodec());
     }
 
     private final ConcurrentHashMap<Provider, ProviderCodec> codecs = new ConcurrentHashMap<>();

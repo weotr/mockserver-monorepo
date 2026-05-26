@@ -116,16 +116,16 @@ public class LlmMcpToolsTest {
     }
 
     @Test
-    public void shouldRejectProviderWithoutCodec() {
+    public void shouldAcceptGeminiProviderWithCodec() {
         ObjectNode params = objectMapper.createObjectNode();
         params.put("provider", "GEMINI");
         params.put("path", "/v1/models/gemini/generateContent");
+        params.put("text", "Hello from Gemini");
 
         JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
-        assertThat(result.path("error").asBoolean(), is(true));
-        assertThat(result.path("message").asText(), containsString("unsupported LLM provider"));
-        assertThat(result.has("supported"), is(true));
-        assertThat(result.path("supported").isArray(), is(true));
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(1));
+        assertThat(result.path("provider").asText(), is("GEMINI"));
     }
 
     @Test
@@ -241,19 +241,18 @@ public class LlmMcpToolsTest {
     }
 
     @Test
-    public void shouldRejectConversationWithNoCodec() {
+    public void shouldAcceptGeminiConversationWithCodec() {
         ObjectNode params = objectMapper.createObjectNode();
         params.put("provider", "GEMINI");
-        params.put("path", "/v1/messages");
+        params.put("path", "/v1/models/gemini/generateContent");
         ArrayNode turns = params.putArray("turns");
         ObjectNode turn0 = turns.addObject();
         ObjectNode resp0 = turn0.putObject("response");
-        resp0.put("text", "Hello");
+        resp0.put("text", "Hello from Gemini");
 
         JsonNode result = toolRegistry.callTool("create_llm_conversation", params);
-        assertThat(result.path("error").asBoolean(), is(true));
-        assertThat(result.path("message").asText(), containsString("unsupported LLM provider"));
-        assertThat(result.has("supported"), is(true));
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(1));
     }
 
     @Test
