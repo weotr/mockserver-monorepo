@@ -179,6 +179,13 @@
             <groupId>net.javacrumbs.json-unit</groupId>
             <artifactId>json-unit-core</artifactId>
         </dependency>
+        <dependency>
+            <!-- json-unit's Configuration.withMatcher exposes org.hamcrest.Matcher; json-unit
+                 declares only the hamcrest-core stub which has no classes since 3.0, so the
+                 hamcrest classes must be pulled in explicitly for compile-time visibility. -->
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest</artifactId>
+        </dependency>
 
         <!-- json validation -->
         <dependency>
@@ -289,11 +296,6 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.hamcrest</groupId>
-            <artifactId>hamcrest</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

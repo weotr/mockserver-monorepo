@@ -11,12 +11,14 @@ import net.javacrumbs.jsonunit.core.internal.Options;
 import net.javacrumbs.jsonunit.core.listener.DifferenceContext;
 import net.javacrumbs.jsonunit.core.listener.DifferenceListener;
 import org.apache.commons.lang3.StringUtils;
+import org.hamcrest.Matcher;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static net.javacrumbs.jsonunit.core.Option.*;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -67,6 +69,9 @@ public class JsonStringMatcher extends BodyMatcher<String> {
                 Configuration diffConfig = Configuration.empty().withDifferenceListener(diffListener).withOptions(options);
                 if (matchNumbersAsStrings) {
                     diffConfig = diffConfig.withTolerance(BigDecimal.ZERO);
+                }
+                for (Map.Entry<String, Matcher<?>> entry : CustomJsonUnitMatcherLoader.load().entrySet()) {
+                    diffConfig = diffConfig.withMatcher(entry.getKey(), entry.getValue());
                 }
 
                 try {

@@ -395,6 +395,38 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.xpathMatchingTimeoutMillis="2000"</code></pre>
 </div>
 
+<button id="button_configuration_custom_json_unit_matchers_class" class="accordion title"><strong>Custom JSON Body Matchers</strong></button>
+<div class="panel title">
+    <p>Fully qualified name of a class that registers custom <a target="_blank" href="https://github.com/lukas-krecan/JsonUnit#matchers">json-unit</a> matchers, so JSON body expectations can validate dynamic values (e.g. "price must be greater than 100") with the <span class="inline_code">${json-unit.matches:name}</span> placeholder.</p>
+    <p>The class must have a public no-arg constructor and implement <span class="inline_code">org.mockserver.matchers.CustomJsonUnitMatcherProvider</span>, returning a <span class="inline_code">Map&lt;String, org.hamcrest.Matcher&lt;?&gt;&gt;</span> keyed by the placeholder name. If the class cannot be loaded, does not implement the interface, or its constructor throws, MockServer logs a WARN and JSON matching falls back to its built-in behaviour.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (no custom matchers)</p>
+    <p>Example provider:</p>
+<pre class="prettyprint lang-java code"><code class="code">public class MyJsonUnitMatchers implements CustomJsonUnitMatcherProvider {
+    public Map&lt;String, Matcher&lt;?&gt;&gt; jsonUnitMatchers() {
+        Map&lt;String, Matcher&lt;?&gt;&gt; matchers = new HashMap&lt;&gt;();
+        matchers.put("largerThan", new BaseMatcher&lt;Object&gt;() {
+            public boolean matches(Object actual) {
+                return new BigDecimal(actual.toString()).compareTo(BigDecimal.valueOf(100)) &gt; 0;
+            }
+            public void describeTo(Description d) { d.appendText("a number larger than 100"); }
+        });
+        return matchers;
+    }
+}</code></pre>
+    <p>Then reference the matcher from the JSON body of an expectation:</p>
+<pre class="prettyprint lang-java code"><code class="code">{ "price": "${json-unit.matches:largerThan}" }</code></pre>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.customJsonUnitMatchersClass(String className)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.customJsonUnitMatchersClass=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.customJsonUnitMatchersClass=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.customJsonUnitMatchersClass="com.example.MyJsonUnitMatchers"</code></pre>
+</div>
+
 <button id="button_configuration_forward_proxy_block_private_networks" class="accordion title"><strong>Block Forwarding To Private Networks (SSRF Protection)</strong></button>
 <div class="panel title">
     <p>When enabled, MockServer rejects forward and proxy targets that resolve to loopback, link-local, RFC 1918 private, or cloud metadata addresses (such as <span class="inline_code">169.254.169.254</span>). This blocks server-side request forgery (SSRF) attacks where a malicious expectation would otherwise forward through MockServer to internal infrastructure.</p>

@@ -93,6 +93,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS = "mockserver.regexMatchingTimeoutMillis";
     private static final String MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS = "mockserver.xpathMatchingTimeoutMillis";
 
+    // body matching extensions
+    private static final String MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS = "mockserver.customJsonUnitMatchersClass";
+
     // gRPC
     private static final String MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY = "mockserver.grpcDescriptorDirectory";
     private static final String MOCKSERVER_GRPC_PROTO_DIRECTORY = "mockserver.grpcProtoDirectory";
@@ -995,6 +998,29 @@ public class ConfigurationProperties {
      */
     public static void xpathMatchingTimeoutMillis(long milliseconds) {
         setProperty(MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS, "" + milliseconds);
+    }
+
+    public static String customJsonUnitMatchersClass() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS, "MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS", "");
+    }
+
+    /**
+     * Fully qualified name of a class implementing {@code org.mockserver.matchers.CustomJsonUnitMatcherProvider}.
+     * When set, the class is instantiated via its public no-arg constructor and the matchers it
+     * returns are registered with the json-unit configuration used for JSON body matching, so
+     * expectations can reference them via the {@code ${json-unit.matches:name}} placeholder
+     * (e.g. {@code { "price": "${json-unit.matches:largerThan}" }}).
+     * <p>
+     * Misconfigured providers (class not found, wrong type, constructor failure) are logged at
+     * WARN and ignored - JSON body matching falls back to the built-in behaviour. Changing the
+     * property at runtime causes the provider to be reloaded on the next match.
+     * <p>
+     * The default is the empty string (no custom matchers).
+     *
+     * @param customJsonUnitMatchersClass fully qualified provider class name
+     */
+    public static void customJsonUnitMatchersClass(String customJsonUnitMatchersClass) {
+        setProperty(MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS, customJsonUnitMatchersClass);
     }
 
     /**

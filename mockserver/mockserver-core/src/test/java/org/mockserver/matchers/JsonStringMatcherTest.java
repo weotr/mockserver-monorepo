@@ -1,7 +1,15 @@
 package org.mockserver.matchers;
 
+import org.hamcrest.BaseMatcher;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.logging.MockServerLogger;
+
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static junit.framework.TestCase.*;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -684,5 +692,87 @@ public class JsonStringMatcherTest {
     public void showHaveCorrectEqualsBehaviour() {
         MockServerLogger mockServerLogger = new MockServerLogger();
         assertEquals(new JsonStringMatcher(mockServerLogger, "some_value", MatchType.ONLY_MATCHING_FIELDS), new JsonStringMatcher(mockServerLogger, "some_value", MatchType.ONLY_MATCHING_FIELDS));
+    }
+
+    @Test
+    public void shouldMatchUsingCustomJsonUnitMatcher() {
+        String previous = ConfigurationProperties.customJsonUnitMatchersClass();
+        try {
+            ConfigurationProperties.customJsonUnitMatchersClass(LargerThanMatcherProvider.class.getName());
+            CustomJsonUnitMatcherLoader.reset();
+
+            assertTrue(new JsonStringMatcher(
+                new MockServerLogger(),
+                "{\"price\":\"${json-unit.matches:largerThan}\"}",
+                MatchType.ONLY_MATCHING_FIELDS
+            ).matches(null, "{\"price\":250}"));
+        } finally {
+            ConfigurationProperties.customJsonUnitMatchersClass(previous);
+            CustomJsonUnitMatcherLoader.reset();
+        }
+    }
+
+    @Test
+    public void shouldNotMatchWhenCustomJsonUnitMatcherRejects() {
+        String previous = ConfigurationProperties.customJsonUnitMatchersClass();
+        try {
+            ConfigurationProperties.customJsonUnitMatchersClass(LargerThanMatcherProvider.class.getName());
+            CustomJsonUnitMatcherLoader.reset();
+
+            assertFalse(new JsonStringMatcher(
+                new MockServerLogger(),
+                "{\"price\":\"${json-unit.matches:largerThan}\"}",
+                MatchType.ONLY_MATCHING_FIELDS
+            ).matches(null, "{\"price\":50}"));
+        } finally {
+            ConfigurationProperties.customJsonUnitMatchersClass(previous);
+            CustomJsonUnitMatcherLoader.reset();
+        }
+    }
+
+    @Test
+    public void shouldFallBackWhenCustomMatcherClassMisconfigured() {
+        String previous = ConfigurationProperties.customJsonUnitMatchersClass();
+        try {
+            ConfigurationProperties.customJsonUnitMatchersClass("org.mockserver.does.not.Exist");
+            CustomJsonUnitMatcherLoader.reset();
+
+            // a plain JSON body that references no custom matcher still matches normally
+            assertTrue(new JsonStringMatcher(
+                new MockServerLogger(),
+                "{\"price\":250}",
+                MatchType.ONLY_MATCHING_FIELDS
+            ).matches(null, "{\"price\":250}"));
+        } finally {
+            ConfigurationProperties.customJsonUnitMatchersClass(previous);
+            CustomJsonUnitMatcherLoader.reset();
+        }
+    }
+
+    public static class LargerThanMatcherProvider implements CustomJsonUnitMatcherProvider {
+
+        @Override
+        public Map<String, Matcher<?>> jsonUnitMatchers() {
+            Map<String, Matcher<?>> matchers = new HashMap<>();
+            matchers.put("largerThan", new BaseMatcher<Object>() {
+                @Override
+                public boolean matches(Object item) {
+                    if (item == null) {
+                        return false;
+                    }
+                    try {
+                        return new BigDecimal(item.toString()).compareTo(BigDecimal.valueOf(100)) > 0;
+                    } catch (NumberFormatException e) {
+                        return false;
+                    }
+                }
+
+                @Override
+                public void describeTo(Description description) {
+                    description.appendText("a number larger than 100");
+                }
+            });
+            return matchers;
+        }
     }
 }
