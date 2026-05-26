@@ -69,7 +69,9 @@ public class McpToolRegistryTest {
         assertThat(tools.containsKey("run_resiliency_test"), is(true));
         assertThat(tools.containsKey("record_llm_fixtures"), is(true));
         assertThat(tools.containsKey("load_expectations_from_file"), is(true));
-        assertThat(tools.size(), is(22));
+        assertThat(tools.containsKey("mock_llm_completion"), is(true));
+        assertThat(tools.containsKey("create_llm_conversation"), is(true));
+        assertThat(tools.size(), is(24));
     }
 
     @Test

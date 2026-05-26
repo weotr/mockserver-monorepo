@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
-import { AnthropicConversationView, OpenAiConversationView } from '../components/ConversationView';
+import { AnthropicConversationView, OpenAiConversationView, ScriptedTurnsPanel } from '../components/ConversationView';
+import type { ScriptedTurn } from '../components/ConversationView';
 import type { AnthropicParsed, OpenAiParsed } from '../lib/llmTraffic';
 import { useDashboardStore } from '../store';
 
@@ -304,5 +305,65 @@ describe('OpenAiConversationView', () => {
     );
     expect(screen.getByText('Let me search for that.')).toBeInTheDocument();
     expect(screen.getByText('web_search')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ScriptedTurnsPanel
+// ---------------------------------------------------------------------------
+
+describe('ScriptedTurnsPanel', () => {
+  it('renders a two-turn scripted conversation', () => {
+    const turns: ScriptedTurn[] = [
+      {
+        turnIndex: 0,
+        predicates: { turnIndex: 0 },
+        response: {
+          toolCalls: [{ name: 'search', arguments: '{"query":"test"}' }],
+          stopReason: 'tool_use',
+        },
+        scenarioState: 'Started',
+        newScenarioState: 'turn_1',
+      },
+      {
+        turnIndex: 1,
+        predicates: { containsToolResultFor: 'search' },
+        response: {
+          text: 'The answer is 42.',
+          stopReason: 'end_turn',
+        },
+        scenarioState: 'turn_1',
+        newScenarioState: '__done',
+      },
+    ];
+
+    wrap(<ScriptedTurnsPanel turns={turns} />);
+
+    // Header
+    expect(screen.getByText('Scripted Conversation Turns')).toBeInTheDocument();
+
+    // Turn indices
+    expect(screen.getByText('Turn 0')).toBeInTheDocument();
+    expect(screen.getByText('Turn 1')).toBeInTheDocument();
+
+    // State transitions
+    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.getAllByText('turn_1').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('__done')).toBeInTheDocument();
+
+    // Predicates
+    expect(screen.getByText(/turnIndex: 0/)).toBeInTheDocument();
+    expect(screen.getByText(/containsToolResultFor: search/)).toBeInTheDocument();
+
+    // Responses
+    expect(screen.getByText('search')).toBeInTheDocument();
+    expect(screen.getByText('The answer is 42.')).toBeInTheDocument();
+    expect(screen.getByText('Stop: tool_use')).toBeInTheDocument();
+    expect(screen.getByText('Stop: end_turn')).toBeInTheDocument();
+  });
+
+  it('renders empty when no turns provided', () => {
+    const { container } = wrap(<ScriptedTurnsPanel turns={[]} />);
+    expect(container.textContent).toBe('');
   });
 });

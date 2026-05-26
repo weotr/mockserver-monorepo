@@ -5,7 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.commons.lang3.tuple.Pair;
+import org.mockserver.client.LlmConversationBuilder;
+import org.mockserver.client.TurnBuilder;
 import org.mockserver.lifecycle.LifeCycle;
+import org.mockserver.llm.IsolationSource;
+import org.mockserver.llm.ProviderCodecRegistry;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.MismatchRemediation;
@@ -15,11 +19,7 @@ import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
 import org.mockserver.mock.OpenAPIExpectation;
-import org.mockserver.model.HttpForward;
-import org.mockserver.model.HttpRequest;
-import org.mockserver.model.HttpResponse;
-import org.mockserver.model.LogEventRequestAndResponse;
-import org.mockserver.model.MediaType;
+import org.mockserver.model.*;
 import org.mockserver.openapi.OpenApiContractTest;
 import org.mockserver.openapi.OpenApiResiliencyTest;
 import org.mockserver.openapi.OpenApiTrafficValidator;
@@ -116,6 +116,8 @@ public class McpToolRegistry {
         registerRunResiliencyTest();
         registerRecordLlmFixtures();
         registerLoadExpectationsFromFile();
+        registerMockLlmCompletion();
+        registerCreateLlmConversation();
     }
 
     private void registerCreateExpectation() {
@@ -1950,6 +1952,441 @@ public class McpToolRegistry {
         return null;
     }
 
+    // --- mock_llm_completion ---
+
+    private void registerMockLlmCompletion() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        ObjectNode providerProp = properties.putObject("provider");
+        providerProp.put("type", "string").put("description", "LLM provider with a registered codec. Other providers from the Provider enum (OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA) are planned and will be added when their codecs land.");
+        ArrayNode providerEnum = providerProp.putArray("enum");
+        for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
+            providerEnum.add(name);
+        }
+        properties.putObject("path").put("type", "string").put("description", "Request path to match (e.g. /v1/messages)");
+        properties.putObject("model").put("type", "string").put("description", "Model name (e.g. claude-sonnet-4, gpt-4o)");
+        properties.putObject("text").put("type", "string").put("description", "Response text content");
+        ObjectNode toolCallsProp = properties.putObject("toolCalls");
+        toolCallsProp.put("type", "array").put("description", "Tool/function calls to include in the response");
+        ObjectNode toolCallItems = toolCallsProp.putObject("items");
+        toolCallItems.put("type", "object");
+        ObjectNode toolCallProps = toolCallItems.putObject("properties");
+        toolCallProps.putObject("name").put("type", "string").put("description", "Tool name");
+        ObjectNode argsProp = toolCallProps.putObject("arguments");
+        argsProp.put("description", "Tool arguments as a JSON string or object");
+        ArrayNode argsAnyOf = argsProp.putArray("anyOf");
+        argsAnyOf.add(objectMapper.createObjectNode().put("type", "string"));
+        argsAnyOf.add(objectMapper.createObjectNode().put("type", "object"));
+        toolCallItems.putArray("required").add("name");
+        properties.putObject("stopReason").put("type", "string").put("description", "Stop reason (e.g. end_turn, tool_use, stop)");
+        ObjectNode usageProp = properties.putObject("usage");
+        usageProp.put("type", "object").put("description", "Token usage");
+        ObjectNode usageProps = usageProp.putObject("properties");
+        usageProps.putObject("inputTokens").put("type", "integer");
+        usageProps.putObject("outputTokens").put("type", "integer");
+        properties.putObject("streaming").put("type", "boolean").put("description", "Whether to stream the response (default false)");
+        ArrayNode required = schema.putArray("required");
+        required.add("provider");
+        required.add("path");
+
+        tools.put("mock_llm_completion", new ToolDefinition(
+            "mock_llm_completion",
+            "Creates a mock LLM completion expectation that returns a provider-correct response (Anthropic, OpenAI, etc.) from a high-level description of text, tool calls, and usage",
+            schema,
+            this::handleMockLlmCompletion
+        ));
+    }
+
+    private JsonNode handleMockLlmCompletion(JsonNode params) {
+        try {
+            // Validate provider
+            String providerStr = params.path("provider").asText(null);
+            if (providerStr == null || providerStr.trim().isEmpty()) {
+                return errorResult("'provider' is required");
+            }
+            Provider provider;
+            try {
+                provider = Provider.valueOf(providerStr.trim());
+            } catch (IllegalArgumentException e) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Pre-validate codec availability
+            if (!ProviderCodecRegistry.getInstance().lookup(provider).isPresent()) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Validate path
+            String path = params.path("path").asText(null);
+            if (path == null || path.trim().isEmpty()) {
+                return errorResult("'path' is required and must not be blank");
+            }
+
+            // Build completion
+            Completion completion = Completion.completion();
+            JsonNode textNode = params.path("text");
+            if (!textNode.isMissingNode() && !textNode.isNull()) {
+                completion.withText(textNode.asText());
+            }
+
+            JsonNode stopReasonNode = params.path("stopReason");
+            if (!stopReasonNode.isMissingNode() && !stopReasonNode.isNull()) {
+                completion.withStopReason(stopReasonNode.asText());
+            }
+
+            // Tool calls
+            JsonNode toolCallsNode = params.path("toolCalls");
+            if (toolCallsNode.isArray()) {
+                for (JsonNode tcNode : toolCallsNode) {
+                    String toolName = tcNode.path("name").asText(null);
+                    if (toolName == null || toolName.trim().isEmpty()) {
+                        return errorResult("each toolCalls entry must have a non-empty 'name'");
+                    }
+                    ToolUse toolUse = ToolUse.toolUse(toolName);
+                    JsonNode argsNode = tcNode.path("arguments");
+                    if (!argsNode.isMissingNode() && !argsNode.isNull()) {
+                        if (argsNode.isTextual()) {
+                            toolUse.withArguments(argsNode.asText());
+                        } else if (argsNode.isObject()) {
+                            toolUse.withArguments(objectMapper.writeValueAsString(argsNode));
+                        } else {
+                            return errorResult("toolCalls[].arguments must be a string or object");
+                        }
+                    }
+                    completion.withToolCall(toolUse);
+                }
+            }
+
+            // Usage
+            JsonNode usageNode = params.path("usage");
+            if (usageNode.isObject()) {
+                Usage usage = Usage.usage();
+                JsonNode inputTokensNode = usageNode.path("inputTokens");
+                if (!inputTokensNode.isMissingNode() && !inputTokensNode.isNull()) {
+                    if (!inputTokensNode.isIntegralNumber()) {
+                        return errorResult("usage.inputTokens must be an integer");
+                    }
+                    usage.withInputTokens(inputTokensNode.asInt());
+                }
+                JsonNode outputTokensNode = usageNode.path("outputTokens");
+                if (!outputTokensNode.isMissingNode() && !outputTokensNode.isNull()) {
+                    if (!outputTokensNode.isIntegralNumber()) {
+                        return errorResult("usage.outputTokens must be an integer");
+                    }
+                    usage.withOutputTokens(outputTokensNode.asInt());
+                }
+                completion.withUsage(usage);
+            }
+
+            // Streaming
+            boolean streaming = params.path("streaming").asBoolean(false);
+            if (streaming) {
+                completion.streaming();
+            }
+
+            // Model
+            String model = params.path("model").asText(null);
+
+            // Build HttpLlmResponse
+            HttpLlmResponse llmResponse = HttpLlmResponse.llmResponse()
+                .withProvider(provider)
+                .withModel(model)
+                .withCompletion(completion);
+
+            // Build and register expectation
+            Expectation expectation = Expectation.when(
+                HttpRequest.request().withMethod("POST").withPath(path)
+            ).thenRespondWithLlm(llmResponse);
+
+            List<Expectation> result = httpState.add(expectation);
+
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "created");
+            resultNode.put("count", result.size());
+            if (!result.isEmpty()) {
+                resultNode.put("id", result.get(0).getId());
+            }
+            resultNode.put("provider", provider.name());
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to create LLM completion expectation", e);
+        }
+    }
+
+    // --- create_llm_conversation ---
+
+    private void registerCreateLlmConversation() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        ObjectNode providerProp = properties.putObject("provider");
+        providerProp.put("type", "string").put("description", "LLM provider with a registered codec. Other providers from the Provider enum (OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA) are planned and will be added when their codecs land.");
+        ArrayNode providerEnum = providerProp.putArray("enum");
+        for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
+            providerEnum.add(name);
+        }
+        properties.putObject("path").put("type", "string").put("description", "Request path to match (e.g. /v1/messages)");
+        properties.putObject("model").put("type", "string").put("description", "Model name");
+        ObjectNode isolateByProp = properties.putObject("isolateBy");
+        isolateByProp.put("type", "object").put("description", "Per-session isolation configuration");
+        ObjectNode isolateByProps = isolateByProp.putObject("properties");
+        ObjectNode sourceProp = isolateByProps.putObject("source");
+        sourceProp.put("type", "string").put("description", "Where to extract the isolation key: header, queryParameter, or cookie");
+        ArrayNode sourceEnum = sourceProp.putArray("enum");
+        sourceEnum.add("header");
+        sourceEnum.add("queryParameter");
+        sourceEnum.add("cookie");
+        isolateByProps.putObject("name").put("type", "string").put("description", "Name of the header, query parameter, or cookie");
+        ObjectNode turnsProp = properties.putObject("turns");
+        turnsProp.put("type", "array").put("description", "Ordered list of conversation turns");
+        ObjectNode turnItems = turnsProp.putObject("items");
+        turnItems.put("type", "object");
+        ObjectNode turnItemProps = turnItems.putObject("properties");
+
+        // match predicates
+        ObjectNode matchProp = turnItemProps.putObject("match");
+        matchProp.put("type", "object").put("description", "Predicates for matching this turn");
+        ObjectNode matchProps = matchProp.putObject("properties");
+        matchProps.putObject("turnIndex").put("type", "integer").put("description", "Match when conversation has this many assistant turns (0-based)");
+        matchProps.putObject("latestMessageContains").put("type", "string").put("description", "Match when latest message contains this substring");
+        matchProps.putObject("latestMessageRole").put("type", "string").put("description", "Match when latest message has this role");
+        matchProps.putObject("containsToolResultFor").put("type", "string").put("description", "Match when conversation contains a tool result for this tool name");
+
+        // response
+        ObjectNode responseProp = turnItemProps.putObject("response");
+        responseProp.put("type", "object").put("description", "Response configuration for this turn");
+        ObjectNode responseProps = responseProp.putObject("properties");
+        responseProps.putObject("text").put("type", "string").put("description", "Response text content");
+        ObjectNode respToolCallsProp = responseProps.putObject("toolCalls");
+        respToolCallsProp.put("type", "array").put("description", "Tool/function calls");
+        ObjectNode respToolCallItems = respToolCallsProp.putObject("items");
+        respToolCallItems.put("type", "object");
+        ObjectNode respTcItemProps = respToolCallItems.putObject("properties");
+        respTcItemProps.putObject("name").put("type", "string");
+        ObjectNode respArgsProp = respTcItemProps.putObject("arguments");
+        respArgsProp.put("description", "Tool arguments as string or object");
+        ArrayNode respArgsAnyOf = respArgsProp.putArray("anyOf");
+        respArgsAnyOf.add(objectMapper.createObjectNode().put("type", "string"));
+        respArgsAnyOf.add(objectMapper.createObjectNode().put("type", "object"));
+        responseProps.putObject("stopReason").put("type", "string").put("description", "Stop reason");
+        ObjectNode respUsageProp = responseProps.putObject("usage");
+        respUsageProp.put("type", "object");
+        ObjectNode respUsageProps = respUsageProp.putObject("properties");
+        respUsageProps.putObject("inputTokens").put("type", "integer");
+        respUsageProps.putObject("outputTokens").put("type", "integer");
+        responseProps.putObject("streaming").put("type", "boolean").put("description", "Whether to stream");
+
+        ArrayNode required = schema.putArray("required");
+        required.add("provider");
+        required.add("path");
+        required.add("turns");
+
+        tools.put("create_llm_conversation", new ToolDefinition(
+            "create_llm_conversation",
+            "Creates a multi-turn LLM conversation mock with scenario-based state advancement. Each turn matches based on conversation predicates and returns a configured completion.",
+            schema,
+            this::handleCreateLlmConversation
+        ));
+    }
+
+    private JsonNode handleCreateLlmConversation(JsonNode params) {
+        try {
+            // Validate provider
+            String providerStr = params.path("provider").asText(null);
+            if (providerStr == null || providerStr.trim().isEmpty()) {
+                return errorResult("'provider' is required");
+            }
+            Provider provider;
+            try {
+                provider = Provider.valueOf(providerStr.trim());
+            } catch (IllegalArgumentException e) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Pre-validate codec availability
+            if (!ProviderCodecRegistry.getInstance().lookup(provider).isPresent()) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Validate path
+            String path = params.path("path").asText(null);
+            if (path == null || path.trim().isEmpty()) {
+                return errorResult("'path' is required and must not be blank");
+            }
+
+            // Validate turns
+            JsonNode turnsNode = params.path("turns");
+            if (!turnsNode.isArray() || turnsNode.size() == 0) {
+                return errorResult("'turns' must be a non-empty array");
+            }
+
+            // Model
+            String model = params.path("model").asText(null);
+
+            // Build conversation using LlmConversationBuilder
+            LlmConversationBuilder conversationBuilder = LlmConversationBuilder.conversation()
+                .withPath(path)
+                .withProvider(provider)
+                .withModel(model);
+
+            // Isolation
+            JsonNode isolateByNode = params.path("isolateBy");
+            if (isolateByNode.isObject()) {
+                String source = isolateByNode.path("source").asText(null);
+                String isoName = isolateByNode.path("name").asText(null);
+                if (source == null || isoName == null || isoName.trim().isEmpty()) {
+                    return errorResult("isolateBy requires both 'source' and 'name'");
+                }
+                IsolationSource isolationSource;
+                switch (source) {
+                    case "header":
+                        isolationSource = IsolationSource.header(isoName);
+                        break;
+                    case "queryParameter":
+                        isolationSource = IsolationSource.queryParameter(isoName);
+                        break;
+                    case "cookie":
+                        isolationSource = IsolationSource.cookie(isoName);
+                        break;
+                    default:
+                        return errorResult("isolateBy.source must be one of: header, queryParameter, cookie");
+                }
+                conversationBuilder.isolateBy(isolationSource);
+            }
+
+            // Build turns
+            for (int i = 0; i < turnsNode.size(); i++) {
+                JsonNode turnNode = turnsNode.get(i);
+                TurnBuilder turnBuilder = conversationBuilder.turn();
+
+                // Match predicates
+                JsonNode matchNode = turnNode.path("match");
+                if (matchNode.isObject()) {
+                    JsonNode turnIndexNode = matchNode.path("turnIndex");
+                    if (!turnIndexNode.isMissingNode() && !turnIndexNode.isNull()) {
+                        if (!turnIndexNode.isIntegralNumber()) {
+                            return errorResult("turns[" + i + "].match.turnIndex must be an integer");
+                        }
+                        turnBuilder.whenTurnIndex(turnIndexNode.asInt());
+                    }
+                    JsonNode latestMsgContains = matchNode.path("latestMessageContains");
+                    if (!latestMsgContains.isMissingNode() && !latestMsgContains.isNull()) {
+                        turnBuilder.whenLatestMessageContains(latestMsgContains.asText());
+                    }
+                    JsonNode latestMsgRole = matchNode.path("latestMessageRole");
+                    if (!latestMsgRole.isMissingNode() && !latestMsgRole.isNull()) {
+                        try {
+                            turnBuilder.whenLatestMessageRole(
+                                org.mockserver.llm.ParsedMessage.Role.valueOf(latestMsgRole.asText().toUpperCase()));
+                        } catch (IllegalArgumentException e) {
+                            return errorResult("turns[" + i + "].match.latestMessageRole must be one of: USER, ASSISTANT, SYSTEM, TOOL");
+                        }
+                    }
+                    JsonNode containsToolResult = matchNode.path("containsToolResultFor");
+                    if (!containsToolResult.isMissingNode() && !containsToolResult.isNull()) {
+                        turnBuilder.whenContainsToolResultFor(containsToolResult.asText());
+                    }
+                }
+
+                // Response
+                JsonNode responseNode = turnNode.path("response");
+                if (responseNode.isObject()) {
+                    Completion turnCompletion = Completion.completion();
+                    JsonNode respTextNode = responseNode.path("text");
+                    if (!respTextNode.isMissingNode() && !respTextNode.isNull()) {
+                        turnCompletion.withText(respTextNode.asText());
+                    }
+                    JsonNode respStopNode = responseNode.path("stopReason");
+                    if (!respStopNode.isMissingNode() && !respStopNode.isNull()) {
+                        turnCompletion.withStopReason(respStopNode.asText());
+                    }
+                    JsonNode respToolCallsNode = responseNode.path("toolCalls");
+                    if (respToolCallsNode.isArray()) {
+                        for (JsonNode tcNode : respToolCallsNode) {
+                            String toolName = tcNode.path("name").asText(null);
+                            if (toolName == null || toolName.trim().isEmpty()) {
+                                return errorResult("turns[" + i + "].response.toolCalls entry must have a non-empty 'name'");
+                            }
+                            ToolUse toolUse = ToolUse.toolUse(toolName);
+                            JsonNode argsNode = tcNode.path("arguments");
+                            if (!argsNode.isMissingNode() && !argsNode.isNull()) {
+                                if (argsNode.isTextual()) {
+                                    toolUse.withArguments(argsNode.asText());
+                                } else if (argsNode.isObject()) {
+                                    toolUse.withArguments(objectMapper.writeValueAsString(argsNode));
+                                }
+                            }
+                            turnCompletion.withToolCall(toolUse);
+                        }
+                    }
+                    JsonNode respUsageNode = responseNode.path("usage");
+                    if (respUsageNode.isObject()) {
+                        Usage usage = Usage.usage();
+                        JsonNode inNode = respUsageNode.path("inputTokens");
+                        if (!inNode.isMissingNode() && !inNode.isNull() && inNode.isIntegralNumber()) {
+                            usage.withInputTokens(inNode.asInt());
+                        }
+                        JsonNode outNode = respUsageNode.path("outputTokens");
+                        if (!outNode.isMissingNode() && !outNode.isNull() && outNode.isIntegralNumber()) {
+                            usage.withOutputTokens(outNode.asInt());
+                        }
+                        turnCompletion.withUsage(usage);
+                    }
+                    boolean respStreaming = responseNode.path("streaming").asBoolean(false);
+                    if (respStreaming) {
+                        turnCompletion.streaming();
+                    }
+                    turnBuilder.respondingWith(turnCompletion);
+                }
+
+                // Chain to next (except last)
+                if (i < turnsNode.size() - 1) {
+                    turnBuilder.andThen();
+                }
+            }
+
+            // Build expectations
+            Expectation[] expectations = conversationBuilder.build();
+
+            // Register each expectation
+            List<Expectation> allResults = new ArrayList<>();
+            for (Expectation exp : expectations) {
+                allResults.addAll(httpState.add(exp));
+            }
+
+            // Extract scenario name from first expectation
+            String scenarioName = expectations.length > 0 ? expectations[0].getScenarioName() : null;
+
+            // Build result with state info
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "created");
+            resultNode.put("count", allResults.size());
+            if (scenarioName != null) {
+                resultNode.put("scenarioName", scenarioName);
+            }
+            ArrayNode statesArray = resultNode.putArray("states");
+            for (Expectation exp : expectations) {
+                ObjectNode stateNode = objectMapper.createObjectNode();
+                stateNode.put("scenarioState", exp.getScenarioState());
+                stateNode.put("newScenarioState", exp.getNewScenarioState());
+                if (exp.getId() != null) {
+                    stateNode.put("id", exp.getId());
+                }
+                statesArray.add(stateNode);
+            }
+            ArrayNode ids = resultNode.putArray("ids");
+            for (Expectation exp : allResults) {
+                ids.add(exp.getId());
+            }
+            return resultNode;
+        } catch (IllegalStateException e) {
+            return errorResult(e.getMessage());
+        } catch (Exception e) {
+            return errorResult("Failed to create LLM conversation", e);
+        }
+    }
+
     private ObjectNode errorResult(String message) {
         ObjectNode resultNode = objectMapper.createObjectNode();
         resultNode.put("error", true);
@@ -1966,6 +2403,17 @@ public class McpToolRegistry {
                 .setThrowable(throwable)
         );
         return errorResult(message);
+    }
+
+    private ObjectNode unsupportedLlmProviderResult(String providerStr) {
+        ObjectNode resultNode = objectMapper.createObjectNode();
+        resultNode.put("error", true);
+        resultNode.put("message", "unsupported LLM provider: " + providerStr);
+        ArrayNode supported = resultNode.putArray("supported");
+        for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
+            supported.add(name);
+        }
+        return resultNode;
     }
 
     public static class ToolDefinition {

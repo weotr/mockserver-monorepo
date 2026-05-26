@@ -311,6 +311,70 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     "scenarioState": "RateLimited"
 }</code></pre>
 
+<a id="llm_conversation_example" class="anchor" href="#llm_conversation_example">&nbsp;</a>
+
+<p><strong>Example - Multi-Turn LLM Conversation:</strong> Script a two-turn agent loop where the model first calls a tool, then answers after receiving the tool result. Each turn advances the scenario state automatically. Use <span class="inline_code">isolateBy</span> so concurrent sessions (identified by a header, query parameter, or cookie) maintain independent state.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.LlmConversationBuilder.conversation;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.ToolUse.toolUse;
+import static org.mockserver.llm.IsolationSource.header;
+
+conversation()
+    .withPath("/v1/messages")
+    .withProvider(Provider.ANTHROPIC)
+    .withModel("claude-sonnet-4")
+    .isolateBy(header("x-session-id"))
+    .turn()
+        .whenTurnIndex(0)
+        .respondingWith(
+            completion()
+                .withToolCall(toolUse("search").withArguments("{\"query\":\"weather\"}"))
+                .withStopReason("tool_use"))
+    .andThen()
+    .turn()
+        .whenContainsToolResultFor("search")
+        .respondingWith(
+            completion()
+                .withText("Based on the search results, it will be sunny.")
+                .withStopReason("end_turn"))
+    .applyTo(mockServerClient);</code></pre>
+
+<p>JSON equivalent (two expectations sharing a scenario):</p>
+<pre class="prettyprint lang-java code"><code class="code">// Turn 1: tool call
+{
+    "httpRequest": { "method": "POST", "path": "/v1/messages" },
+    "httpLlmResponse": {
+        "provider": "ANTHROPIC",
+        "model": "claude-sonnet-4",
+        "completion": {
+            "toolCalls": [{ "name": "search", "arguments": "{\"query\":\"weather\"}" }],
+            "stopReason": "tool_use"
+        },
+        "conversationPredicates": { "turnIndex": 0 }
+    },
+    "scenarioName": "__llm_conv_example",
+    "scenarioState": "Started",
+    "newScenarioState": "turn_1"
+}
+
+// Turn 2: final answer after tool result
+{
+    "httpRequest": { "method": "POST", "path": "/v1/messages" },
+    "httpLlmResponse": {
+        "provider": "ANTHROPIC",
+        "model": "claude-sonnet-4",
+        "completion": {
+            "text": "Based on the search results, it will be sunny.",
+            "stopReason": "end_turn"
+        },
+        "conversationPredicates": { "containsToolResultFor": "search" }
+    },
+    "scenarioName": "__llm_conv_example",
+    "scenarioState": "turn_1",
+    "newScenarioState": "__done"
+}</code></pre>
+
 <p>Scenarios are independent of each other — different scenario names maintain separate state. All scenario states are reset when MockServer is <a href="/mock_server/clearing_and_resetting.html">reset</a>.</p>
 
 <a id="sequential_responses" class="anchor" href="#sequential_responses">&nbsp;</a>
@@ -676,6 +740,7 @@ new MockServerClient("localhost", 1080)
         </ul>
     </li>
     <li><strong><a href="#error_action">error</a></strong> - returns an invalid response as a sequence of bytes or closes the connection</li>
+    <li><strong><a href="#llm_response_action">LLM response</a></strong> - returns a provider-correct LLM completion (Anthropic, OpenAI, etc.) from a high-level description of text, tool calls, and usage</li>
 </ul>
 
 <p>If no action is present for a request because no <a href="#request_matchers">request matcher</a> was matched then:</p>
@@ -774,6 +839,108 @@ new MockServerClient("localhost", 1080)
 <div class="panel title">
     {% include_subpage _includes/error_action_code_examples.html %}
 </div>
+
+<a id="llm_response_action" class="anchor" href="#llm_response_action">&nbsp;</a>
+
+<h3>LLM Response</h3>
+
+<p>An <strong>LLM response action</strong> (<span class="inline_code">httpLlmResponse</span>) returns a provider-correct response from a high-level description of what the model should say. Instead of hand-assembling Anthropic or OpenAI response JSON, you describe the <em>intent</em> (text, tool calls, usage, stop reason) and MockServer produces the byte-correct wire format.</p>
+
+<p>Seven providers are supported: <strong>ANTHROPIC</strong>, <strong>OPENAI</strong> (Chat Completions), <strong>OPENAI_RESPONSES</strong>, <strong>GEMINI</strong>, <strong>BEDROCK</strong>, <strong>AZURE_OPENAI</strong>, and <strong>OLLAMA</strong>. At this milestone, ANTHROPIC and OPENAI have full codec support; the remaining providers are in progress and will return a structured 400 response with a list of currently supported providers.</p>
+
+<h4>Java Client Example</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.LlmMockBuilder.llmMock;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.Provider.ANTHROPIC;
+import static org.mockserver.model.ToolUse.toolUse;
+import static org.mockserver.model.Usage.usage;
+
+// Simple text completion
+llmMock("/v1/messages")
+    .withProvider(ANTHROPIC)
+    .withModel("claude-sonnet-4")
+    .respondingWith(
+        completion()
+            .withText("The capital of France is Paris.")
+            .withStopReason("end_turn")
+            .withUsage(usage().withInputTokens(42).withOutputTokens(8))
+    )
+    .applyTo(mockServerClient);
+
+// Tool / function call
+llmMock("/v1/messages")
+    .withProvider(ANTHROPIC)
+    .respondingWith(
+        completion()
+            .withText("Let me check the weather.")
+            .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"Paris\"}"))
+            .withStopReason("tool_use")
+    )
+    .applyTo(mockServerClient);</code></pre>
+
+<h4>JSON Definition Format</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/v1/messages"
+    },
+    "httpLlmResponse": {
+        "provider": "ANTHROPIC",
+        "model": "claude-sonnet-4",
+        "completion": {
+            "text": "The capital of France is Paris.",
+            "stopReason": "end_turn",
+            "usage": { "inputTokens": 42, "outputTokens": 8 }
+        }
+    }
+}</code></pre>
+
+<h4>Streaming with Realistic Timing</h4>
+
+<p>When <span class="inline_code">streaming</span> is enabled, MockServer expands the completion into provider-correct SSE events (e.g. <span class="inline_code">message_start</span> through <span class="inline_code">message_stop</span> for Anthropic, <span class="inline_code">chat.completion.chunk</span> deltas for OpenAI) with configurable timing physics.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.mockserver.client.Llm.jitter;
+import static org.mockserver.client.Llm.timeToFirstToken;
+import static org.mockserver.client.Llm.tokensPerSecond;
+import static org.mockserver.client.LlmMockBuilder.llmMock;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.Provider.OPENAI;
+
+llmMock("/v1/chat/completions")
+    .withProvider(OPENAI)
+    .withModel("gpt-4o")
+    .respondingWith(
+        completion()
+            .withText("Streaming token by token...")
+            .streaming()
+            .withStreamingPhysics(
+                timeToFirstToken(300, MILLISECONDS),
+                tokensPerSecond(50),
+                jitter(0.2))
+    )
+    .applyTo(mockServerClient);</code></pre>
+
+<h4>Embeddings (Deterministic from Input)</h4>
+
+<p>For OpenAI embeddings, <span class="inline_code">deterministicFromInput()</span> generates reproducible vectors seeded from the input text. Same input + same dimensions + same seed produces an identical L2-normalised vector across JVMs.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.Llm.embedding;
+import static org.mockserver.client.LlmMockBuilder.llmMock;
+import static org.mockserver.model.Provider.OPENAI;
+
+llmMock("/v1/embeddings")
+    .withProvider(OPENAI)
+    .respondingWith(
+        embedding()
+            .withDimensions(1536)
+            .deterministicFromInput()
+    )
+    .applyTo(mockServerClient);</code></pre>
+
+<p>For multi-turn LLM conversations with stateful scenario progression, see the <a href="#llm_conversation_example">LLM Conversation</a> example in the <a href="#stateful_scenarios">Stateful Scenarios</a> section.</p>
 
 <a id="crud_simulation" class="anchor" href="#crud_simulation">&nbsp;</a>
 

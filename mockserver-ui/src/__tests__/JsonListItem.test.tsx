@@ -64,6 +64,72 @@ describe('JsonListItem', () => {
     expect(screen.getByText('5')).toBeInTheDocument();
   });
 
+  it('renders LLM Response badge when httpLlmResponse is present', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'llm1',
+          description: 'POST /v1/messages',
+          value: {
+            httpRequest: { method: 'POST', path: '/v1/messages' },
+            httpLlmResponse: {
+              provider: 'ANTHROPIC',
+              model: 'claude-sonnet-4',
+              completion: {
+                text: 'The capital of France is Paris.',
+              },
+            },
+          },
+        }}
+        index={1}
+      />,
+    );
+    expect(screen.getByText(/LLM Response/)).toBeInTheDocument();
+    expect(screen.getByText(/Anthropic/)).toBeInTheDocument();
+    expect(screen.getByText(/claude-sonnet-4/)).toBeInTheDocument();
+    expect(screen.getByText(/The capital of France is Paris./)).toBeInTheDocument();
+  });
+
+  it('renders LLM Response badge with truncated text preview', () => {
+    const longText = 'A'.repeat(100);
+    render(
+      <JsonListItem
+        item={{
+          key: 'llm2',
+          value: {
+            httpLlmResponse: {
+              provider: 'OPENAI',
+              completion: { text: longText },
+            },
+          },
+        }}
+        index={2}
+      />,
+    );
+    expect(screen.getByText(/LLM Response/)).toBeInTheDocument();
+    expect(screen.getByText(/OpenAI/)).toBeInTheDocument();
+    // The preview should be truncated
+    const preview = screen.getByText(/A{10,}/);
+    expect(preview.textContent!.length).toBeLessThan(100);
+  });
+
+  it('does not render LLM badge for regular expectations', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'reg1',
+          description: 'GET /api/test',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/test' },
+            httpResponse: { statusCode: 200 },
+          },
+        }}
+        index={1}
+      />,
+    );
+    expect(screen.queryByText(/LLM Response/)).not.toBeInTheDocument();
+  });
+
   it('shows chevron right icon when collapsed and expand icon when expanded', async () => {
     const user = userEvent.setup();
     const { container } = render(

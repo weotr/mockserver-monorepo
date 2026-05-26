@@ -1,7 +1,9 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
+import Divider from '@mui/material/Divider';
 import BuildIcon from '@mui/icons-material/Build';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import JsonViewer from './JsonViewer';
 import type {
   AnthropicParsed,
@@ -532,6 +534,179 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
           No conversation content
         </Typography>
       )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scripted turn data structures (from httpLlmResponse.conversationPredicates)
+// ---------------------------------------------------------------------------
+
+export interface ScriptedTurn {
+  turnIndex: number;
+  predicates: Record<string, unknown>;
+  response: {
+    text?: string;
+    toolCalls?: Array<{ name: string; arguments?: string }>;
+    stopReason?: string;
+    streaming?: boolean;
+  };
+  scenarioState: string;
+  newScenarioState: string;
+}
+
+// ---------------------------------------------------------------------------
+// ScriptedTurnsPanel — renders the scripted turn sequence
+// ---------------------------------------------------------------------------
+
+export function ScriptedTurnsPanel({ turns }: { turns: ScriptedTurn[] }) {
+  if (turns.length === 0) return null;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
+      <Typography
+        variant="subtitle2"
+        sx={{
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+          fontSize: '0.7rem',
+          color: 'text.secondary',
+          textAlign: 'center',
+          mb: 0.5,
+        }}
+      >
+        Scripted Conversation Turns
+      </Typography>
+
+      {turns.map((turn, i) => {
+        const predicateEntries = Object.entries(turn.predicates).filter(
+          ([, v]) => v !== undefined && v !== null,
+        );
+        const hasPredicates = predicateEntries.length > 0;
+
+        return (
+          <Box
+            key={`scripted-turn-${i}`}
+            sx={{
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 2,
+              p: 1.5,
+            }}
+          >
+            {/* Turn header with state transition */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+              <Chip
+                label={`Turn ${turn.turnIndex}`}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{ height: 20, fontSize: '0.65rem', fontWeight: 600 }}
+              />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Chip
+                  label={turn.scenarioState}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: '0.6rem' }}
+                />
+                <ArrowForwardIcon sx={{ fontSize: '0.75rem', color: 'text.secondary' }} />
+                <Chip
+                  label={turn.newScenarioState}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: '0.6rem' }}
+                />
+              </Box>
+            </Box>
+
+            {/* Predicates */}
+            {hasPredicates && (
+              <Box sx={{ mb: 1 }}>
+                <Typography
+                  variant="caption"
+                  sx={{ fontSize: '0.6rem', color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase' }}
+                >
+                  When
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.25 }}>
+                  {predicateEntries.map(([key, value]) => (
+                    <Chip
+                      key={key}
+                      label={`${key}: ${String(value)}`}
+                      size="small"
+                      variant="outlined"
+                      color="info"
+                      sx={{ height: 18, fontSize: '0.6rem' }}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            <Divider sx={{ my: 0.5 }} />
+
+            {/* Response */}
+            <Box>
+              <Typography
+                variant="caption"
+                sx={{ fontSize: '0.6rem', color: 'text.secondary', fontWeight: 600, textTransform: 'uppercase' }}
+              >
+                Response
+              </Typography>
+              {turn.response.text && (
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: MONO_FONT_SIZE,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    mt: 0.25,
+                  }}
+                >
+                  {turn.response.text}
+                </Typography>
+              )}
+              {turn.response.toolCalls && turn.response.toolCalls.length > 0 && (
+                <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                  {turn.response.toolCalls.map((tc, j) => (
+                    <Box key={j} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <BuildIcon sx={{ fontSize: '0.75rem', color: 'secondary.main' }} />
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.65rem', fontWeight: 600, color: 'secondary.main' }}>
+                        {tc.name}
+                      </Typography>
+                      {tc.arguments && (
+                        <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.6rem', color: 'text.secondary' }}>
+                          ({tc.arguments.length > 40 ? tc.arguments.substring(0, 40) + '...' : tc.arguments})
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              )}
+              {turn.response.stopReason && (
+                <Chip
+                  label={`Stop: ${turn.response.stopReason}`}
+                  size="small"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: '0.6rem', mt: 0.5 }}
+                />
+              )}
+              {turn.response.streaming && (
+                <Chip
+                  label="Streamed"
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                  sx={{ height: 18, fontSize: '0.6rem', mt: 0.5, ml: 0.5 }}
+                />
+              )}
+            </Box>
+          </Box>
+        );
+      })}
     </Box>
   );
 }

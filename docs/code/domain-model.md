@@ -166,6 +166,69 @@ classDiagram
         +responseCode: DnsResponseCode
     }
 
+    class HttpLlmResponse {
+        +provider: Provider
+        +model: String
+        +completion: Completion
+        +embedding: EmbeddingResponse
+        +conversationPredicates: ConversationPredicates
+    }
+    class Completion {
+        +text: String
+        +toolCalls: List~ToolUse~
+        +stopReason: String
+        +usage: Usage
+        +streaming: Boolean
+        +streamingPhysics: StreamingPhysics
+    }
+    class ToolUse {
+        +id: String
+        +name: String
+        +arguments: String
+    }
+    class Usage {
+        +inputTokens: Integer
+        +outputTokens: Integer
+    }
+    class StreamingPhysics {
+        +timeToFirstToken: Delay
+        +tokensPerSecond: Integer
+        +jitter: Double
+        +seed: Long
+    }
+    class EmbeddingResponse {
+        +dimensions: Integer
+        +deterministicFromInput: Boolean
+        +seed: Integer
+    }
+    class ConversationPredicates {
+        +turnIndex: Integer
+        +latestMessageContains: String
+        +latestMessageMatches: String
+        +latestMessageRole: Role
+        +containsToolResultFor: String
+    }
+    class ParsedConversation {
+        +messages: List~ParsedMessage~
+    }
+    class ParsedMessage {
+        +role: Role
+        +textContent: String
+        +toolName: String
+        +toolCallId: String
+    }
+    class IsolationSource {
+        +kind: Kind
+        +name: String
+    }
+
+    HttpLlmResponse --> Completion
+    HttpLlmResponse --> EmbeddingResponse
+    HttpLlmResponse --> ConversationPredicates
+    Completion --> ToolUse : 0..*
+    Completion --> Usage
+    Completion --> StreamingPhysics
+
     Action <|-- HttpError
     Action <|-- HttpForwardValidateAction
     Action <|-- HttpSseResponse
@@ -173,6 +236,7 @@ classDiagram
     Action <|-- GrpcStreamResponse
     Action <|-- BinaryResponse
     Action <|-- DnsResponse
+    Action <|-- HttpLlmResponse
 ```
 
 ### Body Types

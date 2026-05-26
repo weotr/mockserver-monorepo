@@ -43,6 +43,7 @@ required?"}
     DISPATCH --> OVERRIDE[HttpOverrideForwardedRequestActionHandler]
     DISPATCH --> FWDVAL[HttpForwardValidateActionHandler]
     DISPATCH --> GRPC[GrpcStreamResponseActionHandler]
+    DISPATCH --> LLM[HttpLlmResponseActionHandler]
     DISPATCH --> ERR[HttpErrorActionHandler]
 
     RESP --> LOG_RESP[Log EXPECTATION_RESPONSE]
@@ -299,6 +300,43 @@ The `FORWARD` action type (`HttpForwardActionHandler`) has always adjusted the H
 | Type | Handler | Description |
 |------|---------|-------------|
 | `ERROR` | `HttpErrorActionHandler` | Writes raw bytes and/or drops the connection |
+
+### LLM Response Action
+
+| Type | Handler | Description |
+|------|---------|-------------|
+| `LLM_RESPONSE` | `HttpLlmResponseActionHandler` | Encodes a provider-correct LLM response from a high-level `Completion` |
+
+`HttpLlmResponseActionHandler` routes to the appropriate `ProviderCodec` based on the `HttpLlmResponse.provider` field. For non-streaming completions, the codec produces an `HttpResponse` directly. For streaming completions, the codec produces a `List<SseEvent>` via `StreamingPhysicsExpander`, which is then handed to `HttpSseResponseActionHandler` for delivery.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant ActionHandler as HttpLlmResponseActionHandler
+    participant Registry as ProviderCodecRegistry
+    participant Codec as ProviderCodec
+    participant Expander as StreamingPhysicsExpander
+    participant SSE as HttpSseResponseActionHandler
+
+    Client->>ActionHandler: HTTP POST (matched expectation)
+    ActionHandler->>Registry: lookup(provider)
+    Registry-->>ActionHandler: codec
+
+    alt Non-streaming
+        ActionHandler->>Codec: encode(completion, model)
+        Codec-->>ActionHandler: HttpResponse
+        ActionHandler-->>Client: HTTP response
+    else Streaming
+        ActionHandler->>Expander: expand(completion, physics)
+        Expander->>Codec: encodeStreaming(completion, model, physics)
+        Codec-->>Expander: List of SseEvent
+        Expander-->>ActionHandler: List of SseEvent with delays
+        ActionHandler->>SSE: stream events
+        SSE-->>Client: SSE event stream
+    end
+```
+
+See [LLM Mocking](llm-mocking.md) for the full architecture.
 
 ### Sequential/Cycling Response Dispatch
 
