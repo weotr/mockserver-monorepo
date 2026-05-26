@@ -915,7 +915,7 @@ public class ConfigurationProperties {
     }
 
     public static long regexMatchingTimeoutMillis() {
-        return readLongProperty(MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS", 1000L);
+        return readLongProperty(MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS", 5000L);
     }
 
     /**
@@ -924,7 +924,10 @@ public class ConfigurationProperties {
      * as a non-match (and a WARN log entry is written) so the server cannot be wedged by
      * exponential regex backtracking from an attacker-controlled expectation or input.
      * <p>
-     * The default is 1000 milliseconds. Set to 0 or a negative value to disable the timeout.
+     * The default is 5000 milliseconds. The headroom over typical matching time keeps
+     * normal patterns well clear of the cutoff while still bounding pathological
+     * backtracking (which takes minutes to hours). Set to 0 or a negative value to
+     * disable the timeout.
      *
      * @param milliseconds regex evaluation timeout in milliseconds
      */
@@ -933,7 +936,7 @@ public class ConfigurationProperties {
     }
 
     public static long xpathMatchingTimeoutMillis() {
-        return readLongProperty(MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS", 1000L);
+        return readLongProperty(MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS", 5000L);
     }
 
     /**
@@ -942,7 +945,9 @@ public class ConfigurationProperties {
      * a non-match and a WARN log entry is written, protecting MockServer from XPath-based
      * denial-of-service.
      * <p>
-     * The default is 1000 milliseconds. Set to 0 or a negative value to disable the timeout.
+     * The default is 5000 milliseconds, well above typical XPath evaluation time, so the
+     * timeout only fires on truly pathological expressions or documents. Set to 0 or a
+     * negative value to disable the timeout.
      *
      * @param milliseconds XPath evaluation timeout in milliseconds
      */

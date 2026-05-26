@@ -44,7 +44,16 @@ public final class MatchingTimeoutExecutor {
         if (timeoutMillis <= 0) {
             return task.call();
         }
-        Future<T> future = EXECUTOR.submit(task);
+        // Wrap the user task so that any residual interrupt flag left on a recycled pool
+        // thread (e.g. from a previous timed-out task whose long-running work ignored
+        // future.cancel(true)) is cleared before this task starts. Without this, the
+        // recycled worker can carry an interrupt flag that causes the next task to
+        // observe spurious failure or incorrect results.
+        Callable<T> cleanTask = () -> {
+            Thread.interrupted();
+            return task.call();
+        };
+        Future<T> future = EXECUTOR.submit(cleanTask);
         try {
             return future.get(timeoutMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {
