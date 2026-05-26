@@ -74,23 +74,38 @@ The embedding `deterministicFromInput()` deliberately uses `java.util.Random` se
 
 ### Ollama NDJSON wire format
 
-The `OllamaCodec` streaming path emits SSE events (`data: <json>\n\n`) instead of Ollama's native NDJSON format (`<json>\n`). This means:
-- Clients that strictly parse NDJSON may not consume the mock stream correctly
-- The SSE framing adds negligible overhead
-- This is a compatibility limitation, not a security issue
+**Compatibility bug — actionable.**
 
-The limitation is documented in the `OllamaCodec` javadoc.
+The `OllamaCodec` streaming path emits SSE events (`data: <json>\n\n`) instead of Ollama's native NDJSON format (`<json>\n`). Real Ollama clients that strictly parse newline-delimited JSON (not SSE) will silently receive no tokens or raise a parse error when the mock response is consumed.
+
+To fix: implement an NDJSON write path in `OllamaCodec.encodeStreaming()` that writes each chunk as `<json>\n` without the `data:` prefix, and select the path based on the inbound request's `Accept` header or a codec configuration flag. Non-streaming Ollama responses are already in the correct format; only the streaming path is affected.
+
+The limitation is documented in the `OllamaCodec` javadoc. Not a security issue.
 
 ### BedrockCodec binary framing
 
-The `BedrockCodec` does not implement Bedrock's `InvokeModelWithResponseStream` binary chunk-wrapping envelope (`{"chunk":{"bytes":"..."}}`), emitting plain Anthropic SSE events instead. This is sufficient when the Bedrock SDK handles envelope decoding, but may not work with raw HTTP clients expecting the envelope.
+**Compatibility limitation — actionable for raw HTTP clients.**
 
-This is documented in the `BedrockCodec` javadoc and is not a security concern.
+The `BedrockCodec` does not implement Bedrock's `InvokeModelWithResponseStream` binary chunk-wrapping envelope (`{"chunk":{"bytes":"<base64>"}}`), emitting plain Anthropic SSE events instead. Applications that use the AWS SDK for streaming invocations will work correctly because the SDK handles the envelope at the HTTP client layer. Raw HTTP clients that directly parse the binary frame protocol will not work.
+
+To fix: implement the `aws-chunked` / event stream encoding described in the Bedrock Streaming API reference. The binary envelope is straightforward: base64-encode each Anthropic SSE chunk, wrap it in `{"chunk":{"bytes":"..."}}`, and write with the correct content-type (`application/vnd.amazon.eventstream`). This is a non-trivial change requiring a new codec subclass or a framing wrapper.
+
+The limitation is documented in the `BedrockCodec` javadoc. Not a security concern.
 
 ### Gemini tool-call argument re-serialisation
 
-The `GeminiCodec.encodeStreaming()` method re-serialises tool-call arguments through Jackson (`OBJECT_MAPPER.readTree` + `writeValueAsString`) before embedding them in the SSE chunk. If the arguments are not valid JSON, they are wrapped in a `{"value":"<escaped>"}` object. This is a safe fallback that prevents malformed arguments from corrupting the JSON chunk.
+The `GeminiCodec.encodeStreaming()` method re-serialises tool-call arguments through Jackson (`OBJECT_MAPPER.readTree` + `writeValueAsString`) before embedding them in the SSE chunk. If the arguments are not valid JSON, they are wrapped in a `{"value":"<escaped>"}` object. This is a safe fallback that prevents malformed arguments from corrupting the JSON chunk. No action required.
 
-### `whenContainsToolResultFor` E2E interaction with Gemini/Ollama
+### `whenContainsToolResultFor` E2E false-negative for Gemini and Ollama
 
-Unit tests confirm that the `LlmConversationMatcher.hasToolResultForName` method correctly matches tool results for all providers, including Gemini (name-based correlation) and Ollama (positional fallback). However, when exercised through the full E2E matching pipeline (Netty pipeline -> RequestMatchers -> conversation matcher), the predicate fails for Gemini and Ollama turn-2 requests. The root cause is under investigation; it may be related to how the Netty pipeline's `JsonBody` representation interacts with the body size check or codec decode path. The E2E tests for these providers rely on the scenario state machine for turn ordering (which works correctly), while the predicate-based matching is covered by mockserver-core unit tests. Not a security issue.
+**Bug — requires investigation before fix.**
+
+Unit tests confirm that `LlmConversationMatcher.hasToolResultForName` correctly matches tool results for all providers, including Gemini (name-based correlation) and Ollama (positional fallback). However, when exercised through the full E2E matching pipeline (Netty pipeline &rarr; `RequestMatchers` &rarr; conversation matcher), the predicate fails for Gemini and Ollama turn-2 requests.
+
+The most likely candidates for root cause, in order of probability:
+1. The Netty pipeline deserialises the body into a `JsonBody` before `LlmConversationMatcher` receives it. The codec's `decode()` path may receive a pre-parsed form rather than the raw bytes, causing the Gemini/Ollama tool-result extractor to miss the expected field path.
+2. The body-size cap check in `LlmConversationMatcher.matches()` uses `request.getBodyAsRawBytes().length`. If the Netty pipeline has already consumed the raw bytes into a parsed `JsonBody`, `getBodyAsRawBytes()` may return an empty array, causing every body to pass the size check but `codec.decode()` to receive an empty string.
+
+To investigate: add a DEBUG log in `LlmConversationMatcher.matches()` that records the actual body bytes length and the decoded `ParsedConversation` before predicate evaluation. Compare the Anthropic and Gemini/Ollama code paths at the point `codec.decode(request)` is called.
+
+The scenario state machine (which does not use `whenContainsToolResultFor`) works correctly for all providers. E2E tests for Gemini and Ollama rely on `turnIndex` ordering rather than tool-result predicates. Not a security issue.

@@ -55,11 +55,27 @@ public class LlmConversationMatcher {
     }
 
     /**
-     * Set regex from a source string; the Pattern is compiled lazily on first match.
+     * Set regex from a source string. The pattern is compiled eagerly so that
+     * syntactically-invalid regexes are rejected at configuration time (not at
+     * match time). Throws {@link java.util.regex.PatternSyntaxException}
+     * wrapped in {@link IllegalArgumentException} if the regex does not compile.
+     *
+     * @param regexSource the regex source string
+     * @return this matcher
+     * @throws IllegalArgumentException if the regex source is syntactically invalid
      */
     public LlmConversationMatcher withLatestMessageMatches(String regexSource) {
+        if (regexSource != null) {
+            try {
+                this.latestMessageMatches = Pattern.compile(regexSource);
+            } catch (java.util.regex.PatternSyntaxException e) {
+                throw new IllegalArgumentException(
+                    "invalid regex for whenLatestMessageContains: " + regexSource, e);
+            }
+        } else {
+            this.latestMessageMatches = null;
+        }
         this.latestMessageMatchesSource = regexSource;
-        this.latestMessageMatches = null; // lazy-compile
         return this;
     }
 

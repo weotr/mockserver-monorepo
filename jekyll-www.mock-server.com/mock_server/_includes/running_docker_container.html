@@ -196,6 +196,8 @@ For example to add all jar files in the current directory, map <strong>$(pwd)</s
 
 <p>For more information on the liveness endpoint configuration, see <a href="/mock_server/configuration_properties.html#liveness_configuration">liveness configuration properties</a>.</p>
 
+<p>A selection of commonly used environment variables is shown in the Docker Compose examples below. <code>MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE</code> controls the maximum request body size that conversation-aware LLM matchers will parse (default 1 MiB; valid range 16 KiB&ndash;64 MiB). See <a href="/mock_server/performance.html#button_configuration_max_llm_conversation_body_size">Performance Configuration</a> for details.</p>
+
 <a id="docker_compose" class="anchor" href="#docker_compose">&nbsp;</a>
 
 <h2>Docker Compose</h2>
@@ -220,7 +222,8 @@ For example to add all jar files in the current directory, map <strong>$(pwd)</s
       - 1080:1090
     environment:
       MOCKSERVER_MAX_EXPECTATIONS: 100
-      MOCKSERVER_MAX_HEADER_SIZE: 8192</code></pre>
+      MOCKSERVER_MAX_HEADER_SIZE: 8192
+      MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE: 1048576</code></pre>
 
 <p>It is also possible to configure the MockServer by mounting a volume containing a properties file or JSON expectation initializer, as follows:</p>
 

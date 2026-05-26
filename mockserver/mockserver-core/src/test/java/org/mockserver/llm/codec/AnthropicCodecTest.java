@@ -223,6 +223,42 @@ public class AnthropicCodecTest {
     }
 
     @Test
+    public void shouldFallBackGracefullyForNonJsonObjectArguments() throws Exception {
+        // Gap 3: confirm encode() with arguments="not_a_json_object" falls back
+        // gracefully — produces a string input field, not a JSON parse error.
+        // This is the documented behaviour from M1.
+        Completion completion = completion()
+            .withToolCall(toolUse("tool").withArguments("not_a_json_object"));
+
+        // when
+        HttpResponse response = codec.encode(completion, "test-model");
+
+        // then — response is 200 with the raw string as the input value
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        JsonNode input = root.get("content").get(0).get("input");
+        assertThat(input.isTextual(), is(true));
+        assertThat(input.asText(), is("not_a_json_object"));
+    }
+
+    @Test
+    public void shouldFallBackGracefullyForMalformedJsonArguments() throws Exception {
+        // Gap 3: structurally invalid JSON (unclosed brace) in arguments
+        // should fall back to raw string, not throw
+        Completion completion = completion()
+            .withToolCall(toolUse("tool").withArguments("{\"unclosed\":"));
+
+        // when
+        HttpResponse response = codec.encode(completion, "test-model");
+
+        // then — response is 200, the malformed string is used as-is
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        JsonNode input = root.get("content").get(0).get("input");
+        assertThat(input.asText(), is("{\"unclosed\":"));
+    }
+
+    @Test
     public void shouldHandleNullArguments() throws Exception {
         // given
         Completion completion = completion()

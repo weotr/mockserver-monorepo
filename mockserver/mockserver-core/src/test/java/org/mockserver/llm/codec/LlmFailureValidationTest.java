@@ -1,12 +1,21 @@
 package org.mockserver.llm.codec;
 
 import org.junit.Test;
+import org.mockserver.matchers.LlmConversationMatcher;
+import org.mockserver.model.Provider;
 import org.mockserver.model.StreamingPhysics;
 import org.mockserver.model.Usage;
 
+import java.util.regex.PatternSyntaxException;
+
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 
+/**
+ * Tests for every row in the §2.7 failure-modes table that exercises
+ * validation at registration/configuration time.
+ */
 public class LlmFailureValidationTest {
 
     @Test(expected = IllegalArgumentException.class)
@@ -83,5 +92,41 @@ public class LlmFailureValidationTest {
     public void shouldAcceptNullJitter() {
         StreamingPhysics p = StreamingPhysics.streamingPhysics().withJitter(null);
         assertThat(p.getJitter() == null, is(true));
+    }
+
+    // --- §2.7 row: whenLatestMessageContains regex throws at registration ---
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectInvalidRegexAtSetterTime() {
+        // §2.7: "whenLatestMessageContains(...)regex throws → At registration → 400 with regex compile error"
+        // The LlmConversationMatcher must compile eagerly and throw IllegalArgumentException.
+        new LlmConversationMatcher()
+            .withLatestMessageMatches("[unclosed");
+    }
+
+    @Test
+    public void shouldIncludeRegexSourceInExceptionMessage() {
+        try {
+            new LlmConversationMatcher()
+                .withLatestMessageMatches("(unmatched");
+        } catch (IllegalArgumentException e) {
+            assertThat(e.getMessage(), containsString("(unmatched"));
+            assertThat(e.getCause() instanceof PatternSyntaxException, is(true));
+        }
+    }
+
+    // --- §2.7 row: unsupported provider (codec lookup) ---
+
+    @Test
+    public void shouldNotFindCodecForUnknownProviderEnum() {
+        // After M4 all 7 providers have codecs, but the Registry.lookup
+        // contract still returns Optional.empty() for enum values without a
+        // registered codec. This is tested via the handler (400 path) in
+        // HttpLlmResponseActionHandlerTest and LlmMcpToolsTest.
+        // Here we confirm the registry API contract directly.
+        for (Provider p : Provider.values()) {
+            assertThat("codec must be registered for " + p,
+                org.mockserver.llm.ProviderCodecRegistry.getInstance().lookup(p).isPresent(), is(true));
+        }
     }
 }

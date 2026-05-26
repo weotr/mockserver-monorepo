@@ -36,11 +36,11 @@ Currently registered codecs:
 |----------|-------------|--------|
 | ANTHROPIC | `AnthropicCodec` | Complete |
 | OPENAI | `OpenAiChatCompletionsCodec` | Complete |
-| OPENAI_RESPONSES | -- | Planned (M4) |
-| GEMINI | -- | Planned (M4) |
-| BEDROCK | -- | Planned (M4) |
-| AZURE_OPENAI | -- | Planned (M4) |
-| OLLAMA | -- | Planned (M4) |
+| OPENAI_RESPONSES | `OpenAiResponsesCodec` | Complete |
+| GEMINI | `GeminiCodec` | Complete |
+| BEDROCK | `BedrockCodec` | Complete (delegates to `AnthropicCodec` for non-streaming; see security audit for binary-framing limitation) |
+| AZURE_OPENAI | `AzureOpenAiCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+| OLLAMA | `OllamaCodec` | Complete (see security audit for NDJSON wire-format limitation) |
 
 ## Streaming Physics
 
@@ -81,6 +81,60 @@ __llm_conv_<uuid>__iso=header:x-session-id
 - Auto-generated scenario name (with optional isolation suffix)
 - State progression: `Started` -> `turn_1` -> `turn_2` -> ... -> `__done`
 - `ConversationPredicates` on each `HttpLlmResponse`
+
+The class relationships between the builder, predicates, matcher, and isolation model:
+
+```mermaid
+classDiagram
+    class LlmConversationBuilder {
+        +withPath(path)
+        +withProvider(provider)
+        +withModel(model)
+        +isolateBy(IsolationSource)
+        +turn() TurnBuilder
+        +build() Expectation[]
+    }
+    class TurnBuilder {
+        +whenTurnIndex(int)
+        +whenLatestMessageContains(String)
+        +whenLatestMessageRole(Role)
+        +whenContainsToolResultFor(String)
+        +respondingWith(Completion)
+        +andThen() TurnBuilder
+    }
+    class ConversationPredicates {
+        +turnIndex: Integer
+        +latestMessageContains: String
+        +latestMessageRole: Role
+        +containsToolResultFor: String
+    }
+    class LlmConversationMatcher {
+        +matches(HttpRequest) boolean
+    }
+    class IsolationSource {
+        +kind: Kind
+        +name: String
+        +header(String)
+        +queryParameter(String)
+        +cookie(String)
+    }
+    class LlmScenarioNames {
+        +ISOLATION_MARKER: String
+        +generate(IsolationSource) String
+    }
+    class ScenarioManager {
+        +getState(scenarioName, isolationValue)
+        +setState(scenarioName, isolationValue, state)
+    }
+
+    LlmConversationBuilder --> TurnBuilder : creates
+    LlmConversationBuilder --> IsolationSource : uses
+    LlmConversationBuilder --> LlmScenarioNames : uses
+    TurnBuilder --> ConversationPredicates : produces
+    LlmConversationMatcher --> ConversationPredicates : evaluates
+    LlmScenarioNames --> IsolationSource : encodes
+    ScenarioManager --> LlmScenarioNames : keyed by
+```
 
 ## MCP Tools
 
@@ -189,9 +243,36 @@ classDiagram
 
 ## Related Documents
 
-- [RFC: LLM & Agent Mocking](../plans/mockserver-llm-mocking.md) -- authoritative design
+- [RFC: LLM & Agent Mocking](../plans/mockserver-llm-mocking.md) -- authoritative design spec
 - [Implementation Plan](../plans/mockserver-llm-mocking-impl-plan.md) -- work items and milestones
-- [Request Processing](request-processing.md) -- action dispatch pipeline
-- [Domain Model](domain-model.md) -- model hierarchy
+- [Security Audit](llm-security-audit.md) -- M5 security review including known codec limitations
+- [Codec Golden-File Testing](llm-codec-fixtures.md) -- how to refresh provider fixtures
+- [Request Processing](request-processing.md) -- action dispatch pipeline (LLM dispatch flow)
+- [Domain Model](domain-model.md) -- model class hierarchy
 - [Event System](event-system.md) -- event logging pipeline
 - [AI & RPC Protocol Mocking](ai-protocol-mocking.md) -- SSE, MCP, A2A mocking
+
+## Source References
+
+Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/`:
+
+| File | Role |
+|------|------|
+| `llm/ProviderCodecRegistry.java` | Codec registry singleton; all 7 providers registered at boot |
+| `llm/codec/AnthropicCodec.java` | Anthropic Messages API encoder/decoder |
+| `llm/codec/OpenAiChatCompletionsCodec.java` | OpenAI Chat Completions encoder/decoder |
+| `llm/codec/OpenAiResponsesCodec.java` | OpenAI Responses API encoder/decoder |
+| `llm/codec/GeminiCodec.java` | Gemini encoder/decoder |
+| `llm/codec/BedrockCodec.java` | Bedrock wrapper (delegates to Anthropic codec) |
+| `llm/codec/AzureOpenAiCodec.java` | Azure OpenAI wrapper (delegates to OpenAI codec) |
+| `llm/codec/OllamaCodec.java` | Ollama encoder/decoder |
+| `llm/StreamingPhysicsExpander.java` | Converts `Completion` + `StreamingPhysics` to `List<SseEvent>` |
+| `llm/IsolationSource.java` | Session isolation key extraction descriptor |
+| `llm/LlmScenarioNames.java` | Scenario name generation with isolation encoding |
+| `llm/ParsedConversation.java` | Decoded conversation model |
+| `llm/ParsedMessage.java` | Single decoded message (role, text, tool name, tool call ID) |
+| `client/LlmConversationBuilder.java` | Fluent builder producing per-turn `Expectation` arrays |
+| `client/TurnBuilder.java` | Per-turn predicate and response configuration |
+| `matchers/LlmConversationMatcher.java` | Evaluates `ConversationPredicates` against decoded requests |
+| `model/HttpLlmResponse.java` | Action type holding provider, model, completion, predicates |
+| `model/ConversationPredicates.java` | Serialisable predicate set stored on `HttpLlmResponse` |

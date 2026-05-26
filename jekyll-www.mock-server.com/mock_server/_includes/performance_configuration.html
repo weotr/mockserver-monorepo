@@ -358,3 +358,21 @@
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.disableLogging="true"</code></pre>
 </div>
+
+<button id="button_configuration_max_llm_conversation_body_size" class="accordion title"><strong>Maximum LLM Conversation Body Size</strong></button>
+<div class="panel title">
+    <p>Maximum request body size in bytes that conversation-aware LLM matchers will parse. LLM conversation matchers (<span class="inline_code">whenLatestMessageContains</span>, <span class="inline_code">whenContainsToolResultFor</span>, etc.) parse the inbound request body as JSON to extract the message history. For deep conversation histories or large tool results, this parse step is proportional to body size.</p>
+    <p>Requests whose body exceeds this cap skip conversation-aware matching and are treated as a no-match for conversation predicates (the scenario state machine is unaffected). Increase this value only when your LLM conversations regularly include very large tool results or long message histories. Reduce it in memory-constrained environments to bound the maximum allocation per matching attempt.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">1048576</span> (1 MiB) Range: <span class="this_value">16384</span> (16 KiB) &mdash; <span class="this_value">67108864</span> (64 MiB)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxLlmConversationBodySize(int size)</code></pre>
+    <pre class="prettyprint lang-java code"><code class="code">Configuration.maxLlmConversationBodySize(Integer size)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxLlmConversationBodySize=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxLlmConversationBodySize=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxLlmConversationBodySize="4194304"</code></pre>
+</div>

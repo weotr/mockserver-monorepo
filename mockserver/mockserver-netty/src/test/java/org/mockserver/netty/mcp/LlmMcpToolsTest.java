@@ -162,6 +162,74 @@ public class LlmMcpToolsTest {
         assertThat(result.path("message").asText(), containsString("non-empty 'name'"));
     }
 
+    // --- Gap 3: Malformed toolCall arguments ---
+
+    @Test
+    public void shouldAcceptMalformedJsonStringArguments() {
+        // Gap 3: toolCalls[0].arguments that is structurally invalid JSON when
+        // supplied as a string parameter. Since ToolUse treats arguments as an
+        // opaque string, the MCP tool layer accepts it without validation.
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        ArrayNode toolCalls = params.putArray("toolCalls");
+        ObjectNode tc = toolCalls.addObject();
+        tc.put("name", "my_tool");
+        tc.put("arguments", "{\"unclosed\":");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        // String arguments are opaque — accepted without JSON validation
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(1));
+    }
+
+    @Test
+    public void shouldRejectNonStringNonObjectArguments() {
+        // Gap 3: arguments that are neither string nor object (e.g., array or number)
+        // should be rejected with a clear error
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        ArrayNode toolCalls = params.putArray("toolCalls");
+        ObjectNode tc = toolCalls.addObject();
+        tc.put("name", "my_tool");
+        tc.putArray("arguments").add("invalid");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("arguments must be a string or object"));
+    }
+
+    @Test
+    public void shouldAcceptValidJsonStringArguments() {
+        // Confirm valid JSON string arguments are accepted normally
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        ArrayNode toolCalls = params.putArray("toolCalls");
+        ObjectNode tc = toolCalls.addObject();
+        tc.put("name", "my_tool");
+        tc.put("arguments", "{\"key\":\"value\"}");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("status").asText(), is("created"));
+    }
+
+    @Test
+    public void shouldAcceptPlainTextStringArguments() {
+        // Confirm non-JSON string arguments are accepted (opaque passthrough)
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        ArrayNode toolCalls = params.putArray("toolCalls");
+        ObjectNode tc = toolCalls.addObject();
+        tc.put("name", "my_tool");
+        tc.put("arguments", "not_a_json_object");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("status").asText(), is("created"));
+    }
+
     // --- create_llm_conversation ---
 
     @Test

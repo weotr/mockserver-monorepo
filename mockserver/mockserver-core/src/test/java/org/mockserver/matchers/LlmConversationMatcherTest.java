@@ -6,9 +6,12 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.Provider;
 
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.core.Is.is;
+import static org.junit.Assert.fail;
 import static org.mockserver.model.HttpRequest.request;
 
 public class LlmConversationMatcherTest {
@@ -569,5 +572,76 @@ public class LlmConversationMatcherTest {
             + "]}");
 
         assertThat(matcher.matches(request), is(false));
+    }
+
+    // --- Gap 2: Regex compile error at setter time ---
+
+    @Test(expected = PatternSyntaxException.class)
+    public void shouldThrowPatternSyntaxExceptionForInvalidRegexViaPatternCompile() {
+        // Documenting the contract: Pattern.compile with an invalid regex throws
+        // PatternSyntaxException immediately, so users who pass an invalid Pattern
+        // to whenLatestMessageContains(Pattern) get a clear error at the call site.
+        Pattern.compile("[invalid");
+    }
+
+    @Test
+    public void shouldRejectInvalidRegexStringEagerlyAtSetterTime() {
+        // §2.7: withLatestMessageMatches(String) with an invalid regex must throw
+        // IllegalArgumentException at the setter call, not at match time.
+        try {
+            new LlmConversationMatcher()
+                .withLatestMessageMatches("[invalid");
+            fail("Expected IllegalArgumentException for invalid regex");
+        } catch (IllegalArgumentException e) {
+            assertThat(e.getMessage(), containsString("[invalid"));
+            assertThat(e.getCause() instanceof PatternSyntaxException, is(true));
+        }
+    }
+
+    @Test
+    public void shouldAcceptValidRegexStringAtSetterTime() {
+        // Valid regex should not throw and should match at runtime
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageMatches("\\d+C");
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"It is 18C today\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    @Test
+    public void shouldAcceptNullRegexString() {
+        // Null regex should be accepted (no-op) without throwing
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withLatestMessageMatches((String) null);
+
+        assertThat(matcher.getLatestMessageMatchesSource(), is((String) null));
+        assertThat(matcher.getLatestMessageMatches(), is((Pattern) null));
+    }
+
+    @Test
+    public void shouldMatchWithStringRegexSameAsPatternRegex() {
+        // Verify string-based and Pattern-based setters produce identical matching
+        LlmConversationMatcher stringMatcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageMatches("weather.*paris");
+
+        LlmConversationMatcher patternMatcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageMatches(Pattern.compile("weather.*paris"));
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"what is the weather in paris\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(stringMatcher.matches(request), is(true));
+        assertThat(patternMatcher.matches(request), is(true));
     }
 }

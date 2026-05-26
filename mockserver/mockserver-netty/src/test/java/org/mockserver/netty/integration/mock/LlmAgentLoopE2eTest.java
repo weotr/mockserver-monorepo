@@ -16,8 +16,10 @@ import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.is;
 import static org.mockserver.client.LlmConversationBuilder.conversation;
+import static org.mockserver.client.LlmMockBuilder.llmMock;
 import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.Provider.ANTHROPIC;
 import static org.mockserver.model.Provider.AZURE_OPENAI;
@@ -186,6 +188,8 @@ public class LlmAgentLoopE2eTest {
         assertThat(turn1Response, containsString("200"));
         JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
         assertThat(turn1.get("object").asText(), is("response"));
+        // Status is the field Responses-API clients check to know a response is finished.
+        assertThat(turn1.get("status").asText(), is("completed"));
         // Verify function_call in output
         boolean hasFunctionCall = false;
         for (JsonNode item : turn1.get("output")) {
@@ -212,6 +216,7 @@ public class LlmAgentLoopE2eTest {
         assertThat(turn2Response, containsString("200"));
         JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
         assertThat(turn2.get("object").asText(), is("response"));
+        assertThat(turn2.get("status").asText(), is("completed"));
         // Verify text in output
         boolean hasText = false;
         for (JsonNode item : turn2.get("output")) {
@@ -256,6 +261,9 @@ public class LlmAgentLoopE2eTest {
         assertThat(turn1Response, containsString("200"));
         JsonNode turn1 = OBJECT_MAPPER.readTree(extractJsonBody(turn1Response));
         assertThat(turn1.has("candidates"), is(true));
+        // Gemini collapses every stop reason without a dedicated tool-call category
+        // into STOP (see GeminiCodec.mapFinishReason); pin the wire contract.
+        assertThat(turn1.path("candidates").get(0).get("finishReason").asText(), is("STOP"));
         // Verify functionCall in parts
         boolean hasFc = false;
         for (JsonNode part : turn1.path("candidates").get(0).path("content").path("parts")) {
@@ -276,6 +284,7 @@ public class LlmAgentLoopE2eTest {
         assertThat(turn2Response, containsString("200"));
         JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
         assertThat(turn2.has("candidates"), is(true));
+        assertThat(turn2.path("candidates").get(0).get("finishReason").asText(), is("STOP"));
         boolean hasTextPart = false;
         for (JsonNode part : turn2.path("candidates").get(0).path("content").path("parts")) {
             if (part.has("text")) {
@@ -431,6 +440,58 @@ public class LlmAgentLoopE2eTest {
         JsonNode turn2 = OBJECT_MAPPER.readTree(extractJsonBody(turn2Response));
         assertThat(turn2.get("done").asBoolean(), is(true));
         assertThat(turn2.path("message").get("content").asText(), containsString("18C and sunny"));
+    }
+
+    // ---- Streaming E2E ----
+
+    @Test
+    public void shouldStreamAnthropicResponseThroughNettyPipeline() throws Exception {
+        // Gap 5: verify streaming reaches the client correctly via the Netty
+        // pipeline, not just the codec unit tests
+        llmMock("/v1/messages/stream")
+            .withProvider(ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .respondingWith(completion()
+                .withText("Hello streaming world")
+                .withStreaming(true))
+            .applyTo(mockServerClient);
+
+        String body = "{\"model\":\"claude-sonnet-4-20250514\",\"stream\":true,"
+            + "\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}";
+        String rawResponse = sendPost("/v1/messages/stream", body);
+
+        // Should get SSE events, not a regular JSON body
+        assertThat(rawResponse, containsString("200"));
+        assertThat(rawResponse, containsString("text/event-stream"));
+        assertThat(rawResponse, containsString("event: message_start"));
+        assertThat(rawResponse, containsString("event: content_block_delta"));
+        assertThat(rawResponse, containsString("event: message_stop"));
+
+        // Verify we can reconstruct the text from the delta events
+        assertThat(rawResponse, containsString("Hello"));
+        assertThat(rawResponse, containsString("streaming"));
+        assertThat(rawResponse, containsString("world"));
+    }
+
+    @Test
+    public void shouldStreamOpenAiResponseThroughNettyPipeline() throws Exception {
+        llmMock("/v1/chat/completions/stream")
+            .withProvider(OPENAI)
+            .withModel("gpt-4o")
+            .respondingWith(completion()
+                .withText("Hello from streaming OpenAI")
+                .withStreaming(true))
+            .applyTo(mockServerClient);
+
+        String body = "{\"model\":\"gpt-4o\",\"stream\":true,"
+            + "\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}";
+        String rawResponse = sendPost("/v1/chat/completions/stream", body);
+
+        // OpenAI streaming uses data: lines with chat.completion.chunk objects
+        assertThat(rawResponse, containsString("200"));
+        assertThat(rawResponse, containsString("text/event-stream"));
+        assertThat(rawResponse, containsString("chat.completion.chunk"));
+        assertThat(rawResponse, containsString("[DONE]"));
     }
 
     // ---- Helpers ----
