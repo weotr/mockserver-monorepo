@@ -3,11 +3,11 @@ package org.mockserver.uuid;
 import com.fasterxml.uuid.Generators;
 import com.fasterxml.uuid.impl.RandomBasedGenerator;
 
-import java.util.Random;
+import java.security.SecureRandom;
 
 public class UUIDService {
 
-    private static final RandomBasedGenerator RANDOM_BASED_GENERATOR = Generators.randomBasedGenerator(new Random());
+    private static final RandomBasedGenerator RANDOM_BASED_GENERATOR = Generators.randomBasedGenerator(new SecureRandom());
     public static final String FIXED_UUID_FOR_TESTS = UUIDService.getUUID();
     public static boolean fixedUUID = false;
 

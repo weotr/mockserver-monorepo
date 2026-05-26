@@ -65,6 +65,7 @@ public class NettySslContextFactory {
         this.forServer = true;
         keyAndCertificateFactory = createKeyAndCertificateFactory(configuration, mockServerLogger);
         System.setProperty("https.protocols", configuration.tlsProtocols());
+        warnIfInsecureTlsProfileConfigured();
         nettySslContextFactoryCustomizer.accept(this);
         if (configuration.proactivelyInitialiseTLS()) {
             createServerSslContext();
@@ -77,9 +78,60 @@ public class NettySslContextFactory {
         this.forServer = forServer;
         keyAndCertificateFactory = createKeyAndCertificateFactory(configuration, mockServerLogger, forServer);
         System.setProperty("https.protocols", configuration.tlsProtocols());
+        warnIfInsecureTlsProfileConfigured();
         nettySslContextFactoryCustomizer.accept(this);
         if (configuration.proactivelyInitialiseTLS()) {
             createServerSslContext();
+        }
+    }
+
+    /**
+     * Resolve the effective TLS protocols, filtering out TLSv1 and TLSv1.1 when
+     * {@code tlsAllowInsecureProtocols=false}. If filtering leaves the list empty,
+     * the original list is returned so SSL context creation does not fail.
+     */
+    private String[] effectiveTlsProtocols() {
+        String[] requested = java.util.Arrays.stream(configuration.tlsProtocols().split(","))
+            .map(String::trim)
+            .filter(p -> !p.isEmpty())
+            .toArray(String[]::new);
+        if (Boolean.TRUE.equals(configuration.tlsAllowInsecureProtocols())) {
+            return requested;
+        }
+        String[] filtered = java.util.Arrays.stream(requested)
+            .filter(p -> !p.equalsIgnoreCase("TLSv1") && !p.equalsIgnoreCase("TLSv1.1"))
+            .toArray(String[]::new);
+        return filtered.length > 0 ? filtered : requested;
+    }
+
+    private void warnIfInsecureTlsProfileConfigured() {
+        if (mockServerLogger == null) {
+            return;
+        }
+        boolean configuredInsecure = java.util.Arrays.stream(configuration.tlsProtocols().split(","))
+            .map(String::trim)
+            .anyMatch(p -> p.equalsIgnoreCase("TLSv1") || p.equalsIgnoreCase("TLSv1.1"));
+        if (configuredInsecure && Boolean.TRUE.equals(configuration.tlsAllowInsecureProtocols())) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("TLS protocol list includes deprecated TLSv1 / TLSv1.1 (RFC 8996; vulnerable to BEAST and POODLE). Set mockserver.tlsAllowInsecureProtocols=false to drop them, or remove the entries from mockserver.tlsProtocols.")
+            );
+        }
+        if (forwardProxyTrustsEverything()) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("Forward proxy is configured to trust ALL X.509 certificates (mockserver.forwardProxyTLSX509CertificatesTrustManagerType=ANY). Certificate validation is disabled — this should be used only in development; prefer JVM or CUSTOM in production.")
+            );
+        }
+    }
+
+    private boolean forwardProxyTrustsEverything() {
+        try {
+            return configuration.forwardProxyTLSX509CertificatesTrustManagerType() == ForwardProxyTLSX509CertificatesTrustManager.ANY;
+        } catch (RuntimeException ignore) {
+            return false;
         }
     }
 
@@ -106,7 +158,7 @@ public class NettySslContextFactory {
                 SslContextBuilder sslContextBuilder =
                     SslContextBuilder
                         .forClient()
-                        .protocols(configuration.tlsProtocols().split(","))
+                        .protocols(effectiveTlsProtocols())
                         .keyManager(
                             forwardProxyPrivateKey(),
                             forwardProxyCertificateChain()
@@ -205,7 +257,7 @@ public class NettySslContextFactory {
                         keyAndCertificateFactory.privateKey(),
                         keyAndCertificateFactory.certificateChain()
                     )
-                    .protocols(configuration.tlsProtocols().split(","))
+                    .protocols(effectiveTlsProtocols())
                     .clientAuth(configuration.tlsMutualAuthenticationRequired() ? ClientAuth.REQUIRE : ClientAuth.OPTIONAL);
                 configureALPN(sslContextBuilder);
                 if (isNotBlank(configuration.tlsMutualAuthenticationCertificateChain()) || configuration.tlsMutualAuthenticationRequired()) {

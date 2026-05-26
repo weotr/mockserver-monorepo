@@ -74,9 +74,15 @@ public class Configuration {
     private Integer maxInitialLineLength;
     private Integer maxHeaderSize;
     private Integer maxChunkSize;
+    private Integer maxRequestBodySize;
+    private Integer maxResponseBodySize;
     private Boolean useSemicolonAsQueryParameterSeparator;
     private Boolean assumeAllRequestsAreHttp;
     private Boolean http2Enabled;
+
+    // matcher safety — global only (ConfigurationProperties), no per-instance override:
+    // RegexStringMatcher and XPathEvaluator are constructed without a Configuration handle
+    // and read directly from ConfigurationProperties, so per-instance setters would be dead API.
 
     // streaming proxy
     private Boolean streamingResponsesEnabled;
@@ -162,6 +168,7 @@ public class Configuration {
     private volatile boolean rebuildTLSContext;
     private volatile boolean rebuildServerTLSContext;
     private String tlsProtocols;
+    private Boolean tlsAllowInsecureProtocols;
 
     // inbound - dynamic CA
     private Boolean dynamicallyCreateCertificateAuthorityCertificate;
@@ -187,6 +194,9 @@ public class Configuration {
 
     // outbound - CA
     private ForwardProxyTLSX509CertificatesTrustManager forwardProxyTLSX509CertificatesTrustManagerType;
+
+    // outbound - SSRF protection
+    private Boolean forwardProxyBlockPrivateNetworks;
 
     // outbound - fixed CA
     private String forwardProxyTLSCustomTrustX509Certificates;
@@ -786,6 +796,51 @@ public class Configuration {
         this.maxChunkSize = maxChunkSize;
         return this;
     }
+
+    public Integer maxRequestBodySize() {
+        if (maxRequestBodySize == null) {
+            return ConfigurationProperties.maxRequestBodySize();
+        }
+        return maxRequestBodySize;
+    }
+
+    /**
+     * Maximum aggregated body size (in bytes) accepted on inbound HTTP/1.1 and HTTP/2 requests.
+     * <p>
+     * The default is 10,485,760 bytes (10 MiB).
+     *
+     * @param maxRequestBodySize maximum inbound request body size in bytes
+     */
+    public Configuration maxRequestBodySize(Integer maxRequestBodySize) {
+        this.maxRequestBodySize = maxRequestBodySize;
+        return this;
+    }
+
+    public Integer maxResponseBodySize() {
+        if (maxResponseBodySize == null) {
+            return ConfigurationProperties.maxResponseBodySize();
+        }
+        return maxResponseBodySize;
+    }
+
+    /**
+     * Maximum aggregated body size (in bytes) accepted on responses received from upstream
+     * servers when MockServer is acting as a proxy or forwarder.
+     * <p>
+     * The default is 52,428,800 bytes (50 MiB).
+     *
+     * @param maxResponseBodySize maximum upstream response body size in bytes
+     */
+    public Configuration maxResponseBodySize(Integer maxResponseBodySize) {
+        this.maxResponseBodySize = maxResponseBodySize;
+        return this;
+    }
+
+    // regexMatchingTimeoutMillis / xpathMatchingTimeoutMillis are intentionally NOT exposed as
+    // per-instance Configuration getters/setters: the matchers that consume them are constructed
+    // without a Configuration handle and read directly from ConfigurationProperties. Use
+    // ConfigurationProperties.regexMatchingTimeoutMillis(...) / xpathMatchingTimeoutMillis(...) to
+    // override the JVM-wide default.
 
     public Boolean useSemicolonAsQueryParameterSeparator() {
         if (useSemicolonAsQueryParameterSeparator == null) {
@@ -1964,6 +2019,26 @@ public class Configuration {
         return this;
     }
 
+    public Boolean tlsAllowInsecureProtocols() {
+        if (tlsAllowInsecureProtocols == null) {
+            return ConfigurationProperties.tlsAllowInsecureProtocols();
+        }
+        return tlsAllowInsecureProtocols;
+    }
+
+    /**
+     * Whether to allow TLSv1 and TLSv1.1 in the effective TLS protocols list.
+     * Both are deprecated by RFC 8996 and vulnerable to BEAST and POODLE.
+     * The default is true for backwards compatibility; set to false to opt into
+     * a hardened profile that filters TLSv1 and TLSv1.1 out of {@link #tlsProtocols}.
+     *
+     * @param tlsAllowInsecureProtocols if true, TLSv1 and TLSv1.1 are honoured; if false, they are stripped
+     */
+    public Configuration tlsAllowInsecureProtocols(Boolean tlsAllowInsecureProtocols) {
+        this.tlsAllowInsecureProtocols = tlsAllowInsecureProtocols;
+        return this;
+    }
+
     public Boolean dynamicallyCreateCertificateAuthorityCertificate() {
         if (dynamicallyCreateCertificateAuthorityCertificate == null) {
             return ConfigurationProperties.dynamicallyCreateCertificateAuthorityCertificate();
@@ -2243,6 +2318,30 @@ public class Configuration {
      */
     public Configuration forwardProxyTLSX509CertificatesTrustManagerType(ForwardProxyTLSX509CertificatesTrustManager forwardProxyTLSX509CertificatesTrustManagerType) {
         this.forwardProxyTLSX509CertificatesTrustManagerType = forwardProxyTLSX509CertificatesTrustManagerType;
+        return this;
+    }
+
+    public Boolean forwardProxyBlockPrivateNetworks() {
+        if (forwardProxyBlockPrivateNetworks == null) {
+            return ConfigurationProperties.forwardProxyBlockPrivateNetworks();
+        }
+        return forwardProxyBlockPrivateNetworks;
+    }
+
+    /**
+     * When set to true, MockServer rejects forward and proxy targets that resolve to
+     * loopback, link-local, RFC 1918 private, or cloud metadata addresses
+     * (such as 169.254.169.254), blocking server-side request forgery (SSRF) via
+     * malicious expectations.
+     * <p>
+     * The default is false so that the common case of forwarding to localhost / Docker
+     * bridge / Kubernetes service IPs continues to work. Enable this in hardened or
+     * multi-tenant deployments where untrusted callers can register expectations.
+     *
+     * @param forwardProxyBlockPrivateNetworks if true, block forwarding to private or metadata addresses
+     */
+    public Configuration forwardProxyBlockPrivateNetworks(Boolean forwardProxyBlockPrivateNetworks) {
+        this.forwardProxyBlockPrivateNetworks = forwardProxyBlockPrivateNetworks;
         return this;
     }
 

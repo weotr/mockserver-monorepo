@@ -2,16 +2,22 @@ package org.mockserver.mock.action.http;
 
 import org.mockserver.configuration.Configuration;
 import org.mockserver.httpclient.NettyHttpClient;
+import org.mockserver.log.model.LogEntry;
 import org.mockserver.serialization.model.HttpRequestDTO;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.HttpResponseModifier;
 import org.mockserver.model.HttpTemplate;
+import org.mockserver.model.SocketAddress;
+import org.mockserver.proxyconfiguration.InetAddressValidator;
 import org.mockserver.templates.engine.TemplateEngine;
 import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 import org.mockserver.templates.engine.mustache.MustacheTemplateEngine;
 import org.mockserver.templates.engine.velocity.VelocityTemplateEngine;
+import org.slf4j.event.Level;
+
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 /**
  * @author jamesdbloom
@@ -37,6 +43,19 @@ public class HttpForwardTemplateActionHandler extends HttpForwardAction {
                 if (!templateExplicitlySetHost) {
                     adjustHostHeader(templatedRequest);
                 }
+                try {
+                    String forwardHost = resolveForwardHost(templatedRequest);
+                    InetAddressValidator.validateForwardTarget(configuration, forwardHost);
+                } catch (IllegalArgumentException blocked) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.WARN)
+                            .setHttpRequest(originalRequest)
+                            .setMessageFormat("forward template action blocked by SSRF policy:{}")
+                            .setArguments(blocked.getMessage())
+                    );
+                    return badGatewayFuture(originalRequest);
+                }
                 HttpResponse responseOverride = httpTemplate.getResponseOverride();
                 HttpResponseModifier responseModifier = httpTemplate.getResponseModifier();
                 if (responseOverride != null || responseModifier != null) {
@@ -53,6 +72,21 @@ public class HttpForwardTemplateActionHandler extends HttpForwardAction {
         }
 
         return badGatewayFuture(originalRequest);
+    }
+
+    private static String resolveForwardHost(HttpRequest templatedRequest) {
+        SocketAddress sa = templatedRequest.getSocketAddress();
+        if (sa != null && isNotBlank(sa.getHost())) {
+            return sa.getHost();
+        }
+        String hostHeader = templatedRequest.getFirstHeader("Host");
+        if (isNotBlank(hostHeader)) {
+            String[] parts = HttpRequest.splitHostPort(hostHeader);
+            if (parts.length > 0 && isNotBlank(parts[0])) {
+                return parts[0];
+            }
+        }
+        return null;
     }
 
     TemplateEngine resolveTemplateEngine(HttpTemplate httpTemplate) {

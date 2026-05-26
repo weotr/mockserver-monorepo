@@ -2,6 +2,7 @@ package org.mockserver.matchers;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.apache.commons.lang3.StringUtils;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.NottableSchemaString;
@@ -11,6 +12,7 @@ import java.util.regex.PatternSyntaxException;
 
 import static org.mockserver.model.NottableString.string;
 import static org.slf4j.event.Level.DEBUG;
+import static org.slf4j.event.Level.WARN;
 
 /**
  * @author jamesdbloom
@@ -91,7 +93,7 @@ public class RegexStringMatcher extends BodyMatcher<NottableString> {
 
                     // match as regex - matcher -> matched (data plane or control plane)
                     try {
-                        if (matcher.matches(matchedValue)) {
+                        if (runRegexWithTimeout(mockServerLogger, matcher, matchedValue)) {
                             return true;
                         }
                     } catch (PatternSyntaxException pse) {
@@ -106,9 +108,9 @@ public class RegexStringMatcher extends BodyMatcher<NottableString> {
                     }
                     // match as regex - matched -> matcher (control plane only)
                     try {
-                        if (controlPlaneMatcher && matched.matches(matcherValue)) {
+                        if (controlPlaneMatcher && runRegexWithTimeout(mockServerLogger, matched, matcherValue)) {
                             return true;
-                        } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG) && matched.matches(matcherValue)) {
+                        } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG) && runRegexWithTimeout(mockServerLogger, matched, matcherValue)) {
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setLogLevel(DEBUG)
@@ -140,6 +142,30 @@ public class RegexStringMatcher extends BodyMatcher<NottableString> {
 
     public boolean isBlank() {
         return matcher == null || StringUtils.isBlank(matcher.getValue());
+    }
+
+    private static boolean runRegexWithTimeout(MockServerLogger mockServerLogger, NottableString pattern, String input) {
+        long timeoutMillis = ConfigurationProperties.regexMatchingTimeoutMillis();
+        try {
+            return MatchingTimeoutExecutor.callWithTimeout(
+                () -> pattern.matches(input),
+                timeoutMillis,
+                Boolean.FALSE,
+                fired -> {
+                    if (mockServerLogger != null) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(WARN)
+                                .setMessageFormat("regex evaluation timed out after {}ms for pattern:{}— treating as non-match (raise mockserver.regexMatchingTimeoutMillis or simplify the pattern to suppress this)")
+                                .setArguments(fired, pattern)
+                        );
+                    }
+                });
+        } catch (PatternSyntaxException pse) {
+            throw pse;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override

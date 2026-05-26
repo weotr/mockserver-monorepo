@@ -88,6 +88,12 @@ public class VelocityTemplateEngine implements TemplateEngine {
         velocityProperties.put("resource.loader.file.class", org.apache.velocity.runtime.resource.loader.FileResourceLoader.class.getName());
         if (configuration.velocityDisallowClassLoading()) {
             velocityProperties.put(RuntimeConstants.UBERSPECT_CLASSNAME, SecureUberspector.class.getName());
+        } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.WARN)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("Velocity template class loading is enabled (mockserver.velocityDisallowClassLoading=false). Templates can instantiate arbitrary Java classes — only use Velocity templates from trusted sources, or set mockserver.velocityDisallowClassLoading=true.")
+            );
         }
         velocityEngine = new VelocityEngine();
         velocityEngine.init(velocityProperties);

@@ -10,16 +10,16 @@ import org.mockserver.templates.engine.helpers.StringTemplateHelper;
 import org.mockserver.time.TimeService;
 import org.mockserver.uuid.UUIDService;
 
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
-import java.util.Random;
 import java.util.function.Supplier;
 
 public class TemplateFunctions implements Supplier<Object> {
-    private static final Random random = new Random();
+    private static final SecureRandom random = new SecureRandom();
     private static final Base64Converter base64Converter = new Base64Converter();
 
     public static final Map<String, Supplier<Object>> BUILT_IN_FUNCTIONS = ImmutableMap.<String, Supplier<Object>>builder()

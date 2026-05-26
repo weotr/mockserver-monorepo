@@ -49,6 +49,15 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
         this.mockServerLogger = mockServerLogger;
         this.httpTemplateOutputDeserializer = new HttpTemplateOutputDeserializer(mockServerLogger);
         this.objectMapper = ObjectMapperFactory.createObjectMapper();
+        if (mockServerLogger != null
+            && mockServerLogger.isEnabledForInstance(Level.WARN)
+            && !isNotBlank(this.configuration.javascriptDisallowedClasses())) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("JavaScript template engine has no class restrictions (mockserver.javascriptDisallowedClasses is empty). Templates can use Java.type(\"...\") to instantiate arbitrary Java classes including Runtime — only use JavaScript templates from trusted sources, or populate mockserver.javascriptDisallowedClasses with at least java.lang.Runtime,java.lang.ProcessBuilder,java.lang.System.")
+            );
+        }
     }
 
     @SuppressWarnings("unchecked")

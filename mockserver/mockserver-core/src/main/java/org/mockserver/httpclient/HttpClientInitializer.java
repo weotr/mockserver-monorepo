@@ -112,9 +112,9 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
         pipeline.addLast(new HttpClientCodec());
         pipeline.addLast(new HttpContentDecompressor());
         if (configuration != null) {
-            pipeline.addLast(new StreamingAwareHttpObjectAggregator(Integer.MAX_VALUE, configuration, mockServerLogger));
+            pipeline.addLast(new StreamingAwareHttpObjectAggregator(configuration.maxResponseBodySize(), configuration, mockServerLogger));
         } else {
-            pipeline.addLast(new StreamingAwareHttpObjectAggregator(Integer.MAX_VALUE));
+            pipeline.addLast(new StreamingAwareHttpObjectAggregator(org.mockserver.configuration.ConfigurationProperties.maxResponseBodySize()));
         }
         pipeline.addLast(new MockServerHttpClientCodec(mockServerLogger, proxyConfigurations));
         pipeline.addLast(httpClientHandler);
@@ -128,7 +128,7 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
                 new DelegatingDecompressorFrameListener(
                     connection,
                     new InboundHttp2ToHttpAdapterBuilder(connection)
-                        .maxContentLength(Integer.MAX_VALUE)
+                        .maxContentLength(configuration != null ? configuration.maxResponseBodySize() : org.mockserver.configuration.ConfigurationProperties.maxResponseBodySize())
                         .propagateSettings(true)
                         .validateHttpHeaders(false)
                         .build()

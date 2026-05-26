@@ -300,7 +300,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                     new DelegatingDecompressorFrameListener(
                         connection,
                         new InboundHttp2ToHttpAdapterBuilder(connection)
-                            .maxContentLength(Integer.MAX_VALUE)
+                            .maxContentLength(configuration.maxRequestBodySize())
                             .propagateSettings(true)
                             .validateHttpHeaders(false)
                             .build()
@@ -341,7 +341,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                     new DelegatingDecompressorFrameListener(
                         connection,
                         new InboundHttp2ToHttpAdapterBuilder(connection)
-                            .maxContentLength(Integer.MAX_VALUE)
+                            .maxContentLength(configuration.maxRequestBodySize())
                             .propagateSettings(true)
                             .validateHttpHeaders(false)
                             .build()
@@ -387,7 +387,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
             addLastIfNotPresent(pipeline, new HttpContentDecompressor());
             addLastIfNotPresent(pipeline, httpContentLengthRemover);
             addLastIfNotPresent(pipeline, new EarlyMatchingHandler(configuration, httpState, actionHandler, isSslEnabledUpstream(ctx.channel())));
-            addLastIfNotPresent(pipeline, new HttpObjectAggregator(Integer.MAX_VALUE));
+            addLastIfNotPresent(pipeline, new HttpObjectAggregator(configuration.maxRequestBodySize()));
             if (configuration.tlsMutualAuthenticationRequired() && configuration.controlPlaneTLSMutualAuthenticationRequired() && !isSslEnabledUpstream(ctx.channel())) {
                 HttpResponse httpResponse = response()
                     .withStatusCode(426)

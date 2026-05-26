@@ -32,4 +32,34 @@ public class XPathEvaluatorTest {
         }
     }
 
+    @Test
+    public void shouldReturnTypeAppropriateSentinelOnTimeoutForBooleanReturnType() {
+        // Build a synthetic large XML document and an XPath with a quadratic predicate so
+        // the timeout fires reliably even on fast machines.
+        long previous = org.mockserver.configuration.ConfigurationProperties.xpathMatchingTimeoutMillis();
+        try {
+            org.mockserver.configuration.ConfigurationProperties.xpathMatchingTimeoutMillis(10L);
+            String xml = buildSlowXml(800);
+            AtomicReference<Throwable> throwable = new AtomicReference<>();
+            long start = System.nanoTime();
+            Object result = new XPathEvaluator("count(/root/n[@id = //n/@id]) > 0", null)
+                .evaluateXPathExpression(xml, (xmlAsString, exception, level) -> throwable.set(exception), XPathConstants.BOOLEAN);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+            // contract: must not hang, and must return a Boolean rather than null so callers can unbox safely.
+            assertThat(elapsedMs < 5_000L, is(true));
+            assertThat(result instanceof Boolean, is(true));
+        } finally {
+            org.mockserver.configuration.ConfigurationProperties.xpathMatchingTimeoutMillis(previous);
+        }
+    }
+
+    private static String buildSlowXml(int nodes) {
+        StringBuilder sb = new StringBuilder("<root>");
+        for (int i = 0; i < nodes; i++) {
+            sb.append("<n id=\"").append(i).append("\">v").append(i).append("</n>");
+        }
+        sb.append("</root>");
+        return sb.toString();
+    }
+
 }

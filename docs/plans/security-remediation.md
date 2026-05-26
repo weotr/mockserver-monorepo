@@ -1,28 +1,35 @@
 # Security Remediation Plan
 
-**Status:** Partial — 3 of 12 items shipped; Phase 2 breaking changes deferred past v6.0.0 release (2026-05-21).
-**Created:** May 4, 2026 (updated 2026-05-25)
+**Status:** 8 of 12 items shipped (SEC-1/2/5/6/7/9/11 + PER-1); 4 items partially shipped as warning logs only — default flips deferred to a future major release.
+**Created:** May 4, 2026 (updated 2026-05-26)
 **Priority:** CRITICAL - All items are security vulnerabilities
 **Estimated Total Effort:** 17-22 days
 
-## Implementation Status (2026-05-25)
+## Implementation Status (2026-05-26)
 
 | ID | Item | Status | Evidence |
 |----|------|--------|----------|
-| SEC-1 | SSRF in forward handlers | PENDING | No `InetAddressValidator` in mockserver-core |
-| SEC-2 | ReDoS in regex matcher | PARTIAL | `splitHostPort()` fixed (commit `e14a3b13c`); generic regex timeout missing |
-| SEC-3 | Trust-all TLS default | PENDING | `ConfigurationProperties` still defaults to `"ANY"` — deferred past v6.0.0 |
-| SEC-4 | Velocity class loading | PENDING | Default still `false` (unsafe) — deferred past v6.0.0 |
-| SEC-5 | JsonPath DoS | DONE | Patched via json-path 2.10.0 upgrade (commit `c9ef6ad30`); CVE-2024-57699 mitigated |
-| SEC-6 | XPath DoS | PENDING | No timeout mechanism |
-| SEC-7 | XXE attack vector | DONE | Fixed in `StringToXmlDocumentParser` (commit `bcb4869f0`); `disallow-doctype-decl` + external-entity blocks enabled |
-| SEC-8 | JavaScript class access | PENDING | No `javascriptAllowedClasses` property |
-| SEC-9 | Weak random | DONE | `SecureRandom` used throughout `BCKeyAndCertificateFactory` |
-| SEC-10 | Weak TLS versions | PENDING | Default still `"TLSv1,TLSv1.1,TLSv1.2"` — deferred past v6.0.0 |
-| SEC-11 | Unbounded bodies | PENDING | No size-limit properties |
-| PER-1 | Ring buffer docs | PENDING | Status unknown |
+| SEC-1 | SSRF in forward handlers | DONE | `InetAddressValidator` + `forwardProxyBlockPrivateNetworks` knob wired into `HttpForwardActionHandler` and `HttpForwardTemplateActionHandler`. Default `false` (opt-in) so localhost/Docker/k8s setups keep working; a future major release should flip to `true`. |
+| SEC-2 | ReDoS in regex matcher | DONE | `RegexStringMatcher` now evaluates patterns on a shared cached daemon-thread pool with `regexMatchingTimeoutMillis` (default 1s). Timeouts return non-match and emit a WARN entry. |
+| SEC-3 | Trust-all TLS default | PARTIAL | WARN logged at SSL-context creation when `forwardProxyTLSX509CertificatesTrustManagerType=ANY`. Default itself unchanged. |
+| SEC-4 | Velocity class loading | PARTIAL | WARN logged when class loading is enabled. Default itself unchanged. |
+| SEC-5 | JsonPath DoS | DONE | Patched via json-path 2.10.0 upgrade (commit `c9ef6ad30`); CVE-2024-57699 mitigated. |
+| SEC-6 | XPath DoS | DONE | `XPathEvaluator` evaluates expressions through the shared timeout executor with `xpathMatchingTimeoutMillis` (default 1s). |
+| SEC-7 | XXE attack vector | DONE | Fixed in `StringToXmlDocumentParser` (commit `bcb4869f0`); `disallow-doctype-decl` + external-entity blocks enabled. |
+| SEC-8 | JavaScript class access | PARTIAL | WARN logged when `javascriptDisallowedClasses` is empty. Allowlist migration deferred — would break common cases. |
+| SEC-9 | Weak random | DONE | `SecureRandom` now used in `BCKeyAndCertificateFactory`, `UUIDService`, and `TemplateFunctions`. |
+| SEC-10 | Weak TLS versions | PARTIAL | New `tlsAllowInsecureProtocols` toggle (default `true`); when set to `false`, TLSv1 and TLSv1.1 are filtered out of the effective protocols list. WARN logged when configured `tlsProtocols` still includes them. Default unchanged. |
+| SEC-11 | Unbounded bodies | DONE | `maxRequestBodySize` (default 10 MiB) and `maxResponseBodySize` (default 50 MiB) wired into `PortUnificationHandler` (HTTP/1.1 + HTTP/2 inbound) and `HttpClientInitializer` (HTTP/1.1 + HTTP/2 upstream responses). |
+| PER-1 | Ring buffer docs | DONE | Power-of-2 sizing guidance added to `configuration_properties.html` for `maxExpectations` and `maxLogEntries`. |
 
-**Action:** Phase 2 breaking changes (SEC-3/4/10) need a firm v6.1 or v7.0 deadline so deprecated defaults do not persist indefinitely. Critical SSRF (SEC-1) and remaining ReDoS work (SEC-2) should be unblocked separately from the breaking-change batch.
+**Remaining work for the next major release:**
+- Flip SEC-3 default from `ANY` → `JVM`
+- Flip SEC-4 default from `false` → `true`
+- Design and ship SEC-8 allowlist replacement
+- Flip SEC-10 `tlsAllowInsecureProtocols` default from `true` → `false`
+- Optionally flip SEC-1 `forwardProxyBlockPrivateNetworks` default from `false` → `true`
+
+All five should be bundled into a single "security defaults" major release with one migration guide.
 
 ---
 

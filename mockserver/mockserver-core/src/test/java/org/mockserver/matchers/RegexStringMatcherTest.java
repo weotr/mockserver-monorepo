@@ -125,4 +125,31 @@ public class RegexStringMatcherTest {
     public void shouldHandleIllegalRegexPatternForTest() {
         assertFalse(new RegexStringMatcher(new MockServerLogger(), string("some_value"), false).matches("/{}"));
     }
+
+    @Test
+    public void shouldReturnFalseOnReDoSPatternRatherThanHanging() {
+        // (a+)+b backtracks exponentially on a long run of 'a' followed by a non-match.
+        // Without the regex timeout this call would hang far longer than any test budget.
+        long previousTimeout = org.mockserver.configuration.ConfigurationProperties.regexMatchingTimeoutMillis();
+        try {
+            org.mockserver.configuration.ConfigurationProperties.regexMatchingTimeoutMillis(200L);
+            String evilInput = repeat('a', 40) + "c";
+            long start = System.nanoTime();
+            boolean matched = new RegexStringMatcher(new MockServerLogger(), string("(a+)+b"), false).matches(evilInput);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+            assertFalse(matched);
+            // generous upper bound: even at the 200ms timeout plus thread scheduling slack,
+            // we should never approach minutes (which is what unbounded backtracking would cost).
+            assertTrue("regex evaluation took " + elapsedMs + "ms, expected to be bounded by timeout",
+                elapsedMs < 5_000L);
+        } finally {
+            org.mockserver.configuration.ConfigurationProperties.regexMatchingTimeoutMillis(previousTimeout);
+        }
+    }
+
+    private static String repeat(char c, int n) {
+        char[] buf = new char[n];
+        java.util.Arrays.fill(buf, c);
+        return new String(buf);
+    }
 }

@@ -82,9 +82,15 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_MAX_INITIAL_LINE_LENGTH = "mockserver.maxInitialLineLength";
     private static final String MOCKSERVER_MAX_HEADER_SIZE = "mockserver.maxHeaderSize";
     private static final String MOCKSERVER_MAX_CHUNK_SIZE = "mockserver.maxChunkSize";
+    private static final String MOCKSERVER_MAX_REQUEST_BODY_SIZE = "mockserver.maxRequestBodySize";
+    private static final String MOCKSERVER_MAX_RESPONSE_BODY_SIZE = "mockserver.maxResponseBodySize";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
     private static final String MOCKSERVER_HTTP2_ENABLED = "mockserver.http2Enabled";
+
+    // matcher safety
+    private static final String MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS = "mockserver.regexMatchingTimeoutMillis";
+    private static final String MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS = "mockserver.xpathMatchingTimeoutMillis";
 
     // gRPC
     private static final String MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY = "mockserver.grpcDescriptorDirectory";
@@ -173,6 +179,7 @@ public class ConfigurationProperties {
     // TLS
     private static final String MOCKSERVER_PROACTIVELY_INITIALISE_TLS = "mockserver.proactivelyInitialiseTLS";
     private static final String MOCKSERVER_TLS_PROTOCOLS = "mockserver.tlsProtocols";
+    private static final String MOCKSERVER_TLS_ALLOW_INSECURE_PROTOCOLS = "mockserver.tlsAllowInsecureProtocols";
 
     // inbound - dynamic CA
     private static final String MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE = "mockserver.dynamicallyCreateCertificateAuthorityCertificate";
@@ -201,6 +208,9 @@ public class ConfigurationProperties {
 
     // outbound - CA
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATES_TRUST_MANAGER_TYPE = "mockserver.forwardProxyTLSX509CertificatesTrustManagerType";
+
+    // outbound - SSRF protection
+    private static final String MOCKSERVER_FORWARD_PROXY_BLOCK_PRIVATE_NETWORKS = "mockserver.forwardProxyBlockPrivateNetworks";
 
     // outbound - fixed CA
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_CUSTOM_TRUST_X509_CERTIFICATES = "mockserver.forwardProxyTLSCustomTrustX509Certificates";
@@ -869,6 +879,75 @@ public class ConfigurationProperties {
      */
     public static void maxChunkSize(int size) {
         setProperty(MOCKSERVER_MAX_CHUNK_SIZE, "" + size);
+    }
+
+    public static int maxRequestBodySize() {
+        return readIntegerProperty(MOCKSERVER_MAX_REQUEST_BODY_SIZE, "MOCKSERVER_MAX_REQUEST_BODY_SIZE", 10 * 1024 * 1024);
+    }
+
+    /**
+     * Maximum aggregated body size (in bytes) accepted on inbound HTTP/1.1 and HTTP/2 requests
+     * before MockServer responds with 413 Payload Too Large.
+     * <p>
+     * The default is 10,485,760 bytes (10 MiB). Raise this only if you intentionally mock
+     * large uploads; very large limits make MockServer susceptible to memory exhaustion.
+     *
+     * @param size maximum inbound request body size in bytes
+     */
+    public static void maxRequestBodySize(int size) {
+        setProperty(MOCKSERVER_MAX_REQUEST_BODY_SIZE, "" + size);
+    }
+
+    public static int maxResponseBodySize() {
+        return readIntegerProperty(MOCKSERVER_MAX_RESPONSE_BODY_SIZE, "MOCKSERVER_MAX_RESPONSE_BODY_SIZE", 50 * 1024 * 1024);
+    }
+
+    /**
+     * Maximum aggregated body size (in bytes) accepted on responses received from upstream
+     * servers when MockServer is acting as a proxy or forwarder.
+     * <p>
+     * The default is 52,428,800 bytes (50 MiB).
+     *
+     * @param size maximum upstream response body size in bytes
+     */
+    public static void maxResponseBodySize(int size) {
+        setProperty(MOCKSERVER_MAX_RESPONSE_BODY_SIZE, "" + size);
+    }
+
+    public static long regexMatchingTimeoutMillis() {
+        return readLongProperty(MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS", 1000L);
+    }
+
+    /**
+     * Maximum time (in milliseconds) allowed for evaluating a single regular expression
+     * during request matching. A pathological pattern that exceeds this budget is treated
+     * as a non-match (and a WARN log entry is written) so the server cannot be wedged by
+     * exponential regex backtracking from an attacker-controlled expectation or input.
+     * <p>
+     * The default is 1000 milliseconds. Set to 0 or a negative value to disable the timeout.
+     *
+     * @param milliseconds regex evaluation timeout in milliseconds
+     */
+    public static void regexMatchingTimeoutMillis(long milliseconds) {
+        setProperty(MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS, "" + milliseconds);
+    }
+
+    public static long xpathMatchingTimeoutMillis() {
+        return readLongProperty(MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS, "MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS", 1000L);
+    }
+
+    /**
+     * Maximum time (in milliseconds) allowed for evaluating a single XPath expression
+     * against an XML document during request matching. Exceeding this budget is treated as
+     * a non-match and a WARN log entry is written, protecting MockServer from XPath-based
+     * denial-of-service.
+     * <p>
+     * The default is 1000 milliseconds. Set to 0 or a negative value to disable the timeout.
+     *
+     * @param milliseconds XPath evaluation timeout in milliseconds
+     */
+    public static void xpathMatchingTimeoutMillis(long milliseconds) {
+        setProperty(MOCKSERVER_XPATH_MATCHING_TIMEOUT_MILLIS, "" + milliseconds);
     }
 
     /**
@@ -1852,6 +1931,27 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_TLS_PROTOCOLS, tlsProtocols);
     }
 
+    public static boolean tlsAllowInsecureProtocols() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TLS_ALLOW_INSECURE_PROTOCOLS, "MOCKSERVER_TLS_ALLOW_INSECURE_PROTOCOLS", "" + true));
+    }
+
+    /**
+     * Whether to allow TLSv1 and TLSv1.1 in the effective TLS protocols list.
+     * <p>
+     * Both protocols are deprecated by RFC 8996 and vulnerable to BEAST and POODLE.
+     * The default is true for backwards compatibility — MockServer's
+     * {@link #tlsProtocols} default still includes them. Set this to false to opt
+     * into a hardened profile: any "TLSv1" or "TLSv1.1" entries in
+     * {@link #tlsProtocols} are filtered out before the SSL context is built.
+     * <p>
+     * A future major release is expected to flip this default to false.
+     *
+     * @param allow if true, TLSv1 and TLSv1.1 are honoured in {@link #tlsProtocols}; if false, they are stripped
+     */
+    public static void tlsAllowInsecureProtocols(boolean allow) {
+        setProperty(MOCKSERVER_TLS_ALLOW_INSECURE_PROTOCOLS, "" + allow);
+    }
+
     public static boolean dynamicallyCreateCertificateAuthorityCertificate() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE, "MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE", "false"));
     }
@@ -2063,6 +2163,28 @@ public class ConfigurationProperties {
      */
     public static void forwardProxyTLSX509CertificatesTrustManagerType(ForwardProxyTLSX509CertificatesTrustManager trustManagerType) {
         setProperty(MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATES_TRUST_MANAGER_TYPE, trustManagerType.name());
+    }
+
+    public static boolean forwardProxyBlockPrivateNetworks() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_BLOCK_PRIVATE_NETWORKS, "MOCKSERVER_FORWARD_PROXY_BLOCK_PRIVATE_NETWORKS", "" + false));
+    }
+
+    /**
+     * When set to true, MockServer rejects forward and proxy targets that resolve to
+     * loopback, link-local, RFC 1918 private, or cloud metadata addresses
+     * (such as 169.254.169.254). This blocks server-side request forgery (SSRF) attacks
+     * where a malicious expectation forwards through MockServer to internal infrastructure.
+     * <p>
+     * The default is false because MockServer is primarily used to mock services in
+     * private or loopback test networks (Docker bridges, Kubernetes service IPs,
+     * localhost), so blocking those targets by default would break the common case.
+     * Enable this in hardened or multi-tenant deployments where untrusted callers can
+     * register expectations.
+     *
+     * @param block if true, block forwarding to private or metadata addresses
+     */
+    public static void forwardProxyBlockPrivateNetworks(boolean block) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_BLOCK_PRIVATE_NETWORKS, "" + block);
     }
 
     public static String forwardProxyTLSCustomTrustX509Certificates() {
