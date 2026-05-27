@@ -146,3 +146,21 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker"
+      - "/docker/root"
+      - "/docker/root-snapshot"
+      - "/docker/snapshot"
+      - "/docker/graaljs"
+      - "/docker/local"
+      - "/docker_build/maven"
+      - "/docker_build/performance"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
