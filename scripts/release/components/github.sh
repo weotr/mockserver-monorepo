@@ -39,19 +39,35 @@ if is_dry_run; then
   log_dry "skip: gh release create mockserver-$RELEASE_VERSION"
 else
   GITHUB_TOKEN=$(load_secret "mockserver-release/github-token" "token")
-  # Idempotent: a re-run must not fail because the release already exists.
-  if in_docker "$GH_IMAGE" -w /build -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
-       -- release view "mockserver-$RELEASE_VERSION" >/dev/null 2>&1; then
-    log_info "GitHub Release mockserver-$RELEASE_VERSION already exists - skipping"
-  else
-    log_info "Creating release mockserver-$RELEASE_VERSION"
-    in_docker "$GH_IMAGE" \
-      -w /build \
-      -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
-      -- release create "mockserver-$RELEASE_VERSION" \
-           --title "MockServer $RELEASE_VERSION" \
-           --notes-file ".tmp/changelog-extract.md" \
-           --latest
+  # Idempotency by catching the API response rather than pre-checking with
+  # `gh release view`. The maniator/gh container image is gh-only (no git),
+  # so without an explicit --repo flag `gh release view` can fail to resolve
+  # the repository even when the release exists — that's what bit us in
+  # build #38, where the precheck silently returned non-zero and we hit
+  # HTTP 422 "Release.tag_name already exists" on the subsequent create.
+  # Capturing the create stderr and treating that exact error as success is
+  # both simpler and more robust.
+  log_info "Creating release mockserver-$RELEASE_VERSION"
+  create_output=$(in_docker "$GH_IMAGE" \
+    -w /build \
+    -e "GITHUB_TOKEN=$GITHUB_TOKEN" \
+    -- release create "mockserver-$RELEASE_VERSION" \
+         --title "MockServer $RELEASE_VERSION" \
+         --notes-file ".tmp/changelog-extract.md" \
+         --latest 2>&1) && create_exit=0 || create_exit=$?
+  if [[ $create_exit -ne 0 ]]; then
+    # Match GitHub's specific "release already exists" error strings ONLY.
+    # We deliberately do NOT match a bare "HTTP 422" — GitHub returns 422 for
+    # other unrelated validation failures (malformed body, missing required
+    # field, schema mismatch, etc.) and we don't want to silently mask a real
+    # error as "idempotent success".
+    if echo "$create_output" | grep -qE "Release\.tag_name already exists|already_exists"; then
+      log_info "  release mockserver-$RELEASE_VERSION already exists — treating as idempotent success"
+    else
+      printf '%s\n' "$create_output"
+      log_error "gh release create failed (exit $create_exit)"
+      exit $create_exit
+    fi
   fi
 fi
 

@@ -105,7 +105,12 @@ steps:
 
       - label: ":book: Javadoc"
         command: ".buildkite/scripts/release-runner.sh javadoc"
-        timeout_in_minutes: 15
+        # javadoc.sh does two Maven passes on the full reactor: `mvn install`
+        # (~12 min, populates the local repo so `aggregate` can resolve
+        # inter-module deps) then `mvn javadoc:aggregate` (~6-8 min). Pad
+        # generously over the observed ~20 min total to absorb fresh-agent
+        # network variance pulling plugin/dependency POMs from Central.
+        timeout_in_minutes: 45
         agents: { queue: "release" }
 
       - label: ":swagger: SwaggerHub"
