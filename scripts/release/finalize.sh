@@ -130,12 +130,21 @@ else
   # prefer false negatives (missed bump) over false positives (mangled
   # documentation lie).
   HISTORICAL_RE='([Bb]efore|[Uu]ntil|[Ss]ince|[Ff]ixed in|[Rr]emoved in|[Ii]ntroduced in|[Dd]eprecated in|[Aa]dded in|[Uu]pdated in|[Rr]eleased in|[Cc]hanged in|[Aa]s of|[Rr]equires|[Mm]inimum version[:]?|switched [^.]+ in|moved [^.]+ in|migrated [^.]+ in|renamed [^.]+ in|published [^.]+ in)[[:space:]]+[0-9]+\.[0-9]+'
+  # mockserver-{node,client-node}/package.json are excluded from the general
+  # find-and-replace because their version references are bumped explicitly
+  # with jq above (precise field targeting). Without this guard the blanket
+  # OLD_VERSION->NEW_VERSION sed would rewrite third-party prerelease tags
+  # that share the OLD_VERSION prefix (e.g. grunt-ts@^6.0.0-beta.22). Example
+  # package.json files (under */examples/) are *not* excluded — they carry
+  # first-party "mockserver-client"/"mockserver-node" deps that must bump.
   for ext in "*.html" "*.md" "*.yaml" "*.yml" "*.json" "*.txt"; do
     find "$REPO_ROOT" -name "$ext" \
       -not -path "*/node_modules/*" -not -path "*/.git/*" \
       -not -path "*/target/*" -not -path "*/helm/charts/*" \
       -not -path "*/.tmp/*" \
       -not -name "changelog.md" -not -name "CHANGELOG.md" \
+      -not -path "*/mockserver-node/package.json" \
+      -not -path "*/mockserver-client-node/package.json" \
       -not -name "package-lock.json" -print0 2>/dev/null \
     | while IFS= read -r -d '' file; do
         sed_i -E "/${HISTORICAL_RE}/!s/${OLD_PAT}/${NEW_REP}/g" "$file" 2>/dev/null || true

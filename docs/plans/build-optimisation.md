@@ -19,7 +19,7 @@
 | Build caching | None | None (deps pre-warmed in Docker image) |
 | JVM heap | `-Xmx8192m` | `-Xmx6144m` |
 | Test output | verbose | `mockserver.testOutput=quiet` + `redirectTestOutputToFile=true` |
-| Maven version | 3.9.0 (wrapper) | 3.9.15 (Docker image) |
+| Maven version | 3.9.0 (wrapper) | 3.9.16 (Docker image) |
 | Shade plugin | Runs on 6 modules (~230 LOC duplicated config each) | Same |
 | Assembly plugin | Fat JAR + brew tar on `mockserver-netty` | Same |
 | Invoker plugin | 3 Maven sub-builds + Gradle tests | Same |
@@ -168,7 +168,7 @@ Speculative; would require a major build-system rework for unclear benefit. Out 
 
 ### ❌ Maven Wrapper upgrade (3.9.0 → 3.9.15)
 
-Worth doing as routine hygiene, not as part of a build-optimisation plan. The current wrapper works; CI uses 3.9.15 from the Docker image; the wrapper version mismatch has not caused observable problems.
+Worth doing as routine hygiene, not as part of a build-optimisation plan. The current wrapper works; CI uses 3.9.16 from the Docker image; the wrapper version mismatch has not caused observable problems.
 
 ---
 

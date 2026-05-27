@@ -20,7 +20,7 @@ the pipeline isn't set up yet, or when testing Dockerfile changes.
 
 **Image:** `mockserver/mockserver:maven`
 **Dockerfile:** `docker_build/maven/Dockerfile`
-**Base:** Ubuntu 24.04, OpenJDK 21, Maven 3.9.15
+**Base:** Ubuntu 24.04, OpenJDK 21, Maven 3.9.16
 **Target architecture for CI:** `linux/amd64` (Buildkite agents run on x86_64 EC2)
 
 ## Prerequisites

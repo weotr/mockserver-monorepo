@@ -109,7 +109,7 @@ Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1
 
 | Image | Dockerfile | Base | Purpose |
 |-------|-----------|------|---------|
-| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 21, Maven 3.9.15 |
+| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 21, Maven 3.9.16 |
 | Performance | `docker_build/performance/Dockerfile` | `locustio/locust` | Load testing with Locust |
 
 ## Docker Compose Examples

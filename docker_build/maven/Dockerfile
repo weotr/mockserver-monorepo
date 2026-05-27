@@ -14,7 +14,7 @@ LABEL maintainer="James Bloom <jamesdbloom@gmail.com>"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/London
 
-ARG MAVEN_VERSION=3.9.15
+ARG MAVEN_VERSION=3.9.16
 # Audit finding F-DKR-05: pin gh CLI version + verify SHA256.
 # Update both values together when bumping. Source:
 # https://github.com/cli/cli/releases/download/v2.83.0/gh_2.83.0_checksums.txt
@@ -25,6 +25,7 @@ ARG GH_SHA256_ARM64=12311e320d4cfdb54d7fa2d58cd1e3a2ccb4c12e1c3abb32b0a2e48bd0f9
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
         git \
