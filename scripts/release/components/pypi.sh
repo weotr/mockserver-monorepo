@@ -29,6 +29,16 @@ VERSION=$(grep -E '^version\s*=' "$PYTHON_DIR/pyproject.toml" | head -1 | sed 's
 [[ -n "$VERSION" ]] || { log_error "could not parse version from pyproject.toml"; exit 1; }
 log_info "Package version: $VERSION"
 
+# Fail-fast version guard. Must run BEFORE the "already on PyPI" idempotency
+# check, otherwise a stale pyproject.toml (e.g. prepare.sh didn't bump it)
+# would silently skip — masking the bug behind an "already published"
+# message. The idempotency check still preserves re-runnability for the
+# happy path where the source file IS at $RELEASE_VERSION.
+if [[ "$VERSION" != "$RELEASE_VERSION" ]]; then
+  log_error "pyproject.toml version ($VERSION) does not match RELEASE_VERSION ($RELEASE_VERSION) — refusing to publish wrong version"
+  exit 1
+fi
+
 if ! is_dry_run; then
   log_info "Checking PyPI for existing version"
   http_code=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/mockserver-client/$VERSION/json")

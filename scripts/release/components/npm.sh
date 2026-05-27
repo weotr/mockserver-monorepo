@@ -28,11 +28,22 @@ sync_to_origin_master
 
 publish_one() {
   local pkg="$1"
-  # Idempotent: if this package version is already on npm, an earlier run
-  # published it. The npm package name can differ from the directory name
-  # (mockserver-client-node publishes as "mockserver-client"), so read it.
-  local npm_name
+  # The npm package name can differ from the directory name (mockserver-client-node
+  # publishes as "mockserver-client"), so read it. We also read the version so
+  # we can fail-fast before the registry idempotency check below — otherwise a
+  # stale package.json (e.g. prepare.sh didn't bump it) would cause `npm publish`
+  # to try to republish the old version and hit a 403, OR slip past unnoticed if
+  # the old version was missing from npm. The version assert must run BEFORE
+  # the "already on npm" check so we never mask a wrong-version publish.
+  local npm_name pkg_version
   npm_name=$(jq -r '.name' "$REPO_ROOT/$pkg/package.json")
+  pkg_version=$(jq -r '.version' "$REPO_ROOT/$pkg/package.json")
+  if [[ "$pkg_version" != "$RELEASE_VERSION" ]]; then
+    log_error "[$pkg] $pkg/package.json version ($pkg_version) does not match RELEASE_VERSION ($RELEASE_VERSION) — refusing to publish wrong version"
+    return 1
+  fi
+  # Idempotent: if this package version is already on npm, an earlier run
+  # published it.
   if ! is_dry_run && curl -fsI --connect-timeout 10 --max-time 15 -o /dev/null \
       "https://registry.npmjs.org/$npm_name/$RELEASE_VERSION" 2>/dev/null; then
     log_info "[$pkg] $npm_name@$RELEASE_VERSION already on npm - skipping"

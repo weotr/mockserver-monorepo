@@ -34,6 +34,16 @@ VERSION=$(in_docker "$RUBY_IMAGE" \
 [[ -n "$VERSION" ]] || { log_error "could not read version.rb"; exit 1; }
 log_info "  version: $VERSION"
 
+# Fail-fast version guard. Must run BEFORE the "already on RubyGems"
+# idempotency check, otherwise a stale version.rb (e.g. prepare.sh didn't
+# bump it) would silently skip — masking the bug behind an "already
+# published" message. The idempotency check still preserves re-runnability
+# for the happy path where the source file IS at $RELEASE_VERSION.
+if [[ "$VERSION" != "$RELEASE_VERSION" ]]; then
+  log_error "version.rb VERSION ($VERSION) does not match RELEASE_VERSION ($RELEASE_VERSION) — refusing to publish wrong version"
+  exit 1
+fi
+
 if ! is_dry_run; then
   log_info "Check RubyGems for existing $VERSION"
   http_code=$(curl -s -o /dev/null -w "%{http_code}" \

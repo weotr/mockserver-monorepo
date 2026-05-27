@@ -33,6 +33,17 @@ if ! is_dry_run; then
 fi
 
 log_info "Generate aggregate Javadoc"
+# maven-javadoc-plugin's `aggregate` goal forks `compile` on each reactor
+# module, but the forked compile resolves inter-module dependencies via the
+# local Maven repository — not the reactor's in-flight build. On a fresh
+# Buildkite agent the local repo is empty, so mockserver-examples (which
+# depends on mockserver-client-java, mockserver-netty, etc.) fails its
+# default-compile with "package org.mockserver.client does not exist" and
+# the whole aggregate aborts. Two-pass: install first to populate the local
+# repo at $RELEASE_VERSION, then aggregate javadoc with all dependencies
+# resolvable.
+in_maven -w /build/mockserver \
+  -- mvn install -P release -DskipTests
 in_maven -w /build/mockserver \
   -- mvn javadoc:aggregate -P release -DskipTests
 
