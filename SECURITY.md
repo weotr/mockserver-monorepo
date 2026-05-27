@@ -6,7 +6,7 @@ MockServer maintains support for Java 11 as the minimum supported version to ens
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 6.0.x  | :white_check_mark: |
+| 6.1.x  | :white_check_mark: |
 | < 5.15  | :x:                |
 
 ## Security Posture

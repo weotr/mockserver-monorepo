@@ -85,7 +85,7 @@ Maven Central contains the following MockServer artifacts under the `org.mock-se
 
 > **Tip:** The `-no-dependencies` artifacts bundle all dependencies into a single JAR with packages relocated under `shaded_package.*`, so they declare zero transitive dependencies. This avoids classpath conflicts with versions of Netty / Jackson / Guava / Bouncy Castle that your project already uses, and it removes the noise from CVE scanners flagging unused transitive dependencies. See the [Maven Central](https://www.mock-server.com/where/maven_central.html) page for full coordinates, snapshot repository setup, and the executable `jar-with-dependencies` form for command-line use.
 
-> **6.0.0 breaking change:** the `<classifier>shaded</classifier>` form has been removed. Replace `mockserver-netty:<version>:shaded` with `mockserver-netty-no-dependencies:<version>` (and likewise for the other shaded artifacts). The replacement produces the same shaded bytes; only the coordinates change.
+> **6.1.0 breaking change:** the `<classifier>shaded</classifier>` form has been removed. Replace `mockserver-netty:<version>:shaded` with `mockserver-netty-no-dependencies:<version>` (and likewise for the other shaded artifacts). The replacement produces the same shaded bytes; only the coordinates change.
 
 SNAPSHOT builds are published to the Sonatype Central Portal snapshot repository at <https://central.sonatype.com/repository/maven-snapshots/org/mock-server/>.
 
@@ -106,7 +106,7 @@ Docker Hub contains the following artifacts:
 
 ##### Helm Chart
 
-* [MockServer Helm Chart](helm/mockserver/README.md) - a Helm Chart that installs MockServer to a Kubernetes cluster (latest: [6.0.0](https://www.mock-server.com/mockserver-6.0.0.tgz)). See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all available versions and configuration options.
+* [MockServer Helm Chart](helm/mockserver/README.md) - a Helm Chart that installs MockServer to a Kubernetes cluster (latest: [6.1.0](https://www.mock-server.com/mockserver-6.1.0.tgz)). See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all available versions and configuration options.
 
 ##### MockServer Clients
 
@@ -122,7 +122,7 @@ Docker Hub contains the following artifacts:
 ##### Previous Versions
 | Version        | Date        | Git & Docker Tag / Git Hash                                                                                                                                                                                   | Documentation                                 | Java API                                                               | REST API                                                                                  |
 |:---------------|:------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------|:-----------------------------------------------------------------------|:------------------------------------------------------------------------------------------|
-| 6.0.0 (latest) | 22 May 2026 | [mockserver-6.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.0.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.0.0/apidocs/index.html)  | [6.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.0.x)   |
+| 6.1.0 (latest) | 22 May 2026 | [mockserver-6.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.1.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.1.0/apidocs/index.html)  | [6.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x)   |
 | 5.15.0         | 11 Jan 2023 | [mockserver-5.15.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.15.0) / [7c071b](https://github.com/mock-server/mockserver-monorepo/commit/7c071b8be3608036f2a2ea45eee6970d2f2b8d02) | [Documentation](https://5-15.mock-server.com) | [Java API](https://mock-server.com/versions/5.15.0/apidocs/index.html) | [5.15.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.15.x) |
 | 5.14.0         | 22 Aug 2022 | [mockserver-5.14.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.14.0) / [808eba](https://github.com/mock-server/mockserver-monorepo/commit/808ebaa44a88b630ca181e62712aa47d4c9c7ff4) | [Documentation](https://5-14.mock-server.com) | [Java API](https://mock-server.com/versions/5.14.0/apidocs/index.html) | [5.14.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.14.x) |
 | 5.13.2         | 05 Apr 2022 | [mockserver-5.13.2](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.13.2) / [81105b](https://github.com/mock-server/mockserver-monorepo/commit/81105b3153674bbe66df612ad1b3a09a34a520cf) | [Documentation](https://5-13.mock-server.com) | [Java API](https://mock-server.com/versions/5.13.2/apidocs/index.html) | [5.13.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.13.x) |
@@ -148,7 +148,7 @@ Docker Hub contains the following artifacts:
 ### Issues
 
 If you have any problems, please [check the project issues](https://github.com/mock-server/mockserver-monorepo/issues?state=open) and avoid opening issues that have already been fixed.  When you open an issue please provide the following information:
-- MockServer version (i.e. 6.0.0)
+- MockServer version (i.e. 6.1.0)
 - How your running the MockServer (i.e maven plugin, docker, etc)
 - MockServer log output, at INFO level (or higher)
 - What the error is

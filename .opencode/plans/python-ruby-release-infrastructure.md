@@ -9,7 +9,7 @@ Enable publishing the Python and Ruby MockServer clients to PyPI and RubyGems re
 - Both clients are fully developed, tested (Buildkite CI), and packaged — but no publishing infrastructure exists
 - PyPI `mockserver-client` is currently v0.0.6 (third-party by Internap, 2018) — user is a maintainer
 - RubyGems `mockserver-client` is currently v5.3.0 (official, 2018) — user is an owner
-- 267 commits since last Java release (6.0.0) including new features, behavior changes, UI rewrite — warrants minor version bump
+- 267 commits since last Java release (6.1.0) including new features, behavior changes, UI rewrite — warrants minor version bump
 - User wants version alignment across Java, Python, and Ruby
 
 ## Changes
@@ -19,13 +19,13 @@ Enable publishing the Python and Ruby MockServer clients to PyPI and RubyGems re
 | File | Old | New |
 |------|-----|-----|
 | `mockserver/pom.xml` line 7 | `5.15.1-SNAPSHOT` | `5.16.0-SNAPSHOT` |
-| `mockserver-client-python/pyproject.toml` line 3 | `6.0.0` | `5.16.0` |
-| `mockserver-client-ruby/lib/mockserver/version.rb` line 4 | `6.0.0` | `5.16.0` |
+| `mockserver-client-python/pyproject.toml` line 3 | `6.1.0` | `5.16.0` |
+| `mockserver-client-ruby/lib/mockserver/version.rb` line 4 | `6.1.0` | `5.16.0` |
 | `jekyll-www.mock-server.com/_config.yml` | `5.15.1-SNAPSHOT` refs | `5.16.0-SNAPSHOT` |
 
 Also update any version references in:
 - `mockserver-client-ruby/README.md` line 11: `~> 6.0` → `~> 5.16`
-- `scripts/release_steps.md`: version references (6.0.0, 5.15.1-SNAPSHOT → 5.16.0, 5.16.1-SNAPSHOT)
+- `scripts/release_steps.md`: version references (6.1.0, 5.15.1-SNAPSHOT → 5.16.0, 5.16.1-SNAPSHOT)
 
 ### 2. PyPI Metadata Enhancement (`mockserver-client-python/pyproject.toml`)
 

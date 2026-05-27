@@ -1099,7 +1099,7 @@ Maven dependency:
     <dependency>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-client-java</artifactId>
-      <version>6.0.0</version>
+      <version>6.1.0</version>
     </dependency>
 
 Basic usage:
@@ -1464,7 +1464,7 @@ Basic:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.0.0
+        image: mockserver/mockserver:6.1.0
         ports:
           - "1080:1080"
         environment:
@@ -1474,7 +1474,7 @@ With configuration and initialization:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.0.0
+        image: mockserver/mockserver:6.1.0
         ports:
           - "1080:1080"
         environment:
@@ -1489,7 +1489,7 @@ With OpenAPI initialization and file watching:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.0.0
+        image: mockserver/mockserver:6.1.0
         ports:
           - "1080:1080"
         environment:
@@ -1504,7 +1504,7 @@ Using command line arguments:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.0.0
+        image: mockserver/mockserver:6.1.0
         command: -logLevel DEBUG -serverPort 1090
         ports:
           - "1080:1090"
@@ -1974,7 +1974,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
     <plugin>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-maven-plugin</artifactId>
-      <version>6.0.0</version>
+      <version>6.1.0</version>
       <configuration>
         <serverPort>1080</serverPort>
         <logLevel>WARN</logLevel>
@@ -1995,7 +1995,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
 
 ### Standalone JAR
 
-    java -jar mockserver-netty-no-dependencies-6.0.0.jar -serverPort 1080 -logLevel INFO
+    java -jar mockserver-netty-no-dependencies-6.1.0.jar -serverPort 1080 -logLevel INFO
 
 ### npm Module
 

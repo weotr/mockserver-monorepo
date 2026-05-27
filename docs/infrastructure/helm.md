@@ -28,8 +28,8 @@ initializerJson.json"]
 
 | Chart | Path | Version | Purpose |
 |-------|------|---------|---------|
-| `mockserver` | `helm/mockserver/` | 6.0.0 | Main deployment chart (includes optional ConfigMap) |
-| `mockserver-config` | `helm/mockserver-config/` | 6.0.0 | Example external ConfigMap chart (for reference) |
+| `mockserver` | `helm/mockserver/` | 6.1.0 | Main deployment chart (includes optional ConfigMap) |
+| `mockserver-config` | `helm/mockserver-config/` | 6.1.0 | Example external ConfigMap chart (for reference) |
 
 ## mockserver Chart
 
@@ -249,7 +249,7 @@ The Helm chart repository is hosted on S3 alongside the website:
 
 - **Bucket:** Main website S3 bucket (see `~/mockserver-aws-ids.md`)
 - **Index:** `helm/charts/index.yaml`
-- **Charts:** `helm/charts/mockserver-*.tgz` (versions 5.3.0 through 6.0.0)
+- **Charts:** `helm/charts/mockserver-*.tgz` (versions 5.3.0 through 6.1.0)
 
 ### Publishing a New Chart Version
 

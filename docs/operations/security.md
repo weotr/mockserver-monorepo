@@ -140,9 +140,9 @@ In the Maven ecosystem, a `-SNAPSHOT` suffix (e.g., `5.16.0-SNAPSHOT`) indicates
 
 ### Recommendations for Consumers
 
-- **For maximum security:** Pin to a specific release version (e.g., `6.0.0`), not `latest` or `SNAPSHOT`
+- **For maximum security:** Pin to a specific release version (e.g., `6.1.0`), not `latest` or `SNAPSHOT`
 - **For Renovate/Dependabot users:** Configure version constraints to only match release versions, not SNAPSHOTs
-- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:6.0.0`) rather than `latest`
+- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:6.1.0`) rather than `latest`
 - **Subscribe to releases:** Watch the [GitHub releases page](https://github.com/mock-server/mockserver-monorepo/releases) for new versions with resolved security issues
 
 ## Java 11 Compatibility Trade-Off

@@ -69,7 +69,7 @@ All metrics are Prometheus `Gauge` type. The `Metrics.Name` enum defines 17 gaug
 
 | Label | Description |
 |-------|-------------|
-| `version` | Full version (e.g. `6.0.0`) |
+| `version` | Full version (e.g. `6.1.0`) |
 | `major_minor_version` | Major.minor version (e.g. `5.15`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |

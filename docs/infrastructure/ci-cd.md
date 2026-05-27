@@ -241,7 +241,7 @@ The pipeline has two steps separated by a `- wait` directive:
 
 Builds and pushes the production MockServer Docker image as a multi-arch image (`linux/amd64` + `linux/arm64` via QEMU).
 
-Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-6.0.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
+Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-6.1.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
 
 Two Docker tags are pushed:
 - `mockserver/mockserver:mockserver-X.Y.Z` (full tag)

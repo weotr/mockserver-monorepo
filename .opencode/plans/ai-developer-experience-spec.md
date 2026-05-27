@@ -239,7 +239,7 @@ For the HTTP debugging use case:
 | FR-48 | MockServer MUST serve its OpenAPI spec at `GET /mockserver/openapi.yaml` on running instances | MUST |
 | FR-49 | The website MUST publish the OpenAPI spec at `https://www.mock-server.com/mockserver-openapi.yaml` for static consumption by AI tools and developers | MUST |
 | FR-50 | The OpenAPI spec SHOULD be enhanced with richer descriptions and example request/response payloads for each endpoint, optimised for LLM comprehension | SHOULD |
-| FR-51 | The OpenAPI spec version field MUST be updated to match the current MockServer version (currently says `6.0.x`) | MUST |
+| FR-51 | The OpenAPI spec version field MUST be updated to match the current MockServer version (currently says `6.1.x`) | MUST |
 | FR-52 | The OpenAPI spec `info.description` SHOULD mention MCP as the primary AI integration method, with the REST API as a direct alternative | SHOULD |
 
 ---

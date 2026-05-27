@@ -10,8 +10,8 @@ The end-to-end checklist a release manager follows. **Use this every release.** 
 
 Run the `/prepare-release` slash command from this repo. It inspects `changelog.md`, `mockserver/pom.xml`, and the latest `mockserver-X.Y.Z` git tag, then recommends:
 
-- `release-version` (e.g. `6.0.0`)
-- `next-version` (e.g. `6.0.1-SNAPSHOT`)
+- `release-version` (e.g. `6.1.0`)
+- `next-version` (e.g. `6.1.1-SNAPSHOT`)
 - `old-version` (e.g. `6.0.0` — auto-derived, you don't need to type it on the form)
 - `release-type` (almost always `full`)
 - `create-versioned-site` (`yes` for major/minor, `no` for patch)
@@ -94,15 +94,24 @@ Everything downstream now runs in parallel: Versioned Site, Maven Plugin, Docker
 | Versioned docs site (major/minor only) | `https://<release-version-with-dash>.mock-server.com` — e.g. `6-0.mock-server.com` |
 | Website | https://www.mock-server.com — version pin in the footer should match |
 
-### 9. Manual follow-up — Homebrew
+### 9. Homebrew — fully automated, no action required
 
-Homebrew is the **only** thing the pipeline does not automate. After the GitHub Release is created:
+The `mockserver` formula in `Homebrew/homebrew-core` is bumped automatically by **BrewTestBot** (Homebrew's own automation account). The chain:
 
-```bash
-brew bump-formula-pr --strict --version=<release-version> mockserver
-```
+1. The Maven release publishes a `mockserver-netty-<version>-brew-tar.tar` artifact to Maven Central (built and signed by `maven-central.sh`'s `-P release` profile, same lifecycle as the regular jars).
+2. The Homebrew formula has a `livecheck` block pointing at Maven Search (`https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-netty/maven-metadata.xml`). BrewTestBot's scheduled livecheck picks up the new version, computes the URL + SHA256, and opens a PR against `Homebrew/homebrew-core`.
+3. Homebrew CI builds bottles (pre-compiled binaries) for the supported macOS/Linux targets. A Homebrew maintainer reviews and merges the BrewTestBot PR once all checks pass.
+4. End-users running `brew upgrade mockserver` get the new version.
 
-(Or use the Homebrew web UI / GitHub PR flow if you prefer.) This is the path of least surprise — submit a PR against `homebrew-core` / `homebrew/homebrew-core`, let it CI, and merge.
+The whole cycle from Maven Central publish → live on Homebrew typically takes a few hours. No human action is required, and no MockServer-side script needs to invoke `brew`. The only thing the release pipeline has to keep doing is publishing the `*-brew-tar.tar` artifact (see `mockserver/pom.xml`'s `release` profile).
+
+If a bump ever does not happen within a day or two of release, check:
+- The `mockserver-netty-<version>-brew-tar.tar` artifact is actually present at `https://repo1.maven.org/maven2/org/mock-server/mockserver-netty/<version>/` (canonical mirror) and resolvable via `https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-netty/<version>/mockserver-netty-<version>-brew-tar.tar` (the URL livecheck actually polls).
+- The `mockserver.rb` formula in `homebrew-core` still has a `livecheck` block (`gh api repos/Homebrew/homebrew-core/contents/Formula/m/mockserver.rb`).
+- BrewTestBot's recent activity on this formula: `gh search prs --repo Homebrew/homebrew-core --author BrewTestBot mockserver`.
+- Whether the BrewTestBot PR is open but unmerged: a Homebrew maintainer needs to approve and merge.
+
+If a manual bump is genuinely required (e.g. the bot is broken), `brew bump-formula-pr --strict --version=<release-version> mockserver` from a workstation with `brew` and an authenticated `gh` CLI will open the PR by hand.
 
 ### 10. Announce (optional)
 
@@ -158,17 +167,17 @@ scripts/release/
 # 2. Run the entire pipeline in dry-run mode. Builds everything, but skips
 #    every external write (npm publish, twine upload, S3 sync, gh release
 #    create, git push, etc.).
-./scripts/release/release.sh --version 6.0.0 --dry-run
+./scripts/release/release.sh --version 6.1.0 --dry-run
 
 # 3. Run a single component.
 ./scripts/release/components/npm.sh --dry-run        # exits with `RELEASE_VERSION` unset
-RELEASE_VERSION=6.0.0 ./scripts/release/components/npm.sh --dry-run
+RELEASE_VERSION=6.1.0 ./scripts/release/components/npm.sh --dry-run
 
 # 4. Run only a few components.
-./scripts/release/release.sh --version 6.0.0 --only=npm,pypi --dry-run
+./scripts/release/release.sh --version 6.1.0 --only=npm,pypi --dry-run
 
 # 5. Skip components.
-./scripts/release/release.sh --version 6.0.0 --skip=docker --dry-run
+./scripts/release/release.sh --version 6.1.0 --skip=docker --dry-run
 ```
 
 DRY_RUN defaults to `true` unless you pass `--execute`. **Locally you almost never want `--execute`** — that publishes for real.
@@ -196,8 +205,8 @@ Buildkite outage on release day? No problem. From a developer machine with `dock
 aws sso login --profile mockserver-build
 
 # Run the same scripts the CI would have run
-RELEASE_VERSION=6.0.0 \
-NEXT_VERSION=6.0.1-SNAPSHOT \
+RELEASE_VERSION=6.1.0 \
+NEXT_VERSION=6.1.1-SNAPSHOT \
 RELEASE_TYPE=full \
 CREATE_VERSIONED_SITE=yes \
 ./scripts/release/release.sh --execute
@@ -300,7 +309,7 @@ If, say, the Maven Central step succeeded but `npm` failed:
 # release-runner.sh adapter re-reads meta-data and re-invokes.
 
 # Locally:
-RELEASE_VERSION=6.0.0 ./scripts/release/components/npm.sh --execute
+RELEASE_VERSION=6.1.0 ./scripts/release/components/npm.sh --execute
 ```
 
 ### Reproduce a CI failure locally
@@ -308,8 +317,8 @@ RELEASE_VERSION=6.0.0 ./scripts/release/components/npm.sh --execute
 ```bash
 # Pull the same env vars Buildkite was using (or set them by hand) and run
 # the same script.
-RELEASE_VERSION=6.0.0 \
-NEXT_VERSION=6.0.1-SNAPSHOT \
+RELEASE_VERSION=6.1.0 \
+NEXT_VERSION=6.1.1-SNAPSHOT \
 ./scripts/release/components/maven-central.sh --dry-run
 ```
 
