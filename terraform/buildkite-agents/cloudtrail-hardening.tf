@@ -261,3 +261,16 @@ resource "aws_s3_bucket_policy" "audit_logs" {
     ]
   })
 }
+
+# Audit finding F-BLD-18 (caught by 2026-05-27 re-audit): the Terraform state
+# bucket also needs S3 server access logging. The bucket itself is managed
+# in the bootstrap stack; the bucket-logging resource lives here because
+# that's where the audit-logs target bucket is defined. The cross-stack
+# reference is by bucket name (deterministic) rather than by resource
+# reference — terraform/buildkite-agents/bootstrap/main.tf owns the state
+# bucket resource.
+resource "aws_s3_bucket_logging" "terraform_state" {
+  bucket        = "mockserver-terraform-state"
+  target_bucket = aws_s3_bucket.audit_logs.id
+  target_prefix = "terraform-state/"
+}

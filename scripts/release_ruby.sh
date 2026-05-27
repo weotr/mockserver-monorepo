@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+#
+# Legacy local-publish convenience wrapper. The canonical CI release path is
+# `scripts/release/components/rubygems.sh` which sources `_lib.sh` for
+# shared release-context (dry-run handling, release-input validation,
+# secret fetching). This wrapper is kept for ad-hoc local manual publishes;
+# if you change `_lib.sh`'s `load_secret()` security discipline (e.g.
+# xtrace handling, IMDSv2 token usage) MIRROR THE CHANGE in the inline
+# `load_secret()` below — they must stay in sync. See audit finding from
+# 2026-05-27 re-audit.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

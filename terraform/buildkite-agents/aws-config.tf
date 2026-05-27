@@ -171,3 +171,12 @@ resource "aws_config_config_rule" "ebs_encryption_by_default" {
   }
   depends_on = [aws_config_configuration_recorder_status.this]
 }
+
+# Audit finding N-BLD-05 (caught by 2026-05-27 re-audit): S3 access logging
+# on the AWS Config delivery bucket. Target is the same audit-logs bucket
+# used by CloudTrail (defined in cloudtrail-hardening.tf in this stack).
+resource "aws_s3_bucket_logging" "config" {
+  bucket        = aws_s3_bucket.config.id
+  target_bucket = aws_s3_bucket.audit_logs.id
+  target_prefix = "aws-config/"
+}

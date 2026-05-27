@@ -68,6 +68,19 @@ resource "aws_s3_bucket_policy" "mail" {
             "aws:SourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
+      },
+      {
+        # Audit finding F-WEB-29 (caught by 2026-05-27 re-audit): deny any
+        # non-TLS access to the mail bucket. SES delivers over HTTPS and the
+        # Lambda forwarder uses the AWS SDK (HTTPS); this is defence-in-depth.
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.mail.arn, "${aws_s3_bucket.mail.arn}/*"]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
       }
     ]
   })

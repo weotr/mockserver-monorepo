@@ -50,13 +50,18 @@ AUTH="Authorization: Bearer ${BUILDKITE_API_TOKEN}"
 
 cancel_and_delete_builds() {
   local branch="$1"
+  # F-BK-08: URL-encode the branch name. PR branches can contain `#`, `%`,
+  # `&`, `+`, or whitespace; raw interpolation produces malformed queries
+  # that silently match the wrong (or no) builds.
+  local branch_enc
+  branch_enc=$(printf '%s' "$branch" | jq -sRr @uri)
 
   for PIPELINE in "${PIPELINES[@]}"; do
     PAGE=1
     while true; do
       BUILDS=$(curl -sS --max-time 30 \
         -H "$AUTH" \
-        "${API}/pipelines/${PIPELINE}/builds?branch=${branch}&per_page=100&page=${PAGE}" 2>/dev/null) || break
+        "${API}/pipelines/${PIPELINE}/builds?branch=${branch_enc}&per_page=100&page=${PAGE}" 2>/dev/null) || break
 
       COUNT=$(echo "$BUILDS" | jq 'length')
       if [ "$COUNT" = "0" ] || [ "$COUNT" = "null" ]; then

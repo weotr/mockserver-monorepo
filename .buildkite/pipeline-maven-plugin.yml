@@ -15,7 +15,7 @@ steps:
 
   - label: ":junit: annotate test results"
     plugins:
-      - junit-annotate#v2.7.0:
+      - junit-annotate#8a549e5220869601737287b4d6a9293703dc5a6f:  # v2.7.0
           artifacts: "mockserver/mockserver-maven-plugin/**/TEST-*.xml"
           always-annotate: true
           fail-build-on-error: false

@@ -130,10 +130,27 @@ locals {
   # Manager must be PRIVATE so their build logs are not world-readable. The
   # auto-redaction Buildkite applies is pattern-based and not infallible.
   #
-  # Pipelines that DON'T load secrets (mockserver master, ui, node, python,
-  # ruby, maven-plugin) can remain PUBLIC — useful for OSS build transparency.
+  # Pipelines that don't load secrets — or where the token is fully
+  # protected by `set +x` guards and never appears in stdout/stderr —
+  # can remain PUBLIC. Public visibility is necessary for OSS contributor
+  # UX: external PR submitters need to see their own build logs to debug
+  # failures; flipping these PRIVATE blocks them at a Buildkite login
+  # page and forces maintainers to relay log excerpts manually.
+  #
+  # Note on "pipeline" (the top-level mockserver dispatcher):
+  # generate-pipeline.sh fetches a Buildkite API token to query the last
+  # successful build for path-based change detection. Mitigation is in
+  # depth: `{ set +x; } 2>/dev/null` (F-BK-04) suppresses xtrace before
+  # the secret fetch; the token is only sent in a curl `-H Authorization`
+  # header (never via stdout-visible flags); Buildkite's secret redaction
+  # covers known token patterns. Accepted residual risk: the only
+  # plausible leak vector is an AWS CLI error mode that includes secret
+  # material in the error message — which AWS CLI does not do in practice.
+  # If a future refactor of generate-pipeline.sh removes the API-token
+  # dependency entirely (e.g. by caching last-successful-SHA as a build
+  # artifact), this caveat goes away.
   public_pipelines = toset([
-    "pipeline",     # mockserver — top-level dispatcher, no secrets
+    "pipeline",     # mockserver — top-level dispatcher (see note above)
     "ui",           # mockserver-ui — lint/test only
     "node",         # mockserver-node — lint/test only
     "python",       # mockserver-python — lint/test only
