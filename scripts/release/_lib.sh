@@ -86,10 +86,17 @@ require_release_inputs() {
     exit 1
   fi
 
-  # Auto-derive OLD_VERSION from latest git tag if not supplied.
+  # Auto-derive OLD_VERSION as the latest released tag OTHER than the one we
+  # are about to release. The exclusion matters because prepare.sh pushes the
+  # `mockserver-$RELEASE_VERSION` tag before finalize.sh runs — without this
+  # filter, `latest_release_version` returns the just-pushed tag and
+  # OLD_VERSION would equal RELEASE_VERSION, making finalize.sh's
+  # `s/$OLD_VERSION/$RELEASE_VERSION/g` find-and-replace a silent no-op
+  # (e.g. Helm Chart.yaml, READMEs, docker-compose, example package.json
+  # files all stayed pinned to the previous version through release 6.1.0).
   if [[ -z "${OLD_VERSION:-}" ]]; then
     git -C "$REPO_ROOT" fetch --tags --quiet 2>/dev/null || true
-    OLD_VERSION="$(latest_release_version)"
+    OLD_VERSION="$(previous_release_version "$RELEASE_VERSION")"
   fi
   if [[ -z "$OLD_VERSION" ]]; then
     log_error "OLD_VERSION could not be derived — no mockserver-X.Y.Z git tag found"
@@ -162,6 +169,22 @@ increment_patch_version() {
 latest_release_version() {
   git -C "$REPO_ROOT" tag --list "mockserver-[0-9]*" --sort=-v:refname \
     | sed 's/^mockserver-//' \
+    | awk 'NR == 1 { print; exit }'
+}
+
+# Return the highest mockserver-X.Y.Z tag that is NOT $1. Used by
+# require_release_inputs to derive OLD_VERSION during finalize, where the new
+# release's own tag has already been pushed and would otherwise dominate.
+# Falls back to latest_release_version when no exclude is passed.
+previous_release_version() {
+  local exclude="${1:-}"
+  if [[ -z "$exclude" ]]; then
+    latest_release_version
+    return
+  fi
+  git -C "$REPO_ROOT" tag --list "mockserver-[0-9]*" --sort=-v:refname \
+    | sed 's/^mockserver-//' \
+    | grep -v -x -F "$exclude" \
     | awk 'NR == 1 { print; exit }'
 }
 
