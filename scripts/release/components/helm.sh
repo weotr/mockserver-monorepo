@@ -76,7 +76,15 @@ else
     in_docker "$HELM_IMAGE" -w /build -- repo index helm/charts/ --url "https://www.mock-server.com"
 
     log_info "Upload to S3"
-    aws s3 cp "$REPO_ROOT/helm/charts/mockserver-$RELEASE_VERSION.tgz" "s3://$WEBSITE_BUCKET/"
+    # Upload every chart in helm/charts/, not just the new release. The
+    # bucket is meant to hold all historical charts referenced by index.yaml,
+    # but a new major/minor release lands in a freshly created bucket and
+    # the versioned-site mirror has previously failed to carry the older
+    # .tgz files across (see issue #2282). Syncing every chart on each run
+    # makes the bucket self-heal: helm/charts/ is the canonical set, so any
+    # gap created by a missed mirror is closed here.
+    aws s3 sync "$REPO_ROOT/helm/charts/" "s3://$WEBSITE_BUCKET/" \
+      --exclude "*" --include "mockserver-*.tgz"
     aws s3 cp "$REPO_ROOT/helm/charts/index.yaml" "s3://$WEBSITE_BUCKET/"
   )
 
