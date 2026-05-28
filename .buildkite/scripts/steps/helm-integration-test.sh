@@ -51,6 +51,40 @@ cp "$JAR_DIR/$JAR_NAME" docker/mockserver-netty-jar-with-dependencies.jar
 docker build --no-cache -t mockserver/mockserver:integration_testing --build-arg source=copy docker
 rm docker/mockserver-netty-jar-with-dependencies.jar
 
+echo "--- :helm: Installing helm (if needed)"
+# Build agents are spot instances and helm pre-installation is inconsistent
+# across AMI snapshots (build #46 missing helm while #45 had it on a different
+# agent of the same fleet). Install + SHA256-verify explicitly so behaviour
+# is deterministic. SHA256 from
+# https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz.sha256sum
+HELM_VERSION="v3.16.4"
+HELM_BIN_DIR="${PWD}/.tmp/bin"
+export PATH="${HELM_BIN_DIR}:${PATH}"
+
+declare -A HELM_SHA256=(
+  [amd64]="fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179"
+  [arm64]="d3f8f15b3d9ec8c8678fbf3280c3e5902efabe5912e2f9fcf29107efbc8ead69"
+)
+
+if ! command -v helm &>/dev/null || [[ "$(helm version --short 2>/dev/null)" != *"${HELM_VERSION}"* ]]; then
+  mkdir -p "$HELM_BIN_DIR"
+  ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; esac
+  HELM_TGZ="${HELM_BIN_DIR}/helm.tar.gz"
+  curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz" -o "$HELM_TGZ"
+
+  EXPECTED_SHA="${HELM_SHA256[$ARCH]:-}"
+  if [[ -z "$EXPECTED_SHA" ]]; then
+    echo "ERROR: no SHA256 pin for helm on $ARCH - refusing to install untrusted binary" >&2
+    exit 1
+  fi
+  echo "${EXPECTED_SHA}  ${HELM_TGZ}" | sha256sum -c -
+
+  tar -xzf "$HELM_TGZ" -C "$HELM_BIN_DIR" --strip-components=1 "linux-${ARCH}/helm"
+  chmod +x "$HELM_BIN_DIR/helm"
+  rm -f "$HELM_TGZ"
+  helm version --short
+fi
+
 echo "--- :k8s: Installing k3d (if needed)"
 K3D_VERSION="v5.7.5"
 K3D_DIR="${PWD}/.tmp/bin"

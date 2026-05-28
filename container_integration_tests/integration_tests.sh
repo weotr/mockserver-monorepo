@@ -37,15 +37,45 @@ function test() {
 # 5c.4 - build each published variant Dockerfile and confirm it boots and
 # responds to /mockserver/status. Catches Dockerfile drift early without
 # running the whole test suite per variant.
+#
+# Uses --build-arg source=copy + a locally-built JAR rather than the default
+# source=download path. The download path resolves the latest RELEASE from
+# Maven Central, which doesn't exist for in-development versions (e.g.,
+# 6.1.1-SNAPSHOT before publication) and would always 404 in CI.
 function smoke_test_variant() {
   local variant="$1"
   local tag="mockserver/mockserver:smoke-${variant}"
   local container="smoke-${variant}"
+  local variant_dir="${SCRIPT_DIR}/../docker/${variant}"
+  local jar_path="${variant_dir}/mockserver-netty-jar-with-dependencies.jar"
   export TEST_CASE="docker_variant_smoke_${variant}"
   printMessage "Smoke test: variant \"${variant}\""
 
   local exit_code=0
-  runCommand "docker build -t ${tag} ${SCRIPT_DIR}/../docker/${variant}" || exit_code=1
+  # Locate locally-built fat jar; build_docker() already copies one to
+  # docker/ as part of the main image build, so reuse it for variants too.
+  local source_jar
+  source_jar=$(ls "${SCRIPT_DIR}"/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1)
+  if [[ -z "${source_jar}" ]]; then
+    source_jar=$(ls "${SCRIPT_DIR}"/../docker/mockserver-netty-jar-with-dependencies.jar 2>/dev/null | head -1)
+  fi
+  if [[ -z "${source_jar}" ]]; then
+    printFailureMessage "${variant}: no local mockserver-netty fat jar found - build it first"
+    logTestResult "1" "${TEST_CASE}"
+    return 1
+  fi
+
+  cp "${source_jar}" "${jar_path}"
+  # local Dockerfile is single-stage and expects the JAR in build context;
+  # root + snapshot Dockerfiles take --build-arg source=copy.
+  local build_args=""
+  if [[ "${variant}" != "local" ]]; then
+    build_args="--build-arg source=copy"
+  fi
+
+  runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
+  rm -f "${jar_path}"
+
   if [[ ${exit_code} -eq 0 ]]; then
     runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
     runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
@@ -98,13 +128,15 @@ function run_all_tests() {
       test "docker_compose_jvm_options"
       test "docker_compose_libs_classpath"
       test "docker_compose_graceful_shutdown"
-      clean-up-docker-containers
-    fi
-    if [[ "${SKIP_VARIANT_TESTS:-}" != "true" ]]; then
-      # 5c.4 - per-variant smoke tests (root/snapshot/local Dockerfiles)
-      smoke_test_variant "root" || true
-      smoke_test_variant "snapshot" || true
-      smoke_test_variant "local" || true
+      # 5c.4 - per-variant smoke tests (root/snapshot/local Dockerfiles).
+      # Same gate as docker_compose_* tests: they share the same JAR + docker
+      # daemon, and the helm-only CI step (helm-integration-test.sh) sets
+      # SKIP_DOCKER_TESTS=true to skip both.
+      if [[ "${SKIP_VARIANT_TESTS:-}" != "true" ]]; then
+        smoke_test_variant "root" || true
+        smoke_test_variant "snapshot" || true
+        smoke_test_variant "local" || true
+      fi
       clean-up-docker-containers
     fi
     if [[ "${SKIP_HELM_TESTS:-}" != "true" ]]; then
