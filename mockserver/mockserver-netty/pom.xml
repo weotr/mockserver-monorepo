@@ -212,7 +212,7 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- jacoco:check minimum is set below the measured unit-test floor (LINE 0.5931 measured 2026-05-28). M6 ratchets to the post-improvement floor. -->
+            <!-- jacoco:check minimum set ~4 points below the measured unit-test floor of 0.5931 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -231,7 +231,7 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.10</minimum>
+                                            <minimum>0.55</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

@@ -318,7 +318,7 @@
     <!-- No surefire override: tests run sequentially. parallel=classes deadlocks on shared static <clinit>. See docs/plans/testing-improvements.md Phase 3.1. -->
     <build>
         <plugins>
-            <!-- jacoco:check minimum is set below the measured unit-test floor (LINE 0.0614 measured 2026-05-28). M6 ratchets to the post-improvement floor. -->
+            <!-- jacoco:check minimum set ~3 points below the measured unit-test floor of 0.6858 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -337,7 +337,7 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.05</minimum>
+                                            <minimum>0.65</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

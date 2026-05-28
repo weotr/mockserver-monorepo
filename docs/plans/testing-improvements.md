@@ -13,20 +13,21 @@ See [docs/testing.md](../testing.md) for documentation of the current testing ap
 3. **One TODO, one owner.** When two plans both list the same item (e.g., Buildkite Test Analytics token), consolidate to one plan. Avoids drift.
 4. **Tests should outlive the code they cover.** Splitting a 2,000-line test method that already passes risks dropping edge-case coverage. Do that work opportunistically when the file is being touched anyway, not as a planned phase.
 
-## Status Snapshot (2026-05-26)
+## Status Snapshot (2026-05-28)
+
+All M1-M6 milestones from the [Execution Plan](#execution-plan) shipped on the `worktree-testing-improvements` branch. Production thresholds: `mockserver-core` LINE ≥0.65 (measured floor 0.6858), `mockserver-netty` LINE ≥0.55 (measured floor 0.5931).
 
 | Phase | Status |
 |-------|--------|
-| 1 Measure | 1.1 JaCoCo plugin shipped (decision pending — see below). 1.2 XML reports effectively shipped via CI flag override. 1.3 partial, duplicates [build-optimisation 2.3](./build-optimisation.md#23-buildkite-test-analytics-token-was-34-partial). |
-| 2 Quick Wins | 2.1 schema serializer tests, 2.2 ClientConfiguration tests still PENDING. 2.3/2.4 WebSocket tests DROPPED (see below). |
-| 3 Structural | 3.4 mocking-reduction work DONE (`MockServerClientTest` from 130 → 6 mocks; `HttpActionHandlerTest` from 109 → 23). 3.5 `@Ignore` removal DONE (zero remaining). 3.1/3.2/3.3 DROPPED or de-prioritised. |
-| 4 Coverage | 4.1 TLS error paths PENDING. 4.4 listeners **mislabelled DONE in earlier revisions — not actually done.** 4.6 file persistence partial. 4.2 validator and 4.3 mapper tests PENDING; 4.5 JWT DROPPED. |
-| 5a Container CI | 5a.1 Docker Compose tests in CI DONE. 5a.2 `helm lint` runs via `pipeline-infra.yml` DONE. 5a.3 `helm test` DONE. |
-| 5b K3d | 5b.1–5b.3 DONE. |
-| 5c Docker Coverage | PENDING. |
-| 5d Helm Coverage | 5d.2 ConfigMap + 5d.4 `mockserver-config` chart KEPT. 5d.1 ingress, 5d.3 LoadBalancer, 5d.5 multi-replica DROPPED. |
-
-**Highest-leverage remaining work:** flip XML report default for parity, add Phase 2.1/2.2 unit tests, deliver the genuinely-missing Phase 4.1 TLS error path tests + 4.4 listener unit tests, and decide whether JaCoCo stays.
+| 1 Measure | 1.1 JaCoCo plugin DONE + `jacoco:check` thresholds wired and ratcheted in M6 (Option A+). 1.2 XML report default flipped DONE. 1.3 partial, duplicates [build-optimisation 2.3](./build-optimisation.md#23-buildkite-test-analytics-token-was-34-partial). |
+| 2 Quick Wins | 2.1 schema serializer tests DONE (16 classes, 70 methods). 2.2 ClientConfiguration tests DONE (29 methods). 2.3/2.4 WebSocket tests DROPPED. |
+| 3 Structural | 3.4 mocking-reduction work DONE. 3.5 `@Ignore` removal DONE. 3.1/3.2/3.3 DROPPED or de-prioritised. |
+| 4 Coverage | 4.1 TLS error paths DONE (5 files, 72 methods). 4.2 validator tests DONE (3 ITs, 38 methods). 4.3 mapper tests DONE (5 files, 89 methods). 4.4 listeners DONE (4 files, 22 methods). 4.5 JWT DROPPED. 4.6 file persistence DONE (3 files, 31 methods). |
+| 5a Container CI | 5a.1-5a.3 DONE. |
+| 5b K3d | 5b.1-5b.3 DONE. |
+| 5c Docker Coverage | 5c.1 graceful shutdown DONE, 5c.2 JVM options DONE, 5c.3 libs classpath DONE. 5c.4 variant smoke test deferred to a follow-up (material CI cost for three additional Docker builds). |
+| 5d Helm Coverage | 5d.2 ConfigMap injection DONE, 5d.4 `mockserver-config` chart DONE. 5d.1 ingress, 5d.3 LoadBalancer, 5d.5 multi-replica DROPPED. |
+| 6 Ratchet | DONE. `jacoco:check` thresholds raised from M1's safe-low placeholders to ~3-4pt below measured floors. |
 
 ---
 
