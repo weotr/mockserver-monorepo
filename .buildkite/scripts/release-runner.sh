@@ -3,7 +3,7 @@
 #
 # Translates Buildkite meta-data + pipeline inputs into the environment-
 # variable contract that scripts/release/* expects, then invokes one of:
-#   prepare | finalize | preflight | <component-name>
+#   prepare | finalize | preflight | update-version-references | <component-name>
 #
 # After the script exits, syncs any values it wrote to
 # .tmp/release-outputs.env back into Buildkite meta-data so the next step
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <prepare|finalize|preflight|<component>>" >&2
+  echo "Usage: $0 <prepare|finalize|preflight|update-version-references|<component>>" >&2
   exit 2
 fi
 
@@ -49,7 +49,7 @@ DISTRIBUTION_ID_META=$(get_meta release.DISTRIBUTION_ID)
 
 # ---- Locate the script for this stage -------------------------------------
 case "$STAGE" in
-  prepare|finalize|preflight)
+  prepare|finalize|preflight|update-version-references)
     SCRIPT="$REPO_ROOT/scripts/release/$STAGE.sh"
     ;;
   *)

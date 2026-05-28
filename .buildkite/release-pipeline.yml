@@ -94,7 +94,24 @@ steps:
     command: ".buildkite/scripts/release-runner.sh versioned-site"
     # Creates CloudFront distributions and mirrors the full historical docs
     # site (~460 MB, 35k+ objects) into the new versioned bucket — both slow.
+    #
+    # Runs BEFORE Update Version References intentionally: this step reads
+    # only terraform state + pom.xml (bumped earlier by prepare), never the
+    # files touched by update-version-references (_config.yml, package.json,
+    # changelog, etc.). The version-refs commit is sequenced just below.
     timeout_in_minutes: 60
+    agents: { queue: "release" }
+
+  - wait
+
+  - label: ":bookmark_tabs: Update Version References"
+    command: ".buildkite/scripts/release-runner.sh update-version-references"
+    # Must run before the parallel publish group below. The website (and
+    # several other downstream publishes) clone the repo on a fresh agent
+    # and read the just-committed version from _config.yml / package.json /
+    # etc. If this step ran in finalize (as it used to) the website shipped
+    # with the previous version's _config.yml.
+    timeout_in_minutes: 15
     agents: { queue: "release" }
 
   - wait

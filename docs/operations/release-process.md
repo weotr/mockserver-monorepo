@@ -130,9 +130,12 @@ If this is a notable release, post to:
 scripts/release/
 ├── _lib.sh                       # shared functions: logging, dry-run, AWS,
 │                                 # git, docker wrapper, version helpers
-├── release.sh                    # orchestrator (prepare → components → finalize)
+├── release.sh                    # orchestrator (prepare → update-version-references → components → finalize)
 ├── prepare.sh                    # validate + bump pom + tag + push
-├── finalize.sh                   # SNAPSHOT bump + update version references
+├── update-version-references.sh  # commit + push changelog / _config.yml /
+│                                 # package.json / etc. so the parallel
+│                                 # publish group reads the new version
+├── finalize.sh                   # SNAPSHOT bump + deploy to Sonatype
 ├── preflight.sh                  # verify host has docker + bash + git + jq …
 └── components/                   # one script per deployable artifact
     ├── maven-central.sh          # build + sign + Sonatype + publish + wait
@@ -249,19 +252,19 @@ The release pipeline writes every version-bearing file in the repo, so contribut
 |------|------------|---------------|
 | `mockserver/pom.xml` and every child pom (~34 files — the full mockserver/ subtree, excluding `target/`) | `prepare.sh` (`update_pom_versions` in `_lib.sh`) | `<version>` and `<parent><version>` from `SNAPSHOT` → `RELEASE_VERSION` |
 | `mockserver/pom.xml` and child poms (re-bump) | `finalize.sh` (`update_pom_versions`) | `<version>` and `<parent><version>` from `RELEASE_VERSION` → `NEXT_VERSION` (the next `-SNAPSHOT`) |
-| `changelog.md` | `finalize.sh` | Promote `## [Unreleased]` to `## [RELEASE_VERSION] - YYYY-MM-DD` and re-open an empty `## [Unreleased]` |
-| `jekyll-www.mock-server.com/_config.yml` | `finalize.sh` | `mockserver_version`, `mockserver_api_version`, `mockserver_snapshot_version` |
-| `mockserver/mockserver-core/src/main/resources/org/mockserver/openapi/mock-server-openapi-embedded-model.yaml` | `finalize.sh` | OpenAPI `version:` field |
-| `mockserver-node/package.json` | `finalize.sh` | `version`, and the embedded `mockserver-netty-<version>-jar-with-dependencies.jar` URL |
-| `mockserver-client-node/package.json` | `finalize.sh` | `version`, and `devDependencies["mockserver-node"]` |
-| `mockserver-client-python/pyproject.toml` | `finalize.sh` | `version = "…"` |
-| `mockserver-client-ruby/lib/mockserver/version.rb` | `finalize.sh` | `VERSION = '…'` |
-| `mockserver-client-ruby/README.md` | `finalize.sh` | All occurrences of the old version literal |
+| `changelog.md` | `update-version-references.sh` | Promote `## [Unreleased]` to `## [RELEASE_VERSION] - YYYY-MM-DD` and re-open an empty `## [Unreleased]` |
+| `jekyll-www.mock-server.com/_config.yml` | `update-version-references.sh` | `mockserver_version`, `mockserver_api_version`, `mockserver_snapshot_version` |
+| `mockserver/mockserver-core/src/main/resources/org/mockserver/openapi/mock-server-openapi-embedded-model.yaml` | `prepare.sh` | OpenAPI `version:` field |
+| `mockserver-node/package.json` | `update-version-references.sh` | `version`, and the embedded `mockserver-netty-<version>-jar-with-dependencies.jar` URL |
+| `mockserver-client-node/package.json` | `update-version-references.sh` | `version`, and `devDependencies["mockserver-node"]` |
+| `mockserver-client-python/pyproject.toml` | `update-version-references.sh` | `version = "…"` |
+| `mockserver-client-ruby/lib/mockserver/version.rb` | `update-version-references.sh` | `VERSION = '…'` |
+| `mockserver-client-ruby/README.md` | `update-version-references.sh` | All occurrences of the old version literal |
 | `helm/mockserver/Chart.yaml` | `components/helm.sh` | `version:` and `appVersion:` (must match app version per Helm policy) |
-| All `*.html`, `*.md`, `*.yaml`, `*.yml`, `*.json`, `*.txt` outside `target/`, `node_modules/`, `helm/charts/`, `.tmp/`, and the changelog | `finalize.sh` (general find-and-replace) | Old version literal → new version literal; old API version → new API version |
+| All `*.html`, `*.md`, `*.yaml`, `*.yml`, `*.json`, `*.txt` outside `target/`, `node_modules/`, `helm/charts/`, `.tmp/`, and the changelog | `update-version-references.sh` (general find-and-replace) | Old version literal → new version literal; old API version → new API version |
 | `terraform/website/terraform.tfvars` | `components/versioned-site.sh` | Append `"<MINOR>.<PATCH>" = { bucket_name = "…" }` and update `latest_version = "<SUBDOMAIN>"` |
 
-**Sanity check before promoting a dry-run**: `git diff` should show every file in the table above changed exactly once. If `git diff --name-only | wc -l` is wildly larger than this table suggests, something is rewriting more than expected; if smaller, a version-bearing file may have been added without wiring it into `finalize.sh`.
+**Sanity check before promoting a dry-run**: `git diff` should show every file in the table above changed exactly once. If `git diff --name-only | wc -l` is wildly larger than this table suggests, something is rewriting more than expected; if smaller, a version-bearing file may have been added without wiring it into `update-version-references.sh` (or `prepare.sh` for OpenAPI / pom files).
 
 ## Dry-run behaviour by component
 
@@ -281,7 +284,8 @@ The release pipeline writes every version-bearing file in the repo, so contribut
 | `swaggerhub` | Validate spec file | POST to SwaggerHub |
 | `github` | Extract changelog notes, print preview | `gh release create` |
 | `versioned-site` | `terraform plan` | `terraform apply`, S3 mirror |
-| `finalize` | Show diff of version-reference rewrite | git push, mvn deploy snapshot |
+| `update-version-references` | Show diff of version-reference rewrite | git push |
+| `finalize` | Show pom version-bump diff | git push, mvn deploy snapshot |
 
 ## Pinned Docker images
 

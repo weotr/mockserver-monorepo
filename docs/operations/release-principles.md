@@ -45,7 +45,7 @@ The benefits:
 - Easy to reason about: one component = one file
 - No hidden state between steps
 
-The orchestrator (`scripts/release/release.sh`) is a thin loop: prepare → for each component → finalize.
+The orchestrator (`scripts/release/release.sh`) is a thin loop: prepare → maven-central → update-version-references → for each remaining component (in `ALL_COMPONENTS` order) → finalize.
 
 ## 6. Inputs are env vars; outputs are exit codes
 

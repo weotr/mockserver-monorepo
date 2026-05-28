@@ -50,7 +50,11 @@ Optional:
   --only=A,B,C            Run only these components (comma-separated)
   --skip=X,Y              Skip these components
   --skip-prepare          Skip the prepare step (validation + pom bump + tag)
-  --skip-finalize         Skip the finalize step (snapshot bump + version refs)
+  --skip-update-version-references
+                          Skip the version-references step (changelog,
+                          _config.yml, package.json, etc.). Re-runs of a
+                          previously-finalized release should pass this.
+  --skip-finalize         Skip the finalize step (snapshot bump + mvn deploy)
   -h, --help              Show this help
 
 Components (in order): ${ALL_COMPONENTS[*]}
@@ -60,6 +64,7 @@ EOF
 ONLY=""
 SKIP=""
 SKIP_PREPARE=false
+SKIP_UPDATE_VERSION_REFS=false
 SKIP_FINALIZE=false
 
 while [[ $# -gt 0 ]]; do
@@ -74,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --only=*)          ONLY="${1#*=}"; shift ;;
     --skip=*)          SKIP="${1#*=}"; shift ;;
     --skip-prepare)    SKIP_PREPARE=true; shift ;;
+    --skip-update-version-references) SKIP_UPDATE_VERSION_REFS=true; shift ;;
     --skip-finalize)   SKIP_FINALIZE=true; shift ;;
     -h|--help)         usage; exit 0 ;;
     *)                 log_error "Unknown arg: $1"; usage >&2; exit 2 ;;
@@ -124,6 +130,13 @@ if ! $SKIP_PREPARE; then
   run_step "prepare"  "$SCRIPT_DIR/prepare.sh" "$DRY_ARG"
 fi
 
+# maven-plugin runs locally before update-version-references; that's safe
+# because maven-plugin reads pom.xml (bumped by prepare.sh) and does not
+# read _config.yml, package.json, or any of the files touched by
+# update-version-references. In CI, maven-plugin is part of the parallel
+# publish group AFTER update-version-references, so the orderings differ
+# but neither produces a stale-version artifact.
+UPDATE_REFS_DONE=false
 for c in "${TO_RUN[@]}"; do
   COMP_SCRIPT="$SCRIPT_DIR/components/$c.sh"
   if [[ ! -x "$COMP_SCRIPT" ]]; then
@@ -131,7 +144,28 @@ for c in "${TO_RUN[@]}"; do
     exit 2
   fi
   run_step "$c" "$COMP_SCRIPT" "$DRY_ARG"
+
+  # Commit + push the version-reference updates immediately after
+  # maven-central succeeds so every subsequent component publish
+  # (website, helm, docker, npm, etc.) reads the new version from disk.
+  # Tied to maven-central (a required step that is never legitimately
+  # skipped in a fresh release) rather than versioned-site (which the
+  # operator can drop with --skip=versioned-site, e.g. on a re-publish).
+  # Mirrors the insertion point in .buildkite/release-pipeline.yml.
+  if [[ "$c" == "maven-central" ]] && ! $SKIP_UPDATE_VERSION_REFS; then
+    run_step "update-version-references" "$SCRIPT_DIR/update-version-references.sh" "$DRY_ARG"
+    UPDATE_REFS_DONE=true
+  fi
 done
+
+# If maven-central was skipped (--skip=maven-central, used for re-publish
+# scenarios) the trigger above didn't fire. Surface this so the operator
+# explicitly opts in/out instead of silently shipping stale docs.
+if ! $UPDATE_REFS_DONE && ! $SKIP_UPDATE_VERSION_REFS; then
+  log_error "maven-central was not executed (skipped, or absent from --only=...); update-version-references did not auto-trigger."
+  log_error "  pass --skip-update-version-references to acknowledge, or include maven-central in --only=..."
+  exit 2
+fi
 
 if ! $SKIP_FINALIZE; then
   run_step "finalize" "$SCRIPT_DIR/finalize.sh" "$DRY_ARG"
