@@ -38,42 +38,124 @@ anything the user might want to follow visually:
    IntelliJ's persistent index — orders of magnitude faster than
    `grep -r` on a large repo.
 
-## Long-Running Commands — Background Pattern
+## Long-Running Commands — Use Bash + IntelliJ Hybrid (Tested)
 
-The IntelliJ MCP terminal tool has limits: it caps output at 2000
-lines and effectively times out around 2–3 minutes regardless of the
-`timeout` parameter. For long builds (`mvn install`, `mvn verify`,
-big test suites, Docker builds), **background the command in
-IntelliJ's shell** and poll the log file:
+The IntelliJ MCP terminal tool caps output at 2000 lines and
+effectively times out around 2–3 minutes regardless of the
+`timeout` parameter — **and the timeout kills the shell hard, so
+`&` backgrounded processes do not actually detach** (verified
+twice during the jakarta mega-bump session 2026-05-28: both
+`cmd &` and `nohup cmd & disown` patterns failed; the process
+never spawned). Do not rely on MCP terminal alone for long builds.
+
+The reliable pattern is a **hybrid**: Bash launches the build
+(survives MCP timeouts and gives a clean completion notification);
+IntelliJ opens the log file for live visibility (auto-refreshes
+as the file grows; the user can scroll and search).
 
 ```
-mcp__idea__execute_terminal_command(
-    command="./mvnw verify -fae > .tmp/maven-verify.log 2>&1 &",
-    timeout=5000,
-    reuseExistingTerminalWindow=true
+# 1. Launch via Bash run_in_background (returns immediately, fires
+#    a notification when EXIT= is written by the wrapper)
+Bash(
+    command="cd mockserver && ./mvnw verify -fae \\
+        > /Users/.../.tmp/maven-verify.log 2>&1; \\
+        echo EXIT=$? >> /Users/.../.tmp/maven-verify.log",
+    run_in_background=true
+)
+
+# 2. Open the log file in IntelliJ so the user can watch progress
+mcp__idea__open_file_in_editor(
+    filePath=".tmp/maven-verify.log",
+    projectPath="/Users/.../mockserver-monorepo"
 )
 ```
 
-The `&` puts the build into the background; the short `timeout`
-returns control to the agent almost immediately. The user sees the
-process running live in IntelliJ's Terminal window. To check
-progress, the agent issues another tool call:
-
-```
-mcp__idea__execute_terminal_command(
-    command="tail -50 .tmp/maven-verify.log",
-    timeout=15000,
-    reuseExistingTerminalWindow=true
-)
-```
-
-Or simply `Read` the log file directly (it's on local disk).
+The user sees the log file in IntelliJ as it grows (IntelliJ tails
+external file changes automatically). The agent waits for the Bash
+notification — no polling — and reads the log via `Read` or
+`Bash tail` to evaluate the result.
 
 **Even better when a saved Run Configuration exists:**
 `mcp__idea__execute_run_configuration("Maven verify")` streams into
 IntelliJ's **Run** tool window with module nesting, error markers,
 and click-through to source. Trade-off: requires the user to save
 the Run Configuration once. Recommend this for repeat workflows.
+
+## Short Commands (under 2 minutes)
+
+MCP terminal works fine for short commands that complete
+synchronously: `git status`, `ls`, `mvn dependency:list`, a small
+test class re-run, etc. Use `mcp__idea__execute_terminal_command`
+directly — output appears in IntelliJ's Terminal tool window and
+also comes back to the agent.
+
+## Default Behaviors When IntelliJ MCP Is Available
+
+These four behaviors are the default when `mcp__idea__*` tools are
+in the toolset. They cost a small number of extra tool calls per
+edit; they buy the user real-time visibility of agent activity in
+the IDE.
+
+### 1. Open files in the editor before significant edits
+
+Before any non-trivial `Edit` / `Write` / `replace_text_in_file`
+call, first call `mcp__idea__open_file_in_editor` so the file
+appears as a tab in IntelliJ. The user sees what is about to change
+in real time as the edit lands.
+
+"Significant" = changes more than ~5 lines, adds/removes a method
+or class, or modifies imports. Single-line typo fixes and other
+trivial edits do not need the open-first preamble.
+
+### 2. Auto-validate Java edits with `mcp__idea__get_file_problems`
+
+After any `.java` file edit, immediately call
+`mcp__idea__get_file_problems(filePath=..., errorsOnly=true)` on
+that file. IntelliJ's resolver returns compile errors and
+inspection hits in ~100ms — orders of magnitude faster than a
+Maven cycle. Surface any new errors back to the user before moving
+on. Skip for non-code files (markdown, yaml, json).
+
+### 3. Use `mcp__idea__rename_refactoring` for symbol renames
+
+When renaming a Java class, method, field, parameter, or local
+variable, prefer the IntelliJ refactor tool over grep+sed. IntelliJ
+updates every reference (including JavaDoc, annotations, string
+literals in `@Value`, JSP/XML references) — the things text
+replacement silently misses.
+
+Pattern:
+```
+mcp__idea__rename_refactoring(
+    filePath="path/to/Foo.java",
+    line=42, column=14,         # cursor on the symbol declaration
+    newName="BarBaz"
+)
+```
+
+Fall back to text replacement only when the symbol is genuinely
+text-only (e.g. a string constant value that isn't a class
+reference).
+
+### 4. Record current activity in `.tmp/agent-activity`
+
+Even when working in the main checkout (not a worktree), write a
+short one-line description to `.tmp/agent-activity` at meaningful
+transitions: starting a new high-level task, before spawning a
+subagent, before kicking off a long-running command, after a major
+edit lands.
+
+```bash
+mkdir -p .tmp
+echo "Implementing SSLHostConfig migration in WAR tests" > .tmp/agent-activity
+```
+
+This is the same convention `/agent-status` reads from worktrees.
+Writing it from the main checkout lets the user see *what the
+default agent is doing right now* by `cat .tmp/agent-activity`,
+or have an automation watch the file. Zero cost when no one looks;
+useful when the user wants to know what's happening without
+reading the transcript.
 
 ## When NOT to Use IntelliJ MCP
 

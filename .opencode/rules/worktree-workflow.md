@@ -67,6 +67,27 @@ worktree — if the user wants IDE visibility for worktree work, they
 must `File → Open` the worktree path in a new IntelliJ window. Calling
 this out explicitly in the response when `/worktree` is invoked.
 
+#### Activity recording for `/agent-status`
+
+When multiple agent sessions run in parallel, the user can run
+`/agent-status` to see a table of all active worktrees. To surface
+**what each agent is currently doing** in that table, write a short
+one-line description to `.tmp/agent-activity` inside the worktree
+whenever the focus changes:
+
+```bash
+mkdir -p .tmp
+echo "Running mvn verify on mockserver-netty" > .tmp/agent-activity
+# ... later ...
+echo "Reviewing diff for commit" > .tmp/agent-activity
+```
+
+The convention is intentionally lightweight: a single line, free
+text, overwritten on each update. No state schema, no JSON. The
+dashboard truncates to 32 characters so keep the message tight.
+If the file is absent, the dashboard shows `(idle)` — the agent
+need not write it, but doing so makes parallel work observable.
+
 ### Steps 3–6 — Gates (run by `/worktree-merge`)
 
 All four must pass; any failure stops the merge and leaves the worktree
