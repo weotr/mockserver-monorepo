@@ -1,5 +1,7 @@
 # Build Optimisation Plan
 
+> **Status (2026-05-28):** 2.1 (shade → parent POM) and 2.2 (`.mvn` config + script audit) are **DONE and verified** (all six shaded JARs byte-identical to baseline). 2.3 (Test Analytics) is **blocked on a one-time Buildkite-admin step** — see that section. Original note below.
+>
 > **Status (2026-05-26):** Plan trimmed after adversarial review. Several items from the original plan have been dropped because their complexity-to-payoff ratio was poor or because they would widen local-vs-CI divergence. See [Dropped Items](#dropped-items-and-why) for what was considered and rejected.
 
 ## Guiding Principles
@@ -75,7 +77,13 @@ Buildkite `timeout_in_minutes` on each step; Surefire `forkedProcessTimeoutInSec
 
 The remaining items, in priority order. All are low-complexity and either zero-divergence or already-justified divergence.
 
-### 2.1 Extract shade configuration to parent POM (was 3.3) — HIGH PRIORITY
+### 2.1 Extract shade configuration to parent POM (was 3.3) — DONE
+
+Shipped: the shared shade execution (`id=shade-no-dependencies`) lives in `mockserver/pom.xml` `<build><pluginManagement>`; all six `*-no-dependencies` modules carry a bare `<plugin>` reference. `mockserver-netty-no-dependencies` overrides `<transformers>` (to set `Main-Class: org.mockserver.cli.Main`) and `<filters>` — both with `combine.self="override"` because, in the pluginManagement→plugin merge, a child list element **replaces** rather than appends.
+
+**Key finding (caught by the JAR diff):** the `io.netty:netty-tcnative-boringssl-static` → `META-INF/native/**` filter is **netty-only**, not shared. The other five modules genuinely bundle those native libraries and shipped them in the baseline; putting that filter in the shared config silently stripped them. It now lives solely in netty's override.
+
+**Verification:** `jar tf | sort` of all six shaded JARs matches the pre-change baseline exactly; netty's `Main-Class` and each module's `Automatic-Module-Name` are preserved.
 
 **Why first:** pure deduplication. Roughly 1,400 LOC of duplicated XML across the 6 `*-no-dependencies` modules collapses to ~250 LOC in `<pluginManagement>` (LOC figures are estimates pending implementation). Zero runtime impact, zero local-vs-CI divergence, makes the existing `skipShade` property easier to maintain.
 
@@ -91,7 +99,11 @@ The remaining items, in priority order. All are low-complexity and either zero-d
 
 **Risk:** low, but the JAR diff is the gating check — relocations are subtle and a missing rule produces a JAR that compiles fine but breaks at runtime when consumers shade us.
 
-### 2.2 `.mvn/maven.config` + `.mvn/jvm.config` (was 1.2)
+### 2.2 `.mvn/maven.config` + `.mvn/jvm.config` (was 1.2) — DONE
+
+Shipped: `mockserver/.mvn/maven.config` already carried `-Djava.security.egd=file:/dev/./urandom` (the CI double-slash form); `mockserver/.mvn/jvm.config` set to `-Xms2048m -Xmx6144m`. The redundant explicit `-Djava.security.egd` flag was dropped from `local_quick_build.sh` (was single-slash `file:/dev/urandom`) and `buildkite_quick_build.sh`. The files live in `mockserver/.mvn` (alongside the wrapper and the reactor-root pom), not the repo root, since that is where `find_maven_basedir` resolves the project base directory.
+
+> **Heap note:** `mvnw` prepends `jvm.config` then existing `MAVEN_OPTS`, so `MAVEN_OPTS` wins on duplicate `-Xmx`. CI (`buildkite_quick_build.sh`) sets `MAVEN_OPTS=-Xmx6144m` explicitly and `local_quick_build.sh` sets `-Xmx8192m`, so `jvm.config` only governs **bare `./mvnw`** (IDE / ad-hoc) builds. `-Xmx6144m` sizes only the Maven controller JVM — forked test JVMs get their heap from Surefire's argLine — so it is safe; local scripts still override upward to 8 G.
 
 Centralise Maven and JVM defaults so `./mvnw clean install` works without wrapper scripts.
 
@@ -114,9 +126,21 @@ Centralise Maven and JVM defaults so `./mvnw clean install` works without wrappe
 
 **Impact:** consistent behaviour for bare `./mvnw` invocations (IDE, ad-hoc command line) without needing a wrapper script.
 
-### 2.3 Buildkite Test Analytics token (was 3.4, partial)
+### 2.3 Buildkite Test Analytics token (was 3.4, partial) — BLOCKED on external setup
 
-XML reports are already collected. The remaining step is wiring `BUILDKITE_ANALYTICS_TOKEN` so the reports flow into the Test Analytics tab (historical durations, flaky test detection). One-time setup; no code changes.
+XML reports are already collected. Flowing them into the Test Analytics tab (historical durations, flaky test detection) requires a one-time, Buildkite-admin action that cannot be done from the repo:
+
+1. In Buildkite → Analytics, create a test suite for the Java build and copy its **API token**.
+2. Store the token as a pipeline secret named `BUILDKITE_ANALYTICS_TOKEN` (Buildkite secrets / the agent environment hook — same mechanism as other build secrets).
+3. Only then add the `test-collector` Buildkite plugin to the `:maven: build` step in `.buildkite/pipeline-java.yml`, e.g.:
+   ```yaml
+   plugins:
+     - test-collector#v1.11.0:
+         files: "**/target/*-reports/TEST-*.xml"
+         format: "junit"
+   ```
+
+The plugin **fails the step if `BUILDKITE_ANALYTICS_TOKEN` is unset**, so the pipeline YAML must not be changed until step 2 is complete — otherwise CI breaks for every build. No pipeline edit has been made for this reason.
 
 ---
 
@@ -177,9 +201,9 @@ Worth doing as routine hygiene, not as part of a build-optimisation plan. The cu
 | Item | Local Build | CI Build | Risk |
 |------|------------|---------|------|
 | 1.1–1.6 (DONE) | ~10% | ~35% | Validated in production |
-| 2.1 Shade extract to parent POM | 0% | 0% | Low — verify shaded JAR diff |
-| 2.2 `.mvn/maven.config` + `jvm.config` | 0% | 0% | Low — audit wrapper scripts |
-| 2.3 Test Analytics token | 0% | 0% | None |
+| 2.1 Shade extract to parent POM (DONE) | 0% | 0% | Verified — JAR diff clean (1,284 LOC removed, 249 added) |
+| 2.2 `.mvn/maven.config` + `jvm.config` (DONE) | 0% | 0% | Verified — scripts audited |
+| 2.3 Test Analytics token (blocked) | 0% | 0% | None — needs Buildkite suite + secret |
 
 The remaining work is **maintenance and visibility**, not raw speed. The big speed wins were the items shipped in Phase 1.
 

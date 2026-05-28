@@ -15,7 +15,8 @@ echo
 echo
 
 # to run from specific module use argument in quotes "-rf mockserver-war"
-./mvnw -T 3C clean install ${1:-} -Djava.security.egd=file:/dev/urandom
+# -Djava.security.egd is supplied to all mockserver/ builds via .mvn/maven.config
+./mvnw -T 3C clean install ${1:-}
 
 cd ..
 SKIP_JAVA_BUILD=true container_integration_tests/integration_tests.sh
