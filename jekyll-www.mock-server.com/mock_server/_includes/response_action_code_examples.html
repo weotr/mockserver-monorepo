@@ -338,6 +338,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 </div>
 <button id="button_response_literal_status_code_and_reason_phrase" class="accordion">literal response with status code and reason phrase</button>
 <div class="panel">
+    <p><strong>Note for WAR deployments:</strong> Jakarta Servlet 6 (Tomcat 11+, Jetty 12+, WildFly 32+) removed support for custom HTTP reason phrases via <code>HttpServletResponse.setStatus(int, String)</code>, so when MockServer is deployed as a WAR in a Servlet 6 container only the status code is sent on the wire and the reason phrase is silently dropped. The reason phrase still works in MockServer's standalone, Docker, and Netty deployments.</p>
     <button class="accordion inner">Java</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)

@@ -21,7 +21,6 @@ import org.springframework.web.servlet.view.freemarker.FreeMarkerViewResolver;
  */
 @Configuration
 @EnableWebMvc
-@SuppressWarnings("deprecation")
 @ComponentScan(basePackages = {"org.mockserver.examples.proxy.web"})
 public class WebMvcConfiguration implements WebMvcConfigurer {
 
@@ -33,7 +32,7 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
     @Bean
     public FreeMarkerConfigurer freemarkerConfig() {
         FreeMarkerConfigurer freeMarkerConfigurer = new FreeMarkerConfigurer();
-        freeMarkerConfigurer.setConfiguration(new freemarker.template.Configuration(freemarker.template.Configuration.VERSION_2_3_22) {{
+        freeMarkerConfigurer.setConfiguration(new freemarker.template.Configuration(freemarker.template.Configuration.VERSION_2_3_32) {{
             setTemplateLoader(new MultiTemplateLoader(
                 new TemplateLoader[]{
                     new ClassTemplateLoader(FreeMarkerConfig.class, "/")

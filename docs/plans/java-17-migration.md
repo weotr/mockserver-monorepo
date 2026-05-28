@@ -116,14 +116,14 @@ These can land file-by-file over time; not a single deliverable. Track as a long
 
 **Sealed classes** — `Body<T>` (11 subtypes), `Action<T>` (9), `RequestDefinition` (2), `BodyDTO` (11). Sealing enables exhaustive `instanceof` chains once pattern matching lands.
 
-### 6. Pom cleanup follow-ups (~30 min)
+### 6. Review follow-ups
 
-Adversarial review on the mega-bump commit flagged stale HttpClient 4 references that survived the migration:
+Adversarial review on the mega-bump commit raised four findings. Two were applied as a follow-up cleanup; two were verified as false alarms (the reviewer missed actual HC4 usage in the netty integration tests and the `BookServiceApacheHttpClient` example):
 
-- `mockserver/pom.xml` `<httpcomponents.version>4.4.1</httpcomponents.version>` property is no longer accurate — core/netty don't use HC4 and examples now use HC5.
-- `mockserver/pom.xml` `dependencyManagement` entry for `org.apache.httpcomponents:httpclient:4.5.14` is stale (HC5 lands transitively via `jersey-apache5-connector`).
-- `mockserver-examples/pom.xml` still declares `org.apache.httpcomponents:httpclient` (HC4). Switch to an explicit `org.apache.httpcomponents.client5:httpclient5` so intent is self-documenting.
-- `mockserver/mockserver-examples/.../WebMvcConfiguration.java:24` has a now-narrower `@SuppressWarnings("deprecation")` — add an inline comment naming the FreeMarker `Configuration(VERSION_2_3_22)` deprecation that survives.
+- **Applied**: `WebMvcConfiguration.java` bumped FreeMarker `Configuration(VERSION_2_3_22)` → `VERSION_2_3_32`; obsolete `@SuppressWarnings("deprecation")` removed.
+- **Applied**: `jekyll-www.mock-server.com/.../response_action_code_examples.html` got a "Note for WAR deployments" caveat next to the `withReasonPhrase` example — Jakarta Servlet 6 (Tomcat 11+, Jetty 12+) removed `HttpServletResponse.setStatus(int, String)` so reason phrases are silently dropped in WAR mode. Netty / standalone / Docker deployments are unaffected.
+- **Not a real issue**: root pom `<httpcomponents.version>4.4.1</httpcomponents.version>` and `httpclient:4.5.14` `dependencyManagement` entry. HC4 (`org.apache.http.*`) is still in active use by ~8 `mockserver-netty` integration test files (`AbstractClientAuthenticationMockingIntegrationTest`, `NettyHttp*ProxyIntegrationTest`, etc.) — pulled in transitively via `mockserver-integration-testing`. Removing the pin risks version drift.
+- **Not a real issue**: `mockserver-examples/pom.xml` HC4 `httpclient` declaration. `BookServiceApacheHttpClient.java` exists specifically to demonstrate HC4 client usage as a third-party example, alongside the `BookServiceSpringRestTemplate.java` example that uses HC5.
 
 ## Migration checklist
 
@@ -142,8 +142,9 @@ Adversarial review on the mega-bump commit flagged stale HttpClient 4 references
 - [ ] Update consumer `response_templates.html` (full ES2023+ support, no Nashorn limitations)
 - [ ] Re-evaluate `--add-exports=java.base/sun.security.{x509,util}=ALL-UNNAMED`
 - [ ] Document ZGC (`-XX:+UseZGC`) in performance-tuning docs
-- [ ] Drop stale HC4 `httpcomponents.version` / `httpclient:4.5.14` from root pom; declare explicit `httpclient5` in examples
-- [ ] Note Servlet 6 dropping custom reason phrases in WAR/servlet consumer docs (`creating_expectations.html`)
+- [x] WebMvcConfiguration FreeMarker version bump + drop obsolete `@SuppressWarnings("deprecation")`
+- [x] Note Servlet 6 dropping custom reason phrases in WAR/servlet consumer docs (`response_action_code_examples.html`)
+- HC4 `httpcomponents.version` / `httpclient:4.5.14` left as-is — still in active use by `mockserver-netty` integration tests and `BookServiceApacheHttpClient` example
 - [ ] Integrate DataFaker 2.x (optional feature)
 - [ ] Language modernisation (incremental — pattern matching, text blocks, switch expressions, records, sealed classes)
 
