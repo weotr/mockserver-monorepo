@@ -191,6 +191,46 @@ public class ExpectationLlmRoundTripTest {
     }
 
     @Test
+    public void shouldRoundTripConversationPredicatesNormalization() {
+        // given
+        Expectation original = when(request().withPath("/v1/messages"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.ANTHROPIC)
+                    .withCompletion(completion().withText("Matched"))
+                    .withConversationPredicates(
+                        conversationPredicates()
+                            .withLatestMessageContains("hello")
+                            .withNormalization(
+                                org.mockserver.model.NormalizationOptions.normalizationOptions()
+                                    .withCollapseWhitespace(true)
+                                    .withLowercase(true)
+                                    .withSortJsonKeys(true)
+                                    .withDropBuiltInVolatileFields(true)
+                                    .withDropVolatileFields(java.util.Arrays.asList("requestId"))
+                            )
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then
+        assertThat(deserialized.length, is(1));
+        ConversationPredicates preds = deserialized[0].getHttpLlmResponse().getConversationPredicates();
+        assertThat(preds, is(notNullValue()));
+        assertThat(preds.getNormalization(), is(notNullValue()));
+        assertThat(preds.getNormalization().getCollapseWhitespace(), is(true));
+        assertThat(preds.getNormalization().getLowercase(), is(true));
+        assertThat(preds.getNormalization().getSortJsonKeys(), is(true));
+        assertThat(preds.getNormalization().getDropBuiltInVolatileFields(), is(true));
+        assertThat(preds.getNormalization().getDropVolatileFields(), is(java.util.Arrays.asList("requestId")));
+        // the lazy-reconstructed matcher carries normalisation through
+        assertThat(deserialized[0].getHttpLlmResponse().getConversationMatcher().getNormalization(), is(notNullValue()));
+    }
+
+    @Test
     public void shouldRoundTripConversationPredicatesPartial() {
         // given - only some predicates set
         Expectation original = when(request().withPath("/v1/messages"))

@@ -160,12 +160,21 @@ export interface GenericParsed {
 // ConversationPredicates — matches Java ConversationPredicates model
 // ---------------------------------------------------------------------------
 
+export interface PromptNormalization {
+  collapseWhitespace?: boolean;
+  lowercase?: boolean;
+  sortJsonKeys?: boolean;
+  dropBuiltInVolatileFields?: boolean;
+  dropVolatileFields?: string[];
+}
+
 export interface ConversationPredicates {
   turnIndex?: number;
   latestMessageContains?: string;
   latestMessageMatches?: string;
   latestMessageRole?: 'USER' | 'ASSISTANT' | 'TOOL' | 'SYSTEM';
   containsToolResultFor?: string;
+  normalization?: PromptNormalization;
 }
 
 // ---------------------------------------------------------------------------

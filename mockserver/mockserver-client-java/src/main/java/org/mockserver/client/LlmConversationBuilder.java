@@ -181,6 +181,9 @@ public class LlmConversationBuilder {
             if (turnBuilder.containsToolResultFor != null) {
                 predicates.withContainsToolResultFor(turnBuilder.containsToolResultFor);
             }
+            if (turnBuilder.normalization != null) {
+                predicates.withNormalization(turnBuilder.normalization);
+            }
 
             // Build response
             HttpLlmResponse llmResponse = llmResponse()

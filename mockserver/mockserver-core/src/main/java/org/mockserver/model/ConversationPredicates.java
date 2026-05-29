@@ -19,6 +19,7 @@ public class ConversationPredicates extends ObjectWithJsonToString {
     private String latestMessageMatches;   // regex source string, not Pattern
     private ParsedMessage.Role latestMessageRole;
     private String containsToolResultFor;
+    private NormalizationOptions normalization;   // optional modifier applied before contains/matches
 
     public static ConversationPredicates conversationPredicates() {
         return new ConversationPredicates();
@@ -75,7 +76,25 @@ public class ConversationPredicates extends ObjectWithJsonToString {
     }
 
     /**
-     * Returns true if at least one predicate field is set.
+     * Optional normalisation applied to the prompt text (and, for substring
+     * matching, the expected value) before {@code latestMessageContains} /
+     * {@code latestMessageMatches} are evaluated. A modifier, not a predicate:
+     * normalisation alone does not make the matcher active — see
+     * {@link #hasAnyPredicate()}.
+     */
+    public ConversationPredicates withNormalization(NormalizationOptions normalization) {
+        this.normalization = normalization;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public NormalizationOptions getNormalization() {
+        return normalization;
+    }
+
+    /**
+     * Returns true if at least one predicate field is set. {@code normalization}
+     * is intentionally excluded — it only modifies how the text predicates match.
      */
     public boolean hasAnyPredicate() {
         return turnIndex != null
@@ -101,13 +120,14 @@ public class ConversationPredicates extends ObjectWithJsonToString {
             Objects.equals(latestMessageContains, that.latestMessageContains) &&
             Objects.equals(latestMessageMatches, that.latestMessageMatches) &&
             Objects.equals(latestMessageRole, that.latestMessageRole) &&
-            Objects.equals(containsToolResultFor, that.containsToolResultFor);
+            Objects.equals(containsToolResultFor, that.containsToolResultFor) &&
+            Objects.equals(normalization, that.normalization);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(turnIndex, latestMessageContains, latestMessageMatches, latestMessageRole, containsToolResultFor);
+            hashCode = Objects.hash(turnIndex, latestMessageContains, latestMessageMatches, latestMessageRole, containsToolResultFor, normalization);
         }
         return hashCode;
     }

@@ -2154,6 +2154,18 @@ public class McpToolRegistry {
         matchProps.putObject("latestMessageRole").put("type", "string").put("description", "Match when latest message has this role");
         matchProps.putObject("containsToolResultFor").put("type", "string").put("description", "Match when conversation contains a tool result for this tool name");
 
+        // optional prompt normalisation applied before the latestMessage* text predicates
+        ObjectNode normProp = matchProps.putObject("normalization");
+        normProp.put("type", "object").put("description", "Optional deterministic normalisation applied to the latest-message text (and the latestMessageContains value) before matching, so cosmetic differences in dynamically-assembled prompts do not block a match");
+        ObjectNode normProps = normProp.putObject("properties");
+        normProps.putObject("collapseWhitespace").put("type", "boolean").put("description", "Collapse runs of whitespace to a single space and trim (default true)");
+        normProps.putObject("lowercase").put("type", "boolean").put("description", "Lowercase the text before matching (default false)");
+        normProps.putObject("sortJsonKeys").put("type", "boolean").put("description", "When the prompt is JSON, sort object keys so key ordering is irrelevant (default true)");
+        normProps.putObject("dropBuiltInVolatileFields").put("type", "boolean").put("description", "Strip ISO-8601 timestamps, UUIDs, and prefix_… ids (req_/msg_/call_/…) before matching (default false)");
+        ObjectNode dropFieldsProp = normProps.putObject("dropVolatileFields");
+        dropFieldsProp.put("type", "array").put("description", "Names of JSON fields to drop from the prompt before matching");
+        dropFieldsProp.putObject("items").put("type", "string");
+
         // response
         ObjectNode responseProp = turnItemProps.putObject("response");
         responseProp.put("type", "object").put("description", "Response configuration for this turn");
@@ -2286,7 +2298,7 @@ public class McpToolRegistry {
                     JsonNode latestMsgMatches = matchNode.path("latestMessageMatches");
                     if (!latestMsgMatches.isMissingNode() && !latestMsgMatches.isNull()) {
                         try {
-                            turnBuilder.whenLatestMessageContains(
+                            turnBuilder.whenLatestMessageMatches(
                                 java.util.regex.Pattern.compile(latestMsgMatches.asText()));
                         } catch (java.util.regex.PatternSyntaxException e) {
                             return errorResult("turns[" + i + "].match.latestMessageMatches is not a valid regex: " + e.getMessage());
@@ -2304,6 +2316,37 @@ public class McpToolRegistry {
                     JsonNode containsToolResult = matchNode.path("containsToolResultFor");
                     if (!containsToolResult.isMissingNode() && !containsToolResult.isNull()) {
                         turnBuilder.whenContainsToolResultFor(containsToolResult.asText());
+                    }
+                    JsonNode normalizationNode = matchNode.path("normalization");
+                    if (normalizationNode.isObject()) {
+                        NormalizationOptions normalization = NormalizationOptions.normalizationOptions();
+                        JsonNode collapseNode = normalizationNode.path("collapseWhitespace");
+                        if (collapseNode.isBoolean()) {
+                            normalization.withCollapseWhitespace(collapseNode.asBoolean());
+                        }
+                        JsonNode lowercaseNode = normalizationNode.path("lowercase");
+                        if (lowercaseNode.isBoolean()) {
+                            normalization.withLowercase(lowercaseNode.asBoolean());
+                        }
+                        JsonNode sortKeysNode = normalizationNode.path("sortJsonKeys");
+                        if (sortKeysNode.isBoolean()) {
+                            normalization.withSortJsonKeys(sortKeysNode.asBoolean());
+                        }
+                        JsonNode dropBuiltInNode = normalizationNode.path("dropBuiltInVolatileFields");
+                        if (dropBuiltInNode.isBoolean()) {
+                            normalization.withDropBuiltInVolatileFields(dropBuiltInNode.asBoolean());
+                        }
+                        JsonNode dropFieldsNode = normalizationNode.path("dropVolatileFields");
+                        if (dropFieldsNode.isArray()) {
+                            java.util.List<String> dropFields = new java.util.ArrayList<>();
+                            for (JsonNode fieldNode : dropFieldsNode) {
+                                if (fieldNode.isTextual()) {
+                                    dropFields.add(fieldNode.asText());
+                                }
+                            }
+                            normalization.withDropVolatileFields(dropFields);
+                        }
+                        turnBuilder.withNormalization(normalization);
                     }
                 }
 

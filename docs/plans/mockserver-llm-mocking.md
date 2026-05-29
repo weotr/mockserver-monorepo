@@ -31,7 +31,7 @@ The original RFC (RFC-1 LLM Response Builder + RFC-2 Stateful Scripted Conversat
 | # | Item | Status |
 |---|---|---|
 | 8 | MCP/A2A conformance contract testing (`run_mcp_contract_test`) | ❌ Not started — see Item assessments below |
-| 9a | Normalised prompt matching (deterministic) | ❌ Not started — recommended next |
+| 9a | Normalised prompt matching (deterministic) | ✅ Shipped — `NormalizationOptions` on `ConversationPredicates`, applied by `PromptNormalizer` before the text predicates (whitespace/case/JSON-key-sort/volatile-field drop) |
 | 9b | Semantic prompt matching (runtime LLM / embeddings) | ❌ Not started — opt-in only, not for assertions |
 | 10 | OTel GenAI / OpenInference span export | ❌ Not started |
 | 11 | Correlated agent-run session / call-graph view | ❌ Not started |

@@ -18,12 +18,27 @@ export interface IsolationConfig {
   name: string;
 }
 
+/**
+ * Opt-in, deterministic normalisation applied to the latest-message text (and
+ * the latestMessageContains value) before the text predicates are evaluated, so
+ * cosmetic differences in dynamically-assembled agent prompts do not block a
+ * match. Mirrors org.mockserver.model.NormalizationOptions.
+ */
+export interface NormalizationDraft {
+  collapseWhitespace?: boolean;
+  lowercase?: boolean;
+  sortJsonKeys?: boolean;
+  dropBuiltInVolatileFields?: boolean;
+  dropVolatileFields?: string[];
+}
+
 export interface TurnMatchPredicates {
   turnIndex?: number;
   latestMessageContains?: string;
   latestMessageMatches?: string;
   latestMessageRole?: 'USER' | 'ASSISTANT' | 'TOOL' | 'SYSTEM';
   containsToolResultFor?: string;
+  normalization?: NormalizationDraft;
 }
 
 export interface TurnResponse {
@@ -59,6 +74,22 @@ function escapeJava(s: string): string {
     .replace(/\t/g, '\\t');
 }
 
+/**
+ * Build the wire `normalization` object for JSON / MCP, or undefined when the
+ * draft carries nothing meaningful. Booleans are emitted only when defined so
+ * the backend defaults (collapseWhitespace / sortJsonKeys on) apply otherwise.
+ */
+function normalizationToObject(n: NormalizationDraft | undefined): Record<string, unknown> | undefined {
+  if (!n) return undefined;
+  const obj: Record<string, unknown> = {};
+  if (n.collapseWhitespace != null) obj['collapseWhitespace'] = n.collapseWhitespace;
+  if (n.lowercase != null) obj['lowercase'] = n.lowercase;
+  if (n.sortJsonKeys != null) obj['sortJsonKeys'] = n.sortJsonKeys;
+  if (n.dropBuiltInVolatileFields != null) obj['dropBuiltInVolatileFields'] = n.dropBuiltInVolatileFields;
+  if (n.dropVolatileFields && n.dropVolatileFields.length > 0) obj['dropVolatileFields'] = n.dropVolatileFields;
+  return Object.keys(obj).length > 0 ? obj : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Java codegen
 // ---------------------------------------------------------------------------
@@ -71,6 +102,10 @@ export function conversationToJava(draft: ConversationDraft): string {
   const lines: string[] = [];
   lines.push('import static org.mockserver.client.Llm.*;');
   lines.push('import org.mockserver.model.Provider;');
+  // Generated regex predicates use java.util.regex.Pattern.
+  if (draft.turns.some((t) => t.predicates.latestMessageMatches)) {
+    lines.push('import java.util.regex.Pattern;');
+  }
   lines.push('');
 
   // Start builder chain
@@ -96,13 +131,27 @@ export function conversationToJava(draft: ConversationDraft): string {
       lines.push(`        .whenLatestMessageContains("${escapeJava(turn.predicates.latestMessageContains)}")`);
     }
     if (turn.predicates.latestMessageMatches) {
-      lines.push(`        .whenLatestMessageContains(Pattern.compile("${escapeJava(turn.predicates.latestMessageMatches)}"))`);
+      lines.push(`        .whenLatestMessageMatches(Pattern.compile("${escapeJava(turn.predicates.latestMessageMatches)}"))`);
     }
     if (turn.predicates.latestMessageRole) {
       lines.push(`        .whenLatestMessageRole(ParsedMessage.Role.${turn.predicates.latestMessageRole})`);
     }
     if (turn.predicates.containsToolResultFor) {
       lines.push(`        .whenContainsToolResultFor("${escapeJava(turn.predicates.containsToolResultFor)}")`);
+    }
+    const normObj = normalizationToObject(turn.predicates.normalization);
+    if (normObj) {
+      const n = turn.predicates.normalization!;
+      const normParts: string[] = ['org.mockserver.model.NormalizationOptions.normalizationOptions()'];
+      if (n.collapseWhitespace != null) normParts.push(`.withCollapseWhitespace(${n.collapseWhitespace})`);
+      if (n.lowercase != null) normParts.push(`.withLowercase(${n.lowercase})`);
+      if (n.sortJsonKeys != null) normParts.push(`.withSortJsonKeys(${n.sortJsonKeys})`);
+      if (n.dropBuiltInVolatileFields != null) normParts.push(`.withDropBuiltInVolatileFields(${n.dropBuiltInVolatileFields})`);
+      if (n.dropVolatileFields && n.dropVolatileFields.length > 0) {
+        const list = n.dropVolatileFields.map((f) => `"${escapeJava(f)}"`).join(', ');
+        normParts.push(`.withDropVolatileFields(java.util.Arrays.asList(${list}))`);
+      }
+      lines.push(`        .withNormalization(${normParts.join('')})`);
     }
 
     // Response
@@ -189,6 +238,10 @@ export function conversationToJson(draft: ConversationDraft): string {
     if (turn.predicates.containsToolResultFor) {
       predicates['containsToolResultFor'] = turn.predicates.containsToolResultFor;
     }
+    const jsonNorm = normalizationToObject(turn.predicates.normalization);
+    if (jsonNorm) {
+      predicates['normalization'] = jsonNorm;
+    }
 
     const llmResponse: Record<string, unknown> = {
       provider: draft.provider,
@@ -261,11 +314,18 @@ export function conversationToMcpArgs(
     if (turn.predicates.latestMessageContains) {
       match['latestMessageContains'] = turn.predicates.latestMessageContains;
     }
+    if (turn.predicates.latestMessageMatches) {
+      match['latestMessageMatches'] = turn.predicates.latestMessageMatches;
+    }
     if (turn.predicates.latestMessageRole) {
       match['latestMessageRole'] = turn.predicates.latestMessageRole;
     }
     if (turn.predicates.containsToolResultFor) {
       match['containsToolResultFor'] = turn.predicates.containsToolResultFor;
+    }
+    const mcpNorm = normalizationToObject(turn.predicates.normalization);
+    if (mcpNorm) {
+      match['normalization'] = mcpNorm;
     }
     if (Object.keys(match).length > 0) {
       turnObj['match'] = match;
@@ -386,12 +446,27 @@ function pickProvider(raw: unknown): ProviderName {
   return 'ANTHROPIC';
 }
 
+function parseNormalization(raw: unknown): NormalizationDraft | undefined {
+  if (raw == null || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const draft: NormalizationDraft = {};
+  if (typeof r['collapseWhitespace'] === 'boolean') draft.collapseWhitespace = r['collapseWhitespace'];
+  if (typeof r['lowercase'] === 'boolean') draft.lowercase = r['lowercase'];
+  if (typeof r['sortJsonKeys'] === 'boolean') draft.sortJsonKeys = r['sortJsonKeys'];
+  if (typeof r['dropBuiltInVolatileFields'] === 'boolean') draft.dropBuiltInVolatileFields = r['dropBuiltInVolatileFields'];
+  if (Array.isArray(r['dropVolatileFields'])) {
+    draft.dropVolatileFields = (r['dropVolatileFields'] as unknown[]).filter((f): f is string => typeof f === 'string');
+  }
+  return Object.keys(draft).length > 0 ? draft : undefined;
+}
+
 /**
  * Convert a group of expectations sharing a scenarioName back into a
  * ConversationDraft plus the ordered list of expectation IDs. Lossy by
  * design — predicates beyond turnIndex / latestMessageContains /
- * latestMessageRole / containsToolResultFor are dropped, since the wizard
- * only exposes those four match predicates.
+ * latestMessageMatches / latestMessageRole / containsToolResultFor (plus
+ * optional normalization) are dropped, since the wizard only exposes those
+ * match predicates.
  */
 export function draftFromScenarioExpectations(
   expectations: ScenarioExpectationLike[],
@@ -428,10 +503,13 @@ export function draftFromScenarioExpectations(
         turnIndex: typeof predicates['turnIndex'] === 'number' ? (predicates['turnIndex'] as number) : undefined,
         latestMessageContains: typeof predicates['latestMessageContains'] === 'string'
           ? (predicates['latestMessageContains'] as string) : undefined,
+        latestMessageMatches: typeof predicates['latestMessageMatches'] === 'string'
+          ? (predicates['latestMessageMatches'] as string) : undefined,
         latestMessageRole: typeof predicates['latestMessageRole'] === 'string'
           ? (predicates['latestMessageRole'] as 'USER' | 'ASSISTANT' | 'TOOL' | 'SYSTEM') : undefined,
         containsToolResultFor: typeof predicates['containsToolResultFor'] === 'string'
           ? (predicates['containsToolResultFor'] as string) : undefined,
+        normalization: parseNormalization(predicates['normalization']),
       },
       response: {
         text: typeof completion['text'] === 'string' ? (completion['text'] as string) : '',

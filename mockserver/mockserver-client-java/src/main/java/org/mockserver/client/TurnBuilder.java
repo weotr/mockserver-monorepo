@@ -3,6 +3,7 @@ package org.mockserver.client;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.Completion;
+import org.mockserver.model.NormalizationOptions;
 
 import java.util.regex.Pattern;
 
@@ -21,6 +22,7 @@ public class TurnBuilder {
     Pattern latestMessageMatches;
     ParsedMessage.Role latestMessageRole;
     String containsToolResultFor;
+    NormalizationOptions normalization;
     Completion completion;
 
     TurnBuilder(LlmConversationBuilder parent) {
@@ -56,12 +58,22 @@ public class TurnBuilder {
      * @return this builder
      * @throws IllegalArgumentException if the regex fails to compile
      */
-    public TurnBuilder whenLatestMessageContains(Pattern regex) {
+    public TurnBuilder whenLatestMessageMatches(Pattern regex) {
         if (regex == null) {
             throw new IllegalArgumentException("regex must not be null");
         }
         this.latestMessageMatches = regex;
         return this;
+    }
+
+    /**
+     * @deprecated misleading name — this overload matches by regex, not substring.
+     * Use {@link #whenLatestMessageMatches(Pattern)}. Retained for source
+     * compatibility; delegates to {@code whenLatestMessageMatches}.
+     */
+    @Deprecated
+    public TurnBuilder whenLatestMessageContains(Pattern regex) {
+        return whenLatestMessageMatches(regex);
     }
 
     /**
@@ -84,6 +96,20 @@ public class TurnBuilder {
      */
     public TurnBuilder whenContainsToolResultFor(String toolName) {
         this.containsToolResultFor = toolName;
+        return this;
+    }
+
+    /**
+     * Apply opt-in prompt normalisation before the {@code whenLatestMessage…}
+     * text predicates are evaluated, so cosmetic differences (whitespace, JSON
+     * key ordering, volatile ids/timestamps) do not block a match. Deterministic
+     * — the same prompt always normalises identically.
+     *
+     * @param normalization the normalisation options
+     * @return this builder
+     */
+    public TurnBuilder withNormalization(NormalizationOptions normalization) {
+        this.normalization = normalization;
         return this;
     }
 

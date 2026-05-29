@@ -54,6 +54,19 @@ function buildPills(predicates: ConversationPredicates): PillDef[] {
       label: `has tool_result for ${truncate(predicates.containsToolResultFor)}`,
     });
   }
+  if (predicates.normalization != null) {
+    const n = predicates.normalization;
+    const parts: string[] = [];
+    if (n.collapseWhitespace) parts.push('ws');
+    if (n.lowercase) parts.push('lower');
+    if (n.sortJsonKeys) parts.push('json-keys');
+    if (n.dropBuiltInVolatileFields) parts.push('volatile');
+    if (n.dropVolatileFields && n.dropVolatileFields.length > 0) parts.push(`drop ${n.dropVolatileFields.length}`);
+    pills.push({
+      key: 'normalization',
+      label: parts.length > 0 ? `normalised: ${parts.join(', ')}` : 'normalised',
+    });
+  }
 
   return pills;
 }

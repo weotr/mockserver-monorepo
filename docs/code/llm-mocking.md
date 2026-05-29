@@ -60,10 +60,24 @@ The expanded events are handed to `HttpSseResponseActionHandler` which already h
 
 - `whenTurnIndex(n)` -- assistant turn count
 - `whenLatestMessageContains(text)` -- substring match on last message
+- `whenLatestMessageMatches(pattern)` -- regex match on last message
 - `whenLatestMessageRole(role)` -- role of last message
 - `whenContainsToolResultFor(toolName)` -- tool result presence
+- `withNormalization(options)` -- opt-in prompt normalisation applied before the `contains`/`matches` text predicates (see below)
 
 Predicates are stored as `ConversationPredicates` on `HttpLlmResponse` for JSON round-tripping. The matcher is lazily reconstructed from predicates after deserialisation.
+
+### Normalised prompt matching
+
+Agent prompts are dynamically assembled, so exact-byte matching is brittle. `NormalizationOptions` (carried on `ConversationPredicates`) applies a **deterministic** transform to the latest-message text before the text predicates run, via `PromptNormalizer.normalize(text, options)`:
+
+- `collapseWhitespace` (default on) -- collapse runs of whitespace to a single space and trim
+- `lowercase` (default off) -- lowercase the text
+- `sortJsonKeys` (default on) -- when the prompt is JSON, sort object keys so key ordering is irrelevant
+- `dropBuiltInVolatileFields` (default off) -- strip ISO-8601 timestamps, UUIDs, and `prefix_…` ids (`req_`, `msg_`, `call_`, …)
+- `dropVolatileFields` -- names of JSON fields to drop before matching
+
+For `latestMessageContains`, both the subject text and the expected substring are normalised; for `latestMessageMatches`, only the subject is normalised (normalising the regex source would corrupt the pattern). Normalisation applies **only to the latest-message text** — the `containsToolResultFor` tool name, `turnIndex`, and `latestMessageRole` are matched exactly as specified. Boolean options are nullable: an unset flag uses its default (`collapseWhitespace` and `sortJsonKeys` on; `lowercase` and `dropBuiltInVolatileFields` off), resolved identically whether the options arrive via the REST API or the MCP tool. Normalisation is idempotent and pure — it never makes a test flaky — and is a *modifier*, not a predicate: it does not count toward `hasAnyPredicate()` and has no effect unless a text predicate is also set.
 
 ## Session Isolation
 
@@ -97,16 +111,20 @@ classDiagram
     class TurnBuilder {
         +whenTurnIndex(int)
         +whenLatestMessageContains(String)
+        +whenLatestMessageMatches(Pattern)
         +whenLatestMessageRole(Role)
         +whenContainsToolResultFor(String)
+        +withNormalization(NormalizationOptions)
         +respondingWith(Completion)
         +andThen() TurnBuilder
     }
     class ConversationPredicates {
         +turnIndex: Integer
         +latestMessageContains: String
+        +latestMessageMatches: String
         +latestMessageRole: Role
         +containsToolResultFor: String
+        +normalization: NormalizationOptions
     }
     class LlmConversationMatcher {
         +matches(HttpRequest) boolean
@@ -143,7 +161,7 @@ Two MCP tools expose the LLM mocking feature to agents:
 | Tool | Description |
 |------|-------------|
 | `mock_llm_completion` | Creates a single LLM expectation from provider, path, text, tool calls, usage |
-| `create_llm_conversation` | Creates a multi-turn conversation with scenario state chain and optional isolation |
+| `create_llm_conversation` | Creates a multi-turn conversation with scenario state chain, optional isolation, and an optional per-turn `match.normalization` object |
 
 Both validate provider availability against `ProviderCodecRegistry` at registration time.
 
@@ -208,6 +226,7 @@ classDiagram
         +latestMessageMatches: String
         +latestMessageRole: Role
         +containsToolResultFor: String
+        +normalization: NormalizationOptions
     }
     class ParsedConversation {
         +messages: List~ParsedMessage~
@@ -273,5 +292,7 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `client/LlmConversationBuilder.java` | Fluent builder producing per-turn `Expectation` arrays |
 | `client/TurnBuilder.java` | Per-turn predicate and response configuration |
 | `matchers/LlmConversationMatcher.java` | Evaluates `ConversationPredicates` against decoded requests |
+| `llm/PromptNormalizer.java` | Deterministic prompt normalisation (whitespace/case/JSON-key-sort/volatile-field drop) |
 | `model/HttpLlmResponse.java` | Action type holding provider, model, completion, predicates |
 | `model/ConversationPredicates.java` | Serialisable predicate set stored on `HttpLlmResponse` |
+| `model/NormalizationOptions.java` | Serialisable normalisation modifier carried on `ConversationPredicates` |

@@ -9,10 +9,12 @@ import Typography from '@mui/material/Typography';
 import IconButton from '@mui/material/IconButton';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
+import Checkbox from '@mui/material/Checkbox';
+import Collapse from '@mui/material/Collapse';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PredicatePills from './PredicatePills';
-import type { TurnDraft, TurnMatchPredicates, TurnResponse } from '../lib/conversationCodegen';
+import type { TurnDraft, TurnMatchPredicates, TurnResponse, NormalizationDraft } from '../lib/conversationCodegen';
 import type { ToolCallDraft } from '../lib/expectationFromCapture';
 
 // ---------------------------------------------------------------------------
@@ -63,6 +65,27 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
       updateTurn(index, { response: { ...turn.response, ...partial } });
     },
     [turns, updateTurn],
+  );
+
+  const toggleNormalization = useCallback(
+    (index: number, enabled: boolean) => {
+      // Enabling seeds the backend's defaults (collapse whitespace + sort JSON
+      // keys on); disabling clears the modifier so matching stays exact.
+      updatePredicates(index, {
+        normalization: enabled ? { collapseWhitespace: true, sortJsonKeys: true } : undefined,
+      });
+    },
+    [updatePredicates],
+  );
+
+  const updateNormalization = useCallback(
+    (index: number, partial: Partial<NormalizationDraft>) => {
+      const turn = turns[index]!;
+      updatePredicates(index, {
+        normalization: { ...(turn.predicates.normalization ?? {}), ...partial },
+      });
+    },
+    [turns, updatePredicates],
   );
 
   const updateToolCall = useCallback(
@@ -201,6 +224,61 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                 sx={{ flex: 1, minWidth: 160 }}
               />
             </Box>
+
+            {/* Prompt normalisation (opt-in, deterministic) */}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={turn.predicates.normalization != null}
+                  onChange={(e) => toggleNormalization(i, e.target.checked)}
+                  size="small"
+                />
+              }
+              label="Normalise prompt matching"
+              sx={{ '& .MuiFormControlLabel-label': { fontSize: '0.75rem' }, mb: 0.5 }}
+            />
+            <Collapse in={turn.predicates.normalization != null} unmountOnExit>
+              <Box sx={{ pl: 1.5, mb: 1.5 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  Applied to the latest message before the contains / regex predicates match — deterministic, so it never makes a test flaky.
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0 }}>
+                  {([
+                    ['collapseWhitespace', 'Collapse whitespace'],
+                    ['lowercase', 'Lowercase'],
+                    ['sortJsonKeys', 'Sort JSON keys'],
+                    ['dropBuiltInVolatileFields', 'Drop timestamps / UUIDs / ids'],
+                  ] as [keyof NormalizationDraft, string][]).map(([key, label]) => (
+                    <FormControlLabel
+                      key={key}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={turn.predicates.normalization?.[key] === true}
+                          onChange={(e) => updateNormalization(i, { [key]: e.target.checked })}
+                        />
+                      }
+                      label={label}
+                      sx={{ '& .MuiFormControlLabel-label': { fontSize: '0.75rem' } }}
+                    />
+                  ))}
+                </Box>
+                <TextField
+                  label="Drop JSON fields (comma-separated)"
+                  size="small"
+                  fullWidth
+                  value={(turn.predicates.normalization?.dropVolatileFields ?? []).join(', ')}
+                  onChange={(e) => {
+                    const fields = e.target.value
+                      .split(',')
+                      .map((f) => f.trim())
+                      .filter((f) => f.length > 0);
+                    updateNormalization(i, { dropVolatileFields: fields.length > 0 ? fields : undefined });
+                  }}
+                  sx={{ mt: 0.5 }}
+                />
+              </Box>
+            </Collapse>
 
             {/* Response */}
             <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>

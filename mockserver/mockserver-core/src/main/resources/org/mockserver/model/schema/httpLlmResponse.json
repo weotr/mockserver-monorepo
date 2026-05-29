@@ -130,6 +130,30 @@
         },
         "containsToolResultFor": {
           "type": "string"
+        },
+        "normalization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "collapseWhitespace": {
+              "type": "boolean"
+            },
+            "lowercase": {
+              "type": "boolean"
+            },
+            "sortJsonKeys": {
+              "type": "boolean"
+            },
+            "dropBuiltInVolatileFields": {
+              "type": "boolean"
+            },
+            "dropVolatileFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },

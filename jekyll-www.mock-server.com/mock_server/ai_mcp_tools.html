@@ -996,6 +996,22 @@ sitemap:
         <tr><td><code>latestMessageContains</code></td><td>string</td><td>Match when the latest message in the conversation contains this substring</td></tr>
         <tr><td><code>latestMessageRole</code></td><td>string</td><td>Match when the latest message has this role: <code>USER</code>, <code>ASSISTANT</code>, <code>SYSTEM</code>, or <code>TOOL</code></td></tr>
         <tr><td><code>containsToolResultFor</code></td><td>string</td><td>Match when the conversation contains a tool result for the named tool</td></tr>
+        <tr><td><code>normalization</code></td><td>object</td><td>Optional. Clean up the prompt text before <code>latestMessageContains</code> / <code>latestMessageMatches</code> are checked, so a match is not blocked by cosmetic differences in dynamically-assembled agent prompts. Deterministic &mdash; the same prompt always normalises the same way, so it never makes a test flaky. See the table below.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Turn <code>match.normalization</code> fields</strong> (all optional):</p>
+
+<table>
+    <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>collapseWhitespace</code></td><td>boolean</td><td>Collapse runs of spaces, tabs and newlines to a single space and trim. Default <code>true</code>.</td></tr>
+        <tr><td><code>lowercase</code></td><td>boolean</td><td>Lowercase the text so capitalisation differences are ignored. Default <code>false</code>.</td></tr>
+        <tr><td><code>sortJsonKeys</code></td><td>boolean</td><td>When the prompt is JSON, sort object keys so key ordering does not affect matching. Default <code>true</code>.</td></tr>
+        <tr><td><code>dropBuiltInVolatileFields</code></td><td>boolean</td><td>Strip values that change on every run &mdash; timestamps, UUIDs, and ids like <code>req_…</code> / <code>msg_…</code> / <code>call_…</code> &mdash; before matching. Default <code>false</code>.</td></tr>
+        <tr><td><code>dropVolatileFields</code></td><td>array of string</td><td>Names of JSON fields to remove from the prompt before matching (for caller-specific volatile fields).</td></tr>
     </tbody>
 </table>
 
@@ -1041,7 +1057,11 @@ sitemap:
         {
           "match": {
             "turnIndex": 1,
-            "latestMessageContains": "Paris"
+            "latestMessageContains": "paris",
+            "normalization": {
+              "lowercase": true,
+              "dropBuiltInVolatileFields": true
+            }
           },
           "response": {
             "text": "Paris is the capital of France.",
@@ -1052,6 +1072,8 @@ sitemap:
     }
   }
 }</code></pre>
+
+<p>In the second turn above, <code>normalization</code> lets the turn match whether the prompt says <code>Paris</code>, <code>PARIS</code> or <code>paris</code>, and ignores any per-request timestamps or ids the agent framework injects &mdash; so the match stays stable as prompts are reassembled.</p>
 
 <p><strong>Example response:</strong></p>
 

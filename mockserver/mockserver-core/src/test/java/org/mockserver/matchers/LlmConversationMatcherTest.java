@@ -644,4 +644,71 @@ public class LlmConversationMatcherTest {
         assertThat(stringMatcher.matches(request), is(true));
         assertThat(patternMatcher.matches(request), is(true));
     }
+
+    // --- normalised prompt matching ---
+
+    @Test
+    public void shouldMatchContainsAfterWhitespaceAndCaseNormalisation() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageContains("the weather")
+            .withNormalization(org.mockserver.model.NormalizationOptions.normalizationOptions().withLowercase(true));
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"What is   THE    Weather?\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    @Test
+    public void shouldNotMatchContainsWithoutNormalisationWhenWhitespaceDiffers() {
+        // exact behaviour preserved when normalisation is not set
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageContains("the weather");
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"What is   the    weather?\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(matcher.matches(request), is(false));
+    }
+
+    @Test
+    public void shouldMatchRegexAgainstNormalisedSubjectText() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageMatches("weather in paris")
+            .withNormalization(org.mockserver.model.NormalizationOptions.normalizationOptions().withLowercase(true));
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"WEATHER   IN   PARIS\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
+
+    @Test
+    public void shouldMatchContainsAfterDroppingBuiltInVolatileFields() {
+        LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageContains("order status request")
+            .withNormalization(org.mockserver.model.NormalizationOptions.normalizationOptions()
+                .withDropBuiltInVolatileFields(true));
+
+        HttpRequest request = request().withBody("{\n" +
+            "  \"messages\": [\n" +
+            "    {\"role\": \"user\", \"content\": \"order status request req_abc123def at 2026-05-29T10:15:30Z\"}\n" +
+            "  ]\n" +
+            "}");
+
+        assertThat(matcher.matches(request), is(true));
+    }
 }

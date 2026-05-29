@@ -4,6 +4,7 @@ import {
   conversationToJson,
   conversationToMcpArgs,
   conversationToMcpCall,
+  draftFromScenarioExpectations,
   type ConversationDraft,
 } from '../lib/conversationCodegen';
 
@@ -222,5 +223,85 @@ describe('conversationToMcpCall', () => {
     expect(parsed['params']['name']).toBe('create_llm_conversation');
     expect(parsed['params']['arguments']).toBeDefined();
     expect(parsed['params']['arguments']['provider']).toBe('ANTHROPIC');
+  });
+});
+
+describe('prompt normalisation', () => {
+  function normalisedDraft(): ConversationDraft {
+    const draft = baseDraft();
+    draft.turns[0]!.predicates = {
+      latestMessageContains: 'search the catalogue',
+      normalization: {
+        collapseWhitespace: true,
+        lowercase: true,
+        sortJsonKeys: true,
+        dropBuiltInVolatileFields: true,
+        dropVolatileFields: ['requestId'],
+      },
+    };
+    return draft;
+  }
+
+  it('emits withNormalization in Java', () => {
+    const java = conversationToJava(normalisedDraft());
+    expect(java).toContain('.withNormalization(');
+    expect(java).toContain('.withLowercase(true)');
+    expect(java).toContain('.withDropBuiltInVolatileFields(true)');
+    expect(java).toContain('java.util.Arrays.asList("requestId")');
+  });
+
+  it('emits normalization object in JSON predicates', () => {
+    const json = JSON.parse(conversationToJson(normalisedDraft()));
+    const norm = json[0].httpLlmResponse.conversationPredicates.normalization;
+    expect(norm.lowercase).toBe(true);
+    expect(norm.dropVolatileFields).toEqual(['requestId']);
+  });
+
+  it('emits normalization object in MCP match', () => {
+    const args = conversationToMcpArgs(normalisedDraft());
+    const turns = args['turns'] as Array<Record<string, unknown>>;
+    const match = turns[0]!['match'] as Record<string, unknown>;
+    const norm = match['normalization'] as Record<string, unknown>;
+    expect(norm['sortJsonKeys']).toBe(true);
+    expect(norm['dropBuiltInVolatileFields']).toBe(true);
+  });
+
+  it('round-trips through draftFromScenarioExpectations', () => {
+    const json = JSON.parse(conversationToJson(normalisedDraft())) as Array<Record<string, unknown>>;
+    const { draft } = draftFromScenarioExpectations(
+      json.map((value, i) => ({ key: `k${i}`, value })),
+    );
+    const norm = draft.turns[0]!.predicates.normalization;
+    expect(norm).toBeDefined();
+    expect(norm!.lowercase).toBe(true);
+    expect(norm!.dropVolatileFields).toEqual(['requestId']);
+  });
+});
+
+describe('latestMessageMatches (regex predicate)', () => {
+  function regexDraft(): ConversationDraft {
+    const draft = baseDraft();
+    draft.turns[0]!.predicates = { latestMessageMatches: 'weather.*paris' };
+    return draft;
+  }
+
+  it('emits latestMessageMatches in MCP match', () => {
+    const args = conversationToMcpArgs(regexDraft());
+    const turns = args['turns'] as Array<Record<string, unknown>>;
+    const match = turns[0]!['match'] as Record<string, unknown>;
+    expect(match['latestMessageMatches']).toBe('weather.*paris');
+  });
+
+  it('emits whenLatestMessageMatches in Java', () => {
+    const java = conversationToJava(regexDraft());
+    expect(java).toContain('.whenLatestMessageMatches(Pattern.compile("weather.*paris"))');
+  });
+
+  it('round-trips latestMessageMatches through draftFromScenarioExpectations', () => {
+    const json = JSON.parse(conversationToJson(regexDraft())) as Array<Record<string, unknown>>;
+    const { draft } = draftFromScenarioExpectations(
+      json.map((value, i) => ({ key: `k${i}`, value })),
+    );
+    expect(draft.turns[0]!.predicates.latestMessageMatches).toBe('weather.*paris');
   });
 });

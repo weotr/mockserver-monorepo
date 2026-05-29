@@ -100,6 +100,9 @@ public class HttpLlmResponse extends Action<HttpLlmResponse> {
             if (conversationPredicates.getContainsToolResultFor() != null) {
                 matcher.withContainsToolResultFor(conversationPredicates.getContainsToolResultFor());
             }
+            if (conversationPredicates.getNormalization() != null) {
+                matcher.withNormalization(conversationPredicates.getNormalization());
+            }
             conversationMatcher = matcher;
         }
         return conversationMatcher;

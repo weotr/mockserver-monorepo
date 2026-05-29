@@ -3,9 +3,11 @@ package org.mockserver.matchers;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
+import org.mockserver.llm.PromptNormalizer;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.ProviderCodecRegistry;
 import org.mockserver.model.HttpRequest;
+import org.mockserver.model.NormalizationOptions;
 import org.mockserver.model.Provider;
 import org.mockserver.model.ToolUse;
 import org.slf4j.Logger;
@@ -35,6 +37,7 @@ public class LlmConversationMatcher {
     private ParsedMessage.Role latestMessageRole;
     private String containsToolResultFor;
     private Provider provider;
+    private NormalizationOptions normalization; // optional, applied before contains/matches
 
     public LlmConversationMatcher withTurnIndex(Integer turnIndex) {
         this.turnIndex = turnIndex;
@@ -70,7 +73,7 @@ public class LlmConversationMatcher {
                 this.latestMessageMatches = Pattern.compile(regexSource);
             } catch (java.util.regex.PatternSyntaxException e) {
                 throw new IllegalArgumentException(
-                    "invalid regex for whenLatestMessageContains: " + regexSource, e);
+                    "invalid regex for whenLatestMessageMatches: " + regexSource, e);
             }
         } else {
             this.latestMessageMatches = null;
@@ -121,6 +124,20 @@ public class LlmConversationMatcher {
 
     public Provider getProvider() {
         return provider;
+    }
+
+    /**
+     * Set optional prompt normalisation applied to the latest-message text (and,
+     * for {@code latestMessageContains}, the expected substring) before the text
+     * predicates are evaluated. Null leaves matching exact (today's behaviour).
+     */
+    public LlmConversationMatcher withNormalization(NormalizationOptions normalization) {
+        this.normalization = normalization;
+        return this;
+    }
+
+    public NormalizationOptions getNormalization() {
+        return normalization;
     }
 
     /**
@@ -198,21 +215,34 @@ public class LlmConversationMatcher {
                 }
             }
 
-            // latestMessageContains: substring match against last message's text
+            // latestMessageContains: substring match against last message's text.
+            // When normalisation is set, both the subject text and the expected
+            // substring are normalised so cosmetic differences do not block a match.
             if (latestMessageContains != null) {
                 ParsedMessage lastMessage = messages.get(messages.size() - 1);
                 String text = lastMessage.getTextContent();
-                if (text == null || !text.contains(latestMessageContains)) {
+                if (text == null) {
+                    return false;
+                }
+                String subject = PromptNormalizer.normalize(text, normalization);
+                String expected = PromptNormalizer.normalize(latestMessageContains, normalization);
+                if (!subject.contains(expected)) {
                     return false;
                 }
             }
 
-            // latestMessageMatches: regex match against last message's text
+            // latestMessageMatches: regex match against last message's text. Only
+            // the subject is normalised — normalising the regex source would
+            // corrupt the pattern. The pattern is matched against normalised text.
             if (latestMessageMatchesSource != null) {
                 Pattern pattern = getLatestMessageMatches();
                 ParsedMessage lastMessage = messages.get(messages.size() - 1);
                 String text = lastMessage.getTextContent();
-                if (text == null || !pattern.matcher(text).find()) {
+                if (text == null) {
+                    return false;
+                }
+                String subject = PromptNormalizer.normalize(text, normalization);
+                if (!pattern.matcher(subject).find()) {
                     return false;
                 }
             }
