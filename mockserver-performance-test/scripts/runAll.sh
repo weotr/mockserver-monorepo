@@ -1,9 +1,26 @@
 #!/usr/bin/env bash
+#
+# Start MockServer, wait for it to be ready, then run a k6 scenario against it.
+#
+# Usage: runAll.sh [host] [script]
+#   host    MockServer host (default localhost)
+#   script  k6 script (default load.js)
+#
+set -euo pipefail
 
-host="${1:-localhost}"  # use host.docker.internal for Docker for Desktop
+host="${1:-localhost}"
+script="${2:-load.js}"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-$(dirname $0)/runMockServer.sh
+"${DIR}/runMockServer.sh"
 
-sleep 10
+echo "waiting for MockServer to be ready..."
+for _ in $(seq 1 30); do
+  if curl -fsS -o /dev/null -X PUT "http://localhost:1080/mockserver/status"; then
+    echo "MockServer is up"
+    break
+  fi
+  sleep 1
+done
 
-$(dirname $0)/runLocust.sh "${host}"
+"${DIR}/runK6.sh" "${host}" "${script}"
