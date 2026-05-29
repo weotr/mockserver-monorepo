@@ -58,7 +58,6 @@ Build process, releases, dependencies, security scanning, and the documentation 
 
 | Document | Description |
 |----------|-------------|
-| [Build Optimisation](plans/build-optimisation.md) | Maven build speed improvements (Phase 1 mostly done; Phase 3 pending) |
 | [Security Defaults](plans/security-defaults.md) | Insecure default flips planned for the next major release |
 | [LLM & Agent Mocking Roadmap](plans/mockserver-llm-mocking.md) | Remaining work items after M0–M5 + U1–U4 delivery (drift detection, chaos profiles, tool-call assertions, etc.) |
 
