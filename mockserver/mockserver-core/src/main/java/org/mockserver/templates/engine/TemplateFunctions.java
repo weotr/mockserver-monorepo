@@ -1,6 +1,7 @@
 package org.mockserver.templates.engine;
 
 import com.google.common.collect.ImmutableMap;
+import net.datafaker.Faker;
 import org.mockserver.serialization.Base64Converter;
 import org.mockserver.templates.engine.helpers.DateTemplateHelper;
 import org.mockserver.templates.engine.helpers.JsonTemplateHelper;
@@ -21,6 +22,7 @@ import java.util.function.Supplier;
 public class TemplateFunctions implements Supplier<Object> {
     private static final SecureRandom random = new SecureRandom();
     private static final Base64Converter base64Converter = new Base64Converter();
+    private static final Faker FAKER = new Faker();
 
     public static final Map<String, Supplier<Object>> BUILT_IN_FUNCTIONS = ImmutableMap.<String, Supplier<Object>>builder()
         .put("now", new TemplateFunctions(() -> DateTimeFormatter.ISO_INSTANT.format(TimeService.now())))
@@ -44,6 +46,7 @@ public class TemplateFunctions implements Supplier<Object> {
         .put("jsonTransform", new JsonTemplateHelper())
         .put("dates", new DateTemplateHelper())
         .put("calc", new MathTemplateHelper())
+        .put("faker", FAKER)
         .build();
 
     private final Supplier<String> supplier;

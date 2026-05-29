@@ -446,6 +446,19 @@
                 <artifactId>jmustache</artifactId>
                 <version>1.16</version>
             </dependency>
+            <dependency>
+                <groupId>net.datafaker</groupId>
+                <artifactId>datafaker</artifactId>
+                <version>2.5.4</version>
+            </dependency>
+            <!-- pin libphonenumber to resolve convergence: datafaker:2.5.4 wants 9.0.23,
+                 com.github.java-json-tools:json-schema-validator:2.2.14 (transitive of
+                 swagger-parser) wants 8.11.1. Take the newer line. -->
+            <dependency>
+                <groupId>com.googlecode.libphonenumber</groupId>
+                <artifactId>libphonenumber</artifactId>
+                <version>9.0.23</version>
+            </dependency>
 
             <!-- javascript (GraalVM polyglot) -->
             <dependency>
@@ -1024,6 +1037,10 @@
                                     <relocation>
                                         <pattern>joptsimple.util</pattern>
                                         <shadedPattern>shaded_package.joptsimple.util</shadedPattern>
+                                    </relocation>
+                                    <relocation>
+                                        <pattern>net.datafaker</pattern>
+                                        <shadedPattern>shaded_package.net.datafaker</shadedPattern>
                                     </relocation>
                                     <relocation>
                                         <pattern>net.javacrumbs</pattern>

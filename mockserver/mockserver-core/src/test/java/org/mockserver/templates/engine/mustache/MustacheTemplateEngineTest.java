@@ -1010,6 +1010,31 @@ public class MustacheTemplateEngineTest {
     }
 
     @Test
+    public void shouldExposeFaker() {
+        // given
+        String template = "{" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': \"{'firstName': '{{ faker.name.firstName }}', 'email': '{{ faker.internet.emailAddress }}'}\"" + NEW_LINE +
+            "}";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody("some_body");
+
+        // when
+        HttpResponse actualHttpResponse = new MustacheTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then — strong assertions: jmustache uses defaultValue(""), so a missing
+        // variable silently renders as empty. Verify the faker actually produced
+        // non-empty values for both providers rather than just verifying the template ran.
+        String body = actualHttpResponse.getBodyAsString();
+        assertThat(body, not(emptyString()));
+        assertThat(body, not(containsString("{{")));
+        assertThat("faker.name.firstName resolved to empty", body, not(containsString("'firstName': ''")));
+        assertThat("faker.internet.emailAddress resolved to empty", body, not(containsString("'email': ''")));
+        assertThat("email should contain @", body, containsString("@"));
+    }
+
+    @Test
     public void shouldHandleMultipleHttpRequestsWithMustacheResponseTemplateInParallel()
         throws InterruptedException, ExecutionException {
         // given

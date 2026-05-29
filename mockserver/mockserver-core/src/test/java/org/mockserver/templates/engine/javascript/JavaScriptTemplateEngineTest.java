@@ -1052,6 +1052,26 @@ public class JavaScriptTemplateEngineTest {
     }
 
     @Test
+    public void shouldExposeFaker() {
+        // given
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': '{\"firstName\": \"' + faker.name().firstName() + '\", \"email\": \"' + faker.internet().emailAddress() + '\"}'" + NEW_LINE +
+            "};";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody("some_body");
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse.getBodyAsString(), not(emptyString()));
+        assertThat(actualHttpResponse.getBodyAsString(), not(containsString("faker")));
+    }
+
+    @Test
     public void shouldRestrictGlobalContextMultipleHttpRequestsInParallel() throws InterruptedException, ExecutionException {
         // given
         graalJsAvailable();

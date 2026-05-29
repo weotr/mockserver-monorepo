@@ -840,6 +840,25 @@ public class VelocityTemplateEngineTest {
     }
 
     @Test
+    public void shouldExposeFaker() {
+        // given
+        String template = "{" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': \"{'firstName': '$faker.name().firstName()', 'email': '$faker.internet().emailAddress()'}\"" + NEW_LINE +
+            "}";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody("some_body");
+
+        // when
+        HttpResponse actualHttpResponse = new VelocityTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse.getBodyAsString(), not(emptyString()));
+        assertThat(actualHttpResponse.getBodyAsString(), not(containsString("$faker")));
+    }
+
+    @Test
     public void shouldUseRequestScopeToolsInThreadSafeWay() throws JsonProcessingException, ExecutionException, InterruptedException {
         // given
         String template = "{" + NEW_LINE +

@@ -138,6 +138,10 @@
             <groupId>com.samskivert</groupId>
             <artifactId>jmustache</artifactId>
         </dependency>
+        <dependency>
+            <groupId>net.datafaker</groupId>
+            <artifactId>datafaker</artifactId>
+        </dependency>
 
         <!-- javascript (GraalVM polyglot) -->
         <dependency>
