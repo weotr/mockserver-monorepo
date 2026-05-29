@@ -1,0 +1,27 @@
+{
+  "title": "declarative HTTP chaos/fault injection profile",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "errorStatus": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "retryAfter": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "errorProbability": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "latency": {
+      "$ref": "#/definitions/delay"
+    },
+    "seed": {
+      "type": "integer"
+    }
+  }
+}

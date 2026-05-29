@@ -35,6 +35,7 @@ public class JsonSchemaExpectationValidator extends JsonSchemaValidator {
             "dnsResponse",
             "dnsRecord",
             "afterAction",
+            "httpChaosProfile",
             "times",
             "timeToLive",
             "stringOrJsonSchema",

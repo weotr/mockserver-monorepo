@@ -31,6 +31,7 @@ public class Expectation extends ObjectWithJsonToString {
     private long created;
     private int priority;
     private Integer percentage;
+    private HttpChaosProfile chaos;
     private SortableExpectationId sortableExpectationId;
     private final RequestDefinition httpRequest;
     private final Times times;
@@ -338,6 +339,16 @@ public class Expectation extends ObjectWithJsonToString {
 
     public Integer getPercentage() {
         return percentage;
+    }
+
+    public Expectation withChaos(HttpChaosProfile chaos) {
+        this.chaos = chaos;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public HttpChaosProfile getChaos() {
+        return chaos;
     }
 
     @JsonIgnore
@@ -837,6 +848,7 @@ public class Expectation extends ObjectWithJsonToString {
             .withId(id)
             .withCreated(created)
             .withPercentage(percentage)
+            .withChaos(chaos)
             .withScenarioName(scenarioName)
             .withScenarioState(scenarioState)
             .withNewScenarioState(newScenarioState)
@@ -885,6 +897,7 @@ public class Expectation extends ObjectWithJsonToString {
         Expectation that = (Expectation) o;
         return Objects.equals(priority, that.priority) &&
             Objects.equals(percentage, that.percentage) &&
+            Objects.equals(chaos, that.chaos) &&
             Objects.equals(httpRequest, that.httpRequest) &&
             Objects.equals(times, that.times) &&
             Objects.equals(timeToLive, that.timeToLive) &&
@@ -916,7 +929,7 @@ public class Expectation extends ObjectWithJsonToString {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(priority, percentage, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, binaryResponse, dnsResponse, httpError, afterActions, httpResponses, responseMode, scenarioName, scenarioState, newScenarioState);
+            hashCode = Objects.hash(priority, percentage, chaos, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, binaryResponse, dnsResponse, httpError, afterActions, httpResponses, responseMode, scenarioName, scenarioState, newScenarioState);
         }
         return hashCode;
     }

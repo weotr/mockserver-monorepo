@@ -92,6 +92,22 @@ public class ForwardChainExpectation {
     }
 
     /**
+     * <p>
+     * Set a declarative HTTP chaos/fault injection profile for this expectation.
+     * </p>
+     * <p>
+     * When set, probabilistic error status injection and/or latency injection
+     * is applied to the response returned by the expectation's action.
+     * </p>
+     *
+     * @param chaos the chaos profile to apply, or null to disable chaos injection
+     */
+    public ForwardChainExpectation withChaos(HttpChaosProfile chaos) {
+        expectation.withChaos(chaos);
+        return this;
+    }
+
+    /**
      * Set the scenario name for stateful expectation matching
      *
      * @param scenarioName the name of the scenario

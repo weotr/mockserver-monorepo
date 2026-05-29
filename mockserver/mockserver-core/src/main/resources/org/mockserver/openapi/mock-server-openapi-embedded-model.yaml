@@ -315,6 +315,8 @@ components:
           type: integer
           minimum: 0
           maximum: 100
+        chaos:
+          $ref: "#/components/schemas/HttpChaosProfile"
         httpRequest:
           $ref: "#/components/schemas/RequestDefinition"
         httpResponse:
@@ -1135,6 +1137,27 @@ components:
               type: string
             contentType:
               type: string
+    HttpChaosProfile:
+      description: "declarative HTTP chaos/fault injection profile for mocked responses"
+      type: object
+      additionalProperties: false
+      properties:
+        errorStatus:
+          type: integer
+          minimum: 100
+          maximum: 599
+        retryAfter:
+          type: string
+          maxLength: 100
+        errorProbability:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        latency:
+          $ref: "#/components/schemas/Delay"
+        seed:
+          type: integer
+          format: int64
     Delay:
       description: "response delay"
       type: object

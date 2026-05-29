@@ -121,7 +121,8 @@ public class HttpActionHandler {
         switch (action.getType()) {
             case RESPONSE -> scheduler.schedule(() -> handleAnyException(request, earlyResponseWriter, synchronous, action, () -> {
                 final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
-                writeResponseActionResponse(response, earlyResponseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor);
+                // chaos: inject HTTP chaos faults on early mocked responses
+                writeResponseActionResponse(response, earlyResponseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, expectation.getChaos());
             }, expectationPostProcessor), synchronous);
             case ERROR -> scheduler.schedule(() -> handleAnyException(request, earlyResponseWriter, synchronous, action, () -> {
                 getHttpErrorActionHandler().handle((HttpError) action, ctx);
@@ -195,15 +196,18 @@ public class HttpActionHandler {
             switch (action.getType()) {
                 case RESPONSE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                     final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
-                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor);
+                    // chaos: inject HTTP chaos faults on mocked responses
+                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, expectation.getChaos());
                 }, expectationPostProcessor), synchronous);
                 case RESPONSE_TEMPLATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                     final HttpResponse response = getHttpResponseTemplateActionHandler().handle((HttpTemplate) action, request);
-                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor);
+                    // chaos: inject HTTP chaos faults on mocked responses
+                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, expectation.getChaos());
                 }, expectationPostProcessor), synchronous, action.getDelay());
                 case RESPONSE_CLASS_CALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                     final HttpResponse response = getHttpResponseClassCallbackActionHandler().handle((HttpClassCallback) action, request);
-                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor);
+                    // chaos: inject HTTP chaos faults on mocked responses
+                    writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, expectation.getChaos());
                 }, expectationPostProcessor), synchronous, action.getDelay());
                 case RESPONSE_OBJECT_CALLBACK -> scheduler.schedule(() ->
                         getHttpResponseObjectCallbackActionHandler().handle(HttpActionHandler.this, (HttpObjectCallback) action, request, responseWriter, synchronous, expectationPostProcessor),
@@ -895,6 +899,46 @@ public class HttpActionHandler {
     }
 
     void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final RequestDefinition requestDefinition, final Runnable postProcessor) {
+        writeResponseActionResponse(response, responseWriter, request, action, synchronous, requestDefinition, postProcessor, null);
+    }
+
+    /**
+     * Core response-writing choke point. When a non-null {@code chaos} profile is provided,
+     * HTTP chaos injection is applied before the response is written:
+     * <ol>
+     *   <li><b>Error injection</b> — if the chaos probability fires and {@code errorStatus} is set,
+     *       the mocked response is replaced with a synthetic error response. When error injection
+     *       fires, the original response's action delay is discarded (only chaos latency + global
+     *       delay apply).</li>
+     *   <li><b>Latency injection</b> — if {@code chaos.getLatency()} is set, it is added to the
+     *       delay applied before writing the response (combined with action + global delay).</li>
+     * </ol>
+     */
+    void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final RequestDefinition requestDefinition, final Runnable postProcessor, final HttpChaosProfile chaos) {
+        // Chaos: determine final response and extra delay
+        final HttpResponse effectiveResponse;
+        final Delay chaosLatency;
+        if (chaos != null) {
+            // Error injection
+            if (chaos.getErrorStatus() != null && ChaosProbability.shouldInject(chaos.getErrorProbability(), chaos.getSeed())) {
+                HttpResponse errorResponse = response()
+                    .withStatusCode(chaos.getErrorStatus())
+                    .withHeader("content-type", "application/json")
+                    .withBody("{\"error\":{\"type\":\"chaos_injected\",\"message\":\"injected HTTP chaos error\"}}");
+                if (chaos.getRetryAfter() != null && !chaos.getRetryAfter().isEmpty()) {
+                    errorResponse.withHeader("Retry-After", chaos.getRetryAfter());
+                }
+                effectiveResponse = errorResponse;
+            } else {
+                effectiveResponse = response;
+            }
+            chaosLatency = chaos.getLatency();
+        } else {
+            effectiveResponse = response;
+            chaosLatency = null;
+        }
+
+        Delay[] delays = combineWithChaosAndGlobalDelay(effectiveResponse.getDelay(), chaosLatency);
         scheduler.schedule(() -> {
             try {
                 mockServerLogger.logEvent(
@@ -903,19 +947,19 @@ public class HttpActionHandler {
                         .setLogLevel(Level.INFO)
                         .setCorrelationId(request.getLogCorrelationId())
                         .setHttpRequest(request)
-                        .setHttpResponse(response)
+                        .setHttpResponse(effectiveResponse)
                         .setExpectationId(action.getExpectationId())
                         .setMessageFormat("returning response:{}for request:{}for action:{}from expectation:{}")
-                        .setArguments(response, request, action, action.getExpectationId())
+                        .setArguments(effectiveResponse, request, action, action.getExpectationId())
                 );
-                validateOpenAPIResponse(response, request, action, requestDefinition);
-                responseWriter.writeResponse(request, response, false);
+                validateOpenAPIResponse(effectiveResponse, request, action, requestDefinition);
+                responseWriter.writeResponse(request, effectiveResponse, false);
             } finally {
                 if (postProcessor != null) {
                     postProcessor.run();
                 }
             }
-        }, synchronous, combineWithGlobalDelay(response.getDelay()));
+        }, synchronous, delays);
     }
 
     private Delay[] combineWithGlobalDelay(Delay actionDelay) {
@@ -931,6 +975,21 @@ public class HttpActionHandler {
             return new Delay[]{actionDelay};
         }
         return new Delay[0];
+    }
+
+    /**
+     * Combines the action delay, optional chaos latency, and global delay into a
+     * single array of delays to apply before writing the response.
+     */
+    private Delay[] combineWithChaosAndGlobalDelay(Delay actionDelay, Delay chaosLatency) {
+        Delay[] baseDelays = combineWithGlobalDelay(actionDelay);
+        if (chaosLatency == null) {
+            return baseDelays;
+        }
+        Delay[] combined = new Delay[baseDelays.length + 1];
+        System.arraycopy(baseDelays, 0, combined, 0, baseDelays.length);
+        combined[baseDelays.length] = chaosLatency;
+        return combined;
     }
 
     private void validateOpenAPIResponse(final HttpResponse response, final HttpRequest request, final Action action, final RequestDefinition requestDefinition) {
