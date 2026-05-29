@@ -10,8 +10,6 @@ import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 import org.mockserver.templates.engine.mustache.MustacheTemplateEngine;
 import org.mockserver.templates.engine.velocity.VelocityTemplateEngine;
 
-import javax.script.ScriptEngineManager;
-
 public class ResponseTemplateTester {
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(ResponseTemplateTester.class);
@@ -25,18 +23,11 @@ public class ResponseTemplateTester {
     }
 
     public static HttpResponse testJavaScriptTemplate(String template, HttpRequest request) {
-        if (isJavaScriptEngineAvailable()) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
             return new JavaScriptTemplateEngine(MOCK_SERVER_LOGGER, new Configuration()).executeTemplate(template, request, HttpResponseDTO.class);
         } else {
-            throw new NotImplementedException("No JavaScript engine (Nashorn or GraalJS) is available on this JVM");
+            throw new NotImplementedException("No JavaScript engine (GraalVM Polyglot) is available on this JVM");
         }
-    }
-
-    private static boolean isJavaScriptEngineAvailable() {
-        ScriptEngineManager manager = new ScriptEngineManager();
-        return manager.getEngineByName("nashorn") != null
-            || manager.getEngineByName("graal.js") != null
-            || manager.getEngineByName("js") != null;
     }
 
 }

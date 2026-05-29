@@ -87,19 +87,22 @@ RUN if [ -s /tmp/local-ca.pem ]; then \
       cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
       update-ca-certificates >/dev/null 2>&1 || true; \
     fi
-ARG GRAALJS_VERSION=24.1.1
+ARG GRAALJS_VERSION=25.0.3
+# GraalVM 25.x dropped the JSR-223 javax.script bridge (js-scriptengine.jar is gone).
+# Coordinates also changed: icu4j is now under org.graalvm.shadowed instead of com.ibm.icu,
+# and jniutils is a new artifact required by truffle-runtime.
 RUN mkdir -p /graaljs && \
     wget -O /graaljs/polyglot.jar "https://repo1.maven.org/maven2/org/graalvm/polyglot/polyglot/$GRAALJS_VERSION/polyglot-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/js-language.jar "https://repo1.maven.org/maven2/org/graalvm/js/js-language/$GRAALJS_VERSION/js-language-$GRAALJS_VERSION.jar" && \
-    wget -O /graaljs/js-scriptengine.jar "https://repo1.maven.org/maven2/org/graalvm/js/js-scriptengine/$GRAALJS_VERSION/js-scriptengine-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/truffle-api.jar "https://repo1.maven.org/maven2/org/graalvm/truffle/truffle-api/$GRAALJS_VERSION/truffle-api-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/truffle-runtime.jar "https://repo1.maven.org/maven2/org/graalvm/truffle/truffle-runtime/$GRAALJS_VERSION/truffle-runtime-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/truffle-compiler.jar "https://repo1.maven.org/maven2/org/graalvm/truffle/truffle-compiler/$GRAALJS_VERSION/truffle-compiler-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/collections.jar "https://repo1.maven.org/maven2/org/graalvm/sdk/collections/$GRAALJS_VERSION/collections-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/nativeimage.jar "https://repo1.maven.org/maven2/org/graalvm/sdk/nativeimage/$GRAALJS_VERSION/nativeimage-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/word.jar "https://repo1.maven.org/maven2/org/graalvm/sdk/word/$GRAALJS_VERSION/word-$GRAALJS_VERSION.jar" && \
+    wget -O /graaljs/jniutils.jar "https://repo1.maven.org/maven2/org/graalvm/sdk/jniutils/$GRAALJS_VERSION/jniutils-$GRAALJS_VERSION.jar" && \
     wget -O /graaljs/regex.jar "https://repo1.maven.org/maven2/org/graalvm/regex/regex/$GRAALJS_VERSION/regex-$GRAALJS_VERSION.jar" && \
-    wget -O /graaljs/icu4j.jar "https://repo1.maven.org/maven2/com/ibm/icu/icu4j/$GRAALJS_VERSION/icu4j-76.1.jar" || true
+    wget -O /graaljs/icu4j.jar "https://repo1.maven.org/maven2/org/graalvm/shadowed/icu4j/$GRAALJS_VERSION/icu4j-$GRAALJS_VERSION.jar"
 
 FROM ${source} as intermediate
 

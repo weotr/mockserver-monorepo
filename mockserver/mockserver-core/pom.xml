@@ -139,11 +139,7 @@
             <artifactId>jmustache</artifactId>
         </dependency>
 
-        <!-- javascript (only java 11+) -->
-        <dependency>
-            <groupId>org.openjdk.nashorn</groupId>
-            <artifactId>nashorn-core</artifactId>
-        </dependency>
+        <!-- javascript (GraalVM polyglot) -->
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
             <artifactId>polyglot</artifactId>

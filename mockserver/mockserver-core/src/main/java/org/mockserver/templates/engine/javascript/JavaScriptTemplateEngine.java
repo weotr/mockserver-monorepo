@@ -12,43 +12,50 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.model.DTO;
 import org.mockserver.templates.engine.TemplateEngine;
 import org.mockserver.templates.engine.TemplateFunctions;
-import org.mockserver.templates.engine.javascript.bindings.ScriptBindings;
 import org.mockserver.templates.engine.model.HttpRequestTemplateObject;
 import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
 import org.slf4j.event.Level;
 
-import javax.script.*;
+import java.util.function.Predicate;
 import java.util.stream.StreamSupport;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.formatting.StringFormatter.formatLogMessage;
 import static org.mockserver.formatting.StringFormatter.indentAndToString;
-import static org.mockserver.log.model.LogEntry.LogMessageType.TEMPLATE_GENERATED;
-import static org.mockserver.log.model.LogEntryMessages.TEMPLATE_GENERATED_MESSAGE_FORMAT;
 
 /**
  * @author jamesdbloom
  */
-@SuppressWarnings({"RedundantSuppression", "deprecation", "removal", "FieldMayBeFinal"})
+@SuppressWarnings({"RedundantSuppression", "FieldMayBeFinal"})
 public class JavaScriptTemplateEngine implements TemplateEngine {
 
-    private static final String ENGINE_NASHORN = "nashorn";
-    private static final String ENGINE_GRAALJS = "graal.js";
+    private static final boolean POLYGLOT_AVAILABLE;
 
-    private ScriptEngine engine;
-    private ObjectMapper objectMapper;
+    static {
+        boolean available;
+        try {
+            Class.forName("org.graalvm.polyglot.Context");
+            available = true;
+        } catch (ClassNotFoundException e) {
+            available = false;
+        }
+        POLYGLOT_AVAILABLE = available;
+    }
+
+    private final ObjectMapper objectMapper;
     private final MockServerLogger mockServerLogger;
-    private HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
+    private final HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
     private final Configuration configuration;
+    private final Predicate<String> classFilter;
 
     public JavaScriptTemplateEngine(MockServerLogger mockServerLogger, Configuration configuration) {
         this.configuration = (configuration == null) ? configuration() : configuration;
-        this.engine = createEngine(this.configuration);
         this.mockServerLogger = mockServerLogger;
         this.httpTemplateOutputDeserializer = new HttpTemplateOutputDeserializer(mockServerLogger);
         this.objectMapper = ObjectMapperFactory.createObjectMapper();
+        this.classFilter = className -> isClassAllowed(className, this.configuration);
         if (mockServerLogger != null
             && mockServerLogger.isEnabledForInstance(Level.WARN)
             && !isNotBlank(this.configuration.javascriptDisallowedClasses())) {
@@ -60,42 +67,8 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static ScriptEngine createEngine(Configuration configuration) {
-        try {
-            Class<?> nashornFactoryClass = JavaScriptTemplateEngine.class.getClassLoader()
-                .loadClass("org.openjdk.nashorn.api.scripting.NashornScriptEngineFactory");
-            Class<?> classFilterClass = JavaScriptTemplateEngine.class.getClassLoader()
-                .loadClass("org.openjdk.nashorn.api.scripting.ClassFilter");
-            System.setProperty("nashorn.args", "--language=es6");
-            Object factory = nashornFactoryClass.getConstructor().newInstance();
-            Object classFilter = java.lang.reflect.Proxy.newProxyInstance(
-                JavaScriptTemplateEngine.class.getClassLoader(),
-                new Class<?>[]{classFilterClass},
-                (proxy, method, args) -> {
-                    if ("exposeToScripts".equals(method.getName())) {
-                        return isClassAllowed((String) args[0], configuration);
-                    }
-                    return null;
-                }
-            );
-            java.lang.reflect.Method getScriptEngine = nashornFactoryClass.getMethod("getScriptEngine", classFilterClass);
-            return (ScriptEngine) getScriptEngine.invoke(factory, classFilter);
-        } catch (Throwable ignore) {
-            // fall through to GraalJS
-        }
-
-        ScriptEngine graalEngine = new ScriptEngineManager().getEngineByName(ENGINE_GRAALJS);
-        if (graalEngine == null) {
-            graalEngine = new ScriptEngineManager().getEngineByName("js");
-        }
-        if (graalEngine != null) {
-            Bindings bindings = graalEngine.getBindings(ScriptContext.ENGINE_SCOPE);
-            bindings.put("polyglot.js.allowHostAccess", true);
-            bindings.put("polyglot.js.allowHostClassLookup", (java.util.function.Predicate<String>) className ->
-                isClassAllowed(className, configuration));
-        }
-        return graalEngine;
+    public static boolean isPolyglotAvailable() {
+        return POLYGLOT_AVAILABLE;
     }
 
     private static boolean isClassAllowed(String className, Configuration configuration) {
@@ -117,71 +90,43 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
         return executeTemplateInternal(template, request, response, dtoClass, true);
     }
 
-    private synchronized <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
-        T result = null;
+    private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
         String script = includeResponse ? wrapTemplateWithResponse(template) : wrapTemplate(template);
         try {
             validateTemplate(template);
-            if (engine != null) {
-                Compilable compilable = (Compilable) engine;
-                String serialiseFunction = includeResponse
-                    ? " function serialise(request, response) { return JSON.stringify(handle(JSON.parse(request), JSON.parse(response)), null, 2); }"
-                    : " function serialise(request) { return JSON.stringify(handle(JSON.parse(request)), null, 2); }";
-                CompiledScript compiledScript = compilable.compile(script + serialiseFunction);
-
-                engine.setBindings(new ScriptBindings(TemplateFunctions.BUILT_IN_FUNCTIONS), ScriptContext.ENGINE_SCOPE);
-                TemplateFunctions.BUILT_IN_HELPERS.forEach((key, value) -> engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, value));
-                compiledScript.eval();
-
-                Invocable invocable = (Invocable) engine;
-                Object stringifiedResponse;
-                if (includeResponse) {
-                    stringifiedResponse = invocable.invokeFunction("serialise", new HttpRequestTemplateObject(request), new HttpResponseTemplateObject(response));
-                } else {
-                    stringifiedResponse = invocable.invokeFunction("serialise", new HttpRequestTemplateObject(request));
-                }
-
-                JsonNode generatedObject = null;
-                try {
-                    generatedObject = objectMapper.readTree(String.valueOf(stringifiedResponse));
-                } catch (Throwable throwable) {
-                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                        mockServerLogger.logEvent(
-                            new LogEntry()
-                                .setLogLevel(Level.INFO)
-                                .setHttpRequest(request)
-                                .setMessageFormat("exception deserialising generated content:{}into json node for request:{}")
-                                .setArguments(stringifiedResponse, request)
-                        );
-                    }
-                }
-                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                    mockServerLogger.logEvent(
-                        new LogEntry()
-                            .setType(TEMPLATE_GENERATED)
-                            .setLogLevel(Level.INFO)
-                            .setHttpRequest(request)
-                            .setMessageFormat(TEMPLATE_GENERATED_MESSAGE_FORMAT)
-                            .setArguments(generatedObject != null ? generatedObject : stringifiedResponse, script, request)
-                    );
-                }
-                result = httpTemplateOutputDeserializer.deserializer(request, (String) stringifiedResponse, dtoClass);
+            if (POLYGLOT_AVAILABLE) {
+                // Delegate to PolyglotRunner (nested holder class). The JVM only resolves the
+                // org.graalvm.polyglot.* references inside PolyglotRunner when this branch is
+                // taken, so the standard distribution (no GraalVM on classpath) loads this class
+                // and degrades gracefully via the else branch instead of failing with NoClassDefFoundError.
+                return PolyglotRunner.run(
+                    script,
+                    includeResponse,
+                    request,
+                    response,
+                    classFilter,
+                    objectMapper,
+                    mockServerLogger,
+                    httpTemplateOutputDeserializer,
+                    dtoClass
+                );
             } else {
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setLogLevel(Level.ERROR)
                         .setHttpRequest(request)
                         .setMessageFormat(
-                            "JavaScript based templating requires a JavaScript engine on the classpath, " +
-                                "please add nashorn-core or GraalJS to the classpath"
+                            "JavaScript based templating requires GraalVM Polyglot on the classpath, " +
+                                "please add org.graalvm.polyglot:polyglot and org.graalvm.polyglot:js to the classpath, " +
+                                "or use the MockServer 'graaljs' Docker image variant"
                         )
-                        .setArguments(new RuntimeException("no JavaScript engine available"))
+                        .setArguments(new RuntimeException("GraalVM Polyglot API not on classpath"))
                 );
+                return null;
             }
         } catch (Exception e) {
             throw new RuntimeException(formatLogMessage("Exception:{}transforming template:{}for request:{}", isNotBlank(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName(), template, request), e);
         }
-        return result;
     }
 
     static String wrapTemplate(String template) {

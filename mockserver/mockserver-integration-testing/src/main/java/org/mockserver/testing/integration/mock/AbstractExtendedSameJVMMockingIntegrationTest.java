@@ -3,9 +3,8 @@ package org.mockserver.testing.integration.mock;
 import org.junit.Test;
 import org.mockserver.model.HttpStatusCode;
 import org.mockserver.model.HttpTemplate;
+import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 import org.mockserver.testing.integration.callback.StaticTestExpectationResponseCallback;
-
-import javax.script.ScriptEngineManager;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static junit.framework.TestCase.assertEquals;
@@ -120,7 +119,7 @@ public abstract class AbstractExtendedSameJVMMockingIntegrationTest extends Abst
                 )
             );
 
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
 
             // then
             // - in http
@@ -211,7 +210,7 @@ public abstract class AbstractExtendedSameJVMMockingIntegrationTest extends Abst
                     .withDelay(MILLISECONDS, 10)
             );
 
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
 
             // then
             // - in http

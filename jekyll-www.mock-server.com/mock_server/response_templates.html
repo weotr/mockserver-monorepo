@@ -21,7 +21,7 @@ lastmod: 2019-11-10T08:00:00+01:00
         <ul>
             <li><a href="#mustache_templates">Mustache</a> &mdash; simple syntax, conditional logic, JsonPath and XPath extraction</li>
             <li><a href="#velocity_templates">Velocity</a> &mdash; Apache Velocity engine with conditionals, loops, math, and JSON/XML body parsing</li>
-            <li><a href="#javascript_templates">JavaScript</a> &mdash; full JavaScript via Nashorn (bundled) or GraalJS engine</li>
+            <li><a href="#javascript_templates">JavaScript</a> &mdash; full ES2023+ JavaScript via the GraalVM Polyglot engine (requires the <code>-graaljs</code> Docker image or GraalVM JARs on the classpath)</li>
         </ul>
     </li>
     <li><a href="#templates_in_json_files"><strong>Templates in JSON Initializer Files</strong></a> &mdash; defining templates in JSON expectation files</li>
@@ -1290,13 +1290,18 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 
 <h4>JavaScript Engine Support</h4>
 
-<p>MockServer supports two JavaScript engines:</p>
+<p>MockServer uses the <strong>GraalVM Polyglot JavaScript engine</strong> for JavaScript templates. It supports ES2023+ syntax, including template literals, async/await, destructuring, optional chaining, and the full modern JavaScript language.</p>
+
+<p>The engine is <strong>not bundled in the default distribution</strong> because GraalVM polyglot weighs around 60 MB. To use JavaScript templates, choose one of:</p>
 <ul>
-    <li><strong>Nashorn</strong> (bundled) &mdash; the standalone <code>nashorn-core</code> library is included in MockServer and works on Java 11+. All Docker images include Nashorn by default.</li>
-    <li><strong>GraalJS</strong> (optional) &mdash; a modern, actively maintained JavaScript engine from Oracle. Use the <code>-graaljs</code> Docker image tag (e.g., <code>mockserver/mockserver:latest-graaljs</code>) or add GraalJS JARs to the <code>/libs</code> directory.</li>
+    <li><strong>Docker:</strong> use the <code>-graaljs</code> image tag, e.g. <code>mockserver/mockserver:latest-graaljs</code>. This image bundles GraalVM polyglot 25.0.3 in <code>/libs/</code>.</li>
+    <li><strong>Standalone JAR:</strong> drop <code>org.graalvm.polyglot:polyglot</code> and <code>org.graalvm.polyglot:js</code> (both at version 25.0.3 or later) into a directory and add it to the classpath (e.g. <code>java -cp "mockserver-netty-jar-with-dependencies.jar:libs/*" org.mockserver.cli.Main ...</code>).</li>
+    <li><strong>Library embedding:</strong> add the same two artifacts to your Maven/Gradle dependencies alongside <code>mockserver-netty</code>.</li>
 </ul>
 
-<p>MockServer automatically detects which engine is available on the classpath, preferring Nashorn for backward compatibility. Both engines support ES6+ syntax.</p>
+<p>If GraalVM polyglot is not on the classpath, JavaScript template expectations log an error and the response is treated as unmatched. Velocity and Mustache templates remain available in every distribution.</p>
+
+<p>Nashorn (<code>org.openjdk.nashorn:nashorn-core</code>) is no longer supported. The JSR-223 <code>javax.script</code> bridge was dropped in GraalJS 25.x, so the previous Nashorn-as-fallback path was removed alongside the Java 17 minimum bump.</p>
 
 <h4>Variables</h4>
 

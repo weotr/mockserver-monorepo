@@ -447,12 +447,7 @@
                 <version>1.16</version>
             </dependency>
 
-            <!-- javascript (only Java 11+) -->
-            <dependency>
-                <groupId>org.openjdk.nashorn</groupId>
-                <artifactId>nashorn-core</artifactId>
-                <version>15.7</version>
-            </dependency>
+            <!-- javascript (GraalVM polyglot) -->
             <dependency>
                 <groupId>org.graalvm.polyglot</groupId>
                 <artifactId>polyglot</artifactId>
@@ -1176,8 +1171,6 @@
                     <compilerArgs>
                         <arg>-XDignore.symbol.file</arg>
                         <arg>-Xlint:all</arg>
-                        <arg>--add-exports=java.base/sun.security.x509=ALL-UNNAMED</arg>
-                        <arg>--add-exports=java.base/sun.security.util=ALL-UNNAMED</arg>
                     </compilerArgs>
                 </configuration>
                 <executions>

@@ -7,8 +7,8 @@ import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
 import org.mockserver.model.HttpTemplate.TemplateType;
+import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 
-import javax.script.ScriptEngineManager;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
@@ -24,7 +24,7 @@ import static org.mockserver.model.HttpResponse.badGatewayResponse;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpResponseModifier.responseModifier;
 import static org.mockserver.model.HttpTemplate.template;
-import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.nashornAvailable;
+import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.graalJsAvailable;
 
 /**
  * @author jamesdbloom
@@ -45,7 +45,7 @@ public class HttpForwardTemplateActionHandlerTest {
     @Test
     public void shouldHandleHttpRequestsWithJavaScriptTemplateFirstExample() throws Exception {
         // given
-        nashornAvailable();
+        graalJsAvailable();
         HttpTemplate template = template(HttpTemplate.TemplateType.JAVASCRIPT, "return { 'path': \"somePath\", 'body': JSON.stringify({name: 'value'}) };");
         HttpRequest httpRequest = request("somePath").withBody("{\"name\":\"value\"}");
         CompletableFuture<HttpResponse> httpResponse = new CompletableFuture<>();
@@ -61,7 +61,7 @@ public class HttpForwardTemplateActionHandlerTest {
             .getHttpResponse();
 
         // then
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
             verify(mockHttpClient).sendRequest(httpRequest, null);
             assertThat(actualHttpResponse, is(sameInstance(httpResponse)));
         } else {

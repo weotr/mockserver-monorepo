@@ -6,8 +6,7 @@ import org.mockserver.configuration.Configuration;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.HttpTemplate;
-
-import javax.script.ScriptEngineManager;
+import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -18,7 +17,7 @@ import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.notFoundResponse;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpTemplate.template;
-import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.nashornAvailable;
+import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.graalJsAvailable;
 
 /**
  * @author jamesdbloom
@@ -37,7 +36,7 @@ public class HttpResponseTemplateActionHandlerTest {
     @Test
     public void shouldHandleHttpRequestsWithJavaScriptTemplateFirstExample() {
         // given
-        nashornAvailable();
+        graalJsAvailable();
         HttpTemplate template = template(HttpTemplate.TemplateType.JAVASCRIPT, "if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
                 "    return {" + NEW_LINE +
                 "        'statusCode': 200," + NEW_LINE +
@@ -58,7 +57,7 @@ public class HttpResponseTemplateActionHandlerTest {
         );
 
         // then
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
             assertThat(actualHttpResponse, is(
                     response()
                             .withStatusCode(200)
@@ -74,7 +73,7 @@ public class HttpResponseTemplateActionHandlerTest {
     @Test
     public void shouldHandleHttpRequestsWithJavaScriptTemplateSecondExample() {
         // given
-        nashornAvailable();
+        graalJsAvailable();
         HttpTemplate template = template(HttpTemplate.TemplateType.JAVASCRIPT, "if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
                 "    return {" + NEW_LINE +
                 "        'statusCode': 200," + NEW_LINE +
@@ -94,7 +93,7 @@ public class HttpResponseTemplateActionHandlerTest {
         );
 
         // then
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
             assertThat(actualHttpResponse, is(
                     response()
                             .withStatusCode(406)

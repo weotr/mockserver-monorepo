@@ -7,8 +7,8 @@ import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
 import org.mockserver.model.HttpTemplate.TemplateType;
+import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 
-import javax.script.ScriptEngineManager;
 import java.util.concurrent.CompletableFuture;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -20,7 +20,7 @@ import static org.mockserver.model.HttpOverrideForwardedRequest.forwardOverridde
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpTemplate.template;
-import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.nashornAvailable;
+import static org.mockserver.templates.engine.javascript.JavaScriptTemplateEngineTest.graalJsAvailable;
 
 public class HttpOverrideForwardedRequestActionHandlerTest {
 
@@ -107,7 +107,7 @@ public class HttpOverrideForwardedRequestActionHandlerTest {
 
     @Test
     public void shouldApplyResponseTemplateWithJavaScript() throws Exception {
-        nashornAvailable();
+        graalJsAvailable();
         CompletableFuture<HttpResponse> responseFuture = new CompletableFuture<>();
         responseFuture.complete(response().withStatusCode(200).withBody("upstream_body"));
         when(mockHttpClient.sendRequest(any(HttpRequest.class), any(), anyLong(), anyBoolean())).thenReturn(responseFuture);
@@ -125,7 +125,7 @@ public class HttpOverrideForwardedRequestActionHandlerTest {
         );
 
         HttpResponse actualResponse = result.getHttpResponse().get();
-        if (new ScriptEngineManager().getEngineByName("nashorn") != null) {
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
             assertThat(actualResponse.getStatusCode(), is(203));
             assertThat(actualResponse.getBodyAsString(), is("path=/testPath status=200"));
         }
