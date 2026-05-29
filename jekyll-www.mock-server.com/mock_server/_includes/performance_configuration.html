@@ -137,7 +137,14 @@
         <td>When expectations contain large response bodies</td>
         <td>Fewer expectations can be stored simultaneously</td>
     </tr>
+    <tr>
+        <td>Switch to ZGC (<span class="inline_code">-XX:+UseZGC</span>)</td>
+        <td>Heap &ge; 4 GB and matcher latency matters &mdash; typically gives single-digit-millisecond GC pauses where G1 commonly sits in the 50&ndash;200 ms range under sustained allocation</td>
+        <td>Fixed memory overhead (less attractive below ~4 GB); set <span class="inline_code">-Xms</span> and <span class="inline_code">-Xmx</span> to the same value (e.g. <span class="inline_code">-Xms4g -Xmx4g</span>) so the heap is pre-committed</td>
+    </tr>
 </table>
+
+<p><strong>Note on GC selection:</strong> Java 17 makes ZGC production-ready in every JDK distribution MockServer supports. For deployments with deep ring buffers (high <span class="inline_code">maxLogEntries</span>) or large heaps, <span class="inline_code">-XX:+UseZGC</span> can reduce p99 matcher latency by holding stop-the-world pauses to the single-digit-millisecond range (typically 1&ndash;5 ms in Java 17's non-generational ZGC). For small-fixture deployments (a sidecar in a test pipeline), the default GC is fine &mdash; ZGC's fixed overhead isn't worth it below ~4 GB heap. In containerised deployments using ZGC, size the container memory limit at ~1.5&times; your <span class="inline_code">-Xmx</span> value to leave headroom for JVM overhead (code cache, metaspace, thread stacks) and Netty's direct buffer pool. Note that ZGC multi-maps the same physical pages for its coloured-pointer scheme; under some cgroup RSS-accounting modes those pages are counted multiple times against the container limit, so the process can be OOM-killed even though the actual physical footprint fits (e.g. <span class="inline_code">-Xmx4g</span> &rarr; <span class="inline_code">--memory=6g</span>). Shenandoah is not recommended &mdash; it is not available in Oracle JDK 17 and not universally available across all JDK distributions, so ZGC is the simpler choice.</p>
 
 <p><strong>Note on <span class="inline_code">logLevel</span> and <span class="inline_code">disableLogging</span>:</strong> Setting <span class="inline_code">logLevel</span> to <span class="inline_code">WARN</span> reduces diagnostic TRACE/DEBUG log entries but does <strong>not</strong> prevent request/response recording &mdash; the memory-intensive log entries (received requests, matched expectations, and responses) are always stored regardless of log level, as they are required for verification. Similarly, <span class="inline_code">disableLogging</span> only suppresses system-out output and does not reduce memory usage. To reduce memory, lower <span class="inline_code">maxLogEntries</span> or increase heap size.</p>
 

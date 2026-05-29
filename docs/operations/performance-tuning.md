@@ -32,6 +32,23 @@ The maven CI build agent invokes the JVM with `-Xms2048m -Xmx6144m` (see `script
 
 A heap dump on OOM is *not* enabled by default; for triage runs add `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/mockserver/` via `JAVA_OPTS`.
 
+### GC selection
+
+Java 17 ships production-ready ZGC. For latency-sensitive deployments — particularly those running with large `maxLogEntries` (deep event ring buffers) — `-XX:+UseZGC` typically holds stop-the-world pauses in the single-digit millisecond range (1–5 ms) regardless of heap size, where G1 (the Java 17 server-class default) commonly sits in the 50–200 ms range during mixed cycles under sustained allocation. (Sub-millisecond pauses are an attribute of Generational ZGC in JDK 21+, not the non-generational ZGC shipped in Java 17.)
+
+These numbers are based on typical GC behaviour, not MockServer-specific benchmarks. Use the `mockserver-performance-test/` Locust harness with `mockserver.outputMemoryUsageCsv=true` to confirm your workload before switching.
+
+Rules of thumb:
+- **Heap < 2 GB:** stay on the default (G1). ZGC's fixed overhead isn't worth it.
+- **Heap 2–4 GB:** G1 (the default) is fine for almost everything. Switch to ZGC only if you've measured GC pauses showing up on the matcher path.
+- **Heap ≥ 4 GB and p99 latency matters:** add `-XX:+UseZGC` via `JAVA_OPTS`. Set `-Xms` and `-Xmx` to the same value (e.g. `-Xms4g -Xmx4g`) so the heap is pre-committed.
+
+In containerised deployments, size the container memory limit at least ~1.5× the `-Xmx` value when using ZGC. The kernel OOM-killer reacts to physical memory (RSS), not virtual address space — what eats RSS beyond `-Xmx` is the JVM's own overhead (code cache, metaspace, JIT, thread stacks) plus Netty's direct buffer pool. ZGC adds a further wrinkle on some cgroup setups: it multi-maps the same physical pages for its coloured-pointer scheme, and under certain RSS-accounting modes those pages are counted multiple times against the cgroup limit, so the kernel can OOM-kill the process even though the actual physical footprint fits. Example: `-Xmx4g` → `--memory=6g`.
+
+ZGC is not the default because (a) MockServer's typical deployment is a small fixture in a test pipeline where G1 is fine, and (b) ZGC adds a fixed memory overhead that hurts small-heap scenarios.
+
+Shenandoah is deliberately omitted: it has been production-ready since OpenJDK 15 (JEP 379) and is therefore available in OpenJDK 17, but it is absent from Oracle JDK 17 and not universally available across all JDK distributions. ZGC is the simpler recommendation because it ships in every JDK 17 distribution MockServer supports.
+
 ## Measuring
 
 Two enable-it-once-then-leave-it knobs:
