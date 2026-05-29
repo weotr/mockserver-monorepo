@@ -254,11 +254,42 @@ classDiagram
     Completion --> StreamingPhysics
 ```
 
+## Runtime LLM client SPI
+
+Most LLM mocking is deterministic and offline. A few opt-in features (drift detection, semantic prompt matching) need MockServer to act as a *client* against a real LLM the user already runs. This is the opposite direction to the codecs (`decode` parses an inbound request; `encode` builds a mock response), so a sibling SPI mirrors the codec-registry shape:
+
+- `org.mockserver.llm.client.LlmClient` — `provider()`, `buildCompletionRequest(LlmBackend, ParsedConversation)`, `parseCompletionResponse(HttpResponse)`. Implementations are **pure** (no transport, no shared state) so they unit-test offline. `AbstractLlmClient` provides URL parsing, base-request construction, and JSON helpers.
+- `org.mockserver.llm.client.LlmClientRegistry` — singleton, static-block registration keyed by `Provider`, structurally identical to `ProviderCodecRegistry`. All seven providers registered: Ollama, OpenAI, OpenAI Responses, Azure OpenAI, Anthropic, Gemini, Bedrock.
+- `org.mockserver.llm.client.LlmBackend` — immutable record (`name, provider, baseUrl, apiKey, model, headers, timeoutMillis`); `baseUrl`/`model` default per provider, `apiKey` redacted in `toString()`.
+- `org.mockserver.llm.client.LlmBackendResolver` — three config layers: (1) provider env conventions (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_HOST`), (2) `mockserver.llmProvider`/`llmApiKey`/`llmModel`/`llmBaseUrl`, (3) named backends JSON (`mockserver.llmBackendsConfig`). Properties take precedence over env; named backends are selectable by name.
+- `org.mockserver.llm.client.LlmCompletionService` — the single entry point for runtime-LLM features. Looks up the client, builds the request, sends it via an injected `LlmTransport`, parses the response. Enforces the safety rules: **off unless a backend resolves**, **fail closed** (timeout / transport error / non-2xx / parse failure → `Optional.empty()` + one log line), and **reproducible** (clients pin `temperature=0`/seed; responses cached per provider+model+baseUrl+normalised prompt). `LlmTransport` is a seam; `NettyHttpClientLlmTransport` wraps the server's `NettyHttpClient` in production.
+
+```mermaid
+flowchart TD
+    A["Runtime-LLM feature needs an LLM"] --> B{"Backend resolved?"}
+    B -- "no" --> C["Feature unavailable\nlog one line, deterministic fallback"]
+    B -- "yes" --> D["LlmClientRegistry.lookup(provider)"]
+    D --> E["client.buildCompletionRequest"]
+    E --> F["LlmTransport.send (NettyHttpClient)"]
+    F --> G["client.parseCompletionResponse to Completion"]
+    F -- "timeout / error / non-2xx" --> C
+```
+
+Adding a provider = implement `LlmClient` + one `register(...)` line — the same one-line story as codecs. **Ollama** is the reference backend (no auth, local, free) used to prove the path. **Bedrock** builds the Anthropic-on-Bedrock body and parses the Anthropic-shaped response, but automatic AWS SigV4 signing is not yet implemented — callers supply auth via the `headers` escape hatch or a signing proxy (tracked in `llm-security-audit.md`).
+
+This SPI is never on the deterministic assertion/matching path. The features that consume it (drift detection, semantic matching) are tracked in `docs/plans/mockserver-llm-mocking.md`.
+
 ## Configuration
 
 | Property | Default | Range | Description |
 |----------|---------|-------|-------------|
 | `mockserver.maxLlmConversationBodySize` | `1048576` (1 MiB) | 16384 - 67108864 | Maximum request body size for conversation matcher parsing |
+| `mockserver.llmProvider` | _(unset)_ | — | Default runtime-LLM backend provider (enables runtime-LLM features) |
+| `mockserver.llmApiKey` | _(unset)_ | — | API key for the default backend (secret; redacted in logs) |
+| `mockserver.llmModel` | _(provider default)_ | — | Model for the default backend |
+| `mockserver.llmBaseUrl` | _(provider default)_ | — | Base URL override for the default backend |
+| `mockserver.llmBackendsConfig` | _(unset)_ | — | Path to JSON file of named backends |
+| `mockserver.llmRequestTimeoutMillis` | `30000` | — | Per-request timeout for outbound runtime-LLM calls |
 
 ## Related Documents
 
@@ -296,3 +327,10 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `model/HttpLlmResponse.java` | Action type holding provider, model, completion, predicates |
 | `model/ConversationPredicates.java` | Serialisable predicate set stored on `HttpLlmResponse` |
 | `model/NormalizationOptions.java` | Serialisable normalisation modifier carried on `ConversationPredicates` |
+| `llm/client/LlmClient.java` + `AbstractLlmClient.java` | Runtime-LLM client SPI (build request / parse response), pure |
+| `llm/client/LlmClientRegistry.java` | Singleton registry of runtime-LLM clients keyed by `Provider` |
+| `llm/client/{Ollama,OpenAi,OpenAiResponses,AzureOpenAi,Anthropic,Gemini,Bedrock}LlmClient.java` | Per-provider runtime clients |
+| `llm/client/LlmBackend.java` | Immutable backend config record (apiKey redacted) |
+| `llm/client/LlmBackendResolver.java` | Three-layer backend resolution (env / properties / named JSON) |
+| `llm/client/LlmCompletionService.java` | Orchestrator: off-unless-configured, fail-closed, cached |
+| `llm/client/LlmTransport.java` + `NettyHttpClientLlmTransport.java` | Transport seam over `NettyHttpClient` |

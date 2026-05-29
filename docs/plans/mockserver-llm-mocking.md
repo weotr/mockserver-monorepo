@@ -53,6 +53,9 @@ Apply this lens when scoping the items below:
 
 ## Enabling runtime LLM access
 
+> **Status: shipped.** The SPI below is implemented in `org.mockserver.llm.client` — `LlmClient` + `AbstractLlmClient`, `LlmClientRegistry` (all seven providers), `LlmBackend`, `LlmBackendResolver` (three config layers), `LlmCompletionService` (off-unless-configured, fail-closed, cached) and the `LlmTransport` / `NettyHttpClientLlmTransport` seam. Ollama is the reference backend; Bedrock relies on the `headers` escape hatch pending automatic SigV4 signing. The remaining design notes below are retained for context.
+
+
 Any runtime-LLM feature (starting with #9b) needs MockServer to act as a *client* against a real LLM the user already has. The challenge — "we don't know which LLM a user has" — is solved by reusing the existing provider abstraction and letting the user declare a backend.
 
 ### Mirror the existing codec pattern

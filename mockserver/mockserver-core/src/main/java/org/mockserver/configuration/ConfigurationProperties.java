@@ -85,6 +85,12 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_MAX_REQUEST_BODY_SIZE = "mockserver.maxRequestBodySize";
     private static final String MOCKSERVER_MAX_RESPONSE_BODY_SIZE = "mockserver.maxResponseBodySize";
     private static final String MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE = "mockserver.maxLlmConversationBodySize";
+    private static final String MOCKSERVER_LLM_PROVIDER = "mockserver.llmProvider";
+    private static final String MOCKSERVER_LLM_API_KEY = "mockserver.llmApiKey";
+    private static final String MOCKSERVER_LLM_MODEL = "mockserver.llmModel";
+    private static final String MOCKSERVER_LLM_BASE_URL = "mockserver.llmBaseUrl";
+    private static final String MOCKSERVER_LLM_BACKENDS_CONFIG = "mockserver.llmBackendsConfig";
+    private static final String MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS = "mockserver.llmRequestTimeoutMillis";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
     private static final String MOCKSERVER_HTTP2_ENABLED = "mockserver.http2Enabled";
@@ -957,6 +963,81 @@ public class ConfigurationProperties {
      */
     public static void maxLlmConversationBodySize(int size) {
         setProperty(MOCKSERVER_MAX_LLM_CONVERSATION_BODY_SIZE, "" + size);
+    }
+
+    /**
+     * Provider type for the default runtime-LLM backend (one of the
+     * {@link org.mockserver.model.Provider} enum names). Runtime-LLM features
+     * (drift detection, semantic matching) are off unless a backend resolves;
+     * this is layer 2 of backend resolution (single default backend). Empty by
+     * default.
+     */
+    public static String llmProvider() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_PROVIDER, "MOCKSERVER_LLM_PROVIDER", "");
+    }
+
+    public static void llmProvider(String provider) {
+        setProperty(MOCKSERVER_LLM_PROVIDER, provider);
+    }
+
+    /**
+     * API key (secret) for the default runtime-LLM backend. Never logged or
+     * emitted in config dumps — see {@link org.mockserver.llm.client.LlmBackend}.
+     */
+    public static String llmApiKey() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_API_KEY, "MOCKSERVER_LLM_API_KEY", "");
+    }
+
+    public static void llmApiKey(String apiKey) {
+        setProperty(MOCKSERVER_LLM_API_KEY, apiKey);
+    }
+
+    /**
+     * Model for the default runtime-LLM backend; empty means the per-provider
+     * default applies.
+     */
+    public static String llmModel() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_MODEL, "MOCKSERVER_LLM_MODEL", "");
+    }
+
+    public static void llmModel(String model) {
+        setProperty(MOCKSERVER_LLM_MODEL, model);
+    }
+
+    /**
+     * Base URL override for the default runtime-LLM backend; empty means the
+     * per-provider default applies.
+     */
+    public static String llmBaseUrl() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_BASE_URL, "MOCKSERVER_LLM_BASE_URL", "");
+    }
+
+    public static void llmBaseUrl(String baseUrl) {
+        setProperty(MOCKSERVER_LLM_BASE_URL, baseUrl);
+    }
+
+    /**
+     * Path to a JSON file declaring named runtime-LLM backends (layer 3 of
+     * backend resolution). Empty by default.
+     */
+    public static String llmBackendsConfig() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_BACKENDS_CONFIG, "MOCKSERVER_LLM_BACKENDS_CONFIG", "");
+    }
+
+    public static void llmBackendsConfig(String path) {
+        setProperty(MOCKSERVER_LLM_BACKENDS_CONFIG, path);
+    }
+
+    /**
+     * Per-request timeout (milliseconds) for outbound runtime-LLM calls. A
+     * backend's own {@code timeoutMillis} overrides this. Default 30000.
+     */
+    public static long llmRequestTimeoutMillis() {
+        return readLongProperty(MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS, "MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS", 30000L);
+    }
+
+    public static void llmRequestTimeoutMillis(long millis) {
+        setProperty(MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS, "" + millis);
     }
 
     public static long regexMatchingTimeoutMillis() {

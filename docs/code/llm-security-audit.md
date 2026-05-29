@@ -92,6 +92,18 @@ To fix: implement the `aws-chunked` / event stream encoding described in the Bed
 
 The limitation is documented in the `BedrockCodec` javadoc. Not a security concern.
 
+### Runtime LLM client — Bedrock SigV4 signing
+
+**Compatibility limitation — actionable for direct Bedrock use.**
+
+The runtime-LLM client `BedrockLlmClient` (`org.mockserver.llm.client`) builds the Anthropic-on-Bedrock request body and parses the Anthropic-shaped response, but does **not** implement AWS SigV4 request signing. Callers must supply auth out of band: via the `LlmBackend.headers()` escape hatch (a pre-signed `Authorization` header) or by pointing `baseUrl` at a local signing proxy / sidecar. Without valid auth the request fails closed (Bedrock returns 403 and `LlmCompletionService` returns no completion) — there is no security exposure, but a user attempting direct Bedrock integration receives no completion until signing is provided.
+
+To fix: implement an AWS SigV4 v4 signer (deterministic; verifiable offline against AWS's published canonical-request test vectors) and apply it in `BedrockLlmClient.buildCompletionRequest`. Tracked here per the `BedrockLlmClient` javadoc.
+
+### Gemini API key in query string (runtime client)
+
+The runtime-LLM `GeminiLlmClient` passes the API key as a `?key=` query parameter, as Gemini's API-key auth requires. Unlike header credentials, query-string keys can surface in HTTP access/proxy logs. This is a property of the provider's API, not a MockServer choice; front the call with a gateway that injects the key after ingress in high-security environments. Documented in the `GeminiLlmClient` javadoc. Not a MockServer defect.
+
 ### Gemini tool-call argument re-serialisation
 
 The `GeminiCodec.encodeStreaming()` method re-serialises tool-call arguments through Jackson (`OBJECT_MAPPER.readTree` + `writeValueAsString`) before embedding them in the SSE chunk. If the arguments are not valid JSON, they are wrapped in a `{"value":"<escaped>"}` object. This is a safe fallback that prevents malformed arguments from corrupting the JSON chunk. No action required.
