@@ -98,6 +98,7 @@ public class HttpState {
     private final MemoryMonitoring memoryMonitoring;
     private OpenAPIConverter openAPIConverter;
     private org.mockserver.serialization.har.HarConverter harConverter;
+    private org.mockserver.serialization.curl.HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private AuthenticationHandler controlPlaneAuthenticationHandler;
     private GrpcProtoDescriptorStore grpcDescriptorStore;
     private final FileStore fileStore = new FileStore();
@@ -830,6 +831,19 @@ public class HttpState {
                                     httpResponseFuture.complete(response);
                                 });
                                 break;
+                            case CURL:
+                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
+                                    List<HttpRequest> httpRequests = new java.util.ArrayList<>(requests.size());
+                                    for (RequestDefinition r : requests) {
+                                        if (r instanceof HttpRequest) {
+                                            httpRequests.add((HttpRequest) r);
+                                        }
+                                    }
+                                    response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
+                                    mockServerLogger.logEvent(logEntry);
+                                    httpResponseFuture.complete(response);
+                                });
+                                break;
                         }
                         break;
                     }
@@ -915,6 +929,19 @@ public class HttpState {
                                         .withBody(getExpectationExportSerializer().serializeRequestResponsesAsBruno(pairs))
                                         .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
                                         .withHeader("content-disposition", "attachment; filename=\"mockserver-traffic.bruno.zip\"");
+                                    mockServerLogger.logEvent(logEntry);
+                                    httpResponseFuture.complete(response);
+                                });
+                                break;
+                            case CURL:
+                                mockServerLog.retrieveRequestResponses(requestDefinition, pairs -> {
+                                    List<HttpRequest> httpRequests = new java.util.ArrayList<>(pairs.size());
+                                    for (LogEventRequestAndResponse pair : pairs) {
+                                        if (pair.getHttpRequest() instanceof HttpRequest) {
+                                            httpRequests.add((HttpRequest) pair.getHttpRequest());
+                                        }
+                                    }
+                                    response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
                                     mockServerLogger.logEvent(logEntry);
                                     httpResponseFuture.complete(response);
                                 });
@@ -1013,6 +1040,11 @@ public class HttpState {
                                     httpResponseFuture.complete(response);
                                 });
                                 break;
+                            case CURL:
+                                response.withBody("CURL not supported for RECORDED_EXPECTATIONS", MediaType.create("text", "plain").withCharset(UTF_8));
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
+                                break;
                         }
                         break;
                     }
@@ -1051,6 +1083,9 @@ public class HttpState {
                                     getHarConverter().serialize(expectationsToLogEvents(expectations)),
                                     MediaType.JSON_UTF_8
                                 );
+                                break;
+                            case CURL:
+                                response.withBody("CURL not supported for ACTIVE_EXPECTATIONS", MediaType.create("text", "plain").withCharset(UTF_8));
                                 break;
                         }
                         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
@@ -1697,5 +1732,28 @@ public class HttpState {
             this.harConverter = new org.mockserver.serialization.har.HarConverter();
         }
         return harConverter;
+    }
+
+    private org.mockserver.serialization.curl.HttpRequestToCurlSerializer getHttpRequestToCurlSerializer() {
+        if (this.httpRequestToCurlSerializer == null) {
+            this.httpRequestToCurlSerializer = new org.mockserver.serialization.curl.HttpRequestToCurlSerializer(mockServerLogger);
+        }
+        return httpRequestToCurlSerializer;
+    }
+
+    /**
+     * Render a list of recorded requests as cURL commands, one per request,
+     * separated by a blank line.
+     */
+    private String toCurlCommands(List<HttpRequest> requests) {
+        StringBuilder builder = new StringBuilder();
+        for (HttpRequest request : requests) {
+            if (builder.length() > 0) {
+                builder.append(NEW_LINE).append(NEW_LINE);
+            }
+            builder.append(getHttpRequestToCurlSerializer().toCurl(request));
+        }
+        builder.append(NEW_LINE);
+        return builder.toString();
     }
 }

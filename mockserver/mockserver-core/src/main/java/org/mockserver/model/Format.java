@@ -13,5 +13,8 @@ public enum Format {
     // can be imported elsewhere (specs, request collections).
     OPENAPI,
     POSTMAN,
-    BRUNO
+    BRUNO,
+    // cURL command(s) that reproduce recorded requests. Applicable to REQUESTS
+    // and REQUEST_RESPONSES retrieval (not to expectation scopes).
+    CURL
 }

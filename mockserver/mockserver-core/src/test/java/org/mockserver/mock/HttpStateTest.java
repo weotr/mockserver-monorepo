@@ -282,6 +282,97 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldHandleRetrieveRequestResponsesAsCurl() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setType(FORWARDED_REQUEST)
+                .setHttpRequest(request("/api/test").withMethod("GET").withHeader("host", "example.com"))
+                .setHttpResponse(response().withStatusCode(200).withReasonPhrase("OK").withBody("hello"))
+                .setExpectation(new Expectation(request("/api/test"), Times.once(), TimeToLive.unlimited(), 0).withId("key_one").thenRespond(response().withStatusCode(200).withReasonPhrase("OK").withBody("hello")))
+        );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", REQUEST_RESPONSES.name())
+            .withQueryStringParameter("format", "CURL")
+            .withBody(
+                requestDefinitionSerializer.serialize(request("/api/test"))
+            );
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("curl -v"));
+        assertThat(body, containsString("http://example.com/api/test"));
+    }
+
+    @Test
+    public void shouldRejectCurlForActiveExpectations() {
+        // given
+        httpState.add(new Expectation(request("request_one")).withId("key_one").thenRespond(response("response_one")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "CURL");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then — completes cleanly with a clear message rather than hanging
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("CURL not supported for ACTIVE_EXPECTATIONS"));
+    }
+
+    @Test
+    public void shouldHandleRetrieveRequestsAsCurl() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setType(RECEIVED_REQUEST)
+                .setHttpRequest(request("/api/test").withMethod("GET").withHeader("host", "example.com"))
+        );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.REQUESTS.name())
+            .withQueryStringParameter("format", "CURL")
+            .withBody(requestDefinitionSerializer.serialize(request("/api/test")));
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("curl -v"));
+        assertThat(body, containsString("http://example.com/api/test"));
+    }
+
+    @Test
+    public void shouldRejectCurlForRecordedExpectations() {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.RECORDED_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "CURL");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then — completes cleanly with a clear message rather than hanging
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("CURL not supported for RECORDED_EXPECTATIONS"));
+    }
+
+    @Test
     public void shouldHandleRetrieveLogMessagesRequest() {
         // given
         configuration.logLevel(Level.INFO);
@@ -2092,7 +2183,7 @@ public class HttpStateTest {
         } catch (Throwable throwable) {
             // then
             assertThat(throwable, instanceOf(IllegalArgumentException.class));
-            assertThat(throwable.getMessage(), is("\"invalid\" is not a valid value for \"format\" parameter, only the following values are supported [java, json, log_entries, har, openapi, postman, bruno]"));
+            assertThat(throwable.getMessage(), is("\"invalid\" is not a valid value for \"format\" parameter, only the following values are supported [java, json, log_entries, har, openapi, postman, bruno, curl]"));
         }
     }
 
