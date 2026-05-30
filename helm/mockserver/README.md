@@ -190,6 +190,45 @@ When persistence is enabled, the chart automatically sets `MOCKSERVER_PERSIST_EX
 
 See the [full persistence documentation](https://www.mock-server.com/where/kubernetes.html#helm_persistent_storage) for more examples including existing PVC usage and clustering with shared storage.
 
+### Chaos Proxy (fault injection)
+
+MockServer can be deployed as a **chaos proxy** in front of a real upstream Service to inject faults (errors, latency, dropped connections, slow/corrupted responses, rate limits) into the responses your services receive — without changing the calling code. Point a service at this MockServer Service instead of the real upstream (or use it as an egress/forward proxy), and attach an `HttpChaosProfile` (`chaos` block) to a forwarding expectation.
+
+A minimal reverse-proxy example, supplied through the chart's inline configuration:
+
+```yaml
+# values-chaos.yaml
+app:
+  config:
+    enabled: true
+    properties: |
+      mockserver.initializationJsonPath=/config/initializerJson.json
+    initializerJson: |
+      [
+        {
+          "httpRequest": { "path": "/.*" },
+          "httpForward": { "host": "upstream.default.svc.cluster.local", "port": 8080 },
+          "chaos": {
+            "errorStatus": 503,
+            "errorProbability": 0.3,
+            "retryAfter": "5",
+            "latency": { "timeUnit": "MILLISECONDS", "value": 500 }
+          },
+          "times": { "unlimited": true }
+        }
+      ]
+```
+
+```bash
+helm upgrade --install --namespace mockserver \
+  -f values-chaos.yaml \
+  mockserver helm/mockserver
+```
+
+The `/.*` request matcher means every path is forwarded to the upstream with chaos applied, so no separate `mockserver.proxyRemoteHost` is required. (If `app.persistence.enabled` is also `true`, drop the `mockserver.initializationJsonPath` line — the chart points the initialization path at the persisted-expectations file automatically.)
+
+The `chaos` block supports probabilistic errors, latency, connection drops, count-based and time-based outage windows, response-body corruption, slow (dribbled) responses, and a stateful request quota. See the [Chaos Testing & Fault Injection](https://www.mock-server.com/mock_server/chaos_testing.html) reference and the [Chaos Proxy in Kubernetes](https://www.mock-server.com/mock_server/chaos_testing_kubernetes.html) guide (reverse-proxy, egress/forward-proxy, and sidecar patterns, plus CA-trust setup for TLS interception).
+
 ### MockServer URL
 
 #### Local Kubernetes Cluster (i.e. [minikube](https://github.com/kubernetes/minikube), [microk8s](https://microk8s.io/))
