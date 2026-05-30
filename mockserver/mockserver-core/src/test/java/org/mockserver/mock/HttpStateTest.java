@@ -3070,6 +3070,95 @@ public class HttpStateTest {
         assertThat(body, containsString("\"currentInstant\" : \"2024-06-15T12:00:00Z\""));
     }
 
+    // --- Service chaos endpoint tests ---
+
+    @Test
+    public void shouldRegisterAndGetServiceChaos() throws Exception {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        // register
+        FakeResponseWriter putWriter = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"host\":\"upstream.svc\",\"chaos\":{\"errorStatus\":503,\"errorProbability\":1.0}}");
+        assertThat(httpState.handle(putRequest, putWriter, false), is(true));
+        assertThat(putWriter.response.getStatusCode(), is(200));
+        assertThat(putWriter.response.getBodyAsString(), containsString("\"status\" : \"registered\""));
+        assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().get("upstream.svc"), is(notNullValue()));
+
+        // read back
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        assertThat(httpState.handle(request("/mockserver/serviceChaos").withMethod("GET"), getWriter, false), is(true));
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        String getBody = getWriter.response.getBodyAsString();
+        assertThat(getBody, containsString("upstream.svc"));
+        assertThat(getBody, containsString("\"errorStatus\""));
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+    }
+
+    @Test
+    public void shouldRemoveServiceChaosForHost() throws Exception {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().put("upstream.svc",
+            org.mockserver.model.HttpChaosProfile.httpChaosProfile().withErrorStatus(503));
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest removeRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"host\":\"upstream.svc\",\"remove\":true}");
+        assertThat(httpState.handle(removeRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(200));
+        assertThat(writer.response.getBodyAsString(), containsString("\"status\" : \"removed\""));
+        assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().get("upstream.svc"), is(nullValue()));
+    }
+
+    @Test
+    public void shouldClearAllServiceChaos() throws Exception {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().put("a",
+            org.mockserver.model.HttpChaosProfile.httpChaosProfile().withErrorStatus(503));
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest clearRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"clear\":true}");
+        assertThat(httpState.handle(clearRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(200));
+        assertThat(writer.response.getBodyAsString(), containsString("\"status\" : \"cleared\""));
+        assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().entries().isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldRejectInvalidServiceChaosProfile() throws Exception {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"host\":\"upstream.svc\",\"chaos\":{\"errorStatus\":999}}");
+        assertThat(httpState.handle(putRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(400));
+        assertThat(writer.response.getBodyAsString(), containsString("invalid chaos profile"));
+        assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().get("upstream.svc"), is(nullValue()));
+    }
+
+    @Test
+    public void shouldRejectServiceChaosWithBothClearAndHost() throws Exception {
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"clear\":true,\"host\":\"upstream.svc\"}");
+        assertThat(httpState.handle(putRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(400));
+        assertThat(writer.response.getBodyAsString(), containsString("cannot specify both 'clear' and 'host'"));
+    }
+
+    @Test
+    public void shouldRejectServiceChaosWithoutHost() throws Exception {
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"chaos\":{\"errorStatus\":503}}");
+        assertThat(httpState.handle(putRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(400));
+        assertThat(writer.response.getBodyAsString(), containsString("'host' field is required"));
+    }
+
     @Test
     public void shouldRejectClockWithEmptyBody() throws Exception {
         // given

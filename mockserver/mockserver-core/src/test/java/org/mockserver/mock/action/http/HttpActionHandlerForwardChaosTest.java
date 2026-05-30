@@ -99,6 +99,7 @@ public class HttpActionHandlerForwardChaosTest {
     public void setupMocks() {
         Metrics.resetAdditionalMetricsForTesting();
         HttpQuotaRegistry.getInstance().reset();
+        ServiceChaosRegistry.getInstance().reset();
         configuration = configuration().logLevel(Level.INFO).metricsEnabled(true);
 
         mockHttpStateHandler = mock(HttpState.class);
@@ -277,6 +278,73 @@ public class HttpActionHandlerForwardChaosTest {
         assertThat("connection options set", written.getConnectionOptions() != null, is(true));
         assertThat(written.getConnectionOptions().getChunkSize(), is(4));
         assertThat(written.getConnectionOptions().getChunkDelay().getValue(), is(100L));
+    }
+
+    // ---- Service-scoped chaos tests ----
+
+    @Test
+    public void serviceChaosAppliedToForwardWhenExpectationHasNoChaos() {
+        // given - a FORWARD expectation with NO chaos, but service-scoped chaos registered for the request host
+        HttpRequest request = request("some_path").withHeader("host", "upstream.svc");
+        HttpResponse upstreamResponse = response("upstream body").withStatusCode(200).withDelay(milliseconds(0));
+        HttpForward forward = forward().withHost("localhost").withPort(1090);
+        HttpForwardActionResult forwardResult = completedForwardResult(upstreamResponse);
+        ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503).withErrorProbability(1.0));
+
+        Expectation expectation = new Expectation(request).thenForward(forward); // no chaos on the expectation
+
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(forwardResult);
+
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
+        verify(mockResponseWriter).writeResponse(eq(request), responseCaptor.capture(), eq(false));
+        assertThat("service-scoped chaos replaced the forwarded response", responseCaptor.getValue().getStatusCode(), is(503));
+    }
+
+    @Test
+    public void expectationChaosTakesPriorityOverServiceChaos() {
+        // given - both an expectation-level chaos (500) AND a service-scoped chaos (503) for the host
+        HttpRequest request = request("some_path").withHeader("host", "upstream.svc");
+        HttpResponse upstreamResponse = response("upstream body").withStatusCode(200).withDelay(milliseconds(0));
+        HttpForward forward = forward().withHost("localhost").withPort(1090);
+        HttpForwardActionResult forwardResult = completedForwardResult(upstreamResponse);
+        ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503).withErrorProbability(1.0));
+
+        Expectation expectation = new Expectation(request)
+            .thenForward(forward)
+            .withChaos(httpChaosProfile().withErrorStatus(500).withErrorProbability(1.0));
+
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(forwardResult);
+
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
+        verify(mockResponseWriter).writeResponse(eq(request), responseCaptor.capture(), eq(false));
+        assertThat("the expectation's own chaos wins", responseCaptor.getValue().getStatusCode(), is(500));
+    }
+
+    @Test
+    public void serviceChaosNotAppliedForUnregisteredHost() {
+        HttpRequest request = request("some_path").withHeader("host", "other.svc");
+        HttpResponse upstreamResponse = response("upstream body").withStatusCode(200).withDelay(milliseconds(0));
+        HttpForward forward = forward().withHost("localhost").withPort(1090);
+        HttpForwardActionResult forwardResult = completedForwardResult(upstreamResponse);
+        ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503).withErrorProbability(1.0));
+
+        Expectation expectation = new Expectation(request).thenForward(forward);
+
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(forwardResult);
+
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
+        verify(mockResponseWriter).writeResponse(eq(request), responseCaptor.capture(), eq(false));
+        assertThat("no chaos for an unregistered host", responseCaptor.getValue().getStatusCode(), is(200));
+        assertThat(responseCaptor.getValue().getBodyAsString(), is("upstream body"));
     }
 
     // ---- Latency injection test (non-blocking via scheduler) ----

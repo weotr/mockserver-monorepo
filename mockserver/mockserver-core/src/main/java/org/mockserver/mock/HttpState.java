@@ -280,6 +280,7 @@ public class HttpState {
         fileStore.reset();
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -1292,6 +1293,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleServiceChaosPut(request), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/debugMismatch", "/debugMismatch")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1560,6 +1568,12 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleServiceChaosGet(), true);
+                }
+                return true;
+            }
             return false;
 
         } else {
@@ -1678,6 +1692,102 @@ public class HttpState {
             return response()
                 .withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to get clock status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleServiceChaosPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return serviceChaosError(objectMapper, "request body is required with a 'host' field (and a 'chaos' object), or 'clear':true to clear all");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            boolean clearAll = node.path("clear").asBoolean(false);
+            String host = node.path("host").asText(null);
+            org.mockserver.mock.action.http.ServiceChaosRegistry registry = org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance();
+            // 'clear' (clear all) and 'host' (single-host operation) are mutually exclusive
+            if (clearAll && !isBlank(host)) {
+                return serviceChaosError(objectMapper, "cannot specify both 'clear' and 'host'");
+            }
+            // clear all service-scoped chaos
+            if (clearAll) {
+                registry.reset();
+                logServiceChaos(request, "cleared all service-scoped chaos", null);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "cleared");
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            if (isBlank(host)) {
+                return serviceChaosError(objectMapper, "'host' field is required");
+            }
+            // remove the host's chaos when requested or when no chaos object is supplied
+            if (node.path("remove").asBoolean(false) || !node.hasNonNull("chaos")) {
+                registry.remove(host);
+                logServiceChaos(request, "removed service-scoped chaos for host:{}", host);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "removed");
+                result.put("host", host);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            // register/replace — deserialize through the DTO so range validation runs
+            org.mockserver.serialization.model.HttpChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.HttpChaosProfileDTO.class);
+            org.mockserver.model.HttpChaosProfile profile = dto.buildObject();
+            registry.put(host, profile);
+            logServiceChaos(request, "registered service-scoped chaos for host:{}", host);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("host", host);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            // thrown by HttpChaosProfile validation (e.g. errorStatus out of range)
+            return serviceChaosError(objectMapper, "invalid chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return serviceChaosError(objectMapper, "failed to process service chaos request: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleServiceChaosGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode services = result.putObject("services");
+            org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().entries().forEach((host, profile) ->
+                services.set(host, objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(profile))));
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get service chaos\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private void logServiceChaos(HttpRequest request, String messageFormat, String host) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            LogEntry entry = new LogEntry()
+                .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request)
+                .setMessageFormat(messageFormat);
+            if (host != null) {
+                entry.setArguments(host);
+            }
+            mockServerLogger.logEvent(entry);
+        }
+    }
+
+    private HttpResponse serviceChaosError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process service chaos request\"}", MediaType.JSON_UTF_8);
         }
     }
 

@@ -241,6 +241,14 @@ public class HttpActionHandler {
         // degradation ramp (relative to first match, via the controllable clock);
         // outside the window chaos is disabled (see effectiveChaos)
         final HttpChaosProfile effectiveChaos = effectiveChaos(expectation);
+        // service-scoped chaos: when a matched FORWARD expectation carries no chaos of its own,
+        // fall back to a host-scoped profile (keyed by the request Host header) registered via
+        // PUT /mockserver/serviceChaos. An expectation-level chaos profile always takes precedence
+        // (even when currently gated off by its outage window). The anonymous/unmatched proxy
+        // fall-through path is intentionally not affected.
+        final HttpChaosProfile forwardChaos = (effectiveChaos == null && expectation.getChaos() == null && action.getType().name().startsWith("FORWARD"))
+            ? ServiceChaosRegistry.getInstance().get(request.getFirstHeader("host"))
+            : effectiveChaos;
         switch (action.getType()) {
             case RESPONSE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
@@ -265,15 +273,15 @@ public class HttpActionHandler {
             // its own write path and the unmatched/anonymous proxy-pass path.
             case FORWARD -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardActionHandler().handle((HttpForward) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_TEMPLATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardTemplateActionHandler().handle((HttpTemplate) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_CLASS_CALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardClassCallbackActionHandler().handle((HttpClassCallback) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             // deferred: FORWARD_OBJECT_CALLBACK chaos injection — uses its own write path
             case FORWARD_OBJECT_CALLBACK -> scheduler.schedule(() ->
@@ -281,11 +289,11 @@ public class HttpActionHandler {
                 synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_REPLACE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpOverrideForwardedRequestCallbackActionHandler().handle((HttpOverrideForwardedRequest) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_VALIDATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case SSE_RESPONSE -> {
                 if (ctx == null) {
