@@ -1,5 +1,6 @@
 package org.mockserver.metrics;
 
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.Meter;
 import io.opentelemetry.exporter.otlp.http.metrics.OtlpHttpMetricExporter;
@@ -11,7 +12,11 @@ import org.mockserver.configuration.ConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
 import java.time.Duration;
+import java.util.List;
 
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
 
@@ -65,9 +70,17 @@ public class OtelMetricsExporter {
     }
 
     /**
-     * Build a meter provider with the given reader and register an observable
-     * gauge per {@link Metrics.Name}. Visible for testing (a test can pass an
-     * in-memory reader instead of the OTLP periodic reader).
+     * Build a meter provider with the given reader and register observable
+     * instruments:
+     * <ul>
+     *   <li>One gauge per {@link Metrics.Name} (existing behaviour).</li>
+     *   <li>JVM memory, thread, and GC gauges (same data as
+     *       {@link JvmMetricsCollector} on the Prometheus side).</li>
+     *   <li>A gauge mirroring the slow-request counter so OTLP-only consumers
+     *       can observe it without a Prometheus scrape.</li>
+     * </ul>
+     * Visible for testing (a test can pass an in-memory reader instead of the
+     * OTLP periodic reader).
      */
     public static OtelMetricsExporter startWithReader(MetricReader reader) {
         SdkMeterProvider provider = SdkMeterProvider.builder()
@@ -82,7 +95,87 @@ public class OtelMetricsExporter {
                 .ofLongs()
                 .buildWithCallback(measurement -> measurement.record(Metrics.get(name)));
         }
+        registerJvmMetrics(meter);
+        registerSlowRequestCounter(meter);
         return new OtelMetricsExporter(provider);
+    }
+
+    private static void registerJvmMetrics(Meter meter) {
+        // area label values match JvmMetricsCollector ("heap" / "nonheap" — no hyphen)
+        Attributes heapAttr = Attributes.of(AttributeKey.stringKey("area"), "heap");
+        Attributes nonHeapAttr = Attributes.of(AttributeKey.stringKey("area"), "nonheap");
+
+        meter.gaugeBuilder("jvm_memory_used_bytes")
+            .setDescription("JVM memory used bytes, labeled by area (heap/nonheap)")
+            .setUnit("By")
+            .ofLongs()
+            .buildWithCallback(m -> {
+                MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
+                m.record(mem.getHeapMemoryUsage().getUsed(), heapAttr);
+                m.record(mem.getNonHeapMemoryUsage().getUsed(), nonHeapAttr);
+            });
+        meter.gaugeBuilder("jvm_memory_committed_bytes")
+            .setDescription("JVM memory committed bytes, labeled by area (heap/nonheap)")
+            .setUnit("By")
+            .ofLongs()
+            .buildWithCallback(m -> {
+                MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
+                m.record(mem.getHeapMemoryUsage().getCommitted(), heapAttr);
+                m.record(mem.getNonHeapMemoryUsage().getCommitted(), nonHeapAttr);
+            });
+        meter.gaugeBuilder("jvm_memory_max_bytes")
+            .setDescription("JVM memory max bytes, labeled by area (-1 if undefined)")
+            .setUnit("By")
+            .ofLongs()
+            .buildWithCallback(m -> {
+                MemoryMXBean mem = ManagementFactory.getMemoryMXBean();
+                m.record(mem.getHeapMemoryUsage().getMax(), heapAttr);
+                m.record(mem.getNonHeapMemoryUsage().getMax(), nonHeapAttr);
+            });
+
+        meter.gaugeBuilder("jvm_threads_current")
+            .setDescription("Current JVM thread count")
+            .ofLongs()
+            .buildWithCallback(m ->
+                m.record(ManagementFactory.getThreadMXBean().getThreadCount()));
+        meter.gaugeBuilder("jvm_threads_daemon")
+            .setDescription("Daemon JVM thread count")
+            .ofLongs()
+            .buildWithCallback(m ->
+                m.record(ManagementFactory.getThreadMXBean().getDaemonThreadCount()));
+
+        // Per-collector breakdown (richer than the Prometheus-side aggregate).
+        // Guard the -1 sentinel: JDK spec allows -1 when a collector exposes no stats.
+        List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+        meter.gaugeBuilder("jvm_gc_collection_count")
+            .setDescription("Total GC collection count, labeled by collector name")
+            .ofLongs()
+            .buildWithCallback(m -> {
+                for (GarbageCollectorMXBean gc : gcBeans) {
+                    long count = gc.getCollectionCount();
+                    if (count >= 0) {
+                        m.record(count, Attributes.of(AttributeKey.stringKey("gc"), gc.getName()));
+                    }
+                }
+            });
+        meter.gaugeBuilder("jvm_gc_collection_seconds_sum")
+            .setDescription("Total GC collection time in seconds, labeled by collector name")
+            .setUnit("s")
+            .buildWithCallback(m -> {
+                for (GarbageCollectorMXBean gc : gcBeans) {
+                    long ms = gc.getCollectionTime();
+                    if (ms >= 0) {
+                        m.record(ms / 1000.0, Attributes.of(AttributeKey.stringKey("gc"), gc.getName()));
+                    }
+                }
+            });
+    }
+
+    private static void registerSlowRequestCounter(Meter meter) {
+        meter.gaugeBuilder("mock_server_slow_requests_total")
+            .setDescription("Total forwarded requests that exceeded the slow-request threshold (mirrors Prometheus counter)")
+            .ofLongs()
+            .buildWithCallback(m -> m.record(Metrics.getSlowRequestCount()));
     }
 
     /**

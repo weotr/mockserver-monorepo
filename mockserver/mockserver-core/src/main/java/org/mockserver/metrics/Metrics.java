@@ -157,6 +157,15 @@ public class Metrics {
     }
 
     /**
+     * Return the current slow-request count, or 0 if metrics are disabled.
+     * Used by {@link OtelMetricsExporter} to mirror the Prometheus counter via OTLP.
+     */
+    public static long getSlowRequestCount() {
+        Counter counter = slowRequestTotal;
+        return counter != null ? (long) counter.get() : 0L;
+    }
+
+    /**
      * Increment the slow request counter. No-op unless metrics are enabled.
      */
     public static void incrementSlowRequestTotal() {
