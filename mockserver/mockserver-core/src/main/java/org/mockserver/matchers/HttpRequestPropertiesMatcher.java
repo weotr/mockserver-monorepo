@@ -406,8 +406,19 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
     }
 
     private boolean failFast(Matcher<?> matcher, MatchDifference context, MatchDifferenceCount matchDifferenceCount, StringBuilder becauseBuilder, boolean fieldMatches, MatchDifference.Field fieldName) {
+        // The human-readable "because" message is only ever consumed when INFO
+        // logging is on (see matches(...) above). Building it — the per-field
+        // appends and, more expensively, generateHintsForField — is otherwise
+        // wasted work allocated per field, per matcher, per request. Gate it on
+        // the same INFO check so a performance-tuned deployment (log level below
+        // INFO) does not pay for strings it discards. The match-difference
+        // counter and the fail-fast result below stay unconditional, and the
+        // MatchDifference itself is still populated by the field matchers, so
+        // detailedMatchFailures / debugMismatch / explainUnmatched / verification
+        // are unaffected.
+        boolean logBecause = !controlPlaneMatcher && mockServerLogger.isEnabledForInstance(Level.INFO);
         // update because builder
-        if (!controlPlaneMatcher) {
+        if (logBecause) {
             becauseBuilder
                 .append(NEW_LINE)
                 .append(fieldName.getName()).append(fieldMatches ? MATCHED : DID_NOT_MATCH);
@@ -424,7 +435,7 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
             }
         }
         if (!fieldMatches) {
-            if (!controlPlaneMatcher) {
+            if (logBecause) {
                 if (matchDifferenceCount.getHttpRequest().isNot()) {
                     becauseBuilder
                         .append(REQUEST_NOT_OPERATOR_IS_ENABLED);
