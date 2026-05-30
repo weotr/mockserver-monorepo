@@ -15,6 +15,7 @@ import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.core.Is.is;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -223,5 +224,148 @@ public class HttpLlmResponseActionHandlerTest {
         // then
         assertThat(response.getStatusCode(), is(501));
         assertThat(response.getBodyAsString(), containsString("streaming LLM responses must be dispatched through the SSE handler"));
+    }
+
+    // --- structured-output (outputSchema) validation ---
+
+    private static final String PERSON_SCHEMA =
+        "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}},\"required\":[\"name\",\"age\"]}";
+
+    @Test
+    public void shouldNotFlagWhenOutputConformsToSchema() {
+        // given — completion text is valid JSON conforming to its declared outputSchema
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withText("{\"name\":\"Ada\",\"age\":36}")
+                .withOutputSchema(PERSON_SCHEMA));
+        HttpRequest request = request().withPath("/v1/messages");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — no diagnostic header, response returned normally
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getFirstHeader(HttpLlmResponseActionHandler.STRUCTURED_OUTPUT_INVALID_HEADER), is(""));
+        assertThat(response.getBodyAsString(), containsString("Ada"));
+    }
+
+    @Test
+    public void shouldFlagButNotAlterBodyWhenOutputViolatesSchema() {
+        // given — completion text is missing the required "age" field
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withText("{\"name\":\"Ada\"}")
+                .withOutputSchema(PERSON_SCHEMA));
+        HttpRequest request = request().withPath("/v1/messages");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — fail-soft: body unchanged (still 200, still carries the configured text)
+        // but a diagnostic header flags the non-conformance
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), containsString("Ada"));
+        String diagnostic = response.getFirstHeader(HttpLlmResponseActionHandler.STRUCTURED_OUTPUT_INVALID_HEADER);
+        assertThat(diagnostic, not(is("")));
+        // header value must be a single line (no CR/LF)
+        assertThat(diagnostic.contains("\n") || diagnostic.contains("\r"), is(false));
+    }
+
+    @Test
+    public void shouldFlagWhenOutputTextIsNotJson() {
+        // given — declared schema but the text is plain prose, not JSON
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withText("just some prose, not json")
+                .withOutputSchema(PERSON_SCHEMA));
+        HttpRequest request = request().withPath("/v1/messages");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — flagged, but the response (status + body) is still returned unchanged
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), containsString("just some prose"));
+        assertThat(response.getFirstHeader(HttpLlmResponseActionHandler.STRUCTURED_OUTPUT_INVALID_HEADER), not(is("")));
+    }
+
+    @Test
+    public void shouldTreatMalformedSchemaAsNoOpAndNotBreakResponse() {
+        // given — outputSchema is rejected by the validator (the JsonSchemaValidator
+        // constructor requires a *.json path or a string ending in '}'); validation must fail-soft
+        MockServerLogger mockLogger = mock(MockServerLogger.class);
+        when(mockLogger.isEnabledForInstance(any(Level.class))).thenReturn(true);
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(mockLogger);
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withText("{\"name\":\"Ada\",\"age\":36}")
+                .withOutputSchema("{ this is not valid json schema"));
+        HttpRequest request = request().withPath("/v1/messages");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — response is unaffected, no diagnostic header
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getFirstHeader(HttpLlmResponseActionHandler.STRUCTURED_OUTPUT_INVALID_HEADER), is(""));
+        assertThat(response.getBodyAsString(), containsString("Ada"));
+    }
+
+    @Test
+    public void shouldNotFlagWhenNoOutputSchemaConfigured() {
+        // given — no outputSchema: validation is skipped entirely
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion().withText("anything at all"));
+        HttpRequest request = request().withPath("/v1/messages");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getFirstHeader(HttpLlmResponseActionHandler.STRUCTURED_OUTPUT_INVALID_HEADER), is(""));
+    }
+
+    @Test
+    public void shouldNotAlterStreamingEventsWhenOutputViolatesSchema() {
+        // given — a streaming completion whose text violates its declared schema.
+        // Streaming validation is log-only (an SSE stream carries no response header),
+        // so it must never change the emitted events.
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpRequest request = request().withPath("/v1/messages");
+
+        HttpLlmResponse control = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion().withText("{\"name\":\"Ada\"}").withStreaming(true));
+        HttpLlmResponse withSchema = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withText("{\"name\":\"Ada\"}")          // missing required "age"
+                .withOutputSchema(PERSON_SCHEMA)
+                .withStreaming(true));
+
+        // when
+        List<SseEvent> controlEvents = handler.handleStreaming(control, request);
+        List<SseEvent> schemaEvents = handler.handleStreaming(withSchema, request);
+
+        // then — declaring a (violated) schema does not change the stream
+        assertThat(schemaEvents.size(), is(controlEvents.size()));
+        assertThat(schemaEvents.get(0).getEvent(), is(controlEvents.get(0).getEvent()));
     }
 }

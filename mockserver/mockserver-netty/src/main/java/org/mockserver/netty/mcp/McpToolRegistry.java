@@ -2284,6 +2284,11 @@ public class McpToolRegistry {
         usageProps.putObject("inputTokens").put("type", "integer");
         usageProps.putObject("outputTokens").put("type", "integer");
         properties.putObject("streaming").put("type", "boolean").put("description", "Whether to stream the response (default false)");
+        ObjectNode outputSchemaProp = properties.putObject("outputSchema");
+        outputSchemaProp.put("description", "Optional JSON Schema the response 'text' is expected to conform to. Validated as the response is encoded (fail-soft): a mismatch leaves the body unchanged but adds an 'x-mockserver-structured-output-invalid' diagnostic header and logs a warning. Accepts a JSON Schema as a string or an inline object.");
+        ArrayNode outputSchemaAnyOf = outputSchemaProp.putArray("anyOf");
+        outputSchemaAnyOf.add(objectMapper.createObjectNode().put("type", "string"));
+        outputSchemaAnyOf.add(objectMapper.createObjectNode().put("type", "object"));
         putChaosSchema(properties);
         ArrayNode required = schema.putArray("required");
         required.add("provider");
@@ -2382,6 +2387,18 @@ public class McpToolRegistry {
             boolean streaming = params.path("streaming").asBoolean(false);
             if (streaming) {
                 completion.streaming();
+            }
+
+            // Optional output schema (string or inline object) for structured-output validation
+            JsonNode outputSchemaNode = params.path("outputSchema");
+            if (!outputSchemaNode.isMissingNode() && !outputSchemaNode.isNull()) {
+                if (outputSchemaNode.isTextual()) {
+                    completion.withOutputSchema(outputSchemaNode.asText());
+                } else if (outputSchemaNode.isObject()) {
+                    completion.withOutputSchema(objectMapper.writeValueAsString(outputSchemaNode));
+                } else {
+                    return errorResult("'outputSchema' must be a JSON Schema string or object");
+                }
             }
 
             // Model

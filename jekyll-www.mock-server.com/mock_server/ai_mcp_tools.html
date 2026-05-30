@@ -914,6 +914,7 @@ sitemap:
         <tr><td><code>stopReason</code></td><td>string</td><td>No</td><td>Stop reason to encode in the provider format (e.g. <code>end_turn</code>, <code>tool_use</code>, <code>stop</code>)</td></tr>
         <tr><td><code>usage</code></td><td>object</td><td>No</td><td>Token usage. Accepts <code>inputTokens</code> (integer) and <code>outputTokens</code> (integer).</td></tr>
         <tr><td><code>streaming</code></td><td>boolean</td><td>No</td><td>When <code>true</code>, the response is delivered as a Server-Sent Events stream. Defaults to <code>false</code>.</td></tr>
+        <tr><td><code>outputSchema</code></td><td>string or object</td><td>No</td><td>A JSON Schema the response <code>text</code> is expected to conform to. Validated as the response is encoded (<strong>fail-soft</strong>): on a mismatch the body is returned unchanged but an <code>x-mockserver-structured-output-invalid</code> header is added and a warning logged. A blank or malformed schema, or absent text, is a no-op. Use this to catch malformed structured-output fixtures; use <a href="#verify_structured_output"><code>verify_structured_output</code></a> to assert over recorded traffic.</td></tr>
         <tr><td><code>chaos</code></td><td>object</td><td>No</td><td>Optional fault/chaos profile for resilience testing (see the table below). Also accepted per turn in <a href="#create_llm_conversation"><code>create_llm_conversation</code></a>.</td></tr>
     </tbody>
 </table>

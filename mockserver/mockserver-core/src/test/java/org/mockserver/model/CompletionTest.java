@@ -125,6 +125,12 @@ public class CompletionTest {
     }
 
     @Test
+    public void shouldNotBeEqualWhenDifferentOutputSchema() {
+        assertThat(completion().withOutputSchema("{\"type\":\"object\"}"),
+            is(not(completion().withOutputSchema("{\"type\":\"array\"}"))));
+    }
+
+    @Test
     public void shouldNotBeEqualToNull() {
         assertThat(completion().withText("Hello").equals(null), is(false));
     }

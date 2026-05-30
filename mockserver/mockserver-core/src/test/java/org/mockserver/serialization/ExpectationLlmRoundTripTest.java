@@ -59,6 +59,32 @@ public class ExpectationLlmRoundTripTest {
     }
 
     @Test
+    public void shouldRoundTripCompletionWithOutputSchema() {
+        // given — a completion carrying a declared structured-output schema
+        String schema = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}";
+        Expectation original = when(request().withPath("/v1/messages"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.ANTHROPIC)
+                    .withModel("claude-sonnet-4-20250514")
+                    .withCompletion(
+                        completion()
+                            .withText("{\"name\":\"Ada\"}")
+                            .withOutputSchema(schema)
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — the outputSchema survives the JSON round-trip intact
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        assertThat(deserialized[0].getHttpLlmResponse().getCompletion().getOutputSchema(), is(schema));
+    }
+
+    @Test
     public void shouldRoundTripEmbeddingExpectation() {
         // given
         Expectation original = when(request().withPath("/v1/embeddings"))

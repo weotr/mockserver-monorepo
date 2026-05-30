@@ -7,6 +7,7 @@ import org.mockserver.llm.ProviderCodecRegistry;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
+import org.mockserver.validator.jsonschema.JsonSchemaValidator;
 import org.slf4j.event.Level;
 
 import java.util.ArrayList;
@@ -77,6 +78,7 @@ public class HttpLlmResponseActionHandler {
             Completion completion = httpLlmResponse.getCompletion();
             if (completion != null && !Boolean.TRUE.equals(completion.getStreaming())) {
                 HttpResponse encoded = codecInstance.encode(completion, model);
+                validateStructuredOutput(completion, encoded, provider, request);
                 org.mockserver.telemetry.GenAiSpans.recordCompletion(provider, model, completion);
                 return encoded;
             }
@@ -128,6 +130,70 @@ public class HttpLlmResponseActionHandler {
         }
     }
 
+    static final String STRUCTURED_OUTPUT_INVALID_HEADER = "x-mockserver-structured-output-invalid";
+
+    /**
+     * Validate the completion's configured text against its declared
+     * {@link Completion#getOutputSchema() output schema}, if any. Fail-soft: a
+     * mismatch never alters the response body — it adds the
+     * {@code x-mockserver-structured-output-invalid} diagnostic header (when an
+     * {@code encoded} response is supplied) and logs a warning. A blank schema,
+     * absent text, or a malformed schema are all treated as "nothing to check"
+     * and never throw, so structured-output validation can never break an LLM
+     * response. {@code encoded} may be {@code null} (e.g. streaming) — then only
+     * the warning is logged.
+     */
+    void validateStructuredOutput(Completion completion, HttpResponse encoded, Provider provider, HttpRequest request) {
+        if (completion == null) {
+            return;
+        }
+        String schema = completion.getOutputSchema();
+        String text = completion.getText();
+        if (schema == null || schema.trim().isEmpty() || text == null) {
+            return;
+        }
+        try {
+            String error = new JsonSchemaValidator(mockServerLogger, schema).isValid(text, false);
+            if (error != null && !error.isEmpty()) {
+                if (encoded != null) {
+                    encoded.withHeader(STRUCTURED_OUTPUT_INVALID_HEADER, compactHeaderValue(error));
+                }
+                if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(EXPECTATION_RESPONSE)
+                            .setLogLevel(Level.WARN)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("configured LLM completion text for provider {} does not conform to its declared outputSchema:{}")
+                            .setArguments(provider, error)
+                    );
+                }
+            }
+        } catch (Exception e) {
+            // a malformed schema must never break the response — surface it as a warning only
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(EXPECTATION_RESPONSE)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setMessageFormat("could not validate LLM completion text against outputSchema for provider {} — treating schema as a no-op:{}")
+                        .setArguments(provider, e.getMessage())
+                );
+            }
+        }
+    }
+
+    /**
+     * Flatten a (possibly multi-line) validation message into a single header-safe
+     * line, collapsing CR/LF — HTTP header values must not contain line breaks.
+     */
+    private static String compactHeaderValue(String message) {
+        return message.replaceAll("[\\r\\n]+", "; ").trim();
+    }
+
     /**
      * Handle streaming LLM response by producing a list of SSE events.
      * Called by HttpActionHandler when streaming is detected.
@@ -147,6 +213,7 @@ public class HttpLlmResponseActionHandler {
         StreamingPhysics physics = completion.getStreamingPhysics();
 
         List<SseEvent> events = codecInstance.encodeStreaming(completion, model, physics);
+        validateStructuredOutput(completion, null, provider, request);
         org.mockserver.telemetry.GenAiSpans.recordCompletion(provider, model, completion);
         return applyStreamingChaos(events, httpLlmResponse.getChaos());
     }

@@ -66,6 +66,9 @@
         "streaming": {
           "type": "boolean"
         },
+        "outputSchema": {
+          "type": "string"
+        },
         "streamingPhysics": {
           "type": "object",
           "additionalProperties": false,

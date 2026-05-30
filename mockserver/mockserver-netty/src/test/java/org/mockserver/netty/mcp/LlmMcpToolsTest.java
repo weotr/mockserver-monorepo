@@ -96,6 +96,56 @@ public class LlmMcpToolsTest {
     }
 
     @Test
+    public void shouldCreateLlmCompletionWithOutputSchemaString() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.put("text", "{\"name\":\"Ada\"}");
+        params.put("outputSchema", "{\"type\":\"object\",\"required\":[\"name\"]}");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("status").asText(), is("created"));
+
+        org.mockserver.mock.Expectation expectation = httpState
+            .allMatchingExpectation(request().withMethod("POST").withPath("/v1/messages")).get(0);
+        assertThat(expectation.getHttpLlmResponse().getCompletion().getOutputSchema(),
+            is("{\"type\":\"object\",\"required\":[\"name\"]}"));
+    }
+
+    @Test
+    public void shouldCreateLlmCompletionWithOutputSchemaObject() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.put("text", "{\"name\":\"Ada\"}");
+        ObjectNode schemaObj = params.putObject("outputSchema");
+        schemaObj.put("type", "object");
+        schemaObj.putArray("required").add("name");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("status").asText(), is("created"));
+
+        org.mockserver.mock.Expectation expectation = httpState
+            .allMatchingExpectation(request().withMethod("POST").withPath("/v1/messages")).get(0);
+        // an inline object is serialized to its JSON-string form
+        assertThat(expectation.getHttpLlmResponse().getCompletion().getOutputSchema(),
+            containsString("\"type\":\"object\""));
+    }
+
+    @Test
+    public void shouldRejectNonStringNonObjectOutputSchema() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.put("text", "{}");
+        params.put("outputSchema", 42);
+
+        JsonNode result = toolRegistry.callTool("mock_llm_completion", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("outputSchema"));
+    }
+
+    @Test
     public void shouldCreateLlmCompletionWithUsage() {
         ObjectNode params = objectMapper.createObjectNode();
         params.put("provider", "ANTHROPIC");

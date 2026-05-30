@@ -13,6 +13,7 @@ public class Completion extends ObjectWithJsonToString {
     private Usage usage;
     private Boolean streaming;
     private StreamingPhysics streamingPhysics;
+    private String outputSchema;
 
     public static Completion completion() {
         return new Completion();
@@ -139,6 +140,24 @@ public class Completion extends ObjectWithJsonToString {
         return streamingPhysics;
     }
 
+    /**
+     * Optional JSON Schema (as a JSON string) that this completion's {@link #getText() text}
+     * is expected to conform to. When set, the LLM response handler validates the configured
+     * text against the schema as the response is encoded. Validation is fail-soft: a mismatch
+     * does not alter the response body — it adds an {@code x-mockserver-structured-output-invalid}
+     * diagnostic header and logs a warning, so a deliberately non-conforming fixture still
+     * returns exactly as configured while malformed structured-output fixtures are surfaced.
+     */
+    public Completion withOutputSchema(String outputSchema) {
+        this.outputSchema = outputSchema;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getOutputSchema() {
+        return outputSchema;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -156,13 +175,14 @@ public class Completion extends ObjectWithJsonToString {
             Objects.equals(stopReason, that.stopReason) &&
             Objects.equals(usage, that.usage) &&
             Objects.equals(streaming, that.streaming) &&
-            Objects.equals(streamingPhysics, that.streamingPhysics);
+            Objects.equals(streamingPhysics, that.streamingPhysics) &&
+            Objects.equals(outputSchema, that.outputSchema);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics);
+            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics, outputSchema);
         }
         return hashCode;
     }
