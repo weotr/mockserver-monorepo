@@ -3,6 +3,7 @@ package org.mockserver.mock;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.collect.ImmutableMap;
 import org.hamcrest.CoreMatchers;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Rule;
@@ -14,6 +15,7 @@ import org.mockserver.file.FilePath;
 import org.mockserver.file.FileReader;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.time.EpochService;
+import org.mockserver.time.TimeService;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.TimeToLive;
@@ -97,6 +99,11 @@ public class HttpStateTest {
         Scheduler scheduler = mock(Scheduler.class);
         httpState = new HttpState(configuration, new MockServerLogger(configuration, MockServerLogger.class), scheduler);
         openMocks(this);
+    }
+
+    @After
+    public void resetClock() {
+        TimeService.reset();
     }
 
     private static class FakeResponseWriter extends ResponseWriter {
@@ -2874,6 +2881,211 @@ public class HttpStateTest {
 
         // then
         assertThat(httpState.getFileStore().size(), is(0));
+    }
+
+    // --- Clock endpoint tests ---
+
+    @Test
+    public void shouldHandleClockFreezeWithInstant() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"freeze\",\"instant\":\"2024-01-01T00:00:00Z\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"status\" : \"freeze\""));
+        assertThat(body, containsString("\"currentInstant\" : \"2024-01-01T00:00:00Z\""));
+        assertThat(body, containsString("\"currentEpochMillis\""));
+    }
+
+    @Test
+    public void shouldHandleClockFreezeWithoutInstant() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"freeze\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"status\" : \"freeze\""));
+        assertThat(body, containsString("\"currentInstant\""));
+    }
+
+    @Test
+    public void shouldHandleClockAdvance() throws Exception {
+        // given
+        TimeService.freeze(java.time.Instant.parse("2024-01-01T00:00:00Z"));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"advance\",\"durationMillis\":60000}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"status\" : \"advance\""));
+        assertThat(body, containsString("\"currentInstant\" : \"2024-01-01T00:01:00Z\""));
+    }
+
+    @Test
+    public void shouldHandleClockReset() throws Exception {
+        // given
+        TimeService.freeze(java.time.Instant.parse("2024-01-01T00:00:00Z"));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"reset\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"status\" : \"reset\""));
+        assertThat(TimeService.isFrozen(), is(false));
+    }
+
+    @Test
+    public void shouldRejectClockWithUnknownAction() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"rewind\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("unknown action 'rewind'"));
+    }
+
+    @Test
+    public void shouldRejectClockWithMissingAction() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"instant\":\"2024-01-01T00:00:00Z\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("'action' field is required"));
+    }
+
+    @Test
+    public void shouldRejectClockAdvanceWithNonPositiveDuration() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"advance\",\"durationMillis\":0}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("'durationMillis' must be a positive number"));
+    }
+
+    @Test
+    public void shouldRejectClockFreezeWithInvalidInstant() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("{\"action\":\"freeze\",\"instant\":\"not-a-date\"}");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("invalid 'instant' value"));
+    }
+
+    @Test
+    public void shouldHandleClockGetWhenUnfrozen() throws Exception {
+        // given
+        TimeService.reset();
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("GET");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"frozen\" : false"));
+        assertThat(body, containsString("\"currentInstant\""));
+        assertThat(body, containsString("\"currentEpochMillis\""));
+    }
+
+    @Test
+    public void shouldHandleClockGetWhenFrozen() throws Exception {
+        // given
+        TimeService.freeze(java.time.Instant.parse("2024-06-15T12:00:00Z"));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("GET");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("\"frozen\" : true"));
+        assertThat(body, containsString("\"currentInstant\" : \"2024-06-15T12:00:00Z\""));
+    }
+
+    @Test
+    public void shouldRejectClockWithEmptyBody() throws Exception {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest clockRequest = request("/mockserver/clock")
+            .withMethod("PUT")
+            .withBody("");
+
+        // when
+        boolean handle = httpState.handle(clockRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("request body is required"));
     }
 
 }

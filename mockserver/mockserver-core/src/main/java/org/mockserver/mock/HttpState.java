@@ -32,6 +32,7 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.java.ExpectationToJavaSerializer;
 import org.mockserver.serialization.YamlToJsonConverter;
 import org.mockserver.server.initialize.ExpectationInitializerLoader;
+import org.mockserver.time.TimeService;
 import org.mockserver.uuid.UUIDService;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
@@ -1283,6 +1284,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/clock", "/clock")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleClockPut(request), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/debugMismatch", "/debugMismatch")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1543,12 +1551,133 @@ public class HttpState {
                 return false;
             }
 
+        } else if (request.matches("GET")) {
+
+            if (request.matches("GET", PATH_PREFIX + "/clock", "/clock")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleClockGet(), true);
+                }
+                return true;
+            }
+            return false;
+
         } else {
 
             return false;
 
         }
 
+    }
+
+    private HttpResponse handleClockPut(HttpRequest request) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "request body is required with 'action' field")), MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String action = node.has("action") ? node.get("action").asText() : null;
+            if (isBlank(action)) {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "'action' field is required, must be one of: freeze, advance, reset")), MediaType.JSON_UTF_8);
+            }
+            switch (action.toLowerCase()) {
+                case "freeze": {
+                    java.time.Instant instant = null;
+                    if (node.has("instant") && !node.get("instant").isNull()) {
+                        try {
+                            instant = java.time.Instant.parse(node.get("instant").asText());
+                        } catch (Exception e) {
+                            return response()
+                                .withStatusCode(BAD_REQUEST.code())
+                                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                                    objectMapper.createObjectNode().put("error", "invalid 'instant' value, must be ISO-8601 format (e.g. 2024-01-01T00:00:00Z)")), MediaType.JSON_UTF_8);
+                        }
+                    }
+                    TimeService.freeze(instant);
+                    break;
+                }
+                case "advance": {
+                    long durationMillis = 0;
+                    if (node.has("durationMillis") && !node.get("durationMillis").isNull()) {
+                        durationMillis = node.get("durationMillis").asLong(0);
+                    }
+                    if (durationMillis <= 0) {
+                        return response()
+                            .withStatusCode(BAD_REQUEST.code())
+                            .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                                objectMapper.createObjectNode().put("error", "'durationMillis' must be a positive number")), MediaType.JSON_UTF_8);
+                    }
+                    TimeService.advance(java.time.Duration.ofMillis(durationMillis));
+                    break;
+                }
+                case "reset": {
+                    TimeService.reset();
+                    break;
+                }
+                default: {
+                    return response()
+                        .withStatusCode(BAD_REQUEST.code())
+                        .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                            objectMapper.createObjectNode().put("error", "unknown action '" + action + "', must be one of: freeze, advance, reset")), MediaType.JSON_UTF_8);
+                }
+            }
+            // success response
+            java.time.Instant currentInstant = TimeService.now();
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("clock " + action.toLowerCase() + ", current instant:{}")
+                        .setArguments(currentInstant)
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", action.toLowerCase());
+            resultNode.put("currentInstant", currentInstant.toString());
+            resultNode.put("currentEpochMillis", currentInstant.toEpochMilli());
+            return response()
+                .withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper errorMapper = ObjectMapperFactory.createObjectMapper();
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(errorMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        errorMapper.createObjectNode().put("error", "failed to process clock request: " + e.getMessage())), MediaType.JSON_UTF_8);
+            } catch (Exception jsonError) {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"failed to process clock request\"}", MediaType.JSON_UTF_8);
+            }
+        }
+    }
+
+    private HttpResponse handleClockGet() {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            java.time.Instant currentInstant = TimeService.now();
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("currentInstant", currentInstant.toString());
+            resultNode.put("currentEpochMillis", currentInstant.toEpochMilli());
+            resultNode.put("frozen", TimeService.isFrozen());
+            return response()
+                .withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get clock status\"}", MediaType.JSON_UTF_8);
+        }
     }
 
     private boolean controlPlaneRequestAuthenticated(HttpRequest request, ResponseWriter responseWriter) {
