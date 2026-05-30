@@ -9,6 +9,7 @@ from mockserver.models import (
     DelayDistribution,
     Expectation,
     ExpectationId,
+    HttpChaosProfile,
     HttpClassCallback,
     HttpError,
     HttpForward,
@@ -1647,6 +1648,76 @@ class TestExpectation:
         assert restored.http_error.drop_connection is True
         assert restored.http_error.response_bytes == "YWJj"
 
+    def test_with_chaos(self):
+        chaos = HttpChaosProfile(
+            error_status=503,
+            error_probability=0.5,
+            retry_after="30",
+            latency=Delay(time_unit="MILLISECONDS", value=200),
+            seed=42,
+            succeed_first=3,
+            fail_request_count=5,
+        )
+        e = Expectation(
+            http_request=HttpRequest(path="/chaos"),
+            http_response=HttpResponse(status_code=200),
+            chaos=chaos,
+        )
+        assert e.chaos.error_status == 503
+        assert e.chaos.succeed_first == 3
+        assert e.chaos.fail_request_count == 5
+
+    def test_to_dict_with_chaos(self):
+        e = Expectation(
+            http_request=HttpRequest(path="/chaos"),
+            http_response=HttpResponse(status_code=200),
+            chaos=HttpChaosProfile(error_status=429, error_probability=0.25),
+        )
+        result = e.to_dict()
+        assert result["chaos"] == {"errorStatus": 429, "errorProbability": 0.25}
+
+    def test_from_dict_with_chaos(self):
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/chaos"},
+            "httpResponse": {"statusCode": 200},
+            "chaos": {
+                "errorStatus": 503,
+                "errorProbability": 0.5,
+                "retryAfter": "30",
+                "latency": {"timeUnit": "MILLISECONDS", "value": 200},
+                "seed": 42,
+                "succeedFirst": 3,
+                "failRequestCount": 5,
+            },
+        })
+        assert e.chaos is not None
+        assert e.chaos.error_status == 503
+        assert e.chaos.error_probability == 0.5
+        assert e.chaos.retry_after == "30"
+        assert e.chaos.latency.time_unit == "MILLISECONDS"
+        assert e.chaos.latency.value == 200
+        assert e.chaos.seed == 42
+        assert e.chaos.succeed_first == 3
+        assert e.chaos.fail_request_count == 5
+
+    def test_round_trip_with_chaos(self):
+        original = Expectation(
+            http_request=HttpRequest(path="/chaos"),
+            http_response=HttpResponse(status_code=200),
+            chaos=HttpChaosProfile(
+                error_status=503,
+                error_probability=0.5,
+                retry_after="30",
+                latency=Delay(time_unit="MILLISECONDS", value=200),
+                seed=42,
+                succeed_first=3,
+                fail_request_count=5,
+            ),
+        )
+        restored = Expectation.from_dict(original.to_dict())
+        assert restored.chaos is not None
+        assert restored.chaos.to_dict() == original.chaos.to_dict()
+
 
 class TestOpenAPIDefinition:
     def test_defaults(self):
@@ -2017,6 +2088,122 @@ class TestPorts:
         original = Ports(ports=[1080, 1443, 8080])
         restored = Ports.from_dict(original.to_dict())
         assert restored.ports == [1080, 1443, 8080]
+
+
+class TestHttpChaosProfile:
+    def test_defaults(self):
+        chaos = HttpChaosProfile()
+        assert chaos.error_status is None
+        assert chaos.error_probability is None
+        assert chaos.retry_after is None
+        assert chaos.latency is None
+        assert chaos.seed is None
+        assert chaos.succeed_first is None
+        assert chaos.fail_request_count is None
+
+    def test_construction_all_fields(self):
+        chaos = HttpChaosProfile(
+            error_status=503,
+            error_probability=0.5,
+            retry_after="30",
+            latency=Delay(time_unit="MILLISECONDS", value=200),
+            seed=42,
+            succeed_first=3,
+            fail_request_count=5,
+        )
+        assert chaos.error_status == 503
+        assert chaos.error_probability == 0.5
+        assert chaos.retry_after == "30"
+        assert chaos.latency.time_unit == "MILLISECONDS"
+        assert chaos.latency.value == 200
+        assert chaos.seed == 42
+        assert chaos.succeed_first == 3
+        assert chaos.fail_request_count == 5
+
+    def test_to_dict_all_fields(self):
+        chaos = HttpChaosProfile(
+            error_status=429,
+            error_probability=0.75,
+            retry_after="60",
+            latency=Delay(time_unit="SECONDS", value=2),
+            seed=99,
+            succeed_first=5,
+            fail_request_count=10,
+        )
+        result = chaos.to_dict()
+        assert result == {
+            "errorStatus": 429,
+            "errorProbability": 0.75,
+            "retryAfter": "60",
+            "latency": {"timeUnit": "SECONDS", "value": 2},
+            "seed": 99,
+            "succeedFirst": 5,
+            "failRequestCount": 10,
+        }
+
+    def test_to_dict_strips_none(self):
+        chaos = HttpChaosProfile(error_status=500)
+        result = chaos.to_dict()
+        assert result == {"errorStatus": 500}
+        assert "errorProbability" not in result
+        assert "retryAfter" not in result
+        assert "latency" not in result
+        assert "seed" not in result
+        assert "succeedFirst" not in result
+        assert "failRequestCount" not in result
+
+    def test_from_dict_all_fields(self):
+        chaos = HttpChaosProfile.from_dict({
+            "errorStatus": 503,
+            "errorProbability": 0.5,
+            "retryAfter": "30",
+            "latency": {"timeUnit": "MILLISECONDS", "value": 200},
+            "seed": 42,
+            "succeedFirst": 3,
+            "failRequestCount": 5,
+        })
+        assert chaos.error_status == 503
+        assert chaos.error_probability == 0.5
+        assert chaos.retry_after == "30"
+        assert chaos.latency.time_unit == "MILLISECONDS"
+        assert chaos.latency.value == 200
+        assert chaos.seed == 42
+        assert chaos.succeed_first == 3
+        assert chaos.fail_request_count == 5
+
+    def test_from_dict_none(self):
+        assert HttpChaosProfile.from_dict(None) is None
+
+    def test_from_dict_partial(self):
+        chaos = HttpChaosProfile.from_dict({"errorStatus": 500, "errorProbability": 1.0})
+        assert chaos.error_status == 500
+        assert chaos.error_probability == 1.0
+        assert chaos.retry_after is None
+        assert chaos.latency is None
+        assert chaos.seed is None
+        assert chaos.succeed_first is None
+        assert chaos.fail_request_count is None
+
+    def test_round_trip(self):
+        original = HttpChaosProfile(
+            error_status=503,
+            error_probability=0.5,
+            retry_after="30",
+            latency=Delay(time_unit="MILLISECONDS", value=200),
+            seed=42,
+            succeed_first=3,
+            fail_request_count=5,
+        )
+        restored = HttpChaosProfile.from_dict(original.to_dict())
+        assert restored.error_status == original.error_status
+        assert restored.error_probability == original.error_probability
+        assert restored.retry_after == original.retry_after
+        assert restored.latency.time_unit == original.latency.time_unit
+        assert restored.latency.value == original.latency.value
+        assert restored.seed == original.seed
+        assert restored.succeed_first == original.succeed_first
+        assert restored.fail_request_count == original.fail_request_count
+        assert restored.to_dict() == original.to_dict()
 
 
 class TestRequestDefinitionAlias:

@@ -1,6 +1,6 @@
 import {mockServerClient, MockServerClient} from '../index';
 import {RequestResponse} from '../mockServerClient';
-import {Expectation, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, RequestDefinition} from '../mockServer';
+import {Expectation, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, RequestDefinition} from '../mockServer';
 
 const client: MockServerClient = mockServerClient('mockhttp', 1080);
 
@@ -32,7 +32,32 @@ const expectation: Expectation = {
     }
 };
 
-const expectations: Expectation[] = [expectation, expectation];
+const chaosProfile: HttpChaosProfile = {
+    errorStatus: 503,
+    errorProbability: 0.5,
+    retryAfter: "30",
+    latency: {
+        timeUnit: "MILLISECONDS",
+        value: 200
+    },
+    seed: 42,
+    succeedFirst: 3,
+    failRequestCount: 5
+};
+
+const chaosExpectation: Expectation = {
+    httpRequest: {
+        method: 'GET',
+        path: `/chaos/test`
+    },
+    httpResponse: httpResponse,
+    chaos: chaosProfile,
+    times: {
+        unlimited: true
+    }
+};
+
+const expectations: Expectation[] = [expectation, expectation, chaosExpectation];
 
 const requestDefinition: RequestDefinition = {
     method: 'POST',

@@ -10,6 +10,7 @@ export { mockServerClient, KeysToMultiValues, MockServerClient } from './mockSer
 export {
   Expectation,
   ExpectationId,
+  HttpChaosProfile,
   HttpRequest,
   HttpRequestAndHttpResponse,
   HttpResponse,

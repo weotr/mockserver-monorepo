@@ -1821,4 +1821,83 @@ public class McpToolRegistryTest {
         assertThat(result.path("withinBudget").asBoolean(), is(true));
         assertThat(result.path("budgetCheckAuthoritative").asBoolean(), is(false));
     }
+
+    @Test
+    public void shouldCreateExpectationWithChaos() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("method", "GET");
+        params.put("path", "/chaos-test");
+        params.put("statusCode", 200);
+        params.put("responseBody", "ok");
+
+        ObjectNode chaos = objectMapper.createObjectNode();
+        chaos.put("errorStatus", 503);
+        chaos.put("errorProbability", 0.5);
+        chaos.put("retryAfter", "30");
+        ObjectNode latency = objectMapper.createObjectNode();
+        latency.put("timeUnit", "MILLISECONDS");
+        latency.put("value", 200);
+        chaos.set("latency", latency);
+        chaos.put("seed", 42);
+        chaos.put("succeedFirst", 3);
+        chaos.put("failRequestCount", 5);
+        params.set("chaos", chaos);
+
+        JsonNode result = toolRegistry.callTool("create_expectation", params);
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(1));
+        assertThat(result.has("id"), is(true));
+
+        // Verify the expectation was persisted with chaos profile by retrieving active expectations
+        ObjectNode retrieveParams = objectMapper.createObjectNode();
+        retrieveParams.put("type", "ACTIVE_EXPECTATIONS");
+        retrieveParams.put("format", "JSON");
+        JsonNode retrieveResult = toolRegistry.callTool("raw_retrieve", retrieveParams);
+        JsonNode expectations = retrieveResult.path("data");
+        assertThat(expectations.isArray(), is(true));
+        boolean foundChaos = false;
+        for (JsonNode exp : expectations) {
+            if ("/chaos-test".equals(exp.path("httpRequest").path("path").asText())) {
+                JsonNode chaosResult = exp.path("chaos");
+                assertThat(chaosResult.path("errorStatus").asInt(), is(503));
+                assertThat(chaosResult.path("errorProbability").asDouble(), is(0.5));
+                assertThat(chaosResult.path("retryAfter").asText(), is("30"));
+                assertThat(chaosResult.path("latency").path("timeUnit").asText(), is("MILLISECONDS"));
+                assertThat(chaosResult.path("latency").path("value").asInt(), is(200));
+                assertThat(chaosResult.path("seed").asLong(), is(42L));
+                assertThat(chaosResult.path("succeedFirst").asInt(), is(3));
+                assertThat(chaosResult.path("failRequestCount").asInt(), is(5));
+                foundChaos = true;
+            }
+        }
+        assertThat("Expected to find chaos expectation", foundChaos, is(true));
+    }
+
+    @Test
+    public void shouldCreateExpectationWithPartialChaos() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("method", "POST");
+        params.put("path", "/chaos-partial");
+        params.put("statusCode", 200);
+
+        ObjectNode chaos = objectMapper.createObjectNode();
+        chaos.put("errorStatus", 500);
+        chaos.put("errorProbability", 1.0);
+        params.set("chaos", chaos);
+
+        JsonNode result = toolRegistry.callTool("create_expectation", params);
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(1));
+    }
+
+    @Test
+    public void shouldCreateExpectationWithoutChaos() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("method", "GET");
+        params.put("path", "/no-chaos");
+        params.put("statusCode", 200);
+
+        JsonNode result = toolRegistry.callTool("create_expectation", params);
+        assertThat(result.path("status").asText(), is("created"));
+    }
 }

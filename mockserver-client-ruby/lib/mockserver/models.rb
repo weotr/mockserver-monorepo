@@ -61,7 +61,12 @@ module MockServer
     'base_path'                      => 'basePath',
     'id_field'                       => 'idField',
     'id_strategy'                    => 'idStrategy',
-    'initial_data'                   => 'initialData'
+    'initial_data'                   => 'initialData',
+    'error_status'                   => 'errorStatus',
+    'error_probability'              => 'errorProbability',
+    'retry_after'                    => 'retryAfter',
+    'succeed_first'                  => 'succeedFirst',
+    'fail_request_count'             => 'failRequestCount'
   }.freeze
 
   REVERSE_FIELD_MAP = FIELD_MAP.invert.freeze
@@ -1146,6 +1151,48 @@ module MockServer
     end
   end
 
+  class HttpChaosProfile
+    attr_accessor :error_status, :error_probability, :retry_after,
+                  :latency, :seed, :succeed_first, :fail_request_count
+
+    def initialize(error_status: nil, error_probability: nil, retry_after: nil,
+                   latency: nil, seed: nil, succeed_first: nil, fail_request_count: nil)
+      @error_status = error_status
+      @error_probability = error_probability
+      @retry_after = retry_after
+      @latency = latency
+      @seed = seed
+      @succeed_first = succeed_first
+      @fail_request_count = fail_request_count
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'errorStatus'      => @error_status,
+        'errorProbability'  => @error_probability,
+        'retryAfter'        => @retry_after,
+        'latency'           => @latency&.to_h,
+        'seed'              => @seed,
+        'succeedFirst'      => @succeed_first,
+        'failRequestCount'  => @fail_request_count
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        error_status:      data['errorStatus'],
+        error_probability:  data['errorProbability'],
+        retry_after:        data['retryAfter'],
+        latency:            Delay.from_hash(data['latency']),
+        seed:               data['seed'],
+        succeed_first:      data['succeedFirst'],
+        fail_request_count: data['failRequestCount']
+      )
+    end
+  end
+
   class AfterAction
     attr_accessor :http_request, :http_class_callback, :http_object_callback, :delay
 
@@ -1183,7 +1230,7 @@ module MockServer
                   :http_response_object_callback, :http_forward,
                   :http_forward_template, :http_forward_class_callback,
                   :http_forward_object_callback, :http_override_forwarded_request,
-                  :http_error, :times, :time_to_live,
+                  :http_error, :times, :time_to_live, :chaos,
                   :http_sse_response, :http_websocket_response, :after_actions,
                   :http_responses, :response_mode,
                   :scenario_name, :scenario_state, :new_scenario_state
@@ -1193,7 +1240,7 @@ module MockServer
                    http_response_object_callback: nil, http_forward: nil,
                    http_forward_template: nil, http_forward_class_callback: nil,
                    http_forward_object_callback: nil, http_override_forwarded_request: nil,
-                   http_error: nil, times: nil, time_to_live: nil,
+                   http_error: nil, times: nil, time_to_live: nil, chaos: nil,
                    http_sse_response: nil, http_websocket_response: nil, after_actions: nil,
                    http_responses: nil, response_mode: nil,
                    scenario_name: nil, scenario_state: nil, new_scenario_state: nil)
@@ -1213,6 +1260,7 @@ module MockServer
       @http_error = http_error
       @times = times
       @time_to_live = time_to_live
+      @chaos = chaos
       @http_sse_response = http_sse_response
       @http_websocket_response = http_websocket_response
       @after_actions = after_actions
@@ -1253,6 +1301,7 @@ module MockServer
         'responseMode'                 => @response_mode,
         'times'                        => @times&.to_h,
         'timeToLive'                   => @time_to_live&.to_h,
+        'chaos'                        => @chaos&.to_h,
         'scenarioName'                 => @scenario_name,
         'scenarioState'                => @scenario_state,
         'newScenarioState'             => @new_scenario_state
@@ -1291,6 +1340,7 @@ module MockServer
         response_mode:                   data['responseMode'],
         times:                           Times.from_hash(data['times']),
         time_to_live:                    TimeToLive.from_hash(data['timeToLive']),
+        chaos:                           HttpChaosProfile.from_hash(data['chaos']),
         scenario_name:                   data['scenarioName'],
         scenario_state:                  data['scenarioState'],
         new_scenario_state:              data['newScenarioState']

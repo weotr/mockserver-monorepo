@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable
 from mockserver.models import (
     Delay,
     Expectation,
+    HttpChaosProfile,
     HttpError,
     HttpForward,
     HttpObjectCallback,
@@ -35,6 +36,10 @@ class ForwardChainExpectation:
 
     def with_priority(self, priority: int) -> ForwardChainExpectation:
         self._expectation.priority = priority
+        return self
+
+    def with_chaos(self, chaos: HttpChaosProfile) -> ForwardChainExpectation:
+        self._expectation.chaos = chaos
         return self
 
     async def respond(self, response_or_callback) -> list[Expectation]:

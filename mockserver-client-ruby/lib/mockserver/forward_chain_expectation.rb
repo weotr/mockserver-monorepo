@@ -29,6 +29,14 @@ module MockServer
       self
     end
 
+    # Set a declarative HTTP chaos/fault injection profile.
+    # @param chaos [HttpChaosProfile]
+    # @return [self]
+    def with_chaos(chaos)
+      @expectation.chaos = chaos
+      self
+    end
+
     # Set the response action. Accepts an HttpResponse, HttpTemplate, or
     # a Proc/lambda callback.
     # @param response_or_callback [HttpResponse, HttpTemplate, Proc]

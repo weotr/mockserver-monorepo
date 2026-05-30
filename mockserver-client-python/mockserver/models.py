@@ -5,6 +5,11 @@ from typing import Any
 
 
 _FIELD_MAP = {
+    "error_status": "errorStatus",
+    "error_probability": "errorProbability",
+    "retry_after": "retryAfter",
+    "succeed_first": "succeedFirst",
+    "fail_request_count": "failRequestCount",
     "status_code": "statusCode",
     "reason_phrase": "reasonPhrase",
     "keep_alive": "keepAlive",
@@ -297,6 +302,42 @@ def _ttl_exactly(time_to_live: int, time_unit: str) -> TimeToLive:
 
 TimeToLive.unlimited = staticmethod(_ttl_unlimited)
 TimeToLive.exactly = staticmethod(_ttl_exactly)
+
+
+@dataclass
+class HttpChaosProfile:
+    error_status: int | None = None
+    error_probability: float | None = None
+    retry_after: str | None = None
+    latency: Delay | None = None
+    seed: int | None = None
+    succeed_first: int | None = None
+    fail_request_count: int | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "errorStatus": self.error_status,
+            "errorProbability": self.error_probability,
+            "retryAfter": self.retry_after,
+            "latency": self.latency.to_dict() if self.latency else None,
+            "seed": self.seed,
+            "succeedFirst": self.succeed_first,
+            "failRequestCount": self.fail_request_count,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> HttpChaosProfile:
+        if data is None:
+            return None
+        return cls(
+            error_status=data.get("errorStatus"),
+            error_probability=data.get("errorProbability"),
+            retry_after=data.get("retryAfter"),
+            latency=Delay.from_dict(data.get("latency")),
+            seed=data.get("seed"),
+            succeed_first=data.get("succeedFirst"),
+            fail_request_count=data.get("failRequestCount"),
+        )
 
 
 @dataclass
@@ -1104,6 +1145,7 @@ class Expectation:
     http_websocket_response: HttpWebSocketResponse | None = None
     times: Times | None = None
     time_to_live: TimeToLive | None = None
+    chaos: HttpChaosProfile | None = None
     after_actions: list[AfterAction] | None = None
     http_responses: list[HttpResponse] | None = None
     response_mode: str | None = None
@@ -1131,6 +1173,7 @@ class Expectation:
             "httpWebSocketResponse": self.http_websocket_response.to_dict() if self.http_websocket_response else None,
             "times": self.times.to_dict() if self.times else None,
             "timeToLive": self.time_to_live.to_dict() if self.time_to_live else None,
+            "chaos": self.chaos.to_dict() if self.chaos else None,
             "afterActions": [a.to_dict() for a in self.after_actions] if self.after_actions else None,
             "httpResponses": [r.to_dict() for r in self.http_responses] if self.http_responses else None,
             "responseMode": self.response_mode,
@@ -1165,6 +1208,7 @@ class Expectation:
             http_websocket_response=HttpWebSocketResponse.from_dict(data.get("httpWebSocketResponse")),
             times=Times.from_dict(data.get("times")),
             time_to_live=TimeToLive.from_dict(data.get("timeToLive")),
+            chaos=HttpChaosProfile.from_dict(data.get("chaos")),
             after_actions=[AfterAction.from_dict(a) for a in after_actions_data] if after_actions_data else None,
             http_responses=[HttpResponse.from_dict(r) for r in data["httpResponses"]] if data.get("httpResponses") else None,
             response_mode=data.get("responseMode"),

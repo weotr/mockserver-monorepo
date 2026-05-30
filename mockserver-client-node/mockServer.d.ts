@@ -39,6 +39,7 @@ export type Expectation = {
   httpWebSocketResponse?: HttpWebSocketResponse;
   times?: Times;
   timeToLive?: TimeToLive;
+  chaos?: HttpChaosProfile;
   afterActions?: AfterAction | AfterAction[];
   httpResponses?: HttpResponse[];
   responseMode?: "SEQUENTIAL" | "RANDOM";
@@ -331,6 +332,16 @@ export interface HttpWebSocketResponse {
   closeConnection?: boolean;
   delay?: Delay;
   primary?: boolean;
+}
+
+export interface HttpChaosProfile {
+  errorStatus?: number;
+  errorProbability?: number;
+  retryAfter?: string;
+  latency?: Delay;
+  seed?: number;
+  succeedFirst?: number;
+  failRequestCount?: number;
 }
 
 export interface AfterAction {

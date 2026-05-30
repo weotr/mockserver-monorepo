@@ -1623,6 +1623,182 @@ RSpec.describe 'MockServer models' do
   end
 
   # -------------------------------------------------------------------
+  # HttpChaosProfile
+  # -------------------------------------------------------------------
+  describe MockServer::HttpChaosProfile do
+    it 'has nil defaults' do
+      chaos = MockServer::HttpChaosProfile.new
+      expect(chaos.error_status).to be_nil
+      expect(chaos.error_probability).to be_nil
+      expect(chaos.retry_after).to be_nil
+      expect(chaos.latency).to be_nil
+      expect(chaos.seed).to be_nil
+      expect(chaos.succeed_first).to be_nil
+      expect(chaos.fail_request_count).to be_nil
+    end
+
+    it 'constructs with all seven fields' do
+      chaos = MockServer::HttpChaosProfile.new(
+        error_status: 503,
+        error_probability: 0.5,
+        retry_after: '30',
+        latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 200),
+        seed: 42,
+        succeed_first: 3,
+        fail_request_count: 5
+      )
+      expect(chaos.error_status).to eq(503)
+      expect(chaos.error_probability).to eq(0.5)
+      expect(chaos.retry_after).to eq('30')
+      expect(chaos.latency.time_unit).to eq('MILLISECONDS')
+      expect(chaos.latency.value).to eq(200)
+      expect(chaos.seed).to eq(42)
+      expect(chaos.succeed_first).to eq(3)
+      expect(chaos.fail_request_count).to eq(5)
+    end
+
+    it 'serializes all fields to camelCase hash' do
+      chaos = MockServer::HttpChaosProfile.new(
+        error_status: 429,
+        error_probability: 0.75,
+        retry_after: '60',
+        latency: MockServer::Delay.new(time_unit: 'SECONDS', value: 2),
+        seed: 99,
+        succeed_first: 5,
+        fail_request_count: 10
+      )
+      expect(chaos.to_h).to eq({
+        'errorStatus' => 429,
+        'errorProbability' => 0.75,
+        'retryAfter' => '60',
+        'latency' => { 'timeUnit' => 'SECONDS', 'value' => 2 },
+        'seed' => 99,
+        'succeedFirst' => 5,
+        'failRequestCount' => 10
+      })
+    end
+
+    it 'strips nil fields from serialization' do
+      chaos = MockServer::HttpChaosProfile.new(error_status: 500)
+      h = chaos.to_h
+      expect(h).to eq({ 'errorStatus' => 500 })
+      expect(h).not_to have_key('errorProbability')
+      expect(h).not_to have_key('retryAfter')
+      expect(h).not_to have_key('latency')
+      expect(h).not_to have_key('seed')
+      expect(h).not_to have_key('succeedFirst')
+      expect(h).not_to have_key('failRequestCount')
+    end
+
+    it 'deserializes all fields from camelCase hash' do
+      chaos = MockServer::HttpChaosProfile.from_hash({
+        'errorStatus' => 503,
+        'errorProbability' => 0.5,
+        'retryAfter' => '30',
+        'latency' => { 'timeUnit' => 'MILLISECONDS', 'value' => 200 },
+        'seed' => 42,
+        'succeedFirst' => 3,
+        'failRequestCount' => 5
+      })
+      expect(chaos.error_status).to eq(503)
+      expect(chaos.error_probability).to eq(0.5)
+      expect(chaos.retry_after).to eq('30')
+      expect(chaos.latency.time_unit).to eq('MILLISECONDS')
+      expect(chaos.latency.value).to eq(200)
+      expect(chaos.seed).to eq(42)
+      expect(chaos.succeed_first).to eq(3)
+      expect(chaos.fail_request_count).to eq(5)
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::HttpChaosProfile.from_hash(nil)).to be_nil
+    end
+
+    it 'deserializes partial hash' do
+      chaos = MockServer::HttpChaosProfile.from_hash({ 'errorStatus' => 500, 'errorProbability' => 1.0 })
+      expect(chaos.error_status).to eq(500)
+      expect(chaos.error_probability).to eq(1.0)
+      expect(chaos.retry_after).to be_nil
+      expect(chaos.latency).to be_nil
+      expect(chaos.seed).to be_nil
+      expect(chaos.succeed_first).to be_nil
+      expect(chaos.fail_request_count).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::HttpChaosProfile.new(
+        error_status: 503,
+        error_probability: 0.5,
+        retry_after: '30',
+        latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 200),
+        seed: 42,
+        succeed_first: 3,
+        fail_request_count: 5
+      )
+      roundtrip = MockServer::HttpChaosProfile.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # Expectation with chaos
+  # -------------------------------------------------------------------
+  describe 'MockServer::Expectation with chaos' do
+    it 'serializes chaos into expectation' do
+      exp = MockServer::Expectation.new(
+        http_request: MockServer::HttpRequest.new(path: '/chaos'),
+        http_response: MockServer::HttpResponse.new(status_code: 200),
+        chaos: MockServer::HttpChaosProfile.new(error_status: 503, error_probability: 0.5)
+      )
+      h = exp.to_h
+      expect(h['chaos']).to eq({ 'errorStatus' => 503, 'errorProbability' => 0.5 })
+    end
+
+    it 'deserializes chaos from hash' do
+      exp = MockServer::Expectation.from_hash({
+        'httpRequest' => { 'path' => '/chaos' },
+        'httpResponse' => { 'statusCode' => 200 },
+        'chaos' => {
+          'errorStatus' => 503,
+          'errorProbability' => 0.5,
+          'retryAfter' => '30',
+          'latency' => { 'timeUnit' => 'MILLISECONDS', 'value' => 200 },
+          'seed' => 42,
+          'succeedFirst' => 3,
+          'failRequestCount' => 5
+        }
+      })
+      expect(exp.chaos).not_to be_nil
+      expect(exp.chaos.error_status).to eq(503)
+      expect(exp.chaos.error_probability).to eq(0.5)
+      expect(exp.chaos.retry_after).to eq('30')
+      expect(exp.chaos.latency.time_unit).to eq('MILLISECONDS')
+      expect(exp.chaos.latency.value).to eq(200)
+      expect(exp.chaos.seed).to eq(42)
+      expect(exp.chaos.succeed_first).to eq(3)
+      expect(exp.chaos.fail_request_count).to eq(5)
+    end
+
+    it 'round-trips expectation with chaos' do
+      original = MockServer::Expectation.new(
+        http_request: MockServer::HttpRequest.new(path: '/chaos'),
+        http_response: MockServer::HttpResponse.new(status_code: 200),
+        chaos: MockServer::HttpChaosProfile.new(
+          error_status: 503,
+          error_probability: 0.5,
+          retry_after: '30',
+          latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 200),
+          seed: 42,
+          succeed_first: 3,
+          fail_request_count: 5
+        )
+      )
+      roundtrip = MockServer::Expectation.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+  end
+
+  # -------------------------------------------------------------------
   # Helper functions
   # -------------------------------------------------------------------
   describe 'MockServer.to_camel' do

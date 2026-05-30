@@ -155,6 +155,22 @@ public class McpToolRegistry {
         properties.putObject("responseHeaders").put("type", "object").put("description", "Response headers as key-value pairs");
         properties.putObject("times").put("type", "integer").put("description", "Number of times this expectation should match");
         properties.putObject("timeToLive").put("type", "string").put("description", "Time to live e.g. '60 SECONDS'");
+        {
+            ObjectNode chaosProp = properties.putObject("chaos");
+            chaosProp.put("type", "object").put("description", "Declarative HTTP chaos/fault injection profile for probabilistic errors, latency, and count-based stateful faults");
+            ObjectNode chaosProps = chaosProp.putObject("properties");
+            chaosProps.putObject("errorStatus").put("type", "integer").put("description", "HTTP status to inject on error (e.g. 500, 503, 429)");
+            chaosProps.putObject("errorProbability").put("type", "number").put("description", "Probability of injecting an error (0.0-1.0)");
+            chaosProps.putObject("retryAfter").put("type", "string").put("description", "Optional Retry-After header value on injected error");
+            ObjectNode latencyProp = chaosProps.putObject("latency");
+            latencyProp.put("type", "object").put("description", "Optional injected latency delay");
+            ObjectNode latencyProps = latencyProp.putObject("properties");
+            latencyProps.putObject("timeUnit").put("type", "string").put("description", "Time unit (e.g. MILLISECONDS, SECONDS)");
+            latencyProps.putObject("value").put("type", "integer").put("description", "Delay value");
+            chaosProps.putObject("seed").put("type", "integer").put("description", "Optional seed for reproducible probabilistic draws");
+            chaosProps.putObject("succeedFirst").put("type", "integer").put("description", "First N matches are NOT eligible for chaos (>= 0)");
+            chaosProps.putObject("failRequestCount").put("type", "integer").put("description", "After succeedFirst, next M matches ARE eligible for chaos (>= 1)");
+        }
         ArrayNode required = schema.putArray("required");
         required.add("method");
         required.add("path");
@@ -252,6 +268,42 @@ public class McpToolRegistry {
                 }
                 Times effectiveTimes = (timesNode.isMissingNode() || timesNode.isNull()) ? Times.unlimited() : Times.exactly(timesNode.asInt());
                 expectation = Expectation.when(httpRequest, effectiveTimes, TimeToLive.exactly(timeUnit, ttlValue)).thenRespond(httpResponse);
+            }
+
+            JsonNode chaosNode = params.path("chaos");
+            if (chaosNode.isObject()) {
+                HttpChaosProfile chaos = HttpChaosProfile.httpChaosProfile();
+                JsonNode errorStatusNode = chaosNode.path("errorStatus");
+                if (!errorStatusNode.isMissingNode() && !errorStatusNode.isNull()) {
+                    chaos.withErrorStatus(errorStatusNode.asInt());
+                }
+                JsonNode errorProbabilityNode = chaosNode.path("errorProbability");
+                if (!errorProbabilityNode.isMissingNode() && !errorProbabilityNode.isNull()) {
+                    chaos.withErrorProbability(errorProbabilityNode.asDouble());
+                }
+                JsonNode retryAfterNode = chaosNode.path("retryAfter");
+                if (!retryAfterNode.isMissingNode() && !retryAfterNode.isNull()) {
+                    chaos.withRetryAfter(retryAfterNode.asText());
+                }
+                JsonNode latencyNode = chaosNode.path("latency");
+                if (latencyNode.isObject()) {
+                    String latencyTimeUnit = latencyNode.path("timeUnit").asText("MILLISECONDS");
+                    int latencyValue = latencyNode.path("value").asInt(0);
+                    chaos.withLatency(new Delay(TimeUnit.valueOf(latencyTimeUnit.toUpperCase()), latencyValue));
+                }
+                JsonNode seedNode = chaosNode.path("seed");
+                if (!seedNode.isMissingNode() && !seedNode.isNull()) {
+                    chaos.withSeed(seedNode.asLong());
+                }
+                JsonNode succeedFirstNode = chaosNode.path("succeedFirst");
+                if (!succeedFirstNode.isMissingNode() && !succeedFirstNode.isNull()) {
+                    chaos.withSucceedFirst(succeedFirstNode.asInt());
+                }
+                JsonNode failRequestCountNode = chaosNode.path("failRequestCount");
+                if (!failRequestCountNode.isMissingNode() && !failRequestCountNode.isNull()) {
+                    chaos.withFailRequestCount(failRequestCountNode.asInt());
+                }
+                expectation.withChaos(chaos);
             }
 
             List<Expectation> result = httpState.add(expectation);
