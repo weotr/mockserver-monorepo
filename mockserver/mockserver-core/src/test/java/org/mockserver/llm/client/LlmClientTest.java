@@ -136,6 +136,75 @@ public class LlmClientTest {
         assertThat(completion.getUsage().getInputTokens(), is(8));
     }
 
+    // --- OpenAI Responses ---
+
+    @Test
+    public void openAiResponsesBuildsBearerAuthAndInputBody() {
+        HttpRequest request = new OpenAiResponsesLlmClient().buildCompletionRequest(
+            LlmBackend.of(Provider.OPENAI_RESPONSES, "sk-resp"), conversation());
+        assertThat(request.getPath().getValue(), is("/v1/responses"));
+        assertThat(request.getFirstHeader("Authorization"), is("Bearer sk-resp"));
+        assertThat(request.getBodyAsString(), containsString("\"input\""));
+    }
+
+    @Test
+    public void openAiResponsesParsesOutputText() {
+        Completion completion = new OpenAiResponsesLlmClient().parseCompletionResponse(response()
+            .withStatusCode(200)
+            .withBody("{\"output_text\":\"Paris\",\"status\":\"completed\"," +
+                "\"usage\":{\"input_tokens\":11,\"output_tokens\":2}}"));
+        assertThat(completion.getText(), is("Paris"));
+        assertThat(completion.getStopReason(), is("completed"));
+        assertThat(completion.getUsage().getInputTokens(), is(11));
+    }
+
+    // --- Azure OpenAI ---
+
+    @Test
+    public void azureOpenAiUsesDeploymentPathAndApiKeyHeader() {
+        HttpRequest request = new AzureOpenAiLlmClient().buildCompletionRequest(
+            LlmBackend.of(Provider.AZURE_OPENAI, "az-key"), conversation());
+        assertThat(request.getPath().getValue(), is("/openai/deployments/gpt-4o-mini/chat/completions"));
+        assertThat(request.getFirstHeader("api-key"), is("az-key"));
+        // Azure uses the api-key header, NOT Authorization: Bearer
+        assertThat(request.getFirstHeader("Authorization"), is(""));
+        assertThat(request.getFirstQueryStringParameter("api-version"), is(notNullValue()));
+    }
+
+    @Test
+    public void azureOpenAiParsesChatResponseLikeOpenAi() {
+        Completion completion = new AzureOpenAiLlmClient().parseCompletionResponse(response()
+            .withStatusCode(200)
+            .withBody("{\"choices\":[{\"message\":{\"content\":\"Paris\"},\"finish_reason\":\"stop\"}]," +
+                "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":1}}"));
+        assertThat(completion.getText(), is("Paris"));
+        assertThat(completion.getUsage().getInputTokens(), is(7));
+    }
+
+    // --- Bedrock (Anthropic-on-Bedrock) ---
+
+    @Test
+    public void bedrockUsesInvokePathWithAnthropicBody() {
+        HttpRequest request = new BedrockLlmClient().buildCompletionRequest(
+            LlmBackend.of(Provider.BEDROCK, null), conversation());
+        assertThat(request.getPath().getValue(), containsString("/model/"));
+        assertThat(request.getPath().getValue(), containsString("/invoke"));
+        // Anthropic-shaped body: system hoisted out, a messages array remains
+        String body = request.getBodyAsString();
+        assertThat(body, containsString("\"messages\""));
+        assertThat(body, containsString("\"system\":\"You are helpful.\""));
+    }
+
+    @Test
+    public void bedrockParsesAnthropicShapedResponse() {
+        Completion completion = new BedrockLlmClient().parseCompletionResponse(response()
+            .withStatusCode(200)
+            .withBody("{\"content\":[{\"type\":\"text\",\"text\":\"Paris\"}],\"stop_reason\":\"end_turn\"," +
+                "\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}"));
+        assertThat(completion.getText(), is("Paris"));
+        assertThat(completion.getUsage().getOutputTokens(), is(3));
+    }
+
     // --- registry ---
 
     @Test
