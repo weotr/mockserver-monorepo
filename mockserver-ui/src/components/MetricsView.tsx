@@ -6,7 +6,6 @@ import Alert from '@mui/material/Alert';
 import AlertTitle from '@mui/material/AlertTitle';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
-import LinearProgress from '@mui/material/LinearProgress';
 import CircularProgress from '@mui/material/CircularProgress';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
@@ -226,7 +225,17 @@ MOCKSERVER_METRICS_ENABLED=true`}
             </Box>
           )}
 
-          {/* Per-action breakdown */}
+          {/* Request activity over time — the four request counters as separate lines */}
+          <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Request activity (cumulative)</Typography>
+            <MetricsLineChart
+              height={200}
+              valueFormatter={(v) => Math.round(v).toLocaleString()}
+              series={SUMMARY.map(({ name, label }) => ({ data: gaugeSeries(history, name), label }))}
+            />
+          </Paper>
+
+          {/* Actions executed over time — one line per action type */}
           <Paper variant="outlined" sx={{ p: 1.25 }}>
             <Typography variant="caption" color="text.secondary">Actions executed</Typography>
             {maxAction === 0 ? (
@@ -234,21 +243,16 @@ MOCKSERVER_METRICS_ENABLED=true`}
                 No actions executed yet.
               </Typography>
             ) : (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 0.75 }}>
-                {actionRows.filter((r) => r.value > 0).map((r) => (
-                  <Box key={r.name}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>{r.label}</Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{r.value.toLocaleString()}</Typography>
-                    </Box>
-                    <LinearProgress
-                      variant="determinate"
-                      value={(r.value / maxAction) * 100}
-                      sx={{ height: 6, borderRadius: 1 }}
-                    />
-                  </Box>
-                ))}
-              </Box>
+              <MetricsLineChart
+                height={200}
+                valueFormatter={(v) => Math.round(v).toLocaleString()}
+                series={actionRows
+                  .filter((r) => r.value > 0)
+                  .map((r) => ({
+                    data: gaugeSeries(history, r.name),
+                    label: r.label.charAt(0).toUpperCase() + r.label.slice(1),
+                  }))}
+              />
             )}
           </Paper>
         </>

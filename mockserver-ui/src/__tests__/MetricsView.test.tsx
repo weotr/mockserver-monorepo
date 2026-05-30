@@ -42,6 +42,21 @@ describe('MetricsView', () => {
     expect(screen.getByText('7')).toBeInTheDocument();
   });
 
+  it('renders the request-activity and actions-executed graph panels', async () => {
+    stubFetch(
+      200,
+      'requests_received_count 42.0\nresponse_expectations_matched_count 7.0\n' +
+        'expectations_not_matched_count 3.0\nforward_expectations_matched_count 1.0\n' +
+        'response_actions_count 5.0\n',
+    );
+    render(<MetricsView connectionParams={params} />);
+    // the request-activity graph is the second-last panel, actions-executed the last
+    await waitFor(() => expect(screen.getByText('Request activity (cumulative)')).toBeInTheDocument());
+    expect(screen.getByText('Actions executed')).toBeInTheDocument();
+    // with an action counter present, the actions panel shows the chart, not the empty state
+    expect(screen.queryByText('No actions executed yet.')).not.toBeInTheDocument();
+  });
+
   it('surfaces the MockServer version from build_info', async () => {
     stubFetch(200, 'requests_received_count 1.0\nmock_server_build_info{version="6.1.0"} 1.0\n');
     render(<MetricsView connectionParams={params} />);
