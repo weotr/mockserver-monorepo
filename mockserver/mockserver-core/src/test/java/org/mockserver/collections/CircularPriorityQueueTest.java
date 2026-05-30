@@ -528,6 +528,36 @@ public class CircularPriorityQueueTest {
     }
 
     @Test
+    public void shouldReturnCachedListBetweenMutationsAndInvalidateCacheOnMutation() {
+        // given
+        CircularPriorityQueue<String, Expectation, SortableExpectationId> queue =
+            new CircularPriorityQueue<>(5, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, Expectation::getSortableId, Expectation::getId);
+        long ts = System.currentTimeMillis();
+        Expectation a = when(request("a"), 0).withCreated(ts);
+        Expectation b = when(request("b"), 0).withCreated(ts + 1);
+        queue.add(a);
+        queue.add(b);
+
+        // same list instance is returned on repeated reads without mutation
+        List<Expectation> first = queue.toSortedList();
+        List<Expectation> second = queue.toSortedList();
+        assertThat("cache should return same instance on repeated reads", first == second, is(true));
+
+        // a mutation invalidates the cache — a new list is produced
+        Expectation c = when(request("c"), 1).withCreated(ts + 2);
+        queue.add(c);
+        List<Expectation> afterMutation = queue.toSortedList();
+        assertThat("cache should be invalidated after add", first == afterMutation, is(false));
+        assertThat(afterMutation, contains(c, a, b));
+
+        // remove also invalidates
+        queue.remove(c);
+        List<Expectation> afterRemove = queue.toSortedList();
+        assertThat("cache should be invalidated after remove", afterMutation == afterRemove, is(false));
+        assertThat(afterRemove, contains(a, b));
+    }
+
+    @Test
     public void shouldRemove() {
         // given - a queue
         CircularPriorityQueue<String, Expectation, SortableExpectationId> concurrentLinkedQueue = new CircularPriorityQueue<>(5, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, Expectation::getSortableId, Expectation::getId);

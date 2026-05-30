@@ -19,6 +19,10 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
     private final ConcurrentSkipListSet<SLK> sortOrderSkipList;
     private final ConcurrentLinkedQueue<V> insertionOrderQueue = new ConcurrentLinkedQueue<>();
     private final ConcurrentMap<K, V> byKey = new ConcurrentHashMap<>();
+    // Cached snapshot of the sorted list; nulled on every mutation so toSortedList()
+    // rebuilds lazily. volatile ensures the null write is visible to all threads
+    // immediately (no stale-cache reads after an add/remove).
+    private volatile List<V> sortedCache = null;
 
     public CircularPriorityQueue(int maxSize, Comparator<? super SLK> skipListComparator, Function<V, SLK> skipListKeyFunction, Function<V, K> mapKeyFunction) {
         sortOrderSkipList = new ConcurrentSkipListSet<>(skipListComparator);
@@ -29,14 +33,17 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
 
     public void setMaxSize(int maxSize) {
         this.maxSize = maxSize;
+        sortedCache = null;
     }
 
     public void removePriorityKey(V element) {
         sortOrderSkipList.remove(skipListKeyFunction.apply(element));
+        sortedCache = null;
     }
 
     public void addPriorityKey(V element) {
         sortOrderSkipList.add(skipListKeyFunction.apply(element));
+        sortedCache = null;
     }
 
     public void add(V element) {
@@ -49,6 +56,7 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
                 sortOrderSkipList.remove(skipListKeyFunction.apply(elementToRemove));
                 byKey.remove(mapKeyFunction.apply(elementToRemove));
             }
+            sortedCache = null;
         }
     }
 
@@ -56,7 +64,9 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
         if (element != null) {
             insertionOrderQueue.remove(element);
             byKey.remove(mapKeyFunction.apply(element));
-            return sortOrderSkipList.remove(skipListKeyFunction.apply(element));
+            boolean removed = sortOrderSkipList.remove(skipListKeyFunction.apply(element));
+            sortedCache = null;
+            return removed;
         } else {
             return false;
         }
@@ -87,6 +97,11 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
     }
 
     public List<V> toSortedList() {
-        return stream().collect(Collectors.toList());
+        List<V> cached = sortedCache;
+        if (cached == null) {
+            cached = Collections.unmodifiableList(stream().collect(Collectors.toList()));
+            sortedCache = cached;
+        }
+        return cached;
     }
 }
