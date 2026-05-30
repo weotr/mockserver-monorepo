@@ -22,6 +22,53 @@
             .withBody("{\"status\":\"ok\"}")
     );</code></pre>
     </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.3,
+        "retryAfter": "30"
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/service")
+).with_chaos(
+    HttpChaosProfile(error_status=503, error_probability=0.3, retry_after="30")
+).respond(
+    HttpResponse.response('{"status":"ok"}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/service')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(error_status: 503, error_probability: 0.3, retry_after: '30')
+).respond(
+    MockServer::HttpResponse.response(body: '{"status":"ok"}', status_code: 200)
+)</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -64,6 +111,53 @@
             .withBody("{\"data\":\"result\"}")
     );</code></pre>
     </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/external-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\":\"result\"}"
+    },
+    "chaos": {
+        "errorStatus": 429,
+        "errorProbability": 1.0,
+        "retryAfter": "60"
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/external-service")
+).with_chaos(
+    HttpChaosProfile(error_status=429, error_probability=1.0, retry_after="60")
+).respond(
+    HttpResponse.response('{"data":"result"}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/external-service')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(error_status: 429, error_probability: 1.0, retry_after: '60')
+).respond(
+    MockServer::HttpResponse.response(body: '{"data":"result"}', status_code: 200)
+)</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -105,6 +199,54 @@
             .withStatusCode(200)
             .withBody("{\"result\":\"delayed\"}")
     );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/slow-dependency"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"result\":\"delayed\"}"
+    },
+    "chaos": {
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 2000
+        }
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/slow-dependency")
+).with_chaos(
+    HttpChaosProfile(latency=Delay(time_unit="MILLISECONDS", value=2000))
+).respond(
+    HttpResponse.response('{"result":"delayed"}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/slow-dependency')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 2000))
+).respond(
+    MockServer::HttpResponse.response(body: '{"result":"delayed"}', status_code: 200)
+)</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -152,6 +294,70 @@
             .withStatusCode(200)
             .withBody("{\"transactionId\":\"abc-123\"}")
     );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/payments"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"transactionId\":\"abc-123\"}"
+    },
+    "chaos": {
+        "errorStatus": 500,
+        "errorProbability": 0.1,
+        "retryAfter": "10",
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 500
+        },
+        "seed": 42
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/payments")
+).with_chaos(
+    HttpChaosProfile(
+        error_status=500,
+        error_probability=0.1,
+        retry_after="10",
+        latency=Delay(time_unit="MILLISECONDS", value=500),
+        seed=42
+    )
+).respond(
+    HttpResponse.response('{"transactionId":"abc-123"}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/payments')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(
+        error_status: 500,
+        error_probability: 0.1,
+        retry_after: '10',
+        latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 500),
+        seed: 42
+    )
+).respond(
+    MockServer::HttpResponse.response(body: '{"transactionId":"abc-123"}', status_code: 200)
+)</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -203,6 +409,65 @@
             .withScheme(HttpForward.Scheme.HTTPS)
     );</code></pre>
     </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/upstream-service"
+    },
+    "httpForward": {
+        "host": "upstream.example.com",
+        "port": 443,
+        "scheme": "HTTPS"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.5,
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 1000
+        }
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpChaosProfile, HttpForward, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/upstream-service")
+).with_chaos(
+    HttpChaosProfile(
+        error_status=503,
+        error_probability=0.5,
+        latency=Delay(time_unit="MILLISECONDS", value=1000)
+    )
+).forward(
+    HttpForward(host="upstream.example.com", port=443, scheme="HTTPS")
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/upstream-service')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(
+        error_status: 503,
+        error_probability: 0.5,
+        latency: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 1000)
+    )
+).forward(
+    MockServer::HttpForward.new(host: 'upstream.example.com', port: 443, scheme: 'HTTPS')
+)</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -249,6 +514,53 @@
             .withBody("{\"status\":\"ok\"}")
     );</code></pre>
     </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "failRequestCount": 2
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/service")
+).with_chaos(
+    HttpChaosProfile(error_status=503, error_probability=1.0, fail_request_count=2)
+).respond(
+    HttpResponse.response('{"status":"ok"}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/service')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(error_status: 503, error_probability: 1.0, fail_request_count: 2)
+).respond(
+    MockServer::HttpResponse.response(body: '{"status":"ok"}', status_code: 200)
+)</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -290,6 +602,53 @@
             .withStatusCode(200)
             .withBody("{\"healthy\":true}")
     );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "path": "/api/critical-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"healthy\":true}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "retryAfter": "120"
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse, HttpChaosProfile
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/api/critical-service")
+).with_chaos(
+    HttpChaosProfile(error_status=503, error_probability=1.0, retry_after="120")
+).respond(
+    HttpResponse.response('{"healthy":true}', status_code=200)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.request(path: '/api/critical-service')
+).with_chaos(
+    MockServer::HttpChaosProfile.new(error_status: 503, error_probability: 1.0, retry_after: '120')
+).respond(
+    MockServer::HttpResponse.response(body: '{"healthy":true}', status_code: 200)
+)</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
