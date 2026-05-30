@@ -73,4 +73,29 @@ describe('MetricsView', () => {
     await waitFor(() => expect(screen.getByText('Requests received')).toBeInTheDocument());
     expect(screen.queryByText('JVM heap memory')).not.toBeInTheDocument();
   });
+
+  it('renders the latency panel when the duration histogram is present', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 100.0',
+        'mock_server_request_duration_seconds_bucket{le="0.05"} 50',
+        'mock_server_request_duration_seconds_bucket{le="0.1"} 90',
+        'mock_server_request_duration_seconds_bucket{le="+Inf"} 100',
+        'mock_server_request_duration_seconds_count 100',
+        'mock_server_request_duration_seconds_sum 5.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Request latency (since start)')).toBeInTheDocument());
+    expect(screen.getByText('p95')).toBeInTheDocument();
+  });
+
+  it('hides the latency panel when the histogram is absent', async () => {
+    stubFetch(200, 'requests_received_count 5.0\n');
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Requests received')).toBeInTheDocument());
+    expect(screen.queryByText('Request latency (since start)')).not.toBeInTheDocument();
+  });
 });

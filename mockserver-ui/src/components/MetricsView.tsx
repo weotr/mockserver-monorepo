@@ -13,8 +13,11 @@ import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useMetricsPolling } from '../hooks/useMetricsPolling';
 import { findSample, metricValue, hasMetric } from '../lib/prometheusParser';
 import { gaugeSeries, gaugeSeriesByLabel, ratePerSecond, latestRate } from '../lib/metricsDerive';
+import { histogramQuantile } from '../lib/histogramQuantile';
 import Sparkline from './Sparkline';
 import MetricsLineChart from './MetricsLineChart';
+
+const LATENCY_METRIC = 'mock_server_request_duration_seconds';
 
 interface MetricsViewProps {
   connectionParams: ConnectionParams;
@@ -63,6 +66,7 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
     : [];
   const maxAction = actionRows.reduce((m, r) => Math.max(m, r.value), 0);
   const jvmEnabled = latest ? hasMetric(latest.samples, 'jvm_memory_used_bytes') : false;
+  const latencyEnabled = latest ? hasMetric(latest.samples, `${LATENCY_METRIC}_count`) : false;
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -144,6 +148,39 @@ MOCKSERVER_METRICS_ENABLED=true`}
               valueFormatter={(v) => `${v.toFixed(1)}/s`}
             />
           </Paper>
+
+          {/* Request latency (only when the server exposes the duration histogram) */}
+          {latencyEnabled && latest && (
+            <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">Request latency (since start)</Typography>
+              <Box sx={{ display: 'flex', gap: 3, mt: 0.5, flexWrap: 'wrap' }}>
+                {([['p50', 0.5], ['p95', 0.95], ['p99', 0.99]] as const).map(([label, q]) => {
+                  const seconds = histogramQuantile(latest.samples, LATENCY_METRIC, q);
+                  return (
+                    <Box key={label}>
+                      <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                        {seconds == null ? '—' : `${(seconds * 1000).toFixed(1)} ms`}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">{label}</Typography>
+                    </Box>
+                  );
+                })}
+              </Box>
+              <Box sx={{ mt: 1 }}>
+                <MetricsLineChart
+                  height={140}
+                  valueFormatter={(v) => `${v.toFixed(1)} ms`}
+                  series={[{
+                    data: history.map((snapshot) => {
+                      const seconds = histogramQuantile(snapshot.samples, LATENCY_METRIC, 0.95);
+                      return seconds == null ? 0 : seconds * 1000;
+                    }),
+                    label: 'p95 ms',
+                  }]}
+                />
+              </Box>
+            </Paper>
+          )}
 
           {/* JVM (only when the server exposes JVM metrics) */}
           {jvmEnabled && latest && (
