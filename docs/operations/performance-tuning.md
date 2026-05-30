@@ -36,7 +36,7 @@ A heap dump on OOM is *not* enabled by default; for triage runs add `-XX:+HeapDu
 
 Java 17 ships production-ready ZGC. For latency-sensitive deployments — particularly those running with large `maxLogEntries` (deep event ring buffers) — `-XX:+UseZGC` typically holds stop-the-world pauses in the single-digit millisecond range (1–5 ms) regardless of heap size, where G1 (the Java 17 server-class default) commonly sits in the 50–200 ms range during mixed cycles under sustained allocation. (Sub-millisecond pauses are an attribute of Generational ZGC in JDK 21+, not the non-generational ZGC shipped in Java 17.)
 
-These numbers are based on typical GC behaviour, not MockServer-specific benchmarks. Use the `mockserver-performance-test/` Locust harness with `mockserver.outputMemoryUsageCsv=true` to confirm your workload before switching.
+These numbers are based on typical GC behaviour, not MockServer-specific benchmarks. Use the `mockserver-performance-test/` k6 harness with `mockserver.outputMemoryUsageCsv=true` to confirm your workload before switching.
 
 Rules of thumb:
 - **Heap < 2 GB:** stay on the default (G1). ZGC's fixed overhead isn't worth it.
@@ -56,7 +56,7 @@ Two enable-it-once-then-leave-it knobs:
 - `mockserver.metricsEnabled=true` exposes Prometheus metrics at `GET /mockserver/metrics`. The exposed metrics are listed in [docs/code/metrics.md](../code/metrics.md). Always enable this for any non-trivial perf investigation — Buildkite agents have it off by default to avoid skew.
 - `mockserver.outputMemoryUsageCsv=true` writes per-second JVM memory snapshots to `memoryUsage_<yyyy-MM-dd>.csv` in the working directory (or `memoryUsageCsvDirectory` if set). Useful when reproducing a leak: grep for the heap line, plot it, and you get the same data the dashboard summary shows.
 
-The repo has a Locust harness in `mockserver-performance-test/`. Use it as a starting point for your own scenarios — don't read the numbers as canonical (they're agent-class-dependent).
+The repo has a k6 harness in `mockserver-performance-test/` (`k6/load.js` with thresholds as gates). Use it as a starting point for your own scenarios — don't read the numbers as canonical (they're agent-class-dependent).
 
 ## What's deliberately not tuned
 

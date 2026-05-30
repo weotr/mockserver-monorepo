@@ -23,7 +23,7 @@ This is a monorepo containing several projects:
 | `mockserver-client-node/` | JavaScript | Node.js/browser API client |
 | `mockserver-client-python/` | Python | Python API client |
 | `mockserver-client-ruby/` | Ruby | Ruby API client |
-| `mockserver-performance-test/` | Python | Locust performance tests |
+| `mockserver-performance-test/` | JavaScript | k6 performance tests |
 
 For a deeper picture of how these fit together — module dependencies, the Netty pipeline, request matching, event system, dashboard, TLS — start with the [code overview](docs/code/overview.md) and follow the topic links in [docs/README.md](docs/README.md). High-level architecture: [docs/architecture.md](docs/architecture.md).
 

@@ -33,7 +33,7 @@ Maven CI
 Ubuntu 24.04 + JDK 21 + Maven 3.9"]
         PERF["docker_build/performance/Dockerfile
 Performance
-locustio/locust"]
+grafana/k6"]
     end
 ```
 
@@ -110,7 +110,7 @@ Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1
 | Image | Dockerfile | Base | Purpose |
 |-------|-----------|------|---------|
 | `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 21, Maven 3.9.16 |
-| Performance | `docker_build/performance/Dockerfile` | `locustio/locust` | Load testing with Locust |
+| `mockserver/mockserver:performance` | `docker_build/performance/Dockerfile` | `grafana/k6` | Load testing with k6 |
 
 ## Docker Compose Examples
 

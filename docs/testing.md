@@ -21,7 +21,7 @@ graph TB
         HT["Helm/k3d — 5 tests"]
     end
     subgraph "Performance Tests"
-        PT["Locust"]
+        PT["k6"]
     end
     UT --> IT --> MI & GI --> DC & HT --> PT
 ```
@@ -407,7 +407,7 @@ The 5 Helm tests cover basic deployment, custom image tags, custom server port, 
 
 ## Performance Tests
 
-The `docker_build/performance/Dockerfile` provides a Locust-based performance testing image built on `locustio/locust` with `curl` installed.
+The `docker_build/performance/Dockerfile` provides a k6-based performance testing image built on `grafana/k6`. The scenarios (smoke / load / stress / soak) and their threshold gates live in [`mockserver-performance-test/k6/`](../mockserver-performance-test/k6/README.md); CI lints them on every change and runs an opt-in load test on manual/scheduled builds.
 
 ## Test Utilities
 
