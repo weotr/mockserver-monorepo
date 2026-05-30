@@ -48,6 +48,7 @@ sitemap:
         <tr><td><a href="#create_llm_conversation"><code>create_llm_conversation</code></a></td><td>Create a multi-turn scripted LLM conversation with optional per-session isolation</td><td>High</td></tr>
         <tr><td><a href="#verify_tool_call"><code>verify_tool_call</code></a></td><td>Assert an agent called a named tool, from recorded LLM requests</td><td>High</td></tr>
         <tr><td><a href="#explain_agent_run"><code>explain_agent_run</code></a></td><td>Summarise a recorded agent run (turns, tool-call sequence)</td><td>High</td></tr>
+        <tr><td><a href="#verify_structured_output"><code>verify_structured_output</code></a></td><td>Validate recorded LLM responses' JSON output against a JSON Schema</td><td>High</td></tr>
         <tr><td><a href="#detect_llm_drift"><code>detect_llm_drift</code></a></td><td>Replay a cassette against the live provider and report structural drift</td><td>High</td></tr>
         <tr><td><a href="#mock_adversarial_llm_response"><code>mock_adversarial_llm_response</code></a></td><td>Mock a hostile/malformed LLM response to test agent resilience</td><td>High</td></tr>
         <tr><td><a href="#run_mcp_contract_test"><code>run_mcp_contract_test</code></a></td><td>Check a target MCP server conforms to the protocol over Streamable HTTP</td><td>High</td></tr>
@@ -1159,6 +1160,39 @@ sitemap:
       "toolName": "get_weather",
       "argumentsRegex": "Paris",
       "atLeast": 1
+    }
+  }
+}</code></pre>
+
+<a id="verify_structured_output" class="anchor" href="#verify_structured_output">&nbsp;</a>
+
+<h3>verify_structured_output</h3>
+
+<p>Assert that the structured (JSON) output of recorded LLM responses conforms to a JSON Schema. MockServer decodes each recorded response for the given provider, extracts the assistant's output text, and validates it against the schema. Deterministic and read-only &mdash; useful for checking that an agent (or a mocked model) returns schema-valid structured output. Responses that produce no text output are reported separately as <code>skippedNoOutput</code>.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>provider</code></td><td>string</td><td>Yes</td><td>LLM provider whose recorded responses to validate (e.g. <code>ANTHROPIC</code>, <code>OPENAI</code>)</td></tr>
+        <tr><td><code>schema</code></td><td>string</td><td>Yes</td><td>JSON Schema the output text of each recorded response must conform to</td></tr>
+        <tr><td><code>path</code></td><td>string</td><td>No</td><td>Restrict to responses for requests on this path (e.g. <code>/v1/messages</code>)</td></tr>
+    </tbody>
+</table>
+
+<p>The result reports <code>checked</code>, <code>conforming</code>, <code>nonConforming</code>, <code>skippedNoOutput</code>, and <code>allConform</code>, plus a per-response <code>results</code> array (each with <code>conforms</code> and, on failure, the validation <code>error</code>).</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 45,
+  "method": "tools/call",
+  "params": {
+    "name": "verify_structured_output",
+    "arguments": {
+      "provider": "ANTHROPIC",
+      "path": "/v1/messages",
+      "schema": "{\"type\":\"object\",\"required\":[\"city\",\"temperature\"]}"
     }
   }
 }</code></pre>

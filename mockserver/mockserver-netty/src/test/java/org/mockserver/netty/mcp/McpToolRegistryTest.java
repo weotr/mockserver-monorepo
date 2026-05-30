@@ -76,7 +76,8 @@ public class McpToolRegistryTest {
         assertThat(tools.containsKey("detect_llm_drift"), is(true));
         assertThat(tools.containsKey("mock_adversarial_llm_response"), is(true));
         assertThat(tools.containsKey("run_mcp_contract_test"), is(true));
-        assertThat(tools.size(), is(29));
+        assertThat(tools.containsKey("verify_structured_output"), is(true));
+        assertThat(tools.size(), is(30));
     }
 
     @Test
@@ -1530,5 +1531,98 @@ public class McpToolRegistryTest {
         JsonNode result = toolRegistry.callTool("run_mcp_contract_test", params);
         assertThat(result.path("error").asBoolean(), is(true));
         assertThat(result.path("message").asText(), containsString("must use the http or https scheme"));
+    }
+
+    // --- verify_structured_output tool tests ---
+
+    @Test
+    public void shouldVerifyStructuredOutputToolHasSchema() {
+        McpToolRegistry.ToolDefinition tool = toolRegistry.getTools().get("verify_structured_output");
+        assertThat(tool, notNullValue());
+        assertThat(tool.getDescription(), containsString("JSON Schema"));
+        assertThat(tool.getInputSchema().path("properties").has("provider"), is(true));
+        assertThat(tool.getInputSchema().path("properties").has("schema"), is(true));
+    }
+
+    @Test
+    public void shouldRejectMissingProviderForVerifyStructuredOutput() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("schema", "{\"type\":\"object\"}");
+
+        JsonNode result = toolRegistry.callTool("verify_structured_output", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'provider' is required"));
+    }
+
+    @Test
+    public void shouldRejectBlankSchemaForVerifyStructuredOutput() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("schema", "");
+
+        JsonNode result = toolRegistry.callTool("verify_structured_output", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'schema' is required and must not be blank"));
+    }
+
+    @Test
+    public void shouldReturnZeroCheckedWhenNoRecordedResponses() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("schema", "{\"type\":\"object\",\"required\":[\"city\"]}");
+
+        JsonNode result = toolRegistry.callTool("verify_structured_output", params);
+        assertThat(result.has("error"), is(false));
+        assertThat(result.path("checked").asInt(), is(0));
+        assertThat(result.path("allConform").asBoolean(), is(false));
+    }
+
+    @Test
+    public void shouldReportConformingStructuredOutput() throws Exception {
+        // Record an Anthropic response whose output text is JSON conforming to the schema.
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("POST").withPath("/v1/messages"))
+            .setHttpResponse(response().withStatusCode(200).withBody(
+                "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"city\\\":\\\"Paris\\\"}\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200)));
+        Thread.sleep(500);
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.put("schema", "{\"type\":\"object\",\"required\":[\"city\"]}");
+        JsonNode result = toolRegistry.callTool("verify_structured_output", params);
+
+        assertThat(result.has("error"), is(false));
+        assertThat(result.path("checked").asInt(), is(1));
+        assertThat(result.path("conforming").asInt(), is(1));
+        assertThat(result.path("allConform").asBoolean(), is(true));
+    }
+
+    @Test
+    public void shouldFlagNonConformingStructuredOutput() throws Exception {
+        // Record an Anthropic response whose output text is missing the required field.
+        httpState.log(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("POST").withPath("/v1/messages"))
+            .setHttpResponse(response().withStatusCode(200).withBody(
+                "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"foo\\\":1}\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"))
+            .setMessageFormat("returning response:{}for forwarded request")
+            .setArguments(response().withStatusCode(200)));
+        Thread.sleep(500);
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.put("schema", "{\"type\":\"object\",\"required\":[\"city\"]}");
+        JsonNode result = toolRegistry.callTool("verify_structured_output", params);
+
+        assertThat(result.path("checked").asInt(), is(1));
+        assertThat(result.path("nonConforming").asInt(), is(1));
+        assertThat(result.path("allConform").asBoolean(), is(false));
     }
 }

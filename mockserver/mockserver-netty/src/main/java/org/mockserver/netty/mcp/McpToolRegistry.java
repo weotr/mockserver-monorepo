@@ -15,7 +15,10 @@ import org.mockserver.llm.ProviderCodecRegistry;
 import org.mockserver.llm.analysis.AgentRunAnalyzer;
 import org.mockserver.llm.client.LlmBackend;
 import org.mockserver.llm.client.LlmBackendResolver;
+import org.mockserver.llm.client.LlmClient;
+import org.mockserver.llm.client.LlmClientRegistry;
 import org.mockserver.llm.client.NettyHttpClientLlmTransport;
+import org.mockserver.validator.jsonschema.JsonSchemaValidator;
 import org.mockserver.llm.drift.DriftDetector;
 import org.mockserver.llm.drift.DriftReport;
 import org.mockserver.matchers.MatchType;
@@ -129,6 +132,7 @@ public class McpToolRegistry {
         registerMockLlmCompletion();
         registerCreateLlmConversation();
         registerVerifyToolCall();
+        registerVerifyStructuredOutput();
         registerExplainAgentRun();
         registerDetectLlmDrift();
         registerMockAdversarialLlmResponse();
@@ -2854,6 +2858,145 @@ public class McpToolRegistry {
         } catch (Exception e) {
             return errorResult("Failed to verify tool call", e);
         }
+    }
+
+    // --- verify_structured_output ---
+
+    private void registerVerifyStructuredOutput() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        ObjectNode providerProp = properties.putObject("provider");
+        providerProp.put("type", "string").put("description", "LLM provider whose recorded responses to validate");
+        ArrayNode providerEnum = providerProp.putArray("enum");
+        for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
+            providerEnum.add(name);
+        }
+        properties.putObject("schema").put("type", "string").put("description", "JSON Schema that the structured output text of each recorded response must conform to");
+        properties.putObject("path").put("type", "string").put("description", "Optional request path filter (only validate responses to this path)");
+        ArrayNode required = schema.putArray("required");
+        required.add("provider");
+        required.add("schema");
+
+        tools.put("verify_structured_output", new ToolDefinition(
+            "verify_structured_output",
+            "Validate that the structured (JSON) output of recorded LLM responses conforms to a JSON Schema. "
+                + "Decodes each recorded response for the given provider, extracts the assistant's output text, and checks it "
+                + "against the schema — use this to assert an agent (or mocked model) produced schema-valid structured output. "
+                + "Read-only and deterministic; responses with no text output are reported separately as skipped.",
+            schema,
+            this::handleVerifyStructuredOutput
+        ));
+    }
+
+    private JsonNode handleVerifyStructuredOutput(JsonNode params) {
+        try {
+            String providerStr = params.path("provider").asText(null);
+            if (providerStr == null || providerStr.trim().isEmpty()) {
+                return errorResult("'provider' is required");
+            }
+            Provider provider = parseProviderParam(params);
+            if (provider == null) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+            String schemaStr = params.path("schema").asText(null);
+            if (schemaStr == null || schemaStr.trim().isEmpty()) {
+                return errorResult("'schema' is required and must not be blank");
+            }
+            Optional<LlmClient> clientOpt = LlmClientRegistry.getInstance().lookup(provider);
+            if (!clientOpt.isPresent()) {
+                return errorResult("no runtime client for provider " + provider + " to parse responses");
+            }
+            LlmClient client = clientOpt.get();
+
+            JsonSchemaValidator validator;
+            try {
+                validator = new JsonSchemaValidator(mockServerLogger, schemaStr);
+            } catch (Exception e) {
+                return errorResult("'schema' is not a valid JSON Schema: " + e.getMessage());
+            }
+
+            String path = emptyToNull(params.path("path").asText(null));
+            List<LogEventRequestAndResponse> pairs = retrieveRecordedPairs(path);
+
+            int checked = 0;
+            int conforming = 0;
+            int skipped = 0;
+            ArrayNode results = objectMapper.createArrayNode();
+            for (LogEventRequestAndResponse pair : pairs) {
+                HttpResponse recordedResponse = pair.getHttpResponse();
+                if (recordedResponse == null) {
+                    continue;
+                }
+                String outputText;
+                try {
+                    outputText = client.parseCompletionResponse(recordedResponse).getText();
+                } catch (Exception e) {
+                    outputText = null;
+                }
+                if (outputText == null || outputText.trim().isEmpty()) {
+                    skipped++;
+                    continue;
+                }
+                checked++;
+                String error = validator.isValid(outputText, false);
+                boolean conforms = error == null || error.isEmpty();
+                if (conforms) {
+                    conforming++;
+                }
+                ObjectNode entry = objectMapper.createObjectNode();
+                if (pair.getHttpRequest() instanceof HttpRequest && ((HttpRequest) pair.getHttpRequest()).getPath() != null) {
+                    entry.put("path", ((HttpRequest) pair.getHttpRequest()).getPath().getValue());
+                }
+                entry.put("conforms", conforms);
+                if (!conforms) {
+                    entry.put("error", error);
+                }
+                results.add(entry);
+            }
+
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("provider", provider.name());
+            resultNode.put("checked", checked);
+            resultNode.put("conforming", conforming);
+            resultNode.put("nonConforming", checked - conforming);
+            resultNode.put("skippedNoOutput", skipped);
+            resultNode.put("allConform", checked > 0 && conforming == checked);
+            resultNode.set("results", results);
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to verify structured output", e);
+        }
+    }
+
+    /**
+     * Retrieve recorded request/response pairs (optionally filtered by path) from
+     * the running server's event log.
+     */
+    private List<LogEventRequestAndResponse> retrieveRecordedPairs(String path) {
+        HttpRequest filter = request();
+        if (path != null && !path.isEmpty()) {
+            filter.withPath(path);
+        }
+        HttpRequest retrieveRequest = request()
+            .withMethod("PUT")
+            .withPath("/mockserver/retrieve")
+            .withQueryStringParameter("type", "REQUEST_RESPONSES")
+            .withQueryStringParameter("format", "JSON")
+            .withBody(getRequestDefinitionSerializer().serialize(filter));
+        HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+        String body = retrieveResponse.getBodyAsString();
+        List<LogEventRequestAndResponse> result = new ArrayList<>();
+        if (body != null && !body.trim().isEmpty()) {
+            try {
+                LogEventRequestAndResponse[] pairs =
+                    new LogEventRequestAndResponseSerializer(mockServerLogger).deserializeArray(body);
+                result.addAll(Arrays.asList(pairs));
+            } catch (IllegalArgumentException e) {
+                // No parseable request/response pairs (e.g. an empty "[]" result) — treat as none.
+            }
+        }
+        return result;
     }
 
     // --- explain_agent_run ---
