@@ -12,6 +12,21 @@ function cleanup() {
   tear-down 2>/dev/null || true
 }
 
+# Wait for a MockServer instance (by docker-compose service name) to answer its
+# status endpoint, or fail the test if it never comes up.
+function wait_ready() {
+  local host="${1}"
+  for _ in $(seq 1 30); do
+    if docker-exec-client "curl -sf -o /dev/null -X PUT http://${host}:1080/mockserver/status"; then
+      return 0
+    fi
+    sleep 1
+  done
+  printMessage "FAIL: ${host} did not become ready"
+  container-logs || true
+  return 1
+}
+
 # Retry a client-side check until it passes or attempts run out — absorbs the
 # Prometheus scrape interval and the OTLP export interval on a cold runner
 # without a brittle fixed sleep. Sets TEST_EXIT_CODE=1 on exhaustion.
@@ -34,20 +49,17 @@ function integration_test() {
   start-up
   TEST_EXIT_CODE=0
 
-  # wait for MockServer to be ready
-  local ready=false
-  for _ in $(seq 1 30); do
-    if docker-exec-client "curl -sf -o /dev/null -X PUT http://mockserver:1080/mockserver/status"; then
-      ready=true
-      break
-    fi
-    sleep 1
-  done
-  if [[ "${ready}" != "true" ]]; then
-    printMessage "FAIL: MockServer did not become ready"
-    container-logs || true
-    return 1
-  fi
+  # both the server under test and the MockServer acting as the OTLP sink
+  wait_ready "mockserver" || return 1
+  wait_ready "otlp-receiver" || return 1
+
+  # Tell the OTLP receiver to accept the exporter's metric POSTs with 200 so the
+  # export succeeds cleanly (an unmatched request would 404 and make the OTel SDK
+  # log errors and back off). The request is still recorded either way.
+  docker-exec-client "curl -sf -o /dev/null -X PUT 'http://otlp-receiver:1080/mockserver/expectation' -d \\\"{
+                        'httpRequest' : { 'method' : 'POST', 'path' : '/v1/metrics' },
+                        'httpResponse' : { 'statusCode' : 200 }
+                      }\\\"" || true
 
   # Drive some traffic. requests_received_count increments on ANY request, so
   # no expectation is needed (the unmatched requests return 404 but still count).
@@ -66,10 +78,14 @@ function integration_test() {
   assert_eventually "JVM metrics present in Prometheus" \
     "curl -sf 'http://prometheus:9090/api/v1/query?query=jvm_memory_used_bytes' | jq -e '.data.result | length > 0' >/dev/null" || true
 
-  # 3 — the same metric arrived via OTLP at the collector, which re-exports it
-  # on its own Prometheus endpoint (the push path)
-  assert_eventually "requests_received_count exported via OTLP to the collector" \
-    "curl -sf http://otel-collector:8889/metrics | grep -q requests_received_count" || true
+  # 3 — MockServer actually pushed OTLP metric exports over the wire: the OTLP
+  # receiver verifies it got at least one POST /v1/metrics (verify returns 202
+  # on success, 406 otherwise, so curl -sf passes only when it has arrived).
+  assert_eventually "MockServer exported metrics via OTLP (POST /v1/metrics received)" \
+    "curl -sf -o /dev/null -X PUT 'http://otlp-receiver:1080/mockserver/verify' -d \\\"{
+       'httpRequest' : { 'method' : 'POST', 'path' : '/v1/metrics' },
+       'times' : { 'atLeast' : 1, 'atMost' : -1 }
+     }\\\"" || true
 
   if [[ "${TEST_EXIT_CODE}" != "0" ]]; then
     container-logs || true

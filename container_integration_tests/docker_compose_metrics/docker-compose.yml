@@ -1,8 +1,15 @@
 # Integration test: MockServer metrics output on BOTH paths —
 #   1. Prometheus scrapes GET /mockserver/metrics (metricsEnabled), and
-#   2. MockServer pushes the same metrics via OTLP to an OpenTelemetry Collector
-#      (otelMetricsEnabled), which re-exports them on its own Prometheus endpoint.
-# The test asserts the request counter + the JVM gauges arrive on both paths.
+#   2. MockServer pushes the same metrics via OTLP (otelMetricsEnabled) over
+#      HTTP to the configured endpoint.
+# The OTLP sink is a second MockServer instance (dogfooding) rather than a real
+# OpenTelemetry Collector: the collector's distroless image fails to exec on
+# some Docker runtimes (CI agents and local Docker Desktop), and a real
+# collector would be testing the collector, not MockServer. Pointing the
+# exporter at a MockServer receiver lets the test assert the thing that matters —
+# that MockServer actually sends OTLP metric exports over the wire — using only
+# images this suite already relies on. (The OTLP encoding itself is unit-tested
+# by OtelMetricsExporterTest.)
 services:
   mockserver:
     image: mockserver/mockserver:integration_testing
@@ -10,17 +17,17 @@ services:
     environment:
       MOCKSERVER_METRICS_ENABLED: "true"
       MOCKSERVER_OTEL_METRICS_ENABLED: "true"
-      MOCKSERVER_OTEL_ENDPOINT: "http://otel-collector:4318"
+      MOCKSERVER_OTEL_ENDPOINT: "http://otlp-receiver:1080"
       MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS: "2"
       MOCKSERVER_LOG_LEVEL: "WARN"
     depends_on:
-      - otel-collector
+      - otlp-receiver
 
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.116.0
-    command: ["--config=/etc/otelcol/config.yaml"]
-    volumes:
-      - ${OVERRIDE_DIR}/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+  otlp-receiver:
+    image: mockserver/mockserver:integration_testing
+    command: -serverPort 1080
+    environment:
+      MOCKSERVER_LOG_LEVEL: "WARN"
 
   prometheus:
     image: prom/prometheus:v3.1.0
@@ -33,4 +40,4 @@ services:
     depends_on:
       - mockserver
       - prometheus
-      - otel-collector
+      - otlp-receiver
