@@ -311,4 +311,90 @@ describe('JsonListItem', () => {
     expect(container.querySelector('[data-testid="ExpandMoreIcon"]')).toBeInTheDocument();
     expect(container.querySelector('[data-testid="ChevronRightIcon"]')).not.toBeInTheDocument();
   });
+
+  // -----------------------------------------------------------------------
+  // Chaos profile viewer badge
+  // -----------------------------------------------------------------------
+
+  it('renders chaos summary chip when expectation has a chaos block', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'chaos1',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/test' },
+            httpResponse: { statusCode: 200 },
+            chaos: {
+              errorStatus: 503,
+              errorProbability: 0.5,
+            },
+          },
+        }}
+        index={1}
+      />,
+    );
+    expect(screen.getByText(/Chaos:/)).toBeInTheDocument();
+    expect(screen.getByText(/503/)).toBeInTheDocument();
+    expect(screen.getByText(/50%/)).toBeInTheDocument();
+  });
+
+  it('renders chaos chip with latency summary', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'chaos2',
+          value: {
+            httpRequest: { method: 'GET', path: '/slow' },
+            httpResponse: { statusCode: 200 },
+            chaos: {
+              latency: { timeUnit: 'SECONDS', value: 3 },
+            },
+          },
+        }}
+        index={1}
+      />,
+    );
+    expect(screen.getByText(/Chaos:/)).toBeInTheDocument();
+    expect(screen.getByText(/3se/)).toBeInTheDocument();
+  });
+
+  it('renders chaos chip with window summary', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'chaos3',
+          value: {
+            httpRequest: { method: 'POST', path: '/retry' },
+            httpResponse: { statusCode: 200 },
+            chaos: {
+              errorStatus: 503,
+              errorProbability: 1.0,
+              succeedFirst: 0,
+              failRequestCount: 2,
+            },
+          },
+        }}
+        index={1}
+      />,
+    );
+    const chaosChip = screen.getByText(/Chaos:/);
+    expect(chaosChip).toBeInTheDocument();
+    expect(chaosChip.textContent).toContain('window');
+  });
+
+  it('does not render chaos chip when no chaos block', () => {
+    render(
+      <JsonListItem
+        item={{
+          key: 'no-chaos',
+          value: {
+            httpRequest: { method: 'GET', path: '/normal' },
+            httpResponse: { statusCode: 200 },
+          },
+        }}
+        index={1}
+      />,
+    );
+    expect(screen.queryByText(/Chaos:/)).not.toBeInTheDocument();
+  });
 });

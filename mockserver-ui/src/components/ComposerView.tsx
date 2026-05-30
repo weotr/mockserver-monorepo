@@ -12,6 +12,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Divider from '@mui/material/Divider';
 import Snackbar from '@mui/material/Snackbar';
 import Switch from '@mui/material/Switch';
+import Collapse from '@mui/material/Collapse';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useDashboardStore } from '../store';
 import type { JsonListItem } from '../types';
@@ -20,7 +21,10 @@ import LlmConversationForm from './LlmConversationForm';
 import StandardReview from './StandardReview';
 import {
   buildExpectationJson,
+  chaosFromExpectation,
   type StandardActionPayload,
+  type StandardChaosDraft,
+  type ChaosDelayUnit,
 } from '../lib/standardCodegen';
 
 // ---------------------------------------------------------------------------
@@ -882,6 +886,107 @@ function ErrorPanel({
 }
 
 // ---------------------------------------------------------------------------
+// Chaos / fault injection panel (optional, cross-cutting across action types)
+// ---------------------------------------------------------------------------
+
+function ChaosPanel({
+  chaos,
+  setChaos,
+}: {
+  chaos: StandardChaosDraft;
+  setChaos: (c: StandardChaosDraft) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Inject probabilistic faults (error status, latency) into responses for
+        matched requests. This works on mocked, forwarded, and proxied responses.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <TextField
+          label="Error status"
+          size="small"
+          type="number"
+          value={chaos.errorStatus ?? ''}
+          onChange={(e) => setChaos({ ...chaos, errorStatus: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
+          sx={{ width: 120 }}
+          helperText="e.g. 500, 503, 429"
+        />
+        <TextField
+          label="Error prob (0-1)"
+          size="small"
+          type="number"
+          value={chaos.errorProbability ?? ''}
+          onChange={(e) => setChaos({ ...chaos, errorProbability: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+          sx={{ width: 130 }}
+          helperText="1.0 = always"
+        />
+        <TextField
+          label="Retry-After"
+          size="small"
+          value={chaos.retryAfter ?? ''}
+          onChange={(e) => setChaos({ ...chaos, retryAfter: e.target.value || undefined })}
+          sx={{ width: 120 }}
+          helperText='e.g. "30"'
+        />
+      </Box>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <TextField
+          label="Latency value"
+          size="small"
+          type="number"
+          value={chaos.latencyValue ?? ''}
+          onChange={(e) => setChaos({ ...chaos, latencyValue: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
+          sx={{ width: 140 }}
+          helperText="0 = no latency"
+        />
+        <TextField
+          label="Latency unit"
+          size="small"
+          select
+          value={chaos.latencyUnit ?? 'MILLISECONDS'}
+          onChange={(e) => setChaos({ ...chaos, latencyUnit: e.target.value as ChaosDelayUnit })}
+          sx={{ width: 160 }}
+        >
+          <MenuItem value="MILLISECONDS">milliseconds</MenuItem>
+          <MenuItem value="SECONDS">seconds</MenuItem>
+          <MenuItem value="MINUTES">minutes</MenuItem>
+        </TextField>
+        <TextField
+          label="Seed"
+          size="small"
+          type="number"
+          value={chaos.seed ?? ''}
+          onChange={(e) => setChaos({ ...chaos, seed: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
+          sx={{ width: 110 }}
+          helperText="reproducible prob"
+        />
+      </Box>
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <TextField
+          label="Succeed first (N)"
+          size="small"
+          type="number"
+          value={chaos.succeedFirst ?? ''}
+          onChange={(e) => setChaos({ ...chaos, succeedFirst: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
+          sx={{ width: 150 }}
+          helperText="first N requests OK"
+        />
+        <TextField
+          label="Fail request count"
+          size="small"
+          type="number"
+          value={chaos.failRequestCount ?? ''}
+          onChange={(e) => setChaos({ ...chaos, failRequestCount: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
+          sx={{ width: 160 }}
+          helperText="then next M fail"
+        />
+      </Box>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -929,6 +1034,11 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     delayValue: 0,
     delayUnit: 'MILLISECONDS',
   });
+
+  // Chaos profile — cross-cutting, applies regardless of action type
+  // (except httpError which is already a fault action).
+  const [chaosEnabled, setChaosEnabled] = useState(false);
+  const [chaosState, setChaosState] = useState<StandardChaosDraft>({});
 
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -978,6 +1088,16 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       if (prefill.callbackState) setCallbackState(prefill.callbackState);
       if (prefill.templateState) setTemplateState(prefill.templateState);
       if (prefill.errorState) setErrorState(prefill.errorState);
+
+      // Repopulate chaos panel from an existing expectation
+      const existingChaos = chaosFromExpectation(item.value);
+      if (existingChaos) {
+        setChaosEnabled(true);
+        setChaosState(existingChaos);
+      } else {
+        setChaosEnabled(false);
+        setChaosState({});
+      }
     },
     [activeExpectations],
   );
@@ -1188,6 +1308,36 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               )}
             </Paper>
 
+            {/* Chaos / fault injection — optional, cross-cutting. Not shown
+                for the Error action type since it's already a fault action. */}
+            {actionType !== 'error' && (
+              <Paper variant="outlined" sx={{ p: 2 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={chaosEnabled}
+                      onChange={(e) => {
+                        setChaosEnabled(e.target.checked);
+                        if (!e.target.checked) setChaosState({});
+                      }}
+                    />
+                  }
+                  label={
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
+                      Inject fault / chaos (optional)
+                    </Typography>
+                  }
+                  sx={{ m: 0 }}
+                />
+                <Collapse in={chaosEnabled} unmountOnExit>
+                  <Box sx={{ mt: 1.5 }}>
+                    <ChaosPanel chaos={chaosState} setChaos={setChaosState} />
+                  </Box>
+                </Collapse>
+              </Paper>
+            )}
+
             {/* Step 4: review & register — shows the generated Java / JSON /
                 curl, then the single Register button (mirrors the
                 LLM Conversation form's review-and-register section). */}
@@ -1199,6 +1349,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               if (actionType === 'callback') currentAction.callback = callbackState;
               if (actionType === 'template') currentAction.template = templateState;
               if (actionType === 'error') currentAction.error = errorState;
+              if (chaosEnabled && actionType !== 'error') currentAction.chaos = chaosState;
 
               const dispatchRegister = () => void handleRegister(currentAction);
 

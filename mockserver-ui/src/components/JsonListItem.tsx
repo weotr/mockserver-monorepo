@@ -135,10 +135,40 @@ function extractLlmBadge(value: Record<string, unknown>): LlmBadgeInfo | null {
   };
 }
 
+/**
+ * Build a concise human-readable summary of a top-level `chaos` block on an
+ * expectation. Returns null when no chaos profile is present.
+ */
+function extractChaosSummary(value: Record<string, unknown>): string | null {
+  const raw = value['chaos'];
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof c['errorStatus'] === 'number') {
+    const prob = typeof c['errorProbability'] === 'number' ? c['errorProbability'] as number : null;
+    const probStr = prob != null ? ` @${Math.round(prob * 100)}%` : '';
+    parts.push(`${c['errorStatus']}${probStr}`);
+  }
+  if (c['latency'] && typeof c['latency'] === 'object') {
+    const lat = c['latency'] as Record<string, unknown>;
+    if (typeof lat['value'] === 'number') {
+      const unit = typeof lat['timeUnit'] === 'string' ? (lat['timeUnit'] as string).toLowerCase() : 'ms';
+      parts.push(`${lat['value']}${unit.slice(0, 2)}`);
+    }
+  }
+  if (typeof c['succeedFirst'] === 'number' || typeof c['failRequestCount'] === 'number') {
+    const sf = typeof c['succeedFirst'] === 'number' ? c['succeedFirst'] as number : 0;
+    const fc = typeof c['failRequestCount'] === 'number' ? `${c['failRequestCount']}` : '∞';
+    parts.push(`window ${sf}+${fc}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'enabled';
+}
+
 export default function JsonListItem({ item, index, turnPosition }: JsonListItemProps) {
   const [expanded, setExpanded] = useState(false);
   const llmBadge = useMemo(() => extractLlmBadge(item.value), [item.value]);
   const requestParts = useMemo(() => extractRequestParts(item.value), [item.value]);
+  const chaosSummary = useMemo(() => extractChaosSummary(item.value), [item.value]);
 
   return (
     <Box
@@ -358,6 +388,19 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
           </Box>
           );
         })()}
+        {/* Chaos profile summary chip — shown for any expectation (standard
+            or LLM) that has a top-level `chaos` block. */}
+        {chaosSummary && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 6 }}>
+            <Chip
+              label={`Chaos: ${chaosSummary}`}
+              size="small"
+              color="warning"
+              variant="outlined"
+              sx={{ height: 20, fontSize: '0.65rem' }}
+            />
+          </Box>
+        )}
       </Box>
       {expanded && (
         // pl: 6 matches the second-row chip indent so the expanded JSON

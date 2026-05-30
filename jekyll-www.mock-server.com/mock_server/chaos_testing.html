@@ -299,6 +299,12 @@ rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 # Total latency faults injected
 mock_server_http_chaos_injected_total{fault_type="latency"}</code></pre>
 
+<a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
+
+<h2>Dashboard UI</h2>
+
+<p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for all seven chaos profile properties. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
+
 <a id="coming_soon" class="anchor" href="#coming_soon">&nbsp;</a>
 
 <h2>Roadmap</h2>

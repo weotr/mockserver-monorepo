@@ -73,6 +73,23 @@ export interface StandardErrorState {
   delayUnit: 'MILLISECONDS' | 'SECONDS' | 'MINUTES';
 }
 
+export type ChaosDelayUnit = 'MILLISECONDS' | 'SECONDS' | 'MINUTES';
+
+/**
+ * Draft state for the HTTP chaos profile panel. Maps 1:1 to the seven
+ * HttpChaosProfile fields. `undefined` means "not set / omit from JSON".
+ */
+export interface StandardChaosDraft {
+  errorStatus?: number;
+  errorProbability?: number;
+  retryAfter?: string;
+  latencyUnit?: ChaosDelayUnit;
+  latencyValue?: number;
+  seed?: number;
+  succeedFirst?: number;
+  failRequestCount?: number;
+}
+
 export interface StandardActionPayload {
   type: StandardActionType;
   static?: StandardStaticState;
@@ -81,6 +98,7 @@ export interface StandardActionPayload {
   callback?: StandardCallbackState;
   template?: StandardTemplateState;
   error?: StandardErrorState;
+  chaos?: StandardChaosDraft;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +233,12 @@ export function buildExpectationJson(
       break;
   }
 
+  // Chaos profile — top-level sibling of httpRequest / httpResponse.
+  if (action.chaos) {
+    const chaos = buildChaosJson(action.chaos);
+    if (chaos) out['chaos'] = chaos;
+  }
+
   if (matcher.id.trim()) out['id'] = matcher.id.trim();
   if (matcher.priority !== 0) out['priority'] = matcher.priority;
   if (matcher.times > 0) {
@@ -222,6 +246,51 @@ export function buildExpectationJson(
   }
 
   return out;
+}
+
+/**
+ * Build the JSON object for a chaos profile draft. Returns `undefined` when
+ * all fields are empty/unset so the caller can skip emitting the key entirely.
+ */
+export function buildChaosJson(draft: StandardChaosDraft): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  if (draft.errorStatus != null) out['errorStatus'] = draft.errorStatus;
+  if (draft.errorProbability != null) out['errorProbability'] = draft.errorProbability;
+  if (draft.retryAfter) out['retryAfter'] = draft.retryAfter;
+  if (draft.latencyValue != null && draft.latencyValue > 0) {
+    out['latency'] = { timeUnit: draft.latencyUnit ?? 'MILLISECONDS', value: draft.latencyValue };
+  }
+  if (draft.seed != null) out['seed'] = draft.seed;
+  if (draft.succeedFirst != null) out['succeedFirst'] = draft.succeedFirst;
+  if (draft.failRequestCount != null) out['failRequestCount'] = draft.failRequestCount;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Round-trip: parse a top-level `chaos` JSON object from an existing
+ * expectation back into a `StandardChaosDraft` for repopulating the composer.
+ */
+export function chaosFromExpectation(value: Record<string, unknown>): StandardChaosDraft | undefined {
+  const raw = value['chaos'];
+  if (!raw || typeof raw !== 'object') return undefined;
+  const c = raw as Record<string, unknown>;
+  const draft: StandardChaosDraft = {};
+  if (typeof c['errorStatus'] === 'number') draft.errorStatus = c['errorStatus'] as number;
+  if (typeof c['errorProbability'] === 'number') draft.errorProbability = c['errorProbability'] as number;
+  if (typeof c['retryAfter'] === 'string') draft.retryAfter = c['retryAfter'] as string;
+  if (c['latency'] && typeof c['latency'] === 'object') {
+    const lat = c['latency'] as Record<string, unknown>;
+    if (typeof lat['value'] === 'number') {
+      draft.latencyValue = lat['value'] as number;
+      const tu = lat['timeUnit'];
+      draft.latencyUnit = tu === 'SECONDS' ? 'SECONDS' : tu === 'MINUTES' ? 'MINUTES' : 'MILLISECONDS';
+    }
+  }
+  if (typeof c['seed'] === 'number') draft.seed = c['seed'] as number;
+  if (typeof c['succeedFirst'] === 'number') draft.succeedFirst = c['succeedFirst'] as number;
+  if (typeof c['failRequestCount'] === 'number') draft.failRequestCount = c['failRequestCount'] as number;
+  // Only return if at least one field was populated
+  return Object.keys(draft).length > 0 ? draft : undefined;
 }
 
 export function standardToJson(matcher: StandardMatcher, action: StandardActionPayload): string {
@@ -366,7 +435,27 @@ function actionToJava(action: StandardActionPayload): string {
   }
 }
 
+function chaosToJava(chaos: StandardChaosDraft): string {
+  const lines: string[] = ['.withChaos(', '    httpChaosProfile()'];
+  if (chaos.errorStatus != null) lines.push(`        .withErrorStatus(${chaos.errorStatus})`);
+  if (chaos.errorProbability != null) {
+    const prob = chaos.errorProbability % 1 === 0 ? chaos.errorProbability.toFixed(1) : String(chaos.errorProbability);
+    lines.push(`        .withErrorProbability(${prob})`);
+  }
+  if (chaos.retryAfter) lines.push(`        .withRetryAfter("${escapeJava(chaos.retryAfter)}")`);
+  if (chaos.latencyValue != null && chaos.latencyValue > 0) {
+    const unit = chaos.latencyUnit ?? 'MILLISECONDS';
+    lines.push(`        .withLatency(new Delay(TimeUnit.${unit}, ${chaos.latencyValue}))`);
+  }
+  if (chaos.seed != null) lines.push(`        .withSeed(${chaos.seed}L)`);
+  if (chaos.succeedFirst != null) lines.push(`        .withSucceedFirst(${chaos.succeedFirst})`);
+  if (chaos.failRequestCount != null) lines.push(`        .withFailRequestCount(${chaos.failRequestCount})`);
+  lines.push(')');
+  return lines.join('\n');
+}
+
 export function standardToJava(matcher: StandardMatcher, action: StandardActionPayload): string {
+  const hasChaos = action.chaos && buildChaosJson(action.chaos);
   const lines: string[] = [];
   lines.push('import static org.mockserver.model.HttpRequest.request;');
   if (action.type === 'static' || action.type === 'callback' || action.type === 'template') {
@@ -380,8 +469,14 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
   }
   if (action.type === 'error') {
     lines.push('import static org.mockserver.model.HttpError.error;');
+  }
+  const chaosHasLatency = hasChaos && action.chaos?.latencyValue != null;
+  if ((action.type === 'error' && action.error?.delayValue) || chaosHasLatency) {
     lines.push('import org.mockserver.model.Delay;');
     lines.push('import java.util.concurrent.TimeUnit;');
+  }
+  if (hasChaos) {
+    lines.push('import static org.mockserver.model.HttpChaosProfile.httpChaosProfile;');
   }
   if ((action.type === 'error' && action.error?.responseBytesB64.trim()) || matcher.bodyBinary) {
     lines.push('import java.util.Base64;');
@@ -392,6 +487,9 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
   lines.push('    ' + matcherToJava(matcher).split('\n').join('\n    '));
   lines.push('  )');
   lines.push('  ' + actionToJava(action).split('\n').join('\n  '));
+  if (hasChaos) {
+    lines.push('  ' + chaosToJava(action.chaos!).split('\n').join('\n  '));
+  }
   lines.push(';');
   return lines.join('\n');
 }
