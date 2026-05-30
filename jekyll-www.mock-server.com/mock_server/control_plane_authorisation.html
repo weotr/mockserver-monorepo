@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-05-30T08:00:00+00:00
 ---
 
 <p>Multiple techniques can be used to lock down MockServer deployments, as follows:</p>
@@ -20,6 +20,7 @@ sitemap:
     <li>authenticate all <a href="/mock_server/HTTPS_TLS.html">TCP connections using mTLS</a></li>
     <li>authenticate all REST API i.e. control plane requests using mTLS</li>
     <li>authenticate all REST API i.e. control plane requests using JWT</li>
+    <li>set security-focused configuration property values &mdash; see <a href="#configuration_hardening">Configuration Hardening</a> below</li>
 </ul>
 
 <p><strong>Important:</strong> MockServer does not currently support HTTP proxy authentication (Proxy-Authenticate / Proxy-Authorization headers). The authentication mechanisms described on this page secure the <strong>control plane</strong> (expectation management, verification, retrieval, etc.), not the data plane when MockServer is used as an HTTP proxy. If you need to test proxy authentication, you must use a different proxy server that supports it.</p>
@@ -48,3 +49,60 @@ sitemap:
 <p>When JWT authentication is enabled all control plane requests need and JWT via a <strong>authorization</strong> header which is validated using the <a href="#button_configuration_control_plane_jwt_authentication_jwk_source">controlPlaneJWTAuthenticationJWKSource</a></p>
 
 {% include_subpage _includes/control_plane_authentication_jwt_configuration.html %}
+
+<a id="configuration_hardening" class="anchor" href="#configuration_hardening">&nbsp;</a>
+
+<h2>Configuration Hardening</h2>
+
+<p>For the most security-focused deployment, set the configuration properties below to the values shown. Each can be set as a Java system property (<code class="inline_code">-Dmockserver.&lt;name&gt;=&lt;value&gt;</code>), an environment variable (<code class="inline_code">MOCKSERVER_&lt;NAME&gt;</code>), or in a properties file &mdash; see <a href="/mock_server/configuration_properties.html">Configuration Properties</a> for the exact syntax and full description of each.</p>
+
+<a id="hardening_network" class="anchor" href="#hardening_network">&nbsp;</a>
+
+<h3>Network exposure</h3>
+<ul>
+    <li><code class="inline_code">mockserver.localBoundIP=127.0.0.1</code> &mdash; bind the listener to the loopback interface so MockServer is reachable only from the local host. When running inside a container, set this to <code class="inline_code">0.0.0.0</code> and restrict access at the container, network, or orchestration layer instead.</li>
+    <li><code class="inline_code">mockserver.attemptToProxyIfNoMatchingExpectation=false</code> &mdash; return <code class="inline_code">404 Not Found</code> for any request that matches no expectation, so MockServer serves only the traffic you have explicitly defined and does not forward unmatched requests upstream.</li>
+</ul>
+
+<a id="hardening_forwarding" class="anchor" href="#hardening_forwarding">&nbsp;</a>
+
+<h3>Forwarding &amp; proxying</h3>
+<ul>
+    <li><code class="inline_code">mockserver.forwardProxyBlockPrivateNetworks=true</code> &mdash; reject forward and proxy targets that resolve to loopback, link-local, RFC&nbsp;1918 private, or cloud-metadata addresses (e.g. <code class="inline_code">169.254.169.254</code>), keeping forwarded requests off internal networks (SSRF protection).</li>
+    <li><code class="inline_code">mockserver.forwardProxyTLSX509CertificatesTrustManagerType=JVM</code> &mdash; validate upstream HTTPS certificates against the JDK trust store, exactly as a standard Java HTTPS client would. To trust a specific private CA, use <code class="inline_code">=CUSTOM</code> together with <code class="inline_code">mockserver.forwardProxyTLSCustomTrustX509Certificates</code> pointing at your CA bundle.</li>
+</ul>
+
+<a id="hardening_tls" class="anchor" href="#hardening_tls">&nbsp;</a>
+
+<h3>TLS protocols</h3>
+<ul>
+    <li><code class="inline_code">mockserver.tlsAllowInsecureProtocols=false</code> &mdash; negotiate TLSv1.2 and above only, excluding the deprecated TLSv1 and TLSv1.1 protocols. Add <code class="inline_code">TLSv1.3</code> to <code class="inline_code">mockserver.tlsProtocols</code> to require the most modern protocol.</li>
+</ul>
+
+<a id="hardening_templates" class="anchor" href="#hardening_templates">&nbsp;</a>
+
+<h3>Response template execution</h3>
+<p>If you use <a href="/mock_server/response_templates.html">response templates</a>, restrict what they can reach (templates you do not use carry no risk):</p>
+<ul>
+    <li><code class="inline_code">mockserver.velocityDisallowClassLoading=true</code> &mdash; run Velocity templates with a secure uberspector so they cannot load arbitrary Java classes.</li>
+    <li><code class="inline_code">mockserver.javascriptDisallowedClasses=...</code> &mdash; restrict the Java classes JavaScript templates may reach via <code class="inline_code">Java.type(...)</code>; deny high-risk classes such as <code class="inline_code">java.lang.Runtime</code>, <code class="inline_code">java.lang.ProcessBuilder</code>, <code class="inline_code">java.lang.System</code>, <code class="inline_code">java.lang.Class</code>, <code class="inline_code">java.lang.ClassLoader</code>, <code class="inline_code">java.io.File</code>, and <code class="inline_code">java.nio.file.Files</code>.</li>
+</ul>
+
+<a id="hardening_parsing" class="anchor" href="#hardening_parsing">&nbsp;</a>
+
+<h3>Request parsing limits</h3>
+<p>Bound the size of inbound request lines, headers, and chunks so a single client cannot exhaust memory with an oversized request:</p>
+<ul>
+    <li><code class="inline_code">mockserver.maxInitialLineLength=8192</code> &mdash; cap the request line (method + URI + version) at 8&nbsp;KiB.</li>
+    <li><code class="inline_code">mockserver.maxHeaderSize=16384</code> &mdash; cap the combined request headers at 16&nbsp;KiB.</li>
+    <li><code class="inline_code">mockserver.maxChunkSize=16384</code> &mdash; cap a single chunked-transfer-encoding chunk at 16&nbsp;KiB.</li>
+</ul>
+<p>The body-size limits <code class="inline_code">mockserver.maxRequestBodySize</code> and <code class="inline_code">mockserver.maxResponseBodySize</code> provide complementary bounds on payload size.</p>
+
+<a id="hardening_control_plane_cors" class="anchor" href="#hardening_control_plane_cors">&nbsp;</a>
+
+<h3>Control plane &amp; CORS</h3>
+<ul>
+    <li>Require authentication on every control-plane request &mdash; enable <a href="#control_plane_authentication">mTLS and/or JWT</a> as described above.</li>
+    <li><code class="inline_code">mockserver.corsAllowOrigin</code> &mdash; set this to the specific origin(s) you trust rather than allowing any origin, and keep <code class="inline_code">mockserver.corsAllowCredentials=false</code> unless credentialed cross-origin requests are genuinely required. See <a href="/mock_server/CORS_support.html">CORS</a>.</li>
+</ul>
