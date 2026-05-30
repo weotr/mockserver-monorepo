@@ -29,6 +29,15 @@ import java.util.Objects;
  * a {@code quotaName} share one counter. The quota gate takes priority over the
  * probabilistic error and the body/slow faults (after connection-drop).
  * <p>
+ * It can also model <em>gradual degradation</em>: when {@code degradationRampMillis}
+ * is set, the probabilistic fault rates ({@code errorProbability} and
+ * {@code dropConnectionProbability}) ramp linearly from {@code 0.0} at the
+ * expectation's first match up to their configured values once the ramp duration
+ * has elapsed, so a dependency appears to deteriorate over time (useful for
+ * alerting / SLO-burn tests). The ramp is measured with the controllable clock
+ * (deterministic under freeze/advance) and does not affect the deterministic
+ * faults (latency, body corruption, slow response, quota).
+ * <p>
  * Attach to an {@link org.mockserver.mock.Expectation} via
  * {@code expectation.withChaos(httpChaosProfile()...)} to inject faults into
  * the following action types:
@@ -96,6 +105,7 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
     private Integer quotaLimit;        // stateful quota: max requests allowed per window (>= 1)
     private Long quotaWindowMillis;    // stateful quota: window length in milliseconds (>= 1)
     private Integer quotaErrorStatus;  // stateful quota: status when exceeded (default 429)
+    private Long degradationRampMillis; // gradual degradation: ramp errorProbability/dropConnectionProbability from 0 to full over this many ms from first match (>= 1)
 
     public static HttpChaosProfile httpChaosProfile() {
         return new HttpChaosProfile();
@@ -317,6 +327,78 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
         return quotaErrorStatus;
     }
 
+    public HttpChaosProfile withDegradationRampMillis(Long degradationRampMillis) {
+        if (degradationRampMillis != null && degradationRampMillis < 1) {
+            throw new IllegalArgumentException("degradationRampMillis must be >= 1, got " + degradationRampMillis);
+        }
+        this.degradationRampMillis = degradationRampMillis;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Long getDegradationRampMillis() {
+        return degradationRampMillis;
+    }
+
+    /**
+     * Returns the gradual-degradation ramp factor in {@code [0.0, 1.0]} for the
+     * given timing. When {@code degradationRampMillis} is {@code null} there is no
+     * ramp and this returns {@code 1.0} (faults at full configured rate). Otherwise
+     * the factor climbs linearly from {@code 0.0} at the first match to {@code 1.0}
+     * once {@code degradationRampMillis} has elapsed (and stays at {@code 1.0}
+     * after). When the first-match instant is unknown ({@code <= 0}) the factor is
+     * {@code 1.0} (degenerate — no ramp data, so do not suppress faults). The
+     * instants come from the controllable clock so the ramp is deterministic under
+     * clock freeze/advance.
+     *
+     * @param firstMatchEpochMillis epoch-ms of the expectation's first match (0 when not yet recorded)
+     * @param nowEpochMillis        the current epoch-ms (from the controllable clock)
+     */
+    public double degradationFactor(long firstMatchEpochMillis, long nowEpochMillis) {
+        if (degradationRampMillis == null) {
+            return 1.0;
+        }
+        if (firstMatchEpochMillis <= 0L) {
+            return 1.0;
+        }
+        long elapsed = nowEpochMillis - firstMatchEpochMillis;
+        if (elapsed <= 0L) {
+            return 0.0;
+        }
+        if (elapsed >= degradationRampMillis) {
+            return 1.0;
+        }
+        return (double) elapsed / (double) degradationRampMillis;
+    }
+
+    /**
+     * Returns a copy of this profile with all fields duplicated. Used to derive a
+     * transient, gradually-degraded variant without mutating the shared profile
+     * attached to the expectation.
+     */
+    public HttpChaosProfile copy() {
+        return httpChaosProfile()
+            .withErrorStatus(errorStatus)
+            .withRetryAfter(retryAfter)
+            .withErrorProbability(errorProbability)
+            .withDropConnectionProbability(dropConnectionProbability)
+            .withLatency(latency)
+            .withSeed(seed)
+            .withSucceedFirst(succeedFirst)
+            .withFailRequestCount(failRequestCount)
+            .withOutageAfterMillis(outageAfterMillis)
+            .withOutageDurationMillis(outageDurationMillis)
+            .withTruncateBodyAtFraction(truncateBodyAtFraction)
+            .withMalformedBody(malformedBody)
+            .withSlowResponseChunkSize(slowResponseChunkSize)
+            .withSlowResponseChunkDelay(slowResponseChunkDelay)
+            .withQuotaName(quotaName)
+            .withQuotaLimit(quotaLimit)
+            .withQuotaWindowMillis(quotaWindowMillis)
+            .withQuotaErrorStatus(quotaErrorStatus)
+            .withDegradationRampMillis(degradationRampMillis);
+    }
+
     /**
      * Returns {@code true} when the request falls within the time-based outage
      * window defined by {@code outageAfterMillis} and {@code outageDurationMillis},
@@ -404,13 +486,14 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
             Objects.equals(quotaName, that.quotaName) &&
             Objects.equals(quotaLimit, that.quotaLimit) &&
             Objects.equals(quotaWindowMillis, that.quotaWindowMillis) &&
-            Objects.equals(quotaErrorStatus, that.quotaErrorStatus);
+            Objects.equals(quotaErrorStatus, that.quotaErrorStatus) &&
+            Objects.equals(degradationRampMillis, that.degradationRampMillis);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(errorStatus, retryAfter, errorProbability, dropConnectionProbability, latency, seed, succeedFirst, failRequestCount, outageAfterMillis, outageDurationMillis, truncateBodyAtFraction, malformedBody, slowResponseChunkSize, slowResponseChunkDelay, quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus);
+            hashCode = Objects.hash(errorStatus, retryAfter, errorProbability, dropConnectionProbability, latency, seed, succeedFirst, failRequestCount, outageAfterMillis, outageDurationMillis, truncateBodyAtFraction, malformedBody, slowResponseChunkSize, slowResponseChunkDelay, quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus, degradationRampMillis);
         }
         return hashCode;
     }

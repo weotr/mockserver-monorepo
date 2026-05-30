@@ -1210,6 +1210,11 @@ components:
           minimum: 100
           maximum: 599
           description: "Stateful quota: status returned when the quota is exceeded (default 429)"
+        degradationRampMillis:
+          type: integer
+          format: int64
+          minimum: 1
+          description: "Gradual degradation: ramp errorProbability and dropConnectionProbability linearly from 0 to their configured values over this many milliseconds from the first match"
     Delay:
       description: "response delay"
       type: object

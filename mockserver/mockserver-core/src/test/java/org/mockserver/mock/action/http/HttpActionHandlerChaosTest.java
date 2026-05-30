@@ -1000,6 +1000,35 @@ public class HttpActionHandlerChaosTest {
         assertThat(scrapeCounterValue("mock_server_http_chaos_injected", "fault_type", "quota"), is(1.0));
     }
 
+    // --- Gradual degradation tests ---
+
+    @Test
+    public void degradationRampScalesErrorProbabilityOverTime() {
+        try {
+            // freeze the controllable clock so the ramp is deterministic
+            org.mockserver.time.TimeService.freeze(java.time.Instant.ofEpochMilli(2_000_000L));
+            HttpRequest request = request("some_path");
+            HttpResponse normalResponse = response("normal body").withDelay(milliseconds(0));
+            Expectation expectation = new Expectation(request)
+                .thenRespond(normalResponse)
+                .withChaos(httpChaosProfile()
+                    .withErrorStatus(503)
+                    .withErrorProbability(1.0)
+                    .withDegradationRampMillis(10_000L));
+
+            // first request anchors the ramp at the frozen instant; elapsed 0 -> factor 0 -> no error
+            HttpResponse before = dispatchAndCapture(request, expectation, normalResponse);
+            assertThat(before.getBodyAsString(), is("normal body"));
+
+            // advance to the end of the ramp -> factor 1.0 -> errorProbability back to full -> 503
+            org.mockserver.time.TimeService.advance(java.time.Duration.ofMillis(10_000L));
+            HttpResponse after = dispatchAndCapture(request, expectation, normalResponse);
+            assertThat(after.getStatusCode(), is(503));
+        } finally {
+            org.mockserver.time.TimeService.reset();
+        }
+    }
+
     private static double scrapeCounterValue(String name, String labelName, String labelValue) {
         MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
         for (MetricSnapshot snapshot : snapshots) {

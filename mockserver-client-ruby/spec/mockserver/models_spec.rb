@@ -1780,6 +1780,14 @@ RSpec.describe 'MockServer models' do
       expect(restored.quota_error_status).to eq(429)
     end
 
+    it 'serializes and deserializes the gradual-degradation ramp' do
+      chaos = MockServer::HttpChaosProfile.new(error_probability: 1.0, degradation_ramp_millis: 30000)
+      h = chaos.to_h
+      expect(h).to eq({ 'errorProbability' => 1.0, 'degradationRampMillis' => 30000 })
+      restored = MockServer::HttpChaosProfile.from_hash(h)
+      expect(restored.degradation_ramp_millis).to eq(30000)
+    end
+
     it 'round-trips correctly' do
       original = MockServer::HttpChaosProfile.new(
         error_status: 503,

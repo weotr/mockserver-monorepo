@@ -23,6 +23,7 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
     private Integer quotaLimit;
     private Long quotaWindowMillis;
     private Integer quotaErrorStatus;
+    private Long degradationRampMillis;
 
     public HttpChaosProfileDTO(HttpChaosProfile httpChaosProfile) {
         if (httpChaosProfile != null) {
@@ -48,6 +49,7 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             quotaLimit = httpChaosProfile.getQuotaLimit();
             quotaWindowMillis = httpChaosProfile.getQuotaWindowMillis();
             quotaErrorStatus = httpChaosProfile.getQuotaErrorStatus();
+            degradationRampMillis = httpChaosProfile.getDegradationRampMillis();
         }
     }
 
@@ -73,7 +75,8 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             .withQuotaName(quotaName)
             .withQuotaLimit(quotaLimit)
             .withQuotaWindowMillis(quotaWindowMillis)
-            .withQuotaErrorStatus(quotaErrorStatus);
+            .withQuotaErrorStatus(quotaErrorStatus)
+            .withDegradationRampMillis(degradationRampMillis);
     }
 
     public Integer getErrorStatus() {
@@ -235,6 +238,15 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
 
     public HttpChaosProfileDTO setQuotaErrorStatus(Integer quotaErrorStatus) {
         this.quotaErrorStatus = quotaErrorStatus;
+        return this;
+    }
+
+    public Long getDegradationRampMillis() {
+        return degradationRampMillis;
+    }
+
+    public HttpChaosProfileDTO setDegradationRampMillis(Long degradationRampMillis) {
+        this.degradationRampMillis = degradationRampMillis;
         return this;
     }
 }

@@ -122,11 +122,8 @@ public class HttpActionHandler {
             case RESPONSE -> {
                 // capture matchCount before scheduling to avoid race with concurrent requests
                 final int capturedMatchCount = expectation.getMatchCount();
-                // chaos: gate the profile by the time-based outage window (see processAction)
-                final HttpChaosProfile expectationChaos = expectation.getChaos();
-                final HttpChaosProfile effectiveChaos = (expectationChaos != null
-                    && expectationChaos.timeWindowEligible(expectation.getChaosFirstMatchEpochMillis(), org.mockserver.time.TimeService.currentTimeMillis()))
-                    ? expectationChaos : null;
+                // chaos: gate by the time-based outage window + apply degradation ramp (see effectiveChaos)
+                final HttpChaosProfile effectiveChaos = effectiveChaos(expectation);
                 scheduler.schedule(() -> handleAnyException(request, earlyResponseWriter, synchronous, action, () -> {
                     final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
                     // chaos: inject HTTP chaos faults on early mocked responses
@@ -240,12 +237,10 @@ public class HttpActionHandler {
         final Action action = expectation.getAction();
         // capture matchCount before scheduling to avoid race with concurrent requests
         final int capturedMatchCount = expectation.getMatchCount();
-        // chaos: gate the whole profile by the time-based outage window once per request
-        // (relative to first match, via the controllable clock); outside the window chaos is disabled
-        final HttpChaosProfile expectationChaos = expectation.getChaos();
-        final HttpChaosProfile effectiveChaos = (expectationChaos != null
-            && expectationChaos.timeWindowEligible(expectation.getChaosFirstMatchEpochMillis(), org.mockserver.time.TimeService.currentTimeMillis()))
-            ? expectationChaos : null;
+        // chaos: gate by the time-based outage window once per request and apply the
+        // degradation ramp (relative to first match, via the controllable clock);
+        // outside the window chaos is disabled (see effectiveChaos)
+        final HttpChaosProfile effectiveChaos = effectiveChaos(expectation);
         switch (action.getType()) {
             case RESPONSE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
@@ -984,6 +979,36 @@ public class HttpActionHandler {
             errorResponse.withHeader("Retry-After", chaos.getRetryAfter());
         }
         return errorResponse;
+    }
+
+    /**
+     * Resolves the chaos profile to apply to a request: the expectation's profile
+     * gated by the time-based outage window, and — when {@code degradationRampMillis}
+     * is set — a gradually-degraded copy whose {@code errorProbability} /
+     * {@code dropConnectionProbability} are scaled by the ramp factor (0 at first
+     * match, rising to full over the ramp window). Returns {@code null} when there is
+     * no chaos profile or the request is outside the outage window. Uses the
+     * controllable clock, so both the outage window and the degradation ramp are
+     * deterministic under clock freeze/advance.
+     */
+    HttpChaosProfile effectiveChaos(final Expectation expectation) {
+        final HttpChaosProfile chaos = expectation.getChaos();
+        if (chaos == null) {
+            return null;
+        }
+        final long firstMatch = expectation.getChaosFirstMatchEpochMillis();
+        final long now = org.mockserver.time.TimeService.currentTimeMillis();
+        if (!chaos.timeWindowEligible(firstMatch, now)) {
+            return null;
+        }
+        if (chaos.getDegradationRampMillis() == null) {
+            return chaos;
+        }
+        final double f = chaos.degradationFactor(firstMatch, now);
+        return chaos.copy()
+            .withErrorProbability(chaos.getErrorProbability() != null ? chaos.getErrorProbability() * f : null)
+            .withDropConnectionProbability(chaos.getDropConnectionProbability() != null ? chaos.getDropConnectionProbability() * f : null)
+            .withDegradationRampMillis(null);
     }
 
     /**

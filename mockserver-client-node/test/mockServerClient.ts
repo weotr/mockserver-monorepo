@@ -56,7 +56,8 @@ const chaosProfile: HttpChaosProfile = {
     quotaName: "acct",
     quotaLimit: 4,
     quotaWindowMillis: 60000,
-    quotaErrorStatus: 429
+    quotaErrorStatus: 429,
+    degradationRampMillis: 30000
 };
 
 const chaosExpectation: Expectation = {

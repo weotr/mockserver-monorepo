@@ -2149,6 +2149,13 @@ class TestHttpChaosProfile:
         assert restored.quota_window_millis == 60000
         assert restored.quota_error_status == 429
 
+    def test_degradation_ramp_round_trip(self):
+        chaos = HttpChaosProfile(error_probability=1.0, degradation_ramp_millis=30000)
+        result = chaos.to_dict()
+        assert result == {"errorProbability": 1.0, "degradationRampMillis": 30000}
+        restored = HttpChaosProfile.from_dict(result)
+        assert restored.degradation_ramp_millis == 30000
+
     def test_construction_all_fields(self):
         chaos = HttpChaosProfile(
             error_status=503,

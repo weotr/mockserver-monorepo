@@ -185,6 +185,7 @@ public class McpToolRegistry {
             chaosProps.putObject("quotaLimit").put("type", "integer").put("description", "Stateful quota: max requests allowed per window before requests are rejected (>= 1)");
             chaosProps.putObject("quotaWindowMillis").put("type", "integer").put("description", "Stateful quota: fixed-window length in milliseconds (>= 1)");
             chaosProps.putObject("quotaErrorStatus").put("type", "integer").put("description", "Stateful quota: status returned when the quota is exceeded (default 429)");
+            chaosProps.putObject("degradationRampMillis").put("type", "integer").put("description", "Gradual degradation: ramp errorProbability and dropConnectionProbability from 0 to full over this many milliseconds from the first match (>= 1)");
         }
         ArrayNode required = schema.putArray("required");
         required.add("method");
@@ -386,6 +387,14 @@ public class McpToolRegistry {
                 JsonNode quotaErrorStatusNode = chaosNode.path("quotaErrorStatus");
                 if (!quotaErrorStatusNode.isMissingNode() && !quotaErrorStatusNode.isNull()) {
                     chaos.withQuotaErrorStatus(quotaErrorStatusNode.asInt());
+                }
+                JsonNode degradationRampMillisNode = chaosNode.path("degradationRampMillis");
+                if (!degradationRampMillisNode.isMissingNode() && !degradationRampMillisNode.isNull()) {
+                    long degradationRampMillis = degradationRampMillisNode.asLong();
+                    if (degradationRampMillis < 1) {
+                        return errorResult("chaos degradationRampMillis must be >= 1");
+                    }
+                    chaos.withDegradationRampMillis(degradationRampMillis);
                 }
                 expectation.withChaos(chaos);
             }

@@ -77,7 +77,8 @@ module MockServer
     'quota_name'                     => 'quotaName',
     'quota_limit'                    => 'quotaLimit',
     'quota_window_millis'            => 'quotaWindowMillis',
-    'quota_error_status'             => 'quotaErrorStatus'
+    'quota_error_status'             => 'quotaErrorStatus',
+    'degradation_ramp_millis'        => 'degradationRampMillis'
   }.freeze
 
   REVERSE_FIELD_MAP = FIELD_MAP.invert.freeze
@@ -1168,14 +1169,16 @@ module MockServer
                   :outage_after_millis, :outage_duration_millis,
                   :truncate_body_at_fraction, :malformed_body,
                   :slow_response_chunk_size, :slow_response_chunk_delay,
-                  :quota_name, :quota_limit, :quota_window_millis, :quota_error_status
+                  :quota_name, :quota_limit, :quota_window_millis, :quota_error_status,
+                  :degradation_ramp_millis
 
     def initialize(error_status: nil, error_probability: nil, drop_connection_probability: nil,
                    retry_after: nil, latency: nil, seed: nil, succeed_first: nil, fail_request_count: nil,
                    outage_after_millis: nil, outage_duration_millis: nil,
                    truncate_body_at_fraction: nil, malformed_body: nil,
                    slow_response_chunk_size: nil, slow_response_chunk_delay: nil,
-                   quota_name: nil, quota_limit: nil, quota_window_millis: nil, quota_error_status: nil)
+                   quota_name: nil, quota_limit: nil, quota_window_millis: nil, quota_error_status: nil,
+                   degradation_ramp_millis: nil)
       @error_status = error_status
       @error_probability = error_probability
       @drop_connection_probability = drop_connection_probability
@@ -1194,6 +1197,7 @@ module MockServer
       @quota_limit = quota_limit
       @quota_window_millis = quota_window_millis
       @quota_error_status = quota_error_status
+      @degradation_ramp_millis = degradation_ramp_millis
     end
 
     def to_h
@@ -1215,7 +1219,8 @@ module MockServer
         'quotaName'                  => @quota_name,
         'quotaLimit'                 => @quota_limit,
         'quotaWindowMillis'          => @quota_window_millis,
-        'quotaErrorStatus'           => @quota_error_status
+        'quotaErrorStatus'           => @quota_error_status,
+        'degradationRampMillis'      => @degradation_ramp_millis
       })
     end
 
@@ -1240,7 +1245,8 @@ module MockServer
         quota_name:                  data['quotaName'],
         quota_limit:                 data['quotaLimit'],
         quota_window_millis:         data['quotaWindowMillis'],
-        quota_error_status:          data['quotaErrorStatus']
+        quota_error_status:          data['quotaErrorStatus'],
+        degradation_ramp_millis:     data['degradationRampMillis']
       )
     end
   end

@@ -353,6 +353,7 @@ export interface HttpChaosProfile {
   quotaLimit?: number;
   quotaWindowMillis?: number;
   quotaErrorStatus?: number;
+  degradationRampMillis?: number;
 }
 
 export interface AfterAction {

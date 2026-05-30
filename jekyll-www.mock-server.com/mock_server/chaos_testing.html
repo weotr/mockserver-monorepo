@@ -163,6 +163,12 @@ schema_faq:
             <td>The HTTP status returned when the quota is exceeded.</td>
             <td>100&ndash;599 (default: 429)</td>
         </tr>
+        <tr>
+            <td><code class="inline code">degradationRampMillis</code></td>
+            <td>integer</td>
+            <td>Gradual degradation: ramp <code class="inline code">errorProbability</code> and <code class="inline code">dropConnectionProbability</code> linearly from 0 up to their configured values over this many milliseconds from the expectation's first match, modelling a dependency that deteriorates over time. Measured with the controllable clock.</td>
+            <td>&ge; 1 (default: omitted = no ramp)</td>
+        </tr>
     </tbody>
 </table>
 
@@ -348,6 +354,14 @@ schema_faq:
 <p>The quota gate takes priority over the probabilistic error and the body/slow faults (it is evaluated right after the connection-drop check), so a rate-limited request always returns the quota status. A misconfigured quota (any of the three fields missing) is ignored.</p>
 
 <p>When the quota is combined with a count window (<code class="inline code">succeedFirst</code> / <code class="inline code">failRequestCount</code>), only requests inside that window count against the quota — requests in the "succeed" or "recovered" phases are not counted. Most setups use the quota on its own, where every matched request counts.</p>
+
+<a id="gradual_degradation" class="anchor" href="#gradual_degradation">&nbsp;</a>
+
+<h2>Gradual Degradation</h2>
+
+<p>Gradual degradation models a dependency that <strong>deteriorates over time</strong> rather than failing all at once — useful for testing alerting thresholds and SLO error-budget burn.</p>
+
+<p><strong>How it works:</strong> set <code class="inline code">degradationRampMillis</code>. The probabilistic fault rates — <code class="inline code">errorProbability</code> and <code class="inline code">dropConnectionProbability</code> — are scaled by a factor that climbs linearly from <code class="inline code">0.0</code> at the expectation's first matched request to <code class="inline code">1.0</code> once the ramp duration has elapsed, then stays at full strength. So an expectation with <code class="inline code">errorProbability: 1.0</code> and <code class="inline code">degradationRampMillis: 600000</code> injects no errors at first, ~50% of requests at the 5-minute mark, and 100% after 10 minutes. The ramp is measured with MockServer's controllable clock, so it is deterministic under clock freeze/advance (<code class="inline code">PUT /mockserver/clock</code>) with no real-time waiting. Only the probabilistic rates ramp — the deterministic faults (latency, body corruption, slow response, quota) are unaffected.</p>
 
 <a id="reproducibility" class="anchor" href="#reproducibility">&nbsp;</a>
 

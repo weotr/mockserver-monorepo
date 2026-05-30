@@ -1852,6 +1852,7 @@ public class McpToolRegistryTest {
         chaos.put("quotaLimit", 4);
         chaos.put("quotaWindowMillis", 60000);
         chaos.put("quotaErrorStatus", 429);
+        chaos.put("degradationRampMillis", 30000);
         params.set("chaos", chaos);
 
         JsonNode result = toolRegistry.callTool("create_expectation", params);
@@ -1887,6 +1888,7 @@ public class McpToolRegistryTest {
                 assertThat(chaosResult.path("quotaLimit").asInt(), is(4));
                 assertThat(chaosResult.path("quotaWindowMillis").asLong(), is(60000L));
                 assertThat(chaosResult.path("quotaErrorStatus").asInt(), is(429));
+                assertThat(chaosResult.path("degradationRampMillis").asLong(), is(30000L));
                 foundChaos = true;
             }
         }

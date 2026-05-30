@@ -21,6 +21,7 @@ _FIELD_MAP = {
     "quota_limit": "quotaLimit",
     "quota_window_millis": "quotaWindowMillis",
     "quota_error_status": "quotaErrorStatus",
+    "degradation_ramp_millis": "degradationRampMillis",
     "status_code": "statusCode",
     "reason_phrase": "reasonPhrase",
     "keep_alive": "keepAlive",
@@ -335,6 +336,7 @@ class HttpChaosProfile:
     quota_limit: int | None = None
     quota_window_millis: int | None = None
     quota_error_status: int | None = None
+    degradation_ramp_millis: int | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
@@ -356,6 +358,7 @@ class HttpChaosProfile:
             "quotaLimit": self.quota_limit,
             "quotaWindowMillis": self.quota_window_millis,
             "quotaErrorStatus": self.quota_error_status,
+            "degradationRampMillis": self.degradation_ramp_millis,
         })
 
     @classmethod
@@ -381,6 +384,7 @@ class HttpChaosProfile:
             quota_limit=data.get("quotaLimit"),
             quota_window_millis=data.get("quotaWindowMillis"),
             quota_error_status=data.get("quotaErrorStatus"),
+            degradation_ramp_millis=data.get("degradationRampMillis"),
         )
 
 

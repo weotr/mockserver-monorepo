@@ -193,6 +193,62 @@ public class HttpChaosProfileTest {
             .withQuotaErrorStatus(429);
     }
 
+    // --- degradation ramp tests ---
+
+    @Test
+    public void withDegradationRampMillisRejectsBelowOne() {
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> httpChaosProfile().withDegradationRampMillis(0L));
+        assertThat(exception.getMessage(), is("degradationRampMillis must be >= 1, got 0"));
+    }
+
+    @Test
+    public void degradationFactorIsOneWhenNoRampConfigured() {
+        // no degradationRampMillis -> always full strength
+        assertThat(httpChaosProfile().degradationFactor(1000L, 5000L), is(1.0));
+    }
+
+    @Test
+    public void degradationFactorRampsLinearlyFromZeroToOne() {
+        HttpChaosProfile profile = httpChaosProfile().withDegradationRampMillis(10_000L);
+        // first match at t=1000
+        assertThat("at the first match the factor is 0", profile.degradationFactor(1000L, 1000L), is(0.0));
+        assertThat("half way through the ramp the factor is 0.5", profile.degradationFactor(1000L, 6000L), is(0.5));
+        assertThat("at the end of the ramp the factor is 1.0", profile.degradationFactor(1000L, 11_000L), is(1.0));
+        assertThat("beyond the ramp the factor stays at 1.0", profile.degradationFactor(1000L, 50_000L), is(1.0));
+    }
+
+    @Test
+    public void degradationFactorIsOneWhenFirstMatchUnknown() {
+        // firstMatch <= 0 is degenerate -> do not suppress faults
+        assertThat(httpChaosProfile().withDegradationRampMillis(10_000L).degradationFactor(0L, 5000L), is(1.0));
+    }
+
+    @Test
+    public void copyDuplicatesAllFields() {
+        HttpChaosProfile original = httpChaosProfile()
+            .withErrorStatus(503)
+            .withRetryAfter("60")
+            .withErrorProbability(0.5)
+            .withDropConnectionProbability(0.2)
+            .withLatency(Delay.milliseconds(100))
+            .withSeed(7L)
+            .withSucceedFirst(1)
+            .withFailRequestCount(2)
+            .withOutageAfterMillis(3L)
+            .withOutageDurationMillis(4L)
+            .withTruncateBodyAtFraction(0.5)
+            .withMalformedBody(true)
+            .withSlowResponseChunkSize(8)
+            .withSlowResponseChunkDelay(Delay.milliseconds(50))
+            .withQuotaName("q")
+            .withQuotaLimit(5)
+            .withQuotaWindowMillis(60000L)
+            .withQuotaErrorStatus(429)
+            .withDegradationRampMillis(10_000L);
+        assertThat(original.copy(), is(equalTo(original)));
+    }
+
     // --- equals/hashCode tests ---
 
     @Test
@@ -375,6 +431,25 @@ public class HttpChaosProfileTest {
         assertThat(deserialized[0].getChaos().getQuotaLimit(), is(4));
         assertThat(deserialized[0].getChaos().getQuotaWindowMillis(), is(60000L));
         assertThat(deserialized[0].getChaos().getQuotaErrorStatus(), is(429));
+    }
+
+    @Test
+    public void expectationWithChaosDegradationRampRoundTripsViaSerializer() {
+        ExpectationSerializer serializer = new ExpectationSerializer(new MockServerLogger());
+
+        Expectation original = new Expectation(request("/test"))
+            .thenRespond(response("ok"))
+            .withChaos(httpChaosProfile()
+                .withErrorStatus(503)
+                .withErrorProbability(1.0)
+                .withDegradationRampMillis(30000L));
+
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        assertThat(deserialized.length, is(1));
+        assertThat(deserialized[0].getChaos(), is(equalTo(original.getChaos())));
+        assertThat(deserialized[0].getChaos().getDegradationRampMillis(), is(30000L));
     }
 
     @Test
