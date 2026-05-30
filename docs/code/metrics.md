@@ -14,6 +14,7 @@ graph LR
         WS[WebSocketClientRegistry] -->|set| M
         M --> CR[PrometheusRegistry]
         BIC[BuildInfoCollector] --> CR
+        JMC[JvmMetricsCollector] --> CR
         MH[MetricsHandler] -->|scrape| CR
     end
     P[Prometheus] -->|GET /mockserver/metrics| MH
@@ -29,7 +30,7 @@ When metrics are disabled, the scrape endpoint returns a `404 Not Found` respons
 
 ### Metric Names
 
-All metrics are Prometheus `Gauge` type. The `Metrics.Name` enum defines 17 gauges:
+The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Prometheus `Gauge` type); separate collectors add the build-info and JVM-runtime metrics described below:
 
 #### Request & Expectation Matching
 
@@ -73,6 +74,22 @@ All metrics are Prometheus `Gauge` type. The `Metrics.Name` enum defines 17 gaug
 | `major_minor_version` | Major.minor version (e.g. `5.15`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
+
+### JVM Runtime Metrics
+
+`JvmMetricsCollector` registers JVM process-health gauges (read fresh from JDK `java.lang.management` MX beans on each scrape — no extra dependency). Registered once alongside `BuildInfoCollector` when `metricsEnabled`:
+
+| Metric Name | Labels | Description |
+|-------------|--------|-------------|
+| `jvm_memory_used_bytes` | `area` = `heap` / `nonheap` | Memory currently used |
+| `jvm_memory_committed_bytes` | `area` | Memory committed by the JVM |
+| `jvm_memory_max_bytes` | `area` | Max memory (`-1` if undefined) |
+| `jvm_threads_current` | — | Live thread count |
+| `jvm_threads_daemon` | — | Daemon thread count |
+| `jvm_gc_collection_count` | — | Total GC collections across all collectors |
+| `jvm_gc_collection_seconds_sum` | — | Total GC time across all collectors (seconds) |
+
+These let Grafana and the dashboard Metrics view chart heap/GC/thread behaviour alongside the request and action counters.
 
 ### How Metrics Are Incremented
 
@@ -126,6 +143,7 @@ All metrics are Prometheus `Gauge` type. The `Metrics.Name` enum defines 17 gaug
 | `Metrics.Name` | mockserver-core | `org.mockserver.metrics.Metrics.Name` (enum) |
 | `MetricsHandler` | mockserver-core | `org.mockserver.metrics.MetricsHandler` |
 | `BuildInfoCollector` | mockserver-core | `org.mockserver.metrics.BuildInfoCollector` |
+| `JvmMetricsCollector` | mockserver-core | `org.mockserver.metrics.JvmMetricsCollector` |
 | `MemoryMonitoring` | mockserver-core | `org.mockserver.memory.MemoryMonitoring` |
 | `Summary` | mockserver-core | `org.mockserver.memory.Summary` |
 | `Detail` | mockserver-core | `org.mockserver.memory.Detail` |

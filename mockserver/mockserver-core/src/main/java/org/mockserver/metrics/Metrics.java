@@ -29,6 +29,7 @@ public class Metrics {
         metricsEnabled = configuration.metricsEnabled();
         if (metricsEnabled && additionalMetricsRegistered.compareAndSet(false, true)) {
             PrometheusRegistry.defaultRegistry.register(new BuildInfoCollector());
+            PrometheusRegistry.defaultRegistry.register(new JvmMetricsCollector());
             Arrays.stream(Name.values()).forEach(Metrics::getOrCreate);
         }
     }
