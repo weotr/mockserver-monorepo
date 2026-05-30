@@ -1,6 +1,7 @@
 package org.mockserver.codec;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import org.mockserver.model.*;
 
@@ -16,9 +17,9 @@ public class BodyDecoderEncoder {
     public ByteBuf bodyToByteBuf(Body body, String contentTypeHeader) {
         byte[] bytes = bodyToBytes(body, contentTypeHeader);
         if (bytes != null) {
-            return Unpooled.copiedBuffer(bytes);
+            return PooledByteBufAllocator.DEFAULT.buffer(bytes.length).writeBytes(bytes);
         } else {
-            return Unpooled.buffer(0, 0);
+            return Unpooled.EMPTY_BUFFER;
         }
     }
 
@@ -27,9 +28,9 @@ public class BodyDecoderEncoder {
         ByteBuf[] byteBufs = new ByteBuf[chunks.length];
         for (int i = 0; i < chunks.length; i++) {
             if (chunks[i] != null) {
-                byteBufs[i] = Unpooled.copiedBuffer(chunks[i]);
+                byteBufs[i] = PooledByteBufAllocator.DEFAULT.buffer(chunks[i].length).writeBytes(chunks[i]);
             } else {
-                byteBufs[i] = Unpooled.buffer(0, 0);
+                byteBufs[i] = Unpooled.EMPTY_BUFFER;
             }
         }
         return byteBufs;
