@@ -1900,4 +1900,25 @@ public class McpToolRegistryTest {
         JsonNode result = toolRegistry.callTool("create_expectation", params);
         assertThat(result.path("status").asText(), is("created"));
     }
+
+    @Test
+    public void shouldRejectInvalidChaosLatencyTimeUnit() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("method", "GET");
+        params.put("path", "/chaos-bad-unit");
+        params.put("statusCode", 200);
+
+        ObjectNode chaos = objectMapper.createObjectNode();
+        chaos.put("errorStatus", 503);
+        chaos.put("errorProbability", 0.5);
+        ObjectNode latency = objectMapper.createObjectNode();
+        latency.put("timeUnit", "FORTNIGHTS");
+        latency.put("value", 200);
+        chaos.set("latency", latency);
+        params.set("chaos", chaos);
+
+        JsonNode result = toolRegistry.callTool("create_expectation", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("chaos latency timeUnit must be one of: NANOSECONDS, MICROSECONDS, MILLISECONDS, SECONDS, MINUTES, HOURS, DAYS"));
+    }
 }

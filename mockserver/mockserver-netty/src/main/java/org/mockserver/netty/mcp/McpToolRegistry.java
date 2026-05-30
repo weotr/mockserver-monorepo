@@ -289,7 +289,11 @@ public class McpToolRegistry {
                 if (latencyNode.isObject()) {
                     String latencyTimeUnit = latencyNode.path("timeUnit").asText("MILLISECONDS");
                     int latencyValue = latencyNode.path("value").asInt(0);
-                    chaos.withLatency(new Delay(TimeUnit.valueOf(latencyTimeUnit.toUpperCase()), latencyValue));
+                    try {
+                        chaos.withLatency(new Delay(TimeUnit.valueOf(latencyTimeUnit.toUpperCase()), latencyValue));
+                    } catch (IllegalArgumentException e) {
+                        return errorResult("chaos latency timeUnit must be one of: NANOSECONDS, MICROSECONDS, MILLISECONDS, SECONDS, MINUTES, HOURS, DAYS");
+                    }
                 }
                 JsonNode seedNode = chaosNode.path("seed");
                 if (!seedNode.isMissingNode() && !seedNode.isNull()) {
