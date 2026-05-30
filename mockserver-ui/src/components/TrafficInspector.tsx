@@ -9,6 +9,7 @@ import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Divider from '@mui/material/Divider';
 import Button from '@mui/material/Button';
+import Tooltip from '@mui/material/Tooltip';
 import SearchIcon from '@mui/icons-material/Search';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { useDashboardStore } from '../store';
@@ -31,8 +32,10 @@ import {
   summarizeTraffic,
   getModelLabel,
   getTokenSummary,
+  getTimingLabel,
   type TrafficSummary,
   type ParsedTraffic,
+  type RequestTiming,
   type AnthropicParsed,
   type OpenAiParsed,
   type OpenAiResponsesParsed,
@@ -195,6 +198,7 @@ interface TrafficRowProps {
 function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
   const model = getModelLabel(summary.parsed);
   const tokens = getTokenSummary(summary.parsed);
+  const timingLabel = getTimingLabel(summary.timing);
 
   return (
     <Box
@@ -271,6 +275,15 @@ function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
         <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem', flexShrink: 0 }}>
           {tokens}
         </Typography>
+      )}
+      {timingLabel && (
+        <Chip
+          label={timingLabel}
+          size="small"
+          variant="outlined"
+          color="info"
+          sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 } }}
+        />
       )}
     </Box>
   );
@@ -560,6 +573,131 @@ function SseTimeline({ events }: { events: SseEvent[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Per-request timing waterfall
+// ---------------------------------------------------------------------------
+
+function TimingWaterfall({ timing }: { timing: RequestTiming }) {
+  const total = timing.totalTimeInMillis;
+  if (total === null || total === 0) return null;
+
+  const connect = timing.connectionTimeInMillis ?? 0;
+  // Wait/TTFB is the gap between connection established and first byte
+  const ttfb = timing.timeToFirstByteInMillis ?? 0;
+  const waitMs = Math.max(0, ttfb - connect);
+  const receiveMs = Math.max(0, total - ttfb);
+
+  // Calculate percentages for the waterfall bar
+  const connectPct = (connect / total) * 100;
+  const waitPct = (waitMs / total) * 100;
+  const receivePct = (receiveMs / total) * 100;
+
+  return (
+    <Box
+      data-testid="timing-waterfall"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0.5,
+        px: 1,
+        py: 0.5,
+        borderBottom: 1,
+        borderColor: 'divider',
+        bgcolor: 'action.hover',
+        flexShrink: 0,
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+        <Typography variant="caption" sx={{ fontSize: '0.65rem', fontWeight: 600, color: 'text.primary' }}>
+          Timing
+        </Typography>
+        {timing.connectionTimeInMillis !== null && (
+          <Chip
+            label={`connect ${timing.connectionTimeInMillis}ms`}
+            size="small"
+            variant="outlined"
+            sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 } }}
+          />
+        )}
+        {timing.timeToFirstByteInMillis !== null && (
+          <Chip
+            label={`TTFB ${timing.timeToFirstByteInMillis}ms`}
+            size="small"
+            variant="outlined"
+            sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 } }}
+          />
+        )}
+        <Chip
+          label={`total ${total}ms`}
+          size="small"
+          variant="outlined"
+          color="info"
+          sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 } }}
+        />
+      </Box>
+      {/* Inline waterfall bar: connect -> wait/TTFB -> receive */}
+      <Tooltip
+        title={`Connect: ${connect}ms | Wait: ${waitMs}ms | Receive: ${receiveMs}ms`}
+        placement="top"
+        arrow
+      >
+        <Box
+          data-testid="timing-bar"
+          sx={{
+            display: 'flex',
+            height: 8,
+            borderRadius: 1,
+            overflow: 'hidden',
+            bgcolor: 'background.default',
+          }}
+        >
+          {connectPct > 0 && (
+            <Box
+              sx={{
+                width: `${connectPct}%`,
+                bgcolor: 'warning.main',
+                minWidth: connectPct > 0 ? 2 : 0,
+              }}
+            />
+          )}
+          {waitPct > 0 && (
+            <Box
+              sx={{
+                width: `${waitPct}%`,
+                bgcolor: 'info.main',
+                minWidth: waitPct > 0 ? 2 : 0,
+              }}
+            />
+          )}
+          {receivePct > 0 && (
+            <Box
+              sx={{
+                width: `${receivePct}%`,
+                bgcolor: 'success.main',
+                minWidth: receivePct > 0 ? 2 : 0,
+              }}
+            />
+          )}
+        </Box>
+      </Tooltip>
+      <Box sx={{ display: 'flex', gap: 1.5, justifyContent: 'flex-start' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'warning.main' }} />
+          <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.secondary' }}>Connect</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'info.main' }} />
+          <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.secondary' }}>Wait</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'success.main' }} />
+          <Typography variant="caption" sx={{ fontSize: '0.55rem', color: 'text.secondary' }}>Receive</Typography>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Detail pane wrapper — single-level, adaptive tab row
 // ---------------------------------------------------------------------------
 
@@ -601,6 +739,7 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         <LlmUsageDetail parsed={summary.parsed} />
+        {summary.timing && <TimingWaterfall timing={summary.timing} />}
         <Box sx={{ px: 1, py: 0.5, flexShrink: 0 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
             Raw JSON
@@ -621,6 +760,7 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <LlmUsageDetail parsed={summary.parsed} />
+      {summary.timing && <TimingWaterfall timing={summary.timing} />}
       <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
         <Tabs
           value={safeTab}

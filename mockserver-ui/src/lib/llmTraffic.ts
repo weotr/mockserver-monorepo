@@ -192,6 +192,19 @@ export type ParsedTraffic =
   | GenericParsed;
 
 // ---------------------------------------------------------------------------
+// Per-request timing (populated by the server for forwarded/proxied traffic)
+// ---------------------------------------------------------------------------
+
+export interface RequestTiming {
+  connectionTimeInMillis: number | null;
+  timeToFirstByteInMillis: number | null;
+  totalTimeInMillis: number | null;
+  requestStartedMillis: number | null;
+  connectionEstablishedMillis: number | null;
+  responseReceivedMillis: number | null;
+}
+
+// ---------------------------------------------------------------------------
 // Summary for master list display
 // ---------------------------------------------------------------------------
 
@@ -201,6 +214,7 @@ export interface TrafficSummary {
   path: string | null;
   statusCode: number | null;
   parsed: ParsedTraffic;
+  timing: RequestTiming | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -943,12 +957,29 @@ export function summarizeTraffic(value: Record<string, unknown>): TrafficSummary
 
   const parsed = parseTraffic(value);
 
+  // Extract per-request timing from the forwarded response (if present)
+  let timing: RequestTiming | null = null;
+  if (httpResponse) {
+    const timingObj = getObject(httpResponse, 'timing');
+    if (timingObj) {
+      timing = {
+        connectionTimeInMillis: getNumber(timingObj, 'connectionTimeInMillis'),
+        timeToFirstByteInMillis: getNumber(timingObj, 'timeToFirstByteInMillis'),
+        totalTimeInMillis: getNumber(timingObj, 'totalTimeInMillis'),
+        requestStartedMillis: getNumber(timingObj, 'requestStartedMillis'),
+        connectionEstablishedMillis: getNumber(timingObj, 'connectionEstablishedMillis'),
+        responseReceivedMillis: getNumber(timingObj, 'responseReceivedMillis'),
+      };
+    }
+  }
+
   return {
     host,
     method,
     path,
     statusCode,
     parsed,
+    timing,
   };
 }
 
@@ -997,4 +1028,27 @@ export function getTokenSummary(parsed: ParsedTraffic): string | null {
     return parts.length > 0 ? parts.join(' / ') : null;
   }
   return null;
+}
+
+/**
+ * Get a compact timing label for the master list (e.g. "142ms").
+ * Returns null when timing is not available.
+ */
+export function getTimingLabel(timing: RequestTiming | null): string | null {
+  if (!timing) return null;
+  if (timing.totalTimeInMillis !== null) return `${timing.totalTimeInMillis}ms`;
+  return null;
+}
+
+/**
+ * Build a detailed timing breakdown string (e.g. "connect 12ms / TTFB 85ms / total 142ms").
+ * Returns null when timing is not available.
+ */
+export function getTimingBreakdown(timing: RequestTiming | null): string | null {
+  if (!timing) return null;
+  const parts: string[] = [];
+  if (timing.connectionTimeInMillis !== null) parts.push(`connect ${timing.connectionTimeInMillis}ms`);
+  if (timing.timeToFirstByteInMillis !== null) parts.push(`TTFB ${timing.timeToFirstByteInMillis}ms`);
+  if (timing.totalTimeInMillis !== null) parts.push(`total ${timing.totalTimeInMillis}ms`);
+  return parts.length > 0 ? parts.join(' / ') : null;
 }

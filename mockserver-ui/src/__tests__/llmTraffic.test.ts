@@ -5,6 +5,8 @@ import {
   summarizeTraffic,
   getModelLabel,
   getTokenSummary,
+  getTimingLabel,
+  getTimingBreakdown,
   extractBodyContent,
 } from '../lib/llmTraffic';
 
@@ -1128,5 +1130,142 @@ describe('getTokenSummary — new providers', () => {
     };
     const parsed = parseTraffic(value);
     expect(getTokenSummary(parsed)).toBe('10 in / 5 out');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-request timing extraction
+// ---------------------------------------------------------------------------
+
+describe('summarizeTraffic — timing extraction', () => {
+  it('extracts timing from httpResponse.timing for proxied requests', () => {
+    const value = {
+      httpRequest: {
+        method: 'GET',
+        path: '/api/data',
+      },
+      httpResponse: {
+        statusCode: 200,
+        timing: {
+          connectionTimeInMillis: 12,
+          timeToFirstByteInMillis: 85,
+          totalTimeInMillis: 142,
+          requestStartedMillis: 1700000000000,
+          connectionEstablishedMillis: 1700000000012,
+          responseReceivedMillis: 1700000000142,
+        },
+      },
+    };
+
+    const summary = summarizeTraffic(value);
+    expect(summary.timing).not.toBeNull();
+    expect(summary.timing!.connectionTimeInMillis).toBe(12);
+    expect(summary.timing!.timeToFirstByteInMillis).toBe(85);
+    expect(summary.timing!.totalTimeInMillis).toBe(142);
+    expect(summary.timing!.requestStartedMillis).toBe(1700000000000);
+    expect(summary.timing!.connectionEstablishedMillis).toBe(1700000000012);
+    expect(summary.timing!.responseReceivedMillis).toBe(1700000000142);
+  });
+
+  it('returns null timing when httpResponse has no timing field', () => {
+    const value = {
+      httpRequest: {
+        method: 'POST',
+        path: '/v1/messages',
+        body: {
+          type: 'JSON',
+          json: JSON.stringify({
+            model: 'claude-sonnet-4-20250514',
+            messages: [{ role: 'user', content: 'Hello' }],
+          }),
+        },
+      },
+      httpResponse: {
+        statusCode: 200,
+        body: {
+          type: 'JSON',
+          json: JSON.stringify({
+            content: [{ type: 'text', text: 'Hi' }],
+          }),
+        },
+      },
+    };
+
+    const summary = summarizeTraffic(value);
+    expect(summary.timing).toBeNull();
+  });
+
+  it('handles partial timing fields (only totalTimeInMillis)', () => {
+    const value = {
+      httpRequest: { method: 'GET', path: '/health' },
+      httpResponse: {
+        statusCode: 200,
+        timing: {
+          totalTimeInMillis: 50,
+        },
+      },
+    };
+
+    const summary = summarizeTraffic(value);
+    expect(summary.timing).not.toBeNull();
+    expect(summary.timing!.totalTimeInMillis).toBe(50);
+    expect(summary.timing!.connectionTimeInMillis).toBeNull();
+    expect(summary.timing!.timeToFirstByteInMillis).toBeNull();
+  });
+});
+
+describe('getTimingLabel', () => {
+  it('returns total time as compact label', () => {
+    expect(getTimingLabel({
+      connectionTimeInMillis: 12,
+      timeToFirstByteInMillis: 85,
+      totalTimeInMillis: 142,
+      requestStartedMillis: null,
+      connectionEstablishedMillis: null,
+      responseReceivedMillis: null,
+    })).toBe('142ms');
+  });
+
+  it('returns null when timing is null', () => {
+    expect(getTimingLabel(null)).toBeNull();
+  });
+
+  it('returns null when totalTimeInMillis is null', () => {
+    expect(getTimingLabel({
+      connectionTimeInMillis: 12,
+      timeToFirstByteInMillis: null,
+      totalTimeInMillis: null,
+      requestStartedMillis: null,
+      connectionEstablishedMillis: null,
+      responseReceivedMillis: null,
+    })).toBeNull();
+  });
+});
+
+describe('getTimingBreakdown', () => {
+  it('returns full breakdown with all fields', () => {
+    expect(getTimingBreakdown({
+      connectionTimeInMillis: 12,
+      timeToFirstByteInMillis: 85,
+      totalTimeInMillis: 142,
+      requestStartedMillis: null,
+      connectionEstablishedMillis: null,
+      responseReceivedMillis: null,
+    })).toBe('connect 12ms / TTFB 85ms / total 142ms');
+  });
+
+  it('returns partial breakdown with only total', () => {
+    expect(getTimingBreakdown({
+      connectionTimeInMillis: null,
+      timeToFirstByteInMillis: null,
+      totalTimeInMillis: 50,
+      requestStartedMillis: null,
+      connectionEstablishedMillis: null,
+      responseReceivedMillis: null,
+    })).toBe('total 50ms');
+  });
+
+  it('returns null when timing is null', () => {
+    expect(getTimingBreakdown(null)).toBeNull();
   });
 });
