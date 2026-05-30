@@ -3,6 +3,8 @@ MockServer &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [![Build
 [![GitHub stars](https://img.shields.io/github/stars/mock-server/mockserver-monorepo.svg)](https://github.com/mock-server/mockserver-monorepo/stargazers)
 =====
 
+MockServer is an HTTP(S) **mock server and proxy** for testing. Mock any HTTP/HTTPS, REST, gRPC, or JSON-RPC dependency; record-and-replay real traffic as a proxy; and drive it all from a client library (Java, Node, Python, Ruby) or a built-in dashboard. Recent releases add first-class **LLM / AI-agent** provider mocking (Anthropic, OpenAI, Gemini, Bedrock, Ollama and more), an **MCP server** for AI coding assistants, and **chaos / fault injection** on mocked *and* forwarded responses — see the [changelog](changelog.md) for what has shipped in each version.
+
 ### Quick Start
 
 Run MockServer with Docker in seconds:
@@ -11,7 +13,23 @@ Run MockServer with Docker in seconds:
 docker run -d --rm -p 1080:1080 mockserver/mockserver
 ```
 
-For more configuration options see the [Docker documentation](https://www.mock-server.com/where/docker.html).
+Then create your first expectation and call it (MockServer exposes a REST control plane on the same port):
+
+```bash
+# 1. Mock an endpoint: GET /hello -> 200 "Hello World"
+curl -X PUT http://localhost:1080/mockserver/expectation \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "httpRequest":  { "method": "GET", "path": "/hello" },
+        "httpResponse": { "statusCode": 200, "body": "Hello World" }
+      }'
+
+# 2. Call your mock
+curl http://localhost:1080/hello
+# -> Hello World
+```
+
+The same can be done from any client library or the dashboard at <http://localhost:1080/mockserver/dashboard>. For more configuration options see the [Docker documentation](https://www.mock-server.com/where/docker.html).
 
 ### Documentation
 
@@ -37,11 +55,7 @@ Please see: [Change Log](https://github.com/mock-server/mockserver-monorepo/blob
         <td><a href="https://github.com/mock-server/mockserver-monorepo/discussions"><img height="20px" src="https://mock-server.com/images/GitHub_Logo-md.png" alt="GitHub Discussions"></a></td>
     </tr>
     <tr>
-        <td>Feature Requests</td>
-        <td><a href="https://github.com/mock-server/mockserver-monorepo/issues"><img height="20px" src="https://mock-server.com/images/GitHub_Logo-md.png" alt="GitHub Issues"></a></td>
-    </tr>
-    <tr> 
-        <td>Issues / Bugs</td>
+        <td>Issues, Bugs &amp; Feature Requests</td>
         <td><a href="https://github.com/mock-server/mockserver-monorepo/issues"><img height="20px" src="https://mock-server.com/images/GitHub_Logo-md.png" alt="GitHub Issues"></a></td>
     </tr>
     <tr>
@@ -56,9 +70,9 @@ Please see: [Change Log](https://github.com/mock-server/mockserver-monorepo/blob
 
 ### Requirements
 
-**Runtime:** MockServer requires **Java 11+**. Java 11 is the minimum supported version to maximise compatibility — approximately 23% of Java projects still run on Java 11.
+**Runtime:** MockServer 6.x requires **Java 17+**. The minimum was raised from Java 11 as part of the Jakarta EE 10 / Spring 7 platform modernisation — see the [Java 17 / Jakarta upgrade guide](docs/operations/migration-java17-jakarta.md). If you are still on Java 11, pin to the `5.15.x` line (no longer receiving security updates). The official Docker image already bundles a Java 17 runtime.
 
-**Building from source:** requires **JDK 17+** (frontend-maven-plugin 2.x is used during the build to compile the dashboard UI). The produced bytecode still targets Java 11.
+**Building from source:** requires **JDK 17+**; the produced bytecode targets Java 17.
 
 **Security Note:** MockServer is a **development and testing tool only**. See [SECURITY.md](SECURITY.md) for important security considerations.
 
@@ -113,7 +127,7 @@ Docker Hub contains the following artifacts:
 ##### MockServer Clients
 
 * [mockserver-client-java ![Maven Central](https://img.shields.io/maven-central/v/org.mock-server/mockserver-client-java.svg)](https://central.sonatype.com/artifact/org.mock-server/mockserver-client-java) - a Java client for both the MockServer and the proxy (use the `-no-dependencies` artifact to avoid transitive dependencies)
-* [mockserver-client-node ![npm](https://img.shields.io/npm/v/mockserver-client.svg)](https://www.npmjs.org/package/mockserver-client) - a Node.js and [browser](https://raw.githubusercontent.com/mock-server/mockserver-client-node/mockserver-5.10.0/mockServerClient.js) client for both the MockServer and the proxy
+* [mockserver-client-node ![npm](https://img.shields.io/npm/v/mockserver-client.svg)](https://www.npmjs.org/package/mockserver-client) - a Node.js and [browser](https://github.com/mock-server/mockserver-monorepo/blob/master/mockserver-client-node/mockServerClient.js) client for both the MockServer and the proxy
 * [mockserver-client-python](https://pypi.org/project/mockserver-client/) - a Python client for both the MockServer and the proxy
 * [mockserver-client-ruby ![Gem](https://badge.fury.io/rb/mockserver-client.png)](https://rubygems.org/gems/mockserver-client) - a Ruby client for both the MockServer and the proxy
 
@@ -124,7 +138,8 @@ Docker Hub contains the following artifacts:
 ##### Previous Versions
 | Version        | Date        | Git & Docker Tag / Git Hash                                                                                                                                                                                   | Documentation                                 | Java API                                                               | REST API                                                                                  |
 |:---------------|:------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------|:-----------------------------------------------------------------------|:------------------------------------------------------------------------------------------|
-| 6.1.0 (latest) | 22 May 2026 | [mockserver-6.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.1.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.1.0/apidocs/index.html)  | [6.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x)   |
+| 6.1.0 (latest) | 27 May 2026 | [mockserver-6.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.1.0)   / [33c273](https://github.com/mock-server/mockserver-monorepo/commit/33c2739febd07ce1bf1e3f31ed9d93a61ac871dc) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.1.0/apidocs/index.html)  | [6.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x)   |
+| 6.0.0          | 20 May 2026 | [mockserver-6.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.0.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.0.0/apidocs/index.html)  | [6.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.0.x)   |
 | 5.15.0         | 11 Jan 2023 | [mockserver-5.15.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.15.0) / [7c071b](https://github.com/mock-server/mockserver-monorepo/commit/7c071b8be3608036f2a2ea45eee6970d2f2b8d02) | [Documentation](https://5-15.mock-server.com) | [Java API](https://mock-server.com/versions/5.15.0/apidocs/index.html) | [5.15.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.15.x) |
 | 5.14.0         | 22 Aug 2022 | [mockserver-5.14.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.14.0) / [808eba](https://github.com/mock-server/mockserver-monorepo/commit/808ebaa44a88b630ca181e62712aa47d4c9c7ff4) | [Documentation](https://5-14.mock-server.com) | [Java API](https://mock-server.com/versions/5.14.0/apidocs/index.html) | [5.14.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.14.x) |
 | 5.13.2         | 05 Apr 2022 | [mockserver-5.13.2](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.13.2) / [81105b](https://github.com/mock-server/mockserver-monorepo/commit/81105b3153674bbe66df612ad1b3a09a34a520cf) | [Documentation](https://5-13.mock-server.com) | [Java API](https://mock-server.com/versions/5.13.2/apidocs/index.html) | [5.13.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.13.x) |
