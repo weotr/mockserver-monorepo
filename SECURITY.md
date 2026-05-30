@@ -24,8 +24,8 @@ MockServer targets **Java 17** as the minimum supported runtime. The 6.x line co
 
 - **Minimum Java version:** Java 17
 - **Spring Framework:** 7.x
-- **Spring Boot:** 4.x
-- **Jetty:** 12.x · **Tomcat embed:** 11.x · **Jersey:** 4.x
+- **Spring Boot:** 4.x (test/example dependency only)
+- **Jetty:** 12.x · **Tomcat embed:** 11.x · **Jersey:** 4.x (Jetty/Tomcat are test/example dependencies, not server runtime)
 
 Because these are current major lines, security fixes that previously required dropping Java 11 are now available and applied through normal dependency upgrades. The earlier Java-11 ceiling — which had pinned Spring to 5.3.x and Jetty to 9.4.x and blocked roughly 20 security fixes — no longer applies; those ignores have been removed from the [`.snyk`](.snyk) policy.
 

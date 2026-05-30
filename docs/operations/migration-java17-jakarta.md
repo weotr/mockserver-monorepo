@@ -2,7 +2,7 @@
 
 MockServer 6.x is a **breaking platform modernisation**. The minimum runtime is now **Java 17**, the `javax.*` → `jakarta.*` namespace migration is complete, and the dependency stack moved onto current major lines (Spring 7, Spring Boot 4, Tomcat 11, Jetty 12, Jersey 4, Netty 4.2). This guide covers the consumer-visible changes and how to adapt.
 
-> This is the consumer-facing upgrade guide. For the internal rationale and the full dependency bump list, see the `## [Unreleased]` section of [changelog.md](../../changelog.md) and [docs/operations/security.md](security.md).
+> This is the consumer-facing upgrade guide. For the internal rationale and the full dependency bump list, see the `## [6.0.0]` section of [changelog.md](../../changelog.md) (where the platform modernisation shipped) and [docs/operations/security.md](security.md).
 
 ## At a glance
 
