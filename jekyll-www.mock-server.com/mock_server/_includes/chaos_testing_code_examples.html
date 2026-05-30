@@ -1,0 +1,270 @@
+<p>The following examples show how to add chaos/fault injection to expectations using MockServer.</p>
+
+<button id="button_chaos_error_injection" class="accordion">inject 503 errors 30% of the time with Retry-After</button>
+<div class="panel">
+    <p>Inject a 503 Service Unavailable error on 30% of matched requests, with a <code class="inline code">Retry-After</code> header telling the client to wait 30 seconds before retrying. Useful for testing retry logic and backoff strategies.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/service")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withErrorStatus(503)
+            .withErrorProbability(0.3)
+            .withRetryAfter("30")
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withBody("{\"status\":\"ok\"}")
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.3,
+        "retryAfter": "30"
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_chaos_rate_limit" class="accordion">simulate 429 rate limiting</button>
+<div class="panel">
+    <p>Always return a 429 Too Many Requests error with a <code class="inline code">Retry-After</code> header. Set <code class="inline code">errorProbability</code> to <code class="inline code">1.0</code> for deterministic behaviour (every request is rejected). Useful for testing how your application handles rate limiting from third-party APIs.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/external-service")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withErrorStatus(429)
+            .withErrorProbability(1.0)
+            .withRetryAfter("60")
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withBody("{\"data\":\"result\"}")
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/external-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\":\"result\"}"
+    },
+    "chaos": {
+        "errorStatus": 429,
+        "errorProbability": 1.0,
+        "retryAfter": "60"
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_chaos_latency_injection" class="accordion">inject latency into responses</button>
+<div class="panel">
+    <p>Add artificial latency to responses without changing the status code. Useful for testing timeout handling, slow-response UX, and deadline propagation across services.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/slow-dependency")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withLatency(
+                new Delay(TimeUnit.MILLISECONDS, 2000)
+            )
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withBody("{\"result\":\"delayed\"}")
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/slow-dependency"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"result\":\"delayed\"}"
+    },
+    "chaos": {
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 2000
+        }
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_chaos_combined" class="accordion">combined error and latency injection with reproducible seed</button>
+<div class="panel">
+    <p>Combine error injection and latency injection in a single chaos profile. The <code class="inline code">seed</code> makes the probabilistic error decision reproducible across runs — the same seed always produces the same inject/skip outcome for a given probability.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/payments")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withErrorStatus(500)
+            .withErrorProbability(0.1)
+            .withRetryAfter("10")
+            .withLatency(
+                new Delay(TimeUnit.MILLISECONDS, 500)
+            )
+            .withSeed(42L)
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withBody("{\"transactionId\":\"abc-123\"}")
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/payments"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"transactionId\":\"abc-123\"}"
+    },
+    "chaos": {
+        "errorStatus": 500,
+        "errorProbability": 0.1,
+        "retryAfter": "10",
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 500
+        },
+        "seed": 42
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_chaos_forward_proxy" class="accordion">inject faults into forwarded/proxied upstream responses</button>
+<div class="panel">
+    <p>Chaos profiles work on forwarded (proxied) responses too — not just mocked responses. This lets you inject faults into calls to real upstream services, making MockServer a chaos proxy for testing how your application handles unreliable dependencies.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/upstream-service")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withErrorStatus(503)
+            .withErrorProbability(0.5)
+            .withLatency(
+                new Delay(TimeUnit.MILLISECONDS, 1000)
+            )
+    )
+    .forward(
+        forward()
+            .withHost("upstream.example.com")
+            .withPort(443)
+            .withScheme(HttpForward.Scheme.HTTPS)
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/upstream-service"
+    },
+    "httpForward": {
+        "host": "upstream.example.com",
+        "port": 443,
+        "scheme": "HTTPS"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.5,
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 1000
+        }
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_chaos_deterministic_outage" class="accordion">simulate a complete outage (deterministic)</button>
+<div class="panel">
+    <p>Setting <code class="inline code">errorProbability</code> to <code class="inline code">1.0</code> makes every matched request return the error. This simulates a complete outage of the downstream service — useful for game-day exercises and verifying circuit-breaker behaviour.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/critical-service")
+    )
+    .withChaos(
+        httpChaosProfile()
+            .withErrorStatus(503)
+            .withErrorProbability(1.0)
+            .withRetryAfter("120")
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withBody("{\"healthy\":true}")
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": {
+        "path": "/api/critical-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"healthy\":true}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "retryAfter": "120"
+    }
+}'</code></pre>
+        <p>See <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>

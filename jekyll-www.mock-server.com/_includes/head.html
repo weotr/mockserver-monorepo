@@ -107,7 +107,8 @@
 	    "OpenAPI / Swagger expectation generation",
 	    "gRPC mocking",
 	    "OAuth2 mocking",
-	    "Verification API for test assertions"
+	    "Verification API for test assertions",
+	    "Chaos testing and fault injection for resilience testing"
 	  ],
 	  "author": {
 	    "@type": "Person",
@@ -221,6 +222,26 @@
 	      "name": {{ page.title | jsonify }},
 	      "item": "{{ page.url | replace:'index.html','' | prepend: site.baseurl | prepend: site.url }}"
 	    }
+	  ]
+	}
+	</script>
+	{% endif %}
+	{% if page.schema_faq and page.schema_faq.size > 0 %}
+	<script type="application/ld+json">
+	{
+	  "@context": "https://schema.org",
+	  "@type": "FAQPage",
+	  "mainEntity": [
+	    {% for faq in page.schema_faq %}
+	    {
+	      "@type": "Question",
+	      "name": {{ faq.question | jsonify }},
+	      "acceptedAnswer": {
+	        "@type": "Answer",
+	        "text": {{ faq.answer | jsonify }}
+	      }
+	    }{% unless forloop.last %},{% endunless %}
+	    {% endfor %}
 	  ]
 	}
 	</script>

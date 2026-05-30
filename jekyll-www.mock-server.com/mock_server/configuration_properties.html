@@ -15,6 +15,8 @@ sitemap:
 
 <p><strong>Note:</strong> configuration properties loaded from property files and environment variables are read once at startup and cached. Changes to property files or environment variables after MockServer has started will not take effect. To change configuration at runtime, use the REST API (<span class="inline_code">PUT /mockserver/configuration</span>) or programmatic <span class="inline_code">ConfigurationProperties</span> method calls. System property changes via <span class="inline_code">ConfigurationProperties</span> static methods are read dynamically for properties that support runtime changes (e.g., <span class="inline_code">logLevel</span>).</p>
 
+<p><strong>See also:</strong> <a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> for injecting errors, latency, and outages into mocked and proxied responses using declarative chaos profiles.</p>
+
 <p>Properties can be set by:</p>
 <ol>
     <li>java code (highest precedence)</li>

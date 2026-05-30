@@ -37,6 +37,9 @@
 - [REST API (OpenAPI Spec)](https://www.mock-server.com/mockserver-openapi.yaml): Full OpenAPI 3.0 specification for MockServer's control plane API
 - [REST API on SwaggerHub](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi): Interactive API explorer
 
+## Chaos Testing & Fault Injection
+- [Chaos Testing](https://www.mock-server.com/mock_server/chaos_testing.html): Inject errors, latency, and outages into mocked and proxied responses using declarative chaos profiles for resilience testing
+
 ## Docker
 - [Docker Container](https://www.mock-server.com/where/docker.html): Run MockServer as a Docker container with environment variable configuration
 

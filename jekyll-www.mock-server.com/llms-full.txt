@@ -2010,6 +2010,36 @@ This retrieves detailed logs showing why the request didn't match any active exp
     // ... use mockServer ...
     mockServer.stop();
 
+## Chaos Testing & Fault Injection
+
+MockServer supports declarative HTTP chaos/fault injection via a `chaos` profile on any expectation. Attach an `HttpChaosProfile` to inject probabilistic error statuses (e.g. 500, 503, 429 with optional `Retry-After`) and/or artificial latency into responses. Works on both mocked responses and forwarded/proxied upstream responses, making MockServer usable as a chaos proxy for resilience testing.
+
+### Chaos Profile Fields
+
+- `errorStatus` (integer, 100-599): HTTP status to inject
+- `errorProbability` (number, 0.0-1.0): probability of error injection (0.0=never, 1.0=always)
+- `retryAfter` (string): Retry-After header value on injected errors
+- `latency` (Delay object): artificial delay added to every response
+- `seed` (integer): fixed seed for reproducible probabilistic decisions
+
+### Example: Inject 503 errors 30% of the time
+
+    curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+        "httpRequest": { "path": "/api/service" },
+        "httpResponse": { "statusCode": 200, "body": "{\"status\":\"ok\"}" },
+        "chaos": { "errorStatus": 503, "errorProbability": 0.3, "retryAfter": "30" }
+    }'
+
+### Example: Inject faults into proxied upstream
+
+    curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+        "httpRequest": { "path": "/api/upstream" },
+        "httpForward": { "host": "upstream.example.com", "port": 443, "scheme": "HTTPS" },
+        "chaos": { "errorStatus": 503, "errorProbability": 0.5, "latency": { "timeUnit": "MILLISECONDS", "value": 1000 } }
+    }'
+
+See: https://www.mock-server.com/mock_server/chaos_testing.html
+
 ## Proxying
 
 MockServer can act as an HTTP/HTTPS/SOCKS proxy:

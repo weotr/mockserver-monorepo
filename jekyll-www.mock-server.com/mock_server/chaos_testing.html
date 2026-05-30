@@ -1,0 +1,273 @@
+---
+title: Chaos Testing & Fault Injection
+description: Simulate latency, errors, outages and network faults with MockServer to test service resilience, retries, backoff and circuit breakers.
+layout: page
+pageOrder: 1
+section: 'Chaos Testing'
+subsection: true
+sitemap:
+  priority: 0.9
+  changefreq: 'monthly'
+  lastmod: 2026-05-30T08:00:00+00:00
+keywords: chaos testing, fault injection, resilience testing, latency injection, simulate outage, SRE testing, retry and backoff testing, mock 429 rate limit, chaos testing in kubernetes
+schema_faq:
+  - question: "How do I simulate a 429 rate limit with MockServer?"
+    answer: "Add a chaos profile to your expectation with errorStatus set to 429, errorProbability set to 1.0 for every request (or a fraction like 0.3 for 30% of requests), and an optional retryAfter value. The chaos profile works on both mocked responses and forwarded/proxied upstream calls."
+  - question: "How do I inject latency into API responses?"
+    answer: "Add a chaos profile with a latency field specifying the delay duration and time unit (e.g. 2000 milliseconds). Latency is injected into every matched response regardless of whether an error is also injected. This works on both mocked and forwarded responses."
+  - question: "Can I inject faults into a real upstream or proxy?"
+    answer: "Yes. Chaos profiles apply to forwarded and proxied responses, not just mocked ones. Set up a forward expectation pointing at your real upstream service and attach a chaos profile to inject errors or latency into the responses MockServer returns to the caller."
+  - question: "How do I make chaos test results reproducible?"
+    answer: "Set the seed field on your chaos profile to a fixed value. With the same seed, a given errorProbability always produces the same inject-or-skip decision, making fractional-probability chaos deterministic across test runs."
+  - question: "Does MockServer chaos testing work in Kubernetes?"
+    answer: "Yes. Deploy MockServer as a sidecar proxy, egress proxy, or reverse proxy in your Kubernetes cluster and attach chaos profiles to inject faults into the traffic flowing through it. MockServer operates at the HTTP layer (L7) and requires explicit routing (e.g. HTTP_PROXY environment variable or Service rewrite)."
+---
+
+<p>MockServer's chaos testing feature lets you inject realistic faults into HTTP responses — both <strong>mocked responses</strong> and <strong>forwarded/proxied upstream responses</strong> — so you can verify that your application handles errors, latency, and outages gracefully.</p>
+
+<p>Attach a declarative <strong>chaos profile</strong> to any expectation to control:</p>
+<ul>
+    <li><strong>Error injection</strong> — return an HTTP error status (e.g. 500, 503, 429) instead of the normal response, with an optional <code class="inline code">Retry-After</code> header</li>
+    <li><strong>Latency injection</strong> — add artificial delay to responses to test timeout handling, deadline propagation, and slow-response UX</li>
+    <li><strong>Probabilistic or deterministic</strong> — control what fraction of requests are affected, from "every request" (<code class="inline code">1.0</code>) to "10% of requests" (<code class="inline code">0.1</code>)</li>
+    <li><strong>Reproducible results</strong> — set a <code class="inline code">seed</code> to make probabilistic outcomes identical across test runs</li>
+</ul>
+
+<p>Because chaos profiles work on <strong>both mocked and forwarded responses</strong>, MockServer can act as a chaos proxy — sit it in front of a real service (upstream, third-party API, or internal dependency) and inject faults into the responses it relays. This makes it a powerful tool for SRE resilience testing, not just unit/integration test mocking.</p>
+
+<a id="chaos_profile_fields" class="anchor" href="#chaos_profile_fields">&nbsp;</a>
+
+<h2>Chaos Profile Fields</h2>
+
+<p>A chaos profile is a JSON object (or <code class="inline code">HttpChaosProfile</code> in the Java client) with the following fields. All fields are optional — omit any you don't need.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Valid range</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">errorStatus</code></td>
+            <td>integer</td>
+            <td>The HTTP status code to return when an error is injected (e.g. <code class="inline code">500</code>, <code class="inline code">503</code>, <code class="inline code">429</code>). When an error is injected the response body is a JSON object: <code class="inline code">{"error":{"type":"chaos_injected","message":"injected HTTP chaos error"}}</code>.</td>
+            <td>100 &ndash; 599</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorProbability</code></td>
+            <td>number</td>
+            <td>The probability (0.0 to 1.0) that a matched request will receive the error instead of the normal response. <code class="inline code">0.0</code> or omitted means errors are never injected; <code class="inline code">1.0</code> means every request gets the error (deterministic). Fractional values (e.g. <code class="inline code">0.3</code>) inject errors on approximately 30% of requests.</td>
+            <td>0.0 &ndash; 1.0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">retryAfter</code></td>
+            <td>string</td>
+            <td>Value for the <code class="inline code">Retry-After</code> HTTP header on injected error responses. Typically a number of seconds (e.g. <code class="inline code">"30"</code>) or an HTTP-date. Only included when an error is actually injected.</td>
+            <td>any string (max 100 chars)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">latency</code></td>
+            <td>object</td>
+            <td>Artificial delay added to every matched response (both normal and error responses). Specified as a <a href="/mock_server/creating_expectations.html">Delay</a> object with <code class="inline code">timeUnit</code> (e.g. <code class="inline code">MILLISECONDS</code>, <code class="inline code">SECONDS</code>) and <code class="inline code">value</code>. Latency is applied in addition to any delay on the action itself and the global response delay.</td>
+            <td>valid Delay object</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">seed</code></td>
+            <td>integer</td>
+            <td>A fixed seed for the random number generator used by <code class="inline code">errorProbability</code>. When set, the same seed + probability always yields the same inject/skip outcome, making tests reproducible. Note: a fixed seed produces the <em>same</em> decision on every request (always inject or always skip for a given probability), so it is most useful for making a known-fractional probability deterministic in a specific test.</td>
+            <td>any long integer</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="where_chaos_applies" class="anchor" href="#where_chaos_applies">&nbsp;</a>
+
+<h2>Where Chaos Applies</h2>
+
+<p>Chaos profiles apply to most expectation action types:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Action type</th>
+            <th>Chaos supported</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Mocked response (<code class="inline code">httpResponse</code>)</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Response template (<code class="inline code">httpResponseTemplate</code>)</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Response class callback</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Response object callback</td>
+            <td>Not yet (uses its own write path)</td>
+        </tr>
+        <tr>
+            <td>Forward (<code class="inline code">httpForward</code>)</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Forward template</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Forward class callback</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Forward with override (<code class="inline code">httpOverrideForwardedRequest</code>)</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Forward with validation</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Forward object callback</td>
+            <td>Not yet (uses its own write path)</td>
+        </tr>
+        <tr>
+            <td>Unmatched proxy pass-through</td>
+            <td>Not yet</td>
+        </tr>
+        <tr>
+            <td>Error (<code class="inline code">httpError</code>)</td>
+            <td>Not applicable (already a fault action)</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="error_injection" class="anchor" href="#error_injection">&nbsp;</a>
+
+<h2>Error Injection</h2>
+
+<p>Error injection replaces the normal response with a synthetic HTTP error. This is the primary mechanism for simulating downstream service failures.</p>
+
+<p><strong>How it works:</strong> on each matched request, MockServer draws against <code class="inline code">errorProbability</code>. If the draw says "inject," the configured <code class="inline code">errorStatus</code> is returned instead of the real response. The response body is a JSON error object and, if <code class="inline code">retryAfter</code> is set, a <code class="inline code">Retry-After</code> header is included. When the draw says "skip," the normal response (or forwarded upstream response) is returned unchanged.</p>
+
+<p><strong>Common use cases:</strong></p>
+<ul>
+    <li><strong>Test retry logic:</strong> inject 503 errors at 30% probability and verify your client retries with exponential backoff</li>
+    <li><strong>Test rate-limit handling:</strong> inject 429 errors at 100% probability with a <code class="inline code">Retry-After</code> header and verify your client respects the wait period</li>
+    <li><strong>Simulate outages:</strong> inject 503 at 100% probability to verify circuit-breaker tripping and fallback behaviour</li>
+    <li><strong>Test error pages and user experience:</strong> inject 500 errors and verify your UI displays a useful error message</li>
+</ul>
+
+<a id="latency_injection" class="anchor" href="#latency_injection">&nbsp;</a>
+
+<h2>Latency Injection</h2>
+
+<p>Latency injection adds artificial delay to the response without changing its content or status code. This is useful for testing how your application handles slow dependencies.</p>
+
+<p><strong>How it works:</strong> the <code class="inline code">latency</code> delay is applied to <strong>every</strong> matched response — whether or not an error is also injected. It is added on top of any delay configured on the action itself and any global response delay (<code class="inline code">mockserver.globalResponseDelayMillis</code>).</p>
+
+<p><strong>Common use cases:</strong></p>
+<ul>
+    <li><strong>Test timeout handling:</strong> inject 5-second latency and verify your client times out gracefully</li>
+    <li><strong>Test deadline propagation:</strong> inject latency into one service in a call chain and verify deadlines propagate correctly</li>
+    <li><strong>Test loading states:</strong> inject 2-second latency and verify your UI shows a loading indicator</li>
+    <li><strong>Test slow upstream in proxy mode:</strong> forward requests to a real service with added latency to see how your application copes with a sluggish dependency</li>
+</ul>
+
+<p>For more complex latency patterns (uniform distribution, log-normal, gaussian), use the <code class="inline code">delay</code> field on the response action itself. See <a href="/mock_server/creating_expectations.html">Creating Expectations</a> and <a href="/mock_server/performance.html">Scalability &amp; Latency</a> for details.</p>
+
+<a id="reproducibility" class="anchor" href="#reproducibility">&nbsp;</a>
+
+<h2>Reproducibility with Seed</h2>
+
+<p>When <code class="inline code">errorProbability</code> is fractional (not 0.0 or 1.0), the inject/skip decision is random by default. Set the <code class="inline code">seed</code> field to a fixed value to make this decision deterministic and reproducible across test runs.</p>
+
+<p><strong>Determinism rules:</strong></p>
+<ul>
+    <li><code class="inline code">errorProbability</code> of <code class="inline code">0.0</code> (or omitted) — errors are <strong>never</strong> injected, regardless of seed</li>
+    <li><code class="inline code">errorProbability</code> of <code class="inline code">1.0</code> — errors are <strong>always</strong> injected, regardless of seed</li>
+    <li>Fractional values — the decision depends on a single random draw; with a fixed <code class="inline code">seed</code>, the same draw is made every time (same result on every request)</li>
+</ul>
+
+<p><strong>Note:</strong> a fixed seed with a fractional probability yields the same decision on <em>every</em> request (always inject or always skip), because the seed resets the random state for each evaluation. This is by design — it ensures test reproducibility. For probabilistic variation within a single test run, omit the seed.</p>
+
+<a id="chaos_proxy" class="anchor" href="#chaos_proxy">&nbsp;</a>
+
+<h2>Chaos Proxy: Injecting Faults into Real Services</h2>
+
+<p>One of the most powerful uses of chaos profiles is on <strong>forwarded/proxied responses</strong>. Instead of mocking a service, you can forward requests to the real upstream and inject faults into the responses MockServer relays back to the caller.</p>
+
+<p>This turns MockServer into a <strong>chaos proxy</strong> — sit it between your application and a dependency (internal service or external API) and test what happens when that dependency becomes unreliable.</p>
+
+<p><strong>Deployment patterns:</strong></p>
+<ul>
+    <li><strong>Forward proxy:</strong> configure your application's <code class="inline code">HTTP_PROXY</code> / <code class="inline code">HTTPS_PROXY</code> environment variables to point at MockServer, then create forward expectations with chaos profiles for specific hosts/paths</li>
+    <li><strong>Reverse proxy:</strong> put MockServer in front of a specific upstream service (using MockServer's <code class="inline code">proxyRemoteHost</code> / <code class="inline code">proxyRemotePort</code> configuration) and add chaos profiles to inject faults</li>
+    <li><strong>Kubernetes sidecar or egress proxy:</strong> deploy MockServer as a sidecar container or egress proxy in your K8s pod/namespace and route specific traffic through it with chaos injection enabled</li>
+</ul>
+
+<p>MockServer operates at the <strong>HTTP layer (L7)</strong> and requires explicit routing — it does not transparently intercept traffic at the network layer. See <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for detailed proxy deployment patterns.</p>
+
+<a id="interaction_notes" class="anchor" href="#interaction_notes">&nbsp;</a>
+
+<h2>Interaction with Other Features</h2>
+
+<ul>
+    <li><strong>percentage (match probability)</strong> — the expectation's <code class="inline code">percentage</code> field controls how often a request <em>matches</em> the expectation; <code class="inline code">errorProbability</code> controls how often a <em>matched</em> request gets an error. These compose multiplicatively: an expectation with <code class="inline code">percentage: 50</code> and <code class="inline code">errorProbability: 0.5</code> injects errors on roughly 25% of structurally matching requests.</li>
+    <li><strong>Global response delay</strong> — <code class="inline code">mockserver.globalResponseDelayMillis</code> is added on top of any chaos latency.</li>
+    <li><strong>Action delay</strong> — a delay on the response or forward action itself is combined with chaos latency.</li>
+    <li><strong>maxSocketTimeout</strong> — latency that exceeds <code class="inline code">maxSocketTimeout</code> will be cut off by the socket timeout.</li>
+</ul>
+
+<a id="coming_soon" class="anchor" href="#coming_soon">&nbsp;</a>
+
+<h2>Roadmap</h2>
+
+<p>The following chaos features are planned for future releases:</p>
+<ul>
+    <li><strong>Connection drop injection</strong> — probabilistic connection drops (wiring to the existing <code class="inline code">httpError.dropConnection</code> capability)</li>
+    <li><strong>Stateful fault injection</strong> — token-bucket rate limiting (429 that depletes and refills), nth-request faults, circuit-breaker windows, and gradual degradation ramps</li>
+    <li><strong>Chaos observability</strong> — Prometheus / OpenTelemetry metrics for injected faults (<code class="inline code">mockserver_http_chaos_injected_total</code>)</li>
+</ul>
+
+<a id="chaos_examples" class="anchor" href="#chaos_examples">&nbsp;</a>
+
+<h2>Examples</h2>
+
+{% include_subpage _includes/chaos_testing_code_examples.html %}
+
+<a id="faq" class="anchor" href="#faq">&nbsp;</a>
+
+<h2>FAQ</h2>
+
+<button id="button_faq_rate_limit" class="accordion">How do I simulate a 429 rate limit with MockServer?</button>
+<div class="panel">
+    <p>Add a chaos profile to your expectation with <code class="inline code">errorStatus</code> set to <code class="inline code">429</code>, <code class="inline code">errorProbability</code> set to <code class="inline code">1.0</code> (for every request) or a fraction like <code class="inline code">0.3</code> (for 30% of requests), and an optional <code class="inline code">retryAfter</code> value. The chaos profile works on both mocked responses and forwarded/proxied upstream calls. See the <a href="#button_chaos_rate_limit">rate limiting example</a> above.</p>
+</div>
+
+<button id="button_faq_latency" class="accordion">How do I inject latency into API responses?</button>
+<div class="panel">
+    <p>Add a chaos profile with a <code class="inline code">latency</code> field specifying the delay duration and time unit (e.g. 2000 milliseconds). Latency is injected into every matched response regardless of whether an error is also injected. This works on both mocked and forwarded responses. See the <a href="#button_chaos_latency_injection">latency injection example</a> above.</p>
+</div>
+
+<button id="button_faq_proxy" class="accordion">Can I inject faults into a real upstream or proxy?</button>
+<div class="panel">
+    <p>Yes. Chaos profiles apply to forwarded and proxied responses, not just mocked ones. Set up a forward expectation pointing at your real upstream service and attach a chaos profile to inject errors or latency into the responses MockServer returns to the caller. See the <a href="#button_chaos_forward_proxy">forward/proxy example</a> and the <a href="#chaos_proxy">Chaos Proxy</a> section above.</p>
+</div>
+
+<button id="button_faq_reproducible" class="accordion">How do I make chaos test results reproducible?</button>
+<div class="panel">
+    <p>Set the <code class="inline code">seed</code> field on your chaos profile to a fixed value (e.g. <code class="inline code">42</code>). With the same seed, a given <code class="inline code">errorProbability</code> always produces the same inject-or-skip decision, making fractional-probability chaos deterministic across test runs. See the <a href="#reproducibility">Reproducibility</a> section above.</p>
+</div>
+
+<button id="button_faq_kubernetes" class="accordion">Does MockServer chaos testing work in Kubernetes?</button>
+<div class="panel">
+    <p>Yes. Deploy MockServer as a sidecar proxy, egress proxy, or reverse proxy in your Kubernetes cluster and attach chaos profiles to inject faults into the traffic flowing through it. MockServer operates at the HTTP layer (L7) and requires explicit routing (e.g. <code class="inline code">HTTP_PROXY</code> environment variable or Service rewrite). See the <a href="#chaos_proxy">Chaos Proxy</a> section above and <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for proxy deployment patterns.</p>
+</div>
