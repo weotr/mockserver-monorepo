@@ -1,0 +1,97 @@
+---
+title: Mock Drift Detection
+shortTitle: Drift Detection
+description: Detect when real upstream services have structurally changed compared to your mock stubs, catching status code mismatches, new or removed JSON fields, type changes, and header differences.
+layout: page
+pageOrder: 7
+section: 'Mock Server'
+subsection: false
+sitemap:
+  priority: 0.7
+  changefreq: 'monthly'
+  lastmod: 2026-05-31T08:00:00+00:00
+keywords: mock drift detection, stub validation, proxy mode, schema drift, contract testing, response comparison, api evolution
+---
+
+<h2>What is mock drift?</h2>
+
+<p>Mock drift occurs when a real upstream service evolves (adding fields, changing response codes, modifying headers) but the mock stubs used in your tests remain unchanged. This leads to tests that pass against stale stubs but fail against the real service.</p>
+
+<p>MockServer's drift detection automatically compares forwarded (real) upstream responses against your stub expectations and flags structural differences, giving you early warning that your mocks need updating.</p>
+
+<h2>How it works</h2>
+
+<p>When MockServer forwards a request to an upstream service (in proxy mode) and there are also response-type stub expectations matching the same request pattern, MockServer compares the real response against each matching stub and records any structural drifts. The analysis runs asynchronously and never slows down the response path.</p>
+
+<p>Drift detection is automatic -- no configuration is required. Simply have both forwarding expectations and response-type stub expectations for the same request patterns.</p>
+
+<h2>What is detected</h2>
+
+<table class="table table-striped">
+  <thead>
+    <tr><th>Drift Type</th><th>Description</th><th>Confidence</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>STATUS</code></td><td>HTTP status code differs between stub and real response</td><td>1.0</td></tr>
+    <tr><td><code>SCHEMA_FIELD_ADDED</code></td><td>JSON field present in real response but not in stub</td><td>0.9</td></tr>
+    <tr><td><code>SCHEMA_FIELD_REMOVED</code></td><td>JSON field present in stub but missing from real response</td><td>0.95</td></tr>
+    <tr><td><code>SCHEMA_TYPE_CHANGED</code></td><td>JSON field type changed (e.g. number became string)</td><td>0.95</td></tr>
+    <tr><td><code>HEADER_ADDED</code></td><td>HTTP header present in real response but not in stub</td><td>0.9</td></tr>
+    <tr><td><code>HEADER_REMOVED</code></td><td>HTTP header present in stub but missing from real response</td><td>0.9</td></tr>
+    <tr><td><code>HEADER_CHANGED</code></td><td>HTTP header value differs between stub and real response</td><td>0.85</td></tr>
+  </tbody>
+</table>
+
+<p>Non-semantic headers (<code>date</code>, <code>x-request-id</code>, <code>content-length</code>, <code>transfer-encoding</code>, <code>connection</code>, <code>keep-alive</code>, <code>server</code>) are automatically excluded from comparison.</p>
+
+<h2>Retrieving drift records</h2>
+
+<p>Use the <code>GET /mockserver/drift</code> endpoint to retrieve detected drifts:</p>
+
+<pre><code>curl http://localhost:1080/mockserver/drift</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  "count": 2,
+  "drifts": [
+    {
+      "expectationId": "abc-123",
+      "driftType": "STATUS",
+      "field": "statusCode",
+      "expectedValue": "200",
+      "actualValue": "422",
+      "confidence": 1.0,
+      "epochTimeMs": 1717145600000
+    },
+    {
+      "expectationId": "abc-123",
+      "driftType": "SCHEMA_FIELD_ADDED",
+      "field": "$.newField",
+      "confidence": 0.9,
+      "epochTimeMs": 1717145600000
+    }
+  ]
+}</code></pre>
+
+<h3>Filtering</h3>
+
+<p>Filter by expectation ID:</p>
+
+<pre><code>curl "http://localhost:1080/mockserver/drift?expectationId=abc-123"</code></pre>
+
+<p>Limit the number of results (default 50, max 500):</p>
+
+<pre><code>curl "http://localhost:1080/mockserver/drift?limit=10"</code></pre>
+
+<h2>Clearing drift records</h2>
+
+<p>To clear all recorded drifts:</p>
+
+<pre><code>curl -X PUT http://localhost:1080/mockserver/drift/clear</code></pre>
+
+<p>Drift records are also cleared automatically when MockServer is reset via <code>PUT /mockserver/reset</code>.</p>
+
+<h2>Storage</h2>
+
+<p>Drift records are stored in an in-memory LRU (least recently used) buffer with a maximum capacity of 1000 entries. When the buffer is full, the oldest records are evicted to make room for new ones.</p>
