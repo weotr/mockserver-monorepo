@@ -135,6 +135,7 @@ Manual activation"]
 
 - **Unit tests:** `*Test.java` — run during `test` phase via Surefire
 - **Integration tests:** `*IntegrationTest.java` — run during `integration-test`/`verify` phases via Failsafe
+- **Parallel unit tests (`mockserver-core`):** Surefire runs in two phases — a parallel phase (`parallel=classes`, `threadCount=4`) for the bulk of the suite, and a `sequential-tests` execution (`parallel=none`) for the classes that mutate JVM-global state (`ConfigurationProperties` system properties, the static Prometheus `Metrics` registry, the controllable clock, or globally-fixed time). `ParallelStaticStateGuardTest` fails the build if the parallel-excluded and sequential-included class lists drift apart. See [performance-tuning.md](performance-tuning.md) for the rationale.
 - **Log level:** `mockserver.logLevel=ERROR` during tests
 - **Locale:** Forced to `en-GB` (`-Duser.language=en -Duser.country=GB`)
 - **Test listener:** `org.mockserver.test.PrintOutCurrentTestRunListener` for progress output
