@@ -495,7 +495,7 @@ GET /mockserver/serviceChaos</code></pre>
     </tbody>
 </table>
 
-<p>This counter is also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section (visible only when the metric has non-zero data).</p>
+<p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>), an "active services" count from the gauge, and a per-fault-type chart (visible only when a chaos metric has non-zero data).</p>
 
 <p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape.</p>
 

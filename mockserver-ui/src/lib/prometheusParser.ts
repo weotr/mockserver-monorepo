@@ -108,3 +108,22 @@ export function metricValueByLabel(
 export function hasMetric(samples: PrometheusSample[], name: string): boolean {
   return samples.some((s) => s.name === name);
 }
+
+/**
+ * Distinct values of `labelKey` across all samples named `name`, in first-seen
+ * order. Lets the UI render one entry per label value present (e.g. every
+ * `fault_type` the server actually emits) without hard-coding the set.
+ */
+export function labelValues(samples: PrometheusSample[], name: string, labelKey: string): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const s of samples) {
+    if (s.name !== name) continue;
+    const value = s.labels[labelKey];
+    if (value !== undefined && value !== '' && !seen.has(value)) {
+      seen.add(value);
+      values.push(value);
+    }
+  }
+  return values;
+}

@@ -5,6 +5,7 @@ import {
   metricValue,
   metricValueByLabel,
   hasMetric,
+  labelValues,
 } from '../lib/prometheusParser';
 
 // A faithful slice of a real MockServer `GET /mockserver/metrics` response.
@@ -83,5 +84,20 @@ describe('parsePrometheusText', () => {
     const samples = parsePrometheusText('jvm_threads_current 12\n');
     expect(hasMetric(samples, 'jvm_threads_current')).toBe(true);
     expect(hasMetric(samples, 'jvm_memory_used_bytes')).toBe(false);
+  });
+
+  it('labelValues lists distinct label values in first-seen order', () => {
+    const samples = parsePrometheusText(
+      [
+        'mock_server_http_chaos_injected_total{fault_type="drop"} 1',
+        'mock_server_http_chaos_injected_total{fault_type="error"} 2',
+        'mock_server_http_chaos_injected_total{fault_type="error"} 3',
+        'other_metric{fault_type="ignored"} 1',
+        '',
+      ].join('\n'),
+    );
+    expect(labelValues(samples, 'mock_server_http_chaos_injected_total', 'fault_type')).toEqual(['drop', 'error']);
+    expect(labelValues(samples, 'mock_server_http_chaos_injected_total', 'missing_label')).toEqual([]);
+    expect(labelValues(samples, 'absent_metric', 'fault_type')).toEqual([]);
   });
 });

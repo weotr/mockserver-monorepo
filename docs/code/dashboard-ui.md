@@ -135,7 +135,7 @@ It renders:
 - summary stat cards (requests received, matched, not-matched, forwarded) with inline-SVG sparklines (`Sparkline.tsx`),
 - a derived requests-per-second throughput chart (Δcount / Δt between scrapes, since the metrics are monotonic gauges),
 - request latency percentiles (p50/p95/p99) from the `mock_server_request_duration_seconds` histogram (shown only when present),
-- an **HTTP Chaos Faults** section showing cumulative `mock_server_http_chaos_injected_total` split by `fault_type` (`error` vs `latency`) with a two-line time-series chart (shown only when the metric is present and has non-zero data),
+- an **HTTP Chaos Faults** section showing cumulative `mock_server_http_chaos_injected_total` split by every `fault_type` the server emits (`drop`, `error`, `latency`, `truncate`, `malformed`, `slow`, `quota` — fault types are discovered from the scrape via `labelValues`, so a future type renders automatically), the `mock_server_active_service_chaos` gauge as an "active services" stat, and a per-fault-type time-series chart (shown only when a chaos metric is present and has non-zero data),
 - JVM heap memory, thread count, and GC stats (shown only when JVM metrics are present), and
 - a per-action breakdown of the `*_actions_count` gauges, plus the served MockServer version from `mock_server_build_info`.
 

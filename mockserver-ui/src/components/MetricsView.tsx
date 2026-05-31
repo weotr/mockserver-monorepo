@@ -10,13 +10,30 @@ import CircularProgress from '@mui/material/CircularProgress';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useMetricsPolling } from '../hooks/useMetricsPolling';
-import { findSample, metricValue, metricValueByLabel, hasMetric } from '../lib/prometheusParser';
+import { findSample, metricValue, metricValueByLabel, hasMetric, labelValues } from '../lib/prometheusParser';
 import { gaugeSeries, gaugeSeriesByLabel, ratePerSecond, latestRate } from '../lib/metricsDerive';
 import { histogramQuantile } from '../lib/histogramQuantile';
 import MetricsLineChart from './MetricsLineChart';
 
 const LATENCY_METRIC = 'mock_server_request_duration_seconds';
 const CHAOS_METRIC = 'mock_server_http_chaos_injected_total';
+const ACTIVE_CHAOS_METRIC = 'mock_server_active_service_chaos';
+
+// All HTTP chaos fault types, in display order. Any fault_type the server emits
+// that is not listed here still renders (appended, title-cased) so the UI never
+// silently drops a future fault type.
+const CHAOS_FAULT_ORDER = ['drop', 'error', 'latency', 'truncate', 'malformed', 'slow', 'quota'];
+
+function chaosFaultLabel(faultType: string): string {
+  return faultType.charAt(0).toUpperCase() + faultType.slice(1);
+}
+
+/** fault_type values present in the metric, ordered by CHAOS_FAULT_ORDER then first-seen. */
+function orderedFaultTypes(present: string[]): string[] {
+  const known = CHAOS_FAULT_ORDER.filter((ft) => present.includes(ft));
+  const extra = present.filter((ft) => !CHAOS_FAULT_ORDER.includes(ft));
+  return [...known, ...extra];
+}
 
 interface MetricsViewProps {
   connectionParams: ConnectionParams;
@@ -66,10 +83,14 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
   const maxAction = actionRows.reduce((m, r) => Math.max(m, r.value), 0);
   const jvmEnabled = latest ? hasMetric(latest.samples, 'jvm_memory_used_bytes') : false;
   const latencyEnabled = latest ? hasMetric(latest.samples, `${LATENCY_METRIC}_count`) : false;
-  const chaosErrorTotal = latest ? metricValueByLabel(latest.samples, CHAOS_METRIC, 'fault_type', 'error') : 0;
-  const chaosLatencyTotal = latest ? metricValueByLabel(latest.samples, CHAOS_METRIC, 'fault_type', 'latency') : 0;
-  const chaosEnabled = latest ? hasMetric(latest.samples, CHAOS_METRIC) : false;
-  const chaosHasData = chaosErrorTotal > 0 || chaosLatencyTotal > 0;
+  const chaosFaultTypes = latest ? orderedFaultTypes(labelValues(latest.samples, CHAOS_METRIC, 'fault_type')) : [];
+  const chaosFaultTotals = latest
+    ? chaosFaultTypes.map((ft) => ({ faultType: ft, value: metricValueByLabel(latest.samples, CHAOS_METRIC, 'fault_type', ft) }))
+    : [];
+  const activeServiceChaos = latest ? metricValue(latest.samples, ACTIVE_CHAOS_METRIC) : 0;
+  const activeServiceChaosEnabled = latest ? hasMetric(latest.samples, ACTIVE_CHAOS_METRIC) : false;
+  const chaosEnabled = latest ? (hasMetric(latest.samples, CHAOS_METRIC) || activeServiceChaosEnabled) : false;
+  const chaosHasData = chaosFaultTotals.some((f) => f.value > 0) || activeServiceChaos > 0;
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -172,34 +193,40 @@ MOCKSERVER_METRICS_ENABLED=true`}
             </Paper>
           )}
 
-          {/* HTTP Chaos Faults (only when the metric is present and has non-zero data) */}
+          {/* HTTP Chaos Faults (only when a chaos metric is present and has non-zero data) */}
           {chaosEnabled && chaosHasData && (
             <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
               <Typography variant="caption" color="text.secondary">HTTP Chaos Faults</Typography>
               <Box sx={{ display: 'flex', gap: 3, mt: 0.5, flexWrap: 'wrap' }}>
-                <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                    {chaosErrorTotal.toLocaleString()}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">error faults</Typography>
-                </Box>
-                <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                    {chaosLatencyTotal.toLocaleString()}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">latency faults</Typography>
-                </Box>
+                {activeServiceChaosEnabled && (
+                  <Box>
+                    <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      {activeServiceChaos.toLocaleString()}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">active services</Typography>
+                  </Box>
+                )}
+                {chaosFaultTotals.map(({ faultType, value }) => (
+                  <Box key={faultType}>
+                    <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                      {value.toLocaleString()}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">{faultType} faults</Typography>
+                  </Box>
+                ))}
               </Box>
-              <Box sx={{ mt: 1 }}>
-                <MetricsLineChart
-                  height={180}
-                  valueFormatter={(v) => Math.round(v).toLocaleString()}
-                  series={[
-                    { data: gaugeSeriesByLabel(history, CHAOS_METRIC, 'fault_type', 'error'), label: 'Error' },
-                    { data: gaugeSeriesByLabel(history, CHAOS_METRIC, 'fault_type', 'latency'), label: 'Latency' },
-                  ]}
-                />
-              </Box>
+              {chaosFaultTypes.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  <MetricsLineChart
+                    height={180}
+                    valueFormatter={(v) => Math.round(v).toLocaleString()}
+                    series={chaosFaultTypes.map((ft) => ({
+                      data: gaugeSeriesByLabel(history, CHAOS_METRIC, 'fault_type', ft),
+                      label: chaosFaultLabel(ft),
+                    }))}
+                  />
+                </Box>
+              )}
             </Paper>
           )}
 
