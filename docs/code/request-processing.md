@@ -42,6 +42,7 @@ required?"}
     DISPATCH --> OBJ_F[HttpForwardObjectCallbackActionHandler]
     DISPATCH --> OVERRIDE[HttpOverrideForwardedRequestActionHandler]
     DISPATCH --> FWDVAL[HttpForwardValidateActionHandler]
+    DISPATCH --> FWDFB[HttpForwardWithFallbackActionHandler]
     DISPATCH --> GRPC[GrpcStreamResponseActionHandler]
     DISPATCH --> LLM[HttpLlmResponseActionHandler]
     DISPATCH --> ERR[HttpErrorActionHandler]
@@ -286,6 +287,23 @@ Each `Expectation` binds a request matcher to exactly one action. There are 14 a
 | `FORWARD_OBJECT_CALLBACK` | `HttpForwardObjectCallbackActionHandler` | WebSocket client modifies request before forwarding |
 | `FORWARD_REPLACE` | `HttpOverrideForwardedRequestActionHandler` | Applies request/response overrides and modifiers |
 | `FORWARD_VALIDATE` | `HttpForwardValidateActionHandler` | Forwards and validates request/response against an OpenAPI spec |
+| `FORWARD_WITH_FALLBACK` | `HttpForwardWithFallbackActionHandler` | Forwards to upstream; returns a fallback mock response on 5xx or timeout |
+
+### Forward with Fallback
+
+The `FORWARD_WITH_FALLBACK` action combines MockServer's proxy and mock capabilities: it
+forwards the request to a real upstream service, but if the upstream returns a status code
+matching the fallback criteria (default: 500-599) or the connection fails/times out, a
+pre-configured fallback response is returned instead of the error.
+
+This is useful for resilience testing and development against partially-available services:
+the mock provides a reliable baseline while the upstream is flaky or under development.
+
+Configuration via `HttpForwardWithFallback`:
+- `httpForward` -- the upstream target (host, port, scheme)
+- `fallbackResponse` -- the mock response to return when fallback triggers
+- `fallbackOnStatusCodes` -- list of status codes that trigger fallback (default: 500-599)
+- `fallbackOnTimeout` -- whether to fall back on connection errors/timeouts (default: true)
 
 ### Host Header Auto-Adjustment
 

@@ -125,6 +125,9 @@ public class ExpectationToJavaSerializer implements ToJavaSerializer<Expectation
             if (expectation.getHttpForwardObjectCallback() != null) {
                 appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append("/*NOT POSSIBLE TO GENERATE CODE FOR OBJECT CALLBACK*/");
             }
+            if (expectation.getHttpForwardWithFallback() != null) {
+                appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append("/*NOT POSSIBLE TO GENERATE CODE FOR FORWARD WITH FALLBACK*/");
+            }
             if (expectation.getHttpError() != null) {
                 appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".error(");
                 output.append(new HttpErrorToJavaSerializer().serialize(numberOfSpacesToIndent + 1, expectation.getHttpError()));

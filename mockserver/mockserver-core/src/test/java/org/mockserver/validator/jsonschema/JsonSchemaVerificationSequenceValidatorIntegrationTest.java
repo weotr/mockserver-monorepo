@@ -410,7 +410,7 @@ public class JsonSchemaVerificationSequenceValidatorIntegrationTest {
                     "   " + NEW_LINE +
                     " - $.httpRequests[0].dnsName: is missing, but is required, if specifying action of type Requests[0].dnsName" + NEW_LINE +
                     " - $.httpRequests[0].specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                     NEW_LINE +
                     OPEN_API_SPECIFICATION_URL
             ));
@@ -433,7 +433,7 @@ public class JsonSchemaVerificationSequenceValidatorIntegrationTest {
                     " - $.httpRequests[0].dnsName: is missing, but is required, if specifying action of type Requests[0].dnsName" + NEW_LINE +
                     " - $.httpRequests[0].invalidField: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
                     " - $.httpRequests[0].specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                     NEW_LINE +
                     OPEN_API_SPECIFICATION_URL
             ));
@@ -457,7 +457,7 @@ public class JsonSchemaVerificationSequenceValidatorIntegrationTest {
                     " - $.httpRequests[0].path: boolean found, string expected" + NEW_LINE +
                     " - $.httpRequests[0].path: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
                     " - $.httpRequests[0].specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                    " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                     NEW_LINE +
                     OPEN_API_SPECIFICATION_URL
             ));
@@ -479,7 +479,7 @@ public class JsonSchemaVerificationSequenceValidatorIntegrationTest {
                 " - $.httpRequests[0].headers[0]: string found, object expected" + NEW_LINE +
                 " - $.httpRequests[0].headers[1]: string found, object expected" + NEW_LINE +
                 " - $.httpRequests[0].specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                " - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                 NEW_LINE +
                 OPEN_API_SPECIFICATION_URL));
     }

@@ -50,6 +50,9 @@
     "httpForwardValidateAction": {
       "$ref": "#/definitions/httpForwardValidateAction"
     },
+    "httpForwardWithFallback": {
+      "$ref": "#/definitions/httpForwardWithFallback"
+    },
     "httpError": {
       "$ref": "#/definitions/httpError"
     },
@@ -159,6 +162,11 @@
     {
       "required": [
         "httpForwardValidateAction"
+      ]
+    },
+    {
+      "required": [
+        "httpForwardWithFallback"
       ]
     },
     {

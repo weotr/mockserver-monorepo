@@ -71,7 +71,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 <p>A <strong>request matcher expectation</strong> may contain:</p>
 <ul>
     <li><strong><a href="#request_matchers">request matcher</a></strong> - used to match which requests this expectation should be applied to</li>
-    <li><strong><a href="#actions">action</a></strong> - what action to take, actions include <strong>response</strong>, <strong>forward</strong>, <strong>callback</strong> and <strong>error</strong></li>
+    <li><strong><a href="#actions">action</a></strong> - what action to take, actions include <strong>response</strong>, <strong>forward</strong>, <strong><a href="#forward_with_fallback_action">forward with fallback</a></strong>, <strong>callback</strong> and <strong>error</strong></li>
     <li><strong><a href="#button_match_request_by_path_exactly_twice">times</a></strong> <em>(optional)</em> - how many times the action should be taken</li>
     <li><strong><a href="#button_match_request_by_path_exactly_once_in_the_next_60_seconds">timeToLive</a></strong> <em>(optional)</em> - how long the expectation should stay active</li>
     <li><strong><a href="#button_match_request_by_priority">priority</a></strong> <em>(optional)</em> - matching is ordered by priority (highest first) then creation (earliest first)</li>
@@ -927,6 +927,72 @@ new MockServerClient("localhost", 1080)
 <div class="panel title">
     {% include_subpage _includes/forward_action_code_examples.html %}
 </div>
+
+<a id="forward_with_fallback_action" class="anchor" href="#forward_with_fallback_action">&nbsp;</a>
+
+<h3>Forward with Fallback</h3>
+
+<p>A <strong>forward with fallback action</strong> (<span class="inline_code">httpForwardWithFallback</span>) forwards the request to an upstream service, but returns a pre-configured fallback response when the upstream returns an error status code or the connection fails. This is unique to MockServer's hybrid mock+proxy architecture.</p>
+
+<p>Use cases:</p>
+<ul>
+    <li><strong>Resilience testing</strong> - test your application's behaviour when a downstream service is flaky</li>
+    <li><strong>Development against partially-available services</strong> - work offline with cached/mock responses while still connecting to real services when they are available</li>
+    <li><strong>Circuit breaker simulation</strong> - provide a fallback response on specific status codes like 429 (rate limited) or 503 (service unavailable)</li>
+</ul>
+
+<h4>Configuration</h4>
+<ul>
+    <li><strong>httpForward</strong> - the upstream target (host, port, scheme)</li>
+    <li><strong>fallbackResponse</strong> - the mock response to return when fallback is triggered</li>
+    <li><strong>fallbackOnStatusCodes</strong> - list of HTTP status codes that trigger the fallback (defaults to 500-599 when not specified)</li>
+    <li><strong>fallbackOnTimeout</strong> - whether to return the fallback on connection errors or timeouts (defaults to true)</li>
+</ul>
+
+<h4>Java Client Example</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/downstream")
+    )
+    .forwardWithFallback(
+        forwardWithFallback()
+            .withForward(
+                forward()
+                    .withHost("downstream-service.example.com")
+                    .withPort(443)
+                    .withScheme(HttpForward.Scheme.HTTPS)
+            )
+            .withFallback(
+                response()
+                    .withStatusCode(200)
+                    .withBody("{\"status\": \"cached\", \"data\": []}")
+            )
+            .withFallbackOnStatusCodes(500, 502, 503, 504)
+            .withFallbackOnTimeout(true)
+    );</code></pre>
+
+<h4>JSON Example</h4>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "httpRequest": {
+        "path": "/api/downstream"
+    },
+    "httpForwardWithFallback": {
+        "httpForward": {
+            "host": "downstream-service.example.com",
+            "port": 443,
+            "scheme": "HTTPS"
+        },
+        "fallbackResponse": {
+            "statusCode": 200,
+            "body": "{\"status\": \"cached\", \"data\": []}"
+        },
+        "fallbackOnStatusCodes": [500, 502, 503, 504],
+        "fallbackOnTimeout": true
+    }
+}</code></pre>
 
 <a id="error_action" class="anchor" href="#error_action">&nbsp;</a>
 

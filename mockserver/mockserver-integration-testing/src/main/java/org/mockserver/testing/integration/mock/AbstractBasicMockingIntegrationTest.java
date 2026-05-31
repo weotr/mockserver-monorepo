@@ -2789,7 +2789,7 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractMockin
             "   - $.httpSseResponse: is missing, but is required, if specifying action of type SseResponse" + NEW_LINE +
             "   - $.httpWebSocketResponse: is missing, but is required, if specifying action of type WebSocketResponse" + NEW_LINE +
             "   - $.incorrectField: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+            "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
             "  " + NEW_LINE +
             "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  ")));
     }

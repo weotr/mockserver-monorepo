@@ -72,6 +72,7 @@ public class HttpActionHandler {
     private HttpForwardObjectCallbackActionHandler httpForwardObjectCallbackActionHandler;
     private HttpOverrideForwardedRequestActionHandler httpOverrideForwardedRequestCallbackActionHandler;
     private HttpForwardValidateActionHandler httpForwardValidateActionHandler;
+    private HttpForwardWithFallbackActionHandler httpForwardWithFallbackActionHandler;
     private HttpSseResponseActionHandler httpSseResponseActionHandler;
     private HttpLlmResponseActionHandler httpLlmResponseActionHandler;
     private HttpWebSocketResponseActionHandler httpWebSocketResponseActionHandler;
@@ -293,6 +294,10 @@ public class HttpActionHandler {
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_VALIDATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) action, request);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+            case FORWARD_WITH_FALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
+                final HttpForwardActionResult responseFuture = getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) action, request);
                 writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case SSE_RESPONSE -> {
@@ -850,6 +855,10 @@ public class HttpActionHandler {
                         HttpForwardActionResult result = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) secondaryAction, request);
                         logForwardResultAsync(result, request, secondaryAction);
                     }
+                    case FORWARD_WITH_FALLBACK -> {
+                        HttpForwardActionResult result = getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) secondaryAction, request);
+                        logForwardResultAsync(result, request, secondaryAction);
+                    }
                     case ERROR -> { }
                     default -> { }
                 }
@@ -1331,6 +1340,10 @@ public class HttpActionHandler {
                     org.mockserver.metrics.Metrics.incrementHttpChaosInjected("latency");
                 }
 
+                // Drift detection: asynchronously compare the real upstream response against
+                // any response-type stub expectations matching this request.
+                analyseDrift(request, response);
+
                 // Factor the write (streaming vs non-streaming) into a single command so
                 // it can be dispatched either directly or via the non-blocking scheduler.
                 final Runnable writeCommand;
@@ -1694,6 +1707,13 @@ public class HttpActionHandler {
             httpForwardValidateActionHandler = new HttpForwardValidateActionHandler(mockServerLogger, configuration, httpClient);
         }
         return httpForwardValidateActionHandler;
+    }
+
+    private HttpForwardWithFallbackActionHandler getHttpForwardWithFallbackActionHandler() {
+        if (httpForwardWithFallbackActionHandler == null) {
+            httpForwardWithFallbackActionHandler = new HttpForwardWithFallbackActionHandler(mockServerLogger, configuration, httpClient);
+        }
+        return httpForwardWithFallbackActionHandler;
     }
 
     private HttpSseResponseActionHandler getHttpSseResponseActionHandler() {

@@ -350,6 +350,18 @@ public class ForwardChainExpectation {
     }
 
     /**
+     * Forward request to the upstream host and return a fallback response when
+     * the upstream returns a configured status code (default 5xx) or times out.
+     *
+     * @param httpForwardWithFallback the forward-with-fallback action
+     * @return added or updated expectations
+     */
+    public Expectation[] forwardWithFallback(final HttpForwardWithFallback httpForwardWithFallback) {
+        expectation.thenForwardWithFallback(httpForwardWithFallback);
+        return mockServerClient.upsert(expectation);
+    }
+
+    /**
      * Return error when expectation is matched
      *
      * @param httpError error to return

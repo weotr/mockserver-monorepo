@@ -250,7 +250,7 @@ public class ExpectationSerializerIntegrationTest {
                 "   - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
                 "   - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
                 "   - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                 "  " + NEW_LINE +
                 "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  ")));
         }
@@ -380,7 +380,7 @@ public class ExpectationSerializerIntegrationTest {
                 "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
                 "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
                 "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                 "    " + NEW_LINE +
                 "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + "," + NEW_LINE +
                 "  " + NEW_LINE +
@@ -405,7 +405,7 @@ public class ExpectationSerializerIntegrationTest {
                 "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
                 "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
                 "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                 "    " + NEW_LINE +
                 "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + "," + NEW_LINE +
                 "  " + NEW_LINE +
@@ -430,7 +430,7 @@ public class ExpectationSerializerIntegrationTest {
                 "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
                 "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
                 "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
                 "    " + NEW_LINE +
                 "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + NEW_LINE +
                 "]"));

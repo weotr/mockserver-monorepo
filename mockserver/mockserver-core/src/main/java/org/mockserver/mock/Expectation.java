@@ -48,6 +48,7 @@ public class Expectation extends ObjectWithJsonToString {
     private HttpObjectCallback httpForwardObjectCallback;
     private HttpOverrideForwardedRequest httpOverrideForwardedRequest;
     private HttpForwardValidateAction httpForwardValidateAction;
+    private HttpForwardWithFallback httpForwardWithFallback;
     private HttpSseResponse httpSseResponse;
     private HttpLlmResponse httpLlmResponse;
     private HttpWebSocketResponse httpWebSocketResponse;
@@ -429,6 +430,10 @@ public class Expectation extends ObjectWithJsonToString {
         return httpForwardValidateAction;
     }
 
+    public HttpForwardWithFallback getHttpForwardWithFallback() {
+        return httpForwardWithFallback;
+    }
+
     public HttpSseResponse getHttpSseResponse() {
         return httpSseResponse;
     }
@@ -631,6 +636,9 @@ public class Expectation extends ObjectWithJsonToString {
         if (getHttpForwardValidateAction() != null) {
             actions.add(getHttpForwardValidateAction());
         }
+        if (getHttpForwardWithFallback() != null) {
+            actions.add(getHttpForwardWithFallback());
+        }
         if (getHttpSseResponse() != null) {
             actions.add(getHttpSseResponse());
         }
@@ -745,6 +753,14 @@ public class Expectation extends ObjectWithJsonToString {
     public Expectation thenForwardValidate(HttpForwardValidateAction httpForwardValidateAction) {
         if (httpForwardValidateAction != null) {
             this.httpForwardValidateAction = httpForwardValidateAction;
+            this.hashCode = 0;
+        }
+        return this;
+    }
+
+    public Expectation thenForwardWithFallback(HttpForwardWithFallback httpForwardWithFallback) {
+        if (httpForwardWithFallback != null) {
+            this.httpForwardWithFallback = httpForwardWithFallback;
             this.hashCode = 0;
         }
         return this;
@@ -879,6 +895,7 @@ public class Expectation extends ObjectWithJsonToString {
             .thenForward(httpForwardObjectCallback)
             .thenForward(httpOverrideForwardedRequest)
             .thenForwardValidate(httpForwardValidateAction)
+            .thenForwardWithFallback(httpForwardWithFallback)
             .thenRespondWithSse(httpSseResponse)
             .thenRespondWithLlm(httpLlmResponse)
             .thenRespondWithWebSocket(httpWebSocketResponse)
@@ -928,6 +945,7 @@ public class Expectation extends ObjectWithJsonToString {
             Objects.equals(httpForwardObjectCallback, that.httpForwardObjectCallback) &&
             Objects.equals(httpOverrideForwardedRequest, that.httpOverrideForwardedRequest) &&
             Objects.equals(httpForwardValidateAction, that.httpForwardValidateAction) &&
+            Objects.equals(httpForwardWithFallback, that.httpForwardWithFallback) &&
             Objects.equals(httpSseResponse, that.httpSseResponse) &&
             Objects.equals(httpLlmResponse, that.httpLlmResponse) &&
             Objects.equals(httpWebSocketResponse, that.httpWebSocketResponse) &&
@@ -946,7 +964,7 @@ public class Expectation extends ObjectWithJsonToString {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(priority, percentage, chaos, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, binaryResponse, dnsResponse, httpError, afterActions, httpResponses, responseMode, scenarioName, scenarioState, newScenarioState);
+            hashCode = Objects.hash(priority, percentage, chaos, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpForwardWithFallback, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, binaryResponse, dnsResponse, httpError, afterActions, httpResponses, responseMode, scenarioName, scenarioState, newScenarioState);
         }
         return hashCode;
     }

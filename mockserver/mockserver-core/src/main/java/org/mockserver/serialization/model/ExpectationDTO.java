@@ -33,6 +33,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     private HttpObjectCallbackDTO httpForwardObjectCallback;
     private HttpOverrideForwardedRequestDTO httpOverrideForwardedRequest;
     private HttpForwardValidateActionDTO httpForwardValidateAction;
+    private HttpForwardWithFallbackDTO httpForwardWithFallback;
     private HttpSseResponseDTO httpSseResponse;
     private HttpLlmResponseDTO httpLlmResponse;
     private HttpWebSocketResponseDTO httpWebSocketResponse;
@@ -110,6 +111,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             if (httpForwardValidateAction != null) {
                 this.httpForwardValidateAction = new HttpForwardValidateActionDTO(httpForwardValidateAction);
             }
+            HttpForwardWithFallback httpForwardWithFallback = expectation.getHttpForwardWithFallback();
+            if (httpForwardWithFallback != null) {
+                this.httpForwardWithFallback = new HttpForwardWithFallbackDTO(httpForwardWithFallback);
+            }
             HttpSseResponse httpSseResponse = expectation.getHttpSseResponse();
             if (httpSseResponse != null) {
                 this.httpSseResponse = new HttpSseResponseDTO(httpSseResponse);
@@ -182,6 +187,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         HttpObjectCallback httpForwardObjectCallback = null;
         HttpOverrideForwardedRequest httpOverrideForwardedRequest = null;
         HttpForwardValidateAction httpForwardValidateAction = null;
+        HttpForwardWithFallback httpForwardWithFallback = null;
         HttpSseResponse httpSseResponse = null;
         HttpLlmResponse httpLlmResponse = null;
         HttpWebSocketResponse httpWebSocketResponse = null;
@@ -224,6 +230,9 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         }
         if (this.httpForwardValidateAction != null) {
             httpForwardValidateAction = this.httpForwardValidateAction.buildObject();
+        }
+        if (this.httpForwardWithFallback != null) {
+            httpForwardWithFallback = this.httpForwardWithFallback.buildObject();
         }
         if (this.httpSseResponse != null) {
             httpSseResponse = this.httpSseResponse.buildObject();
@@ -282,6 +291,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             .thenForward(httpForwardObjectCallback)
             .thenForward(httpOverrideForwardedRequest)
             .thenForwardValidate(httpForwardValidateAction)
+            .thenForwardWithFallback(httpForwardWithFallback)
             .thenRespondWithSse(httpSseResponse)
             .thenRespondWithLlm(httpLlmResponse)
             .thenRespondWithWebSocket(httpWebSocketResponse)
@@ -426,6 +436,15 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
 
     public ExpectationDTO setHttpForwardValidateAction(HttpForwardValidateActionDTO httpForwardValidateAction) {
         this.httpForwardValidateAction = httpForwardValidateAction;
+        return this;
+    }
+
+    public HttpForwardWithFallbackDTO getHttpForwardWithFallback() {
+        return httpForwardWithFallback;
+    }
+
+    public ExpectationDTO setHttpForwardWithFallback(HttpForwardWithFallbackDTO httpForwardWithFallback) {
+        this.httpForwardWithFallback = httpForwardWithFallback;
         return this;
     }
 

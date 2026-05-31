@@ -354,6 +354,7 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
                             "httpForwardObjectCallback, " +
                             "httpForwardTemplate, " +
                             "httpForwardValidateAction, " +
+                            "httpForwardWithFallback, " +
                             "httpOverrideForwardedRequest, " +
                             "httpResponse, " +
                             "httpResponseClassCallback, " +
