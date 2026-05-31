@@ -1638,9 +1638,9 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     org.mockserver.mock.drift.DriftStore.getInstance().clear();
-                    responseWriter.writeResponse(request, response()
+                    responseWriter.writeResponse(request, withDashboardCORS(request, response()
                         .withStatusCode(OK.code())
-                        .withBody("{\"status\":\"cleared\"}", MediaType.JSON_UTF_8), true);
+                        .withBody("{\"status\":\"cleared\"}", MediaType.JSON_UTF_8)), true);
                 }
                 canHandle.complete(true);
 
@@ -1709,7 +1709,7 @@ public class HttpState {
             }
             if (request.matches("GET", PATH_PREFIX + "/drift", "/drift")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, handleDriftGet(request), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleDriftGet(request)), true);
                 }
                 return true;
             }
@@ -1721,7 +1721,7 @@ public class HttpState {
             }
             if (request.matches("GET", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, handleGrpcHealthGet(), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcHealthGet()), true);
                 }
                 return true;
             }

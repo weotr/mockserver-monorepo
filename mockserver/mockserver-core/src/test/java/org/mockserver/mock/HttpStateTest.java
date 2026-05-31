@@ -3209,6 +3209,28 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldAddCorsHeadersToDriftResponsesWithoutEnableCorsForApi() {
+        // the Drift dashboard tab GETs /mockserver/drift (and clears via /drift/clear)
+        // cross-origin from the UI dev server, so these responses must carry CORS headers
+        // even when enableCORSForAPI is off (the default here)
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        HttpRequest getRequest = request("/mockserver/drift")
+            .withMethod("GET")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(getRequest, getWriter, false), is(true));
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        assertThat(getWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+
+        FakeResponseWriter clearWriter = new FakeResponseWriter();
+        HttpRequest clearRequest = request("/mockserver/drift/clear")
+            .withMethod("PUT")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(clearRequest, clearWriter, false), is(true));
+        assertThat(clearWriter.response.getStatusCode(), is(200));
+        assertThat(clearWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+    }
+
+    @Test
     public void shouldRejectServiceChaosWithTtlBelowOne() throws Exception {
         FakeResponseWriter writer = new FakeResponseWriter();
         HttpRequest putRequest = request("/mockserver/serviceChaos")
