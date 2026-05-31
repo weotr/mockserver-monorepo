@@ -306,6 +306,14 @@ client.when(
     <li><strong>Bidirectional streaming RPC</strong> — not yet supported</li>
 </ul>
 
+<a id="grpc_fault_injection_link" class="anchor" href="#grpc_fault_injection_link">&nbsp;</a>
+
+<h2>gRPC Fault Injection (Chaos)</h2>
+
+<p>MockServer can inject gRPC-level faults — <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, <code class="inline code">RESOURCE_EXHAUSTED</code>, and other status codes — into matched RPC calls, with optional latency and request-quota controls. Faults are registered per gRPC service name via a dedicated control-plane endpoint and apply before normal request conversion in <code class="inline code">GrpcToHttpRequestHandler</code>.</p>
+
+<p>This is separate from the health-check serving-status feature described below. See the <a href="/mock_server/chaos_testing.html#grpc_fault_injection">gRPC Fault Injection</a> section on the Chaos Testing page for the full profile reference and REST API examples.</p>
+
 <a id="grpc_health_check" class="anchor" href="#grpc_health_check">&nbsp;</a>
 
 <h2>gRPC Health Checking Protocol</h2>

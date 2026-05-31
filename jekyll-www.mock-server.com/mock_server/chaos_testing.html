@@ -547,6 +547,156 @@ mock_server_active_service_chaos{fault_type="drop"}</code></pre>
 
 <p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for all seven chaos profile properties. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
 
+<a id="grpc_fault_injection" class="anchor" href="#grpc_fault_injection">&nbsp;</a>
+
+<h2>gRPC Fault Injection</h2>
+
+<p>MockServer can inject gRPC-level faults — error status codes, latency, and rate-limit exhaustion — on matched gRPC RPC calls. This is <strong>distinct from the gRPC health-check chaos</strong> (which controls the <code class="inline code">grpc.health.v1.Health/Check</code> serving-status response): gRPC fault injection fires <em>before</em> normal gRPC request conversion in <code class="inline code">GrpcToHttpRequestHandler</code> and applies to any RPC method on any loaded service, not just health probes.</p>
+
+<p>Register one chaos profile per gRPC service name. The profile is applied to every matched call to that service. An empty string (<code class="inline code">""</code>) registers a default profile that applies to all services without a more-specific override.</p>
+
+<p><strong>Why use this:</strong> gRPC clients have their own retry, deadline, and circuit-breaker logic that is separate from HTTP clients. Injecting <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, or <code class="inline code">RESOURCE_EXHAUSTED</code> statuses at the RPC layer tests that gRPC-native error handling, backoff, and deadline propagation work correctly — without having to modify the real service.</p>
+
+<p><strong>Note:</strong> streaming message-level faults (drop or truncate individual stream messages mid-stream) are planned for a future release. The v1 profile covers unary-applicable faults: status injection, latency, request quota, and count windows.</p>
+
+<h3>gRPC Chaos Profile Fields</h3>
+
+<p>A gRPC chaos profile is a JSON object (or <code class="inline code">GrpcChaosProfile</code> in the Java model) with the following fields. All fields are optional — omit any you don't need.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Valid values / range</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">errorStatusCode</code></td>
+            <td>string</td>
+            <td>The gRPC status code name to return when a fault fires. When set, the handler writes an HTTP 200 response with the corresponding <code class="inline code">grpc-status</code> trailer. Must be one of the 17 canonical gRPC status code names.</td>
+            <td>See table below</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorMessage</code></td>
+            <td>string</td>
+            <td>The <code class="inline code">grpc-message</code> trailer value sent alongside the error status code. Optional — omit to send no message.</td>
+            <td>any string</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorProbability</code></td>
+            <td>number</td>
+            <td>Probability (0.0 to 1.0) that a matched call receives the error instead of normal processing. <code class="inline code">0.0</code> or omitted means no error injection; <code class="inline code">1.0</code> means every call gets the error.</td>
+            <td>0.0 &ndash; 1.0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">seed</code></td>
+            <td>integer</td>
+            <td>Fixed seed for the random number generator used by <code class="inline code">errorProbability</code>. When set, the same seed + probability always produces the same inject/skip outcome, making tests reproducible.</td>
+            <td>any long integer</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">latencyMs</code></td>
+            <td>integer</td>
+            <td>Artificial delay in milliseconds added before the response (whether an error is injected or not).</td>
+            <td>&ge; 0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">succeedFirst</code></td>
+            <td>integer</td>
+            <td>The first N calls to this service bypass fault injection (succeed normally). Combine with <code class="inline code">failRequestCount</code> for a finite fault window.</td>
+            <td>&ge; 0 (default: omitted = 0)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">failRequestCount</code></td>
+            <td>integer</td>
+            <td>After the <code class="inline code">succeedFirst</code> window, the next M calls receive the fault; after that the service recovers. Omit for unlimited faults after the succeed window.</td>
+            <td>&ge; 1 (default: omitted = unlimited)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaName</code></td>
+            <td>string</td>
+            <td>Stateful rate-limit counter key. Required (with <code class="inline code">quotaLimit</code> and <code class="inline code">quotaWindowMillis</code>) to enable quota enforcement. Calls over the limit return <code class="inline code">RESOURCE_EXHAUSTED</code>.</td>
+            <td>(default: omitted = no quota)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaLimit</code></td>
+            <td>integer</td>
+            <td>Maximum number of calls allowed within the window before quota is exceeded.</td>
+            <td>&ge; 1 (default: omitted = no quota)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaWindowMillis</code></td>
+            <td>integer</td>
+            <td>Fixed-window length in milliseconds. The first call starts the window; it resets after this duration elapses. Calls beyond <code class="inline code">quotaLimit</code> within the window return <code class="inline code">RESOURCE_EXHAUSTED</code>.</td>
+            <td>&ge; 1 (default: omitted = no quota)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Supported gRPC Status Codes</h3>
+
+<p>The <code class="inline code">errorStatusCode</code> field accepts any of the 17 canonical gRPC status code names. The most commonly injected for resilience testing are:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Name</th>
+            <th>Typical test scenario</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>4</td><td><code class="inline code">DEADLINE_EXCEEDED</code></td><td>Client deadline propagation, timeout handling</td></tr>
+        <tr><td>8</td><td><code class="inline code">RESOURCE_EXHAUSTED</code></td><td>Rate-limit / quota exhaustion handling (also the quota fault code)</td></tr>
+        <tr><td>13</td><td><code class="inline code">INTERNAL</code></td><td>Unexpected server-side failure handling</td></tr>
+        <tr><td>14</td><td><code class="inline code">UNAVAILABLE</code></td><td>Service outage, retry and circuit-breaker testing</td></tr>
+        <tr><td>16</td><td><code class="inline code">UNAUTHENTICATED</code></td><td>Auth-token expiry and re-authentication flows</td></tr>
+        <tr><td>10</td><td><code class="inline code">ABORTED</code></td><td>Optimistic concurrency, transaction conflict handling</td></tr>
+    </tbody>
+</table>
+
+<p>All 17 canonical codes are accepted: <code class="inline code">OK</code>, <code class="inline code">CANCELLED</code>, <code class="inline code">UNKNOWN</code>, <code class="inline code">INVALID_ARGUMENT</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, <code class="inline code">NOT_FOUND</code>, <code class="inline code">ALREADY_EXISTS</code>, <code class="inline code">PERMISSION_DENIED</code>, <code class="inline code">RESOURCE_EXHAUSTED</code>, <code class="inline code">FAILED_PRECONDITION</code>, <code class="inline code">ABORTED</code>, <code class="inline code">OUT_OF_RANGE</code>, <code class="inline code">UNIMPLEMENTED</code>, <code class="inline code">INTERNAL</code>, <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DATA_LOSS</code>, <code class="inline code">UNAUTHENTICATED</code>.</p>
+
+<h3>gRPC Chaos REST API</h3>
+
+<pre class="code"><code class="code">// register a fault profile for a specific gRPC service (replaces any existing one)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorStatusCode": "UNAVAILABLE", "errorProbability": 0.3, "latencyMs": 200 } }
+
+// register with a TTL (auto-revert after 5 minutes)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorStatusCode": "UNAVAILABLE", "errorProbability": 1.0 }, "ttlMillis": 300000 }
+
+// register a default profile that applies to ALL gRPC services (empty string key)
+PUT /mockserver/grpcChaos
+{ "service": "", "chaos": { "errorStatusCode": "DEADLINE_EXCEEDED", "errorProbability": 0.2 } }
+
+// remove the profile for a service
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "remove": true }
+
+// clear all gRPC chaos profiles
+PUT /mockserver/grpcChaos
+{ "clear": true }
+
+// read all active gRPC chaos profiles and TTL countdowns
+GET /mockserver/grpcChaos
+
+// merge-patch — update only the specified fields, preserve the rest and the TTL
+PATCH /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorProbability": 0.9 } }</code></pre>
+
+<p>The <code class="inline code">GET</code> response reports active profiles under a <code class="inline code">services</code> map (service name &rarr; profile) and, when any registrations carry a TTL, a <code class="inline code">ttlRemainingMillis</code> map alongside it.</p>
+
+<p>The <code class="inline code">PATCH</code> endpoint applies JSON Merge Patch semantics: only the fields you supply are updated; unspecified fields in the existing profile and the current TTL are left unchanged. If no profile exists yet for the service, the partial is registered as a new profile with no TTL.</p>
+
+<p>Like <a href="#service_scoped_chaos">service-scoped HTTP chaos</a> and <a href="#tcp_layer_chaos">TCP chaos</a>, registrations support an optional <code class="inline code">ttlMillis</code> for automatic expiry and are cleared on server reset.</p>
+
+<p><strong>Relationship to gRPC health-check chaos:</strong> the gRPC health-check feature (<code class="inline code">PUT /mockserver/grpc/health</code>) controls the <code class="inline code">grpc.health.v1.Health/Check</code> serving-status response — changing it makes a Kubernetes readiness probe fail. gRPC fault injection (this section, <code class="inline code">PUT /mockserver/grpcChaos</code>) injects status errors into any RPC method on your application services. The two mechanisms are independent.</p>
+
 <a id="tcp_layer_chaos" class="anchor" href="#tcp_layer_chaos">&nbsp;</a>
 
 <h2>TCP-Layer Chaos</h2>

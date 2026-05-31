@@ -22,6 +22,8 @@
  *                            faults, two with an auto-revert TTL) for the Chaos tab.
  *   - gRPC health chaos      a few forced gRPC health-check serving statuses
  *                            (NOT_SERVING / SERVICE_UNKNOWN / SERVING) for the Chaos tab.
+ *   - gRPC fault injection   a few gRPC fault-injection chaos registrations
+ *                            (status errors + latency + quota) for the Chaos tab.
  *
  * It talks to MockServer over its plain REST API (no extra dependencies — uses
  * the built-in global fetch in Node 18+). Safe to re-run: it resets first.
@@ -65,7 +67,7 @@ const SELF_HOST = TARGET.hostname;
 const SELF_PORT = Number(TARGET.port || (TARGET.protocol === 'https:' ? 443 : 80));
 const SELF_SCHEME = TARGET.protocol === 'https:' ? 'HTTPS' : 'HTTP';
 
-const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, drift: 0 };
+const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0 };
 function log(msg) { if (!quiet) console.log(msg); }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +521,35 @@ async function grpcHealthExamples() {
   }
 }
 
+// gRPC fault-injection chaos (Chaos tab -> "gRPC Fault Injection" section). These exercise
+// gRPC-level status errors and latency keyed by gRPC service name, distinct from gRPC health
+// overrides and HTTP-semantic faults. One carries an auto-revert TTL so the countdown is visible.
+const GRPC_CHAOS = [
+  {
+    service: 'payments.v1.PaymentService',
+    chaos: { errorStatusCode: 'UNAVAILABLE', errorProbability: 0.5, latencyMs: 200 },
+    ttlMillis: 600000,
+  },
+  {
+    service: 'orders.v1.OrderService',
+    chaos: { errorStatusCode: 'RESOURCE_EXHAUSTED', quotaName: 'orders', quotaLimit: 100, quotaWindowMillis: 60000 },
+  },
+  {
+    service: 'shipping.v1.ShippingService',
+    chaos: { errorStatusCode: 'DEADLINE_EXCEEDED', errorProbability: 1.0 },
+  },
+];
+
+async function grpcChaosExamples() {
+  log('\n→ gRPC fault injection chaos (Chaos tab)');
+  for (const entry of GRPC_CHAOS) {
+    const res = await api('PUT', '/mockserver/grpcChaos', entry);
+    if (!res.ok) throw new Error(`Failed to register gRPC chaos for "${entry.service}": HTTP ${res.status}`);
+    counts.grpcChaos++;
+    log(`   ~ grpc chaos     ${entry.service}${entry.ttlMillis ? `  (ttl ${entry.ttlMillis}ms)` : ''}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 3e. Mock drift detection (Drift tab)
 // ---------------------------------------------------------------------------
@@ -733,6 +764,7 @@ async function main() {
   await serviceChaosExamples();
   await tcpChaosExamples();
   await grpcHealthExamples();
+  await grpcChaosExamples();
   await driftExamples();
   await plainHttpTraffic();
   await proxyTraffic();
@@ -747,13 +779,14 @@ async function main() {
   log(` Service chaos hosts  : ${counts.serviceChaos} (2 with an auto-revert TTL countdown)`);
   log(` TCP chaos hosts      : ${counts.tcpChaos} (2 with an auto-revert TTL countdown)`);
   log(` gRPC health statuses : ${counts.grpcHealth} (NOT_SERVING / SERVICE_UNKNOWN / SERVING)`);
+  log(` gRPC chaos services  : ${counts.grpcChaos} (UNAVAILABLE / RESOURCE_EXHAUSTED / DEADLINE_EXCEEDED)`);
   log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
   log('');
   log(' Try these views in the dashboard:');
   log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills)');
   log('   Traffic            — recorded + proxied (forwarded) requests, incl. a lane per LLM provider + token/cost');
   log('   Sessions           — agent-001 / agent-002 loops + their call graphs');
-  log('   Chaos              — HTTP service chaos + TCP-layer chaos (fault chips + live TTL countdown) + gRPC health chaos');
+  log('   Chaos              — HTTP service chaos + gRPC fault injection + TCP-layer chaos (fault chips + live TTL countdown) + gRPC health chaos');
   log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
   log('');
 }

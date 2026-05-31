@@ -35,6 +35,9 @@ function stubServiceChaos(initial: {
       if (u.includes('/tcpChaos')) {
         return { ok: true, status: 200, statusText: 'ok', json: async () => ({ hosts: {} }) };
       }
+      if (u.includes('/grpcChaos')) {
+        return { ok: true, status: 200, statusText: 'ok', json: async () => ({ services: {} }) };
+      }
       return { ok: true, status: 200, statusText: 'ok', json: async () => state };
     }),
   );

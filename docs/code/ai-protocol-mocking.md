@@ -386,6 +386,39 @@ sequenceDiagram
 - **`ExpectationDTO`** includes a `grpcStreamResponse` field mapped to `GrpcStreamResponseDTO`
 - **`grpcStreamResponse.json`** JSON schema is registered in `JsonSchemaExpectationValidator`
 
+### gRPC Fault Injection
+
+`GrpcChaosProfile` (`org.mockserver.model.GrpcChaosProfile`) is a declarative gRPC fault/chaos injection profile. It is stored in a `GrpcChaosRegistry` keyed by gRPC service name and applied by `GrpcToHttpRequestHandler` before normal request conversion. An empty-string key registers a default profile that covers all services without a more-specific override.
+
+**Profile fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `errorStatusCode` | String | gRPC status code name (e.g. `"UNAVAILABLE"`, `"DEADLINE_EXCEEDED"`) — one of the 16 `GrpcStatusMapper.GrpcStatusCode` enum names |
+| `errorMessage` | String | Optional `grpc-message` trailer value |
+| `errorProbability` | Double | 0.0–1.0 probability of fault injection; null/0 = never, 1.0 = always |
+| `seed` | Long | Optional seed to make fractional probability reproducible |
+| `latencyMs` | Long | Milliseconds of artificial delay before the response; >= 0 |
+| `succeedFirst` | Integer | First N calls per service are not eligible for chaos; >= 0 |
+| `failRequestCount` | Integer | After `succeedFirst`, the next M calls are eligible; >= 1; null = unlimited |
+| `quotaName` | String | Shared rate-limit counter key |
+| `quotaLimit` | Integer | Max calls allowed per quota window; >= 1 |
+| `quotaWindowMillis` | Long | Fixed-window length in ms; calls over the limit return `RESOURCE_EXHAUSTED`; >= 1 |
+
+Serialization uses `GrpcChaosProfileDTO` (`org.mockserver.serialization.model.GrpcChaosProfileDTO`).
+
+This feature is distinct from `GrpcHealthRegistry` — gRPC fault injection fires on application RPC methods; health-check chaos controls the `grpc.health.v1.Health/Check` serving-status response.
+
+**REST endpoints:**
+
+| Endpoint | Action |
+|----------|--------|
+| `PUT /mockserver/grpcChaos` | Register, remove, or clear gRPC chaos profiles; supports `ttlMillis` for auto-expiry |
+| `GET /mockserver/grpcChaos` | Read all active profiles and TTL countdowns |
+| `PATCH /mockserver/grpcChaos` | JSON Merge Patch a single service's profile (preserves TTL) |
+
+**v1 scope:** unary-applicable faults (status injection, latency, quota, count windows). Streaming message-level faults (drop/truncate individual stream messages mid-stream) are deferred to a future release.
+
 ### gRPC Health Checking Protocol
 
 MockServer auto-responds to `grpc.health.v1.Health/Check` without requiring a proto descriptor. The implementation uses manual protobuf encode/decode so health checks work even when the descriptor store is empty.
@@ -438,6 +471,9 @@ All overrides are cleared on `HttpState.reset()`. An empty `service` string sets
 | `GrpcStreamMessage`, `GrpcStreamResponse` | `mockserver-core` | `org.mockserver.model` |
 | `GrpcFrameCodec`, `GrpcJsonMessageConverter`, `GrpcProtoDescriptorStore`, `GrpcProtoFileCompiler`, `GrpcStatusMapper`, `GrpcException` | `mockserver-core` | `org.mockserver.grpc` |
 | `GrpcHealthRegistry`, `GrpcHealthCheckHandler`, `ServingStatus` | `mockserver-core` | `org.mockserver.grpc` |
+| `GrpcChaosProfile` | `mockserver-core` | `org.mockserver.model` |
+| `GrpcChaosRegistry` | `mockserver-core` | `org.mockserver.mock.action.http` |
+| `GrpcChaosProfileDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `GrpcStreamResponseActionHandler` | `mockserver-core` | `org.mockserver.mock.action.http` |
 | `GrpcStreamMessageDTO`, `GrpcStreamResponseDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `GrpcToHttpRequestHandler`, `GrpcToHttpResponseHandler` | `mockserver-netty` | `org.mockserver.netty.grpc` |

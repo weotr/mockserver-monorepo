@@ -54,6 +54,15 @@ import {
   type TcpChaosProfileDTO,
   type TcpChaosResponse,
 } from '../lib/tcpChaos';
+import {
+  fetchGrpcChaos,
+  registerGrpcChaos,
+  removeGrpcChaos,
+  clearGrpcChaos,
+  summarizeGrpcChaosProfile,
+  type GrpcChaosProfileDTO,
+  type GrpcChaosResponse,
+} from '../lib/grpcChaos';
 
 interface ServiceChaosPanelProps {
   connectionParams: ConnectionParams;
@@ -193,6 +202,68 @@ function validateTcpForm(form: TcpFormState): string | null {
 
 const SERVING_STATUSES: ServingStatus[] = ['SERVING', 'NOT_SERVING', 'UNKNOWN', 'SERVICE_UNKNOWN'];
 
+// --- gRPC fault injection form state ---
+
+const GRPC_STATUS_CODES = [
+  'OK', 'CANCELLED', 'UNKNOWN', 'INVALID_ARGUMENT', 'DEADLINE_EXCEEDED',
+  'NOT_FOUND', 'ALREADY_EXISTS', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED',
+  'FAILED_PRECONDITION', 'ABORTED', 'OUT_OF_RANGE', 'UNIMPLEMENTED',
+  'INTERNAL', 'UNAVAILABLE', 'DATA_LOSS', 'UNAUTHENTICATED',
+] as const;
+
+interface GrpcChaosFormState {
+  service: string;
+  errorStatusCode: string;
+  errorProbability: string;
+  latencyMs: string;
+  quotaName: string;
+  quotaLimit: string;
+  quotaWindowMillis: string;
+  ttlMs: string;
+}
+
+const EMPTY_GRPC_CHAOS_FORM: GrpcChaosFormState = {
+  service: '',
+  errorStatusCode: 'UNAVAILABLE',
+  errorProbability: '',
+  latencyMs: '',
+  quotaName: '',
+  quotaLimit: '',
+  quotaWindowMillis: '',
+  ttlMs: '',
+};
+
+function buildGrpcChaosProfile(form: GrpcChaosFormState): GrpcChaosProfileDTO {
+  const profile: GrpcChaosProfileDTO = {};
+  if (form.errorStatusCode) profile.errorStatusCode = form.errorStatusCode;
+  const errorProbability = num(form.errorProbability);
+  if (errorProbability != null) profile.errorProbability = errorProbability;
+  const latencyMs = num(form.latencyMs);
+  if (latencyMs != null) profile.latencyMs = latencyMs;
+  const quotaName = form.quotaName.trim();
+  if (quotaName) profile.quotaName = quotaName;
+  const quotaLimit = num(form.quotaLimit);
+  if (quotaLimit != null) profile.quotaLimit = quotaLimit;
+  const quotaWindowMillis = num(form.quotaWindowMillis);
+  if (quotaWindowMillis != null) profile.quotaWindowMillis = quotaWindowMillis;
+  return profile;
+}
+
+function validateGrpcChaosForm(form: GrpcChaosFormState): string | null {
+  if (form.service.trim() === '') return 'Service is required';
+  const profile = buildGrpcChaosProfile(form);
+  if (summarizeGrpcChaosProfile(profile).length === 0) {
+    return 'Set at least one fault (error code, latency, or quota)';
+  }
+  const ep = num(form.errorProbability);
+  if (ep != null && (ep < 0 || ep > 1)) return 'Error probability must be between 0 and 1';
+  const latencyMs = num(form.latencyMs);
+  if (latencyMs != null && latencyMs < 0) return 'Latency must be 0 or greater';
+  const ttl = num(form.ttlMs);
+  if (ttl != null && (!Number.isInteger(ttl) || ttl < 1)) return 'TTL must be a whole number of milliseconds >= 1';
+  return null;
+}
+
 function servingStatusColor(status: ServingStatus): 'success' | 'error' | 'default' | 'warning' {
   switch (status) {
     case 'SERVING': return 'success';
@@ -230,6 +301,11 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [tcpExpanded, setTcpExpanded] = useState(false);
   const [tcpData, setTcpData] = useState<TcpChaosResponse>({ hosts: {} });
   const [tcpForm, setTcpForm] = useState<TcpFormState>(EMPTY_TCP_FORM);
+
+  // gRPC fault injection chaos state
+  const [grpcChaosExpanded, setGrpcChaosExpanded] = useState(false);
+  const [grpcChaosData, setGrpcChaosData] = useState<GrpcChaosResponse>({ services: {} });
+  const [grpcChaosForm, setGrpcChaosForm] = useState<GrpcChaosFormState>(EMPTY_GRPC_CHAOS_FORM);
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
@@ -319,6 +395,32 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       if (timer) clearTimeout(timer);
     };
   }, [connectionParams, tcpExpanded, refreshTick]);
+
+  // Fetch gRPC fault injection chaos on mount (so the collapsed header chip shows the real count),
+  // then keep polling only while the section is expanded.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll(): Promise<void> {
+      try {
+        const result = await fetchGrpcChaos(connectionParams, controller.signal);
+        if (!cancelled) setGrpcChaosData(result);
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled && grpcChaosExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [connectionParams, grpcChaosExpanded, refreshTick]);
 
   const hosts = useMemo(() => Object.keys(data.services).sort(), [data.services]);
 
@@ -449,6 +551,33 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       setTcpForm(EMPTY_TCP_FORM);
     });
   }, [connectionParams, tcpForm, runAction]);
+
+  // gRPC fault injection chaos helpers
+  const grpcChaosServices = useMemo(() => Object.keys(grpcChaosData?.services ?? {}).sort(), [grpcChaosData?.services]);
+
+  const grpcChaosRemainingTtl = (service: string): number | undefined => {
+    const atPoll = grpcChaosData.ttlRemainingMillis?.[service];
+    if (atPoll == null) return undefined;
+    return Math.max(0, atPoll - (now - polledAt));
+  };
+
+  const setGrpcChaosField = (field: keyof GrpcChaosFormState) => (e: ChangeEvent<HTMLInputElement>) =>
+    setGrpcChaosForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const handleRegisterGrpcChaos = useCallback(() => {
+    const validationError = validateGrpcChaosForm(grpcChaosForm);
+    if (validationError !== null) {
+      setActionError(validationError);
+      return;
+    }
+    const service = grpcChaosForm.service.trim();
+    const profile = buildGrpcChaosProfile(grpcChaosForm);
+    const ttl = num(grpcChaosForm.ttlMs);
+    void runAction(async () => {
+      await registerGrpcChaos(connectionParams, service, profile, ttl);
+      setGrpcChaosForm(EMPTY_GRPC_CHAOS_FORM);
+    });
+  }, [connectionParams, grpcChaosForm, runAction]);
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -693,6 +822,114 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                   </TableBody>
                 </Table>
               </TableContainer>
+            )}
+          </Box>
+        </Collapse>
+      </Paper>
+
+      {/* gRPC Fault Injection */}
+      <Paper variant="outlined" sx={{ p: 1.25, mt: 1.5 }}>
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+          onClick={() => setGrpcChaosExpanded((v) => !v)}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            gRPC Fault Injection
+          </Typography>
+          <Chip size="small" label={`${grpcChaosServices.length} services`} color={grpcChaosServices.length > 0 ? 'warning' : 'default'} variant="outlined" />
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Clear gRPC fault injection chaos">
+            <span>
+              <Button
+                size="small"
+                color="error"
+                startIcon={<DeleteSweepIcon fontSize="small" />}
+                disabled={busy || grpcChaosServices.length === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void runAction(() => clearGrpcChaos(connectionParams));
+                }}
+              >
+                Clear gRPC
+              </Button>
+            </span>
+          </Tooltip>
+          <IconButton size="small" aria-label={grpcChaosExpanded ? 'Collapse gRPC fault injection' : 'Expand gRPC fault injection'}>
+            {grpcChaosExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        </Box>
+        <Collapse in={grpcChaosExpanded} unmountOnExit>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Inject gRPC status errors (UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, &hellip;) and
+              latency on matched RPC calls &mdash; distinct from the health-check status above.
+            </Typography>
+
+            {/* gRPC Chaos Register form */}
+            <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+              <Typography variant="caption" color="text.secondary">Register gRPC chaos for a service</Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} sx={{ minWidth: 200 }} />
+                <Select
+                  size="small"
+                  value={grpcChaosForm.errorStatusCode}
+                  onChange={(e) => setGrpcChaosForm((prev) => ({ ...prev, errorStatusCode: e.target.value }))}
+                  sx={{ minWidth: 180 }}
+                >
+                  {GRPC_STATUS_CODES.map((code) => (
+                    <MenuItem key={code} value={code}>{code}</MenuItem>
+                  ))}
+                </Select>
+                <TextField size="small" label="Error prob" placeholder="0.5" value={grpcChaosForm.errorProbability} onChange={setGrpcChaosField('errorProbability')} sx={{ width: 100 }} />
+                <TextField size="small" label="Latency ms" placeholder="200" value={grpcChaosForm.latencyMs} onChange={setGrpcChaosField('latencyMs')} sx={{ width: 100 }} />
+                <TextField size="small" label="TTL ms" placeholder="60000" value={grpcChaosForm.ttlMs} onChange={setGrpcChaosField('ttlMs')} sx={{ width: 110 }} />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField size="small" label="Quota name" placeholder="rpc-quota" value={grpcChaosForm.quotaName} onChange={setGrpcChaosField('quotaName')} sx={{ width: 140 }} />
+                <TextField size="small" label="Quota limit" placeholder="100" value={grpcChaosForm.quotaLimit} onChange={setGrpcChaosField('quotaLimit')} sx={{ width: 100 }} />
+                <TextField size="small" label="Quota window ms" placeholder="60000" value={grpcChaosForm.quotaWindowMillis} onChange={setGrpcChaosField('quotaWindowMillis')} sx={{ width: 130 }} />
+                <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterGrpcChaos} sx={{ ml: 'auto', mt: 0.25 }}>
+                  Register
+                </Button>
+              </Box>
+            </Paper>
+
+            {/* gRPC Chaos Active registrations */}
+            {grpcChaosServices.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                No gRPC fault injection chaos registered.
+              </Typography>
+            ) : (
+              <Box>
+                {grpcChaosServices.map((service) => {
+                  const ttl = grpcChaosRemainingTtl(service);
+                  return (
+                    <Box key={service} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 200 }}>{service}</Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
+                        {summarizeGrpcChaosProfile(grpcChaosData.services[service] ?? {}).map((part) => (
+                          <Chip key={part} size="small" label={part} variant="outlined" />
+                        ))}
+                      </Box>
+                      {ttl != null && (
+                        <Chip size="small" color="warning" label={`auto-revert in ${formatTtl(ttl)}`} />
+                      )}
+                      <Tooltip title="Remove gRPC chaos for this service">
+                        <span>
+                          <IconButton
+                            size="small"
+                            aria-label={`Remove gRPC chaos for ${service}`}
+                            disabled={busy}
+                            onClick={() => void runAction(() => removeGrpcChaos(connectionParams, service))}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Box>
+                  );
+                })}
+              </Box>
             )}
           </Box>
         </Collapse>

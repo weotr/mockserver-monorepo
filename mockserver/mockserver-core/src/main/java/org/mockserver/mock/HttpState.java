@@ -308,6 +308,7 @@ public class HttpState {
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
         org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reset();
         org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
         org.mockserver.wasm.WasmStore.getInstance().reset();
         org.mockserver.mock.drift.DriftStore.getInstance().clear();
@@ -1342,6 +1343,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosPut(request)), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/debugMismatch", "/debugMismatch")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1694,6 +1702,12 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosGet()), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     try {
@@ -1763,6 +1777,12 @@ public class HttpState {
             if (request.matches("PATCH", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosPatch(request)), true);
+                }
+                return true;
+            }
+            if (request.matches("PATCH", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosPatch(request)), true);
                 }
                 return true;
             }
@@ -2215,6 +2235,153 @@ public class HttpState {
         } catch (Exception jsonError) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to process TCP chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- gRPC Chaos endpoint helpers ---
+
+    private HttpResponse handleGrpcChaosPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return grpcChaosError(objectMapper, "request body is required with a 'service' field (and a 'chaos' object), or 'clear':true to clear all");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            boolean clearAll = node.path("clear").asBoolean(false);
+            String service = node.has("service") ? node.path("service").asText("") : null;
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            if (clearAll && service != null) {
+                return grpcChaosError(objectMapper, "cannot specify both 'clear' and 'service'");
+            }
+            if (clearAll) {
+                registry.reset();
+                logGrpcChaos(request, "cleared all gRPC chaos", null);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "cleared");
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            if (service == null) {
+                return grpcChaosError(objectMapper, "'service' field is required");
+            }
+            if (node.path("remove").asBoolean(false) || !node.hasNonNull("chaos")) {
+                registry.remove(service);
+                logGrpcChaos(request, "removed gRPC chaos for service:{}", service);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "removed");
+                result.put("service", service);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            long ttlMillis = 0L;
+            if (node.hasNonNull("ttlMillis")) {
+                ttlMillis = node.path("ttlMillis").asLong(0L);
+                if (ttlMillis < 1) {
+                    return grpcChaosError(objectMapper, "'ttlMillis' must be >= 1 when supplied");
+                }
+            }
+            org.mockserver.serialization.model.GrpcChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.GrpcChaosProfileDTO.class);
+            org.mockserver.model.GrpcChaosProfile profile = dto.buildObject();
+            registry.put(service, profile, ttlMillis);
+            logGrpcChaos(request, ttlMillis > 0
+                ? "registered gRPC chaos (ttl " + ttlMillis + "ms) for service:{}"
+                : "registered gRPC chaos for service:{}", service);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("service", service);
+            if (ttlMillis > 0) {
+                result.put("ttlMillis", ttlMillis);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return grpcChaosError(objectMapper, "invalid gRPC chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return grpcChaosError(objectMapper, "failed to process gRPC chaos request: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleGrpcChaosPatch(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return grpcChaosError(objectMapper, "request body is required with 'service' and 'chaos' fields");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String service = node.has("service") ? node.path("service").asText("") : null;
+            if (service == null) {
+                return grpcChaosError(objectMapper, "'service' field is required");
+            }
+            if (!node.hasNonNull("chaos")) {
+                return grpcChaosError(objectMapper, "'chaos' field is required with at least one field to patch");
+            }
+            org.mockserver.serialization.model.GrpcChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.GrpcChaosProfileDTO.class);
+            org.mockserver.model.GrpcChaosProfile partial = dto.buildObject();
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            org.mockserver.model.GrpcChaosProfile updated = registry.patch(service, partial);
+            logGrpcChaos(request, "patched gRPC chaos for service:{}", service);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "patched");
+            result.put("service", service);
+            if (updated != null) {
+                result.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.GrpcChaosProfileDTO(updated)));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return grpcChaosError(objectMapper, "invalid gRPC chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return grpcChaosError(objectMapper, "failed to process gRPC chaos patch: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleGrpcChaosGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode services = result.putObject("services");
+            registry.entries().forEach((service, profile) ->
+                services.set(service, objectMapper.valueToTree(new org.mockserver.serialization.model.GrpcChaosProfileDTO(profile))));
+            java.util.Map<String, Long> ttlRemaining = registry.ttlRemainingMillis();
+            if (!ttlRemaining.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ObjectNode ttlNode = result.putObject("ttlRemainingMillis");
+                ttlRemaining.forEach((s, ms) -> ttlNode.put(s, ms.longValue()));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get gRPC chaos\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private void logGrpcChaos(HttpRequest request, String messageFormat, String service) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            LogEntry entry = new LogEntry()
+                .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request)
+                .setMessageFormat(messageFormat);
+            if (service != null) {
+                entry.setArguments(service);
+            }
+            mockServerLogger.logEvent(entry);
+        }
+    }
+
+    private HttpResponse grpcChaosError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process gRPC chaos request\"}", MediaType.JSON_UTF_8);
         }
     }
 
