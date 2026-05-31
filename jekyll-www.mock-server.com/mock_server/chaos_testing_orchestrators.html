@@ -1,0 +1,259 @@
+---
+title: Driving MockServer from Chaos Orchestrators
+shortTitle: Chaos Orchestrators
+description: Drive MockServer's service-scoped chaos from Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos using the control-plane endpoint, with a TTL dead-man's switch for safe auto-revert.
+layout: page
+pageOrder: 3
+section: 'Chaos Testing'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-05-31T08:00:00+00:00
+keywords: chaos orchestrator integration, chaos toolkit mockserver, aws fis http, azure chaos studio webhook, litmuschaos byoc, chaos engineering control plane, fault injection api, dead mans switch chaos, ttl auto revert
+schema_faq:
+  - question: "How do I drive MockServer chaos from an external chaos engineering tool?"
+    answer: "Any orchestrator that can make an HTTP call (or run a shell step) can drive MockServer's service-scoped chaos through the control-plane endpoint PUT /mockserver/serviceChaos. Register a chaos profile for an upstream host at the start of the experiment, run your steady-state checks, then clear it at the end. Always include a ttlMillis so the fault auto-reverts even if the orchestrator never sends the clear."
+  - question: "What happens if my chaos experiment crashes before it removes the fault?"
+    answer: "Add a ttlMillis (time-to-live) to the registration. MockServer auto-reverts the chaos that many milliseconds after it is registered, so the injected fault self-heals even if the orchestrator crashes, times out, or its rollback step never runs. This is the dead-man's-switch pattern and is the recommended safety net for every orchestrator integration."
+  - question: "Does AWS FIS or Azure Chaos Studio have a native MockServer fault?"
+    answer: "No. Neither has a generic HTTP action, so you wrap a control-plane call in a step they can run — an SSM RunShellScript document for AWS FIS, or an Azure Automation runbook / pipeline step for Azure Chaos Studio. Because those tools cannot guarantee a rollback step runs, set a ttlMillis matched to the experiment duration so MockServer reverts the fault on its own."
+---
+
+<p>MockServer is a controllable fault-injection point: its <a href="/mock_server/chaos_testing.html#service_scoped_chaos">service-scoped chaos</a> control plane lets you break an upstream host with a single HTTP call and revert it with another. That makes it straightforward to drive from any chaos-engineering orchestrator — the orchestrator owns the experiment timeline, MockServer applies the fault.</p>
+
+<a id="the_pattern" class="anchor" href="#the_pattern">&nbsp;</a>
+
+<h2>The integration pattern</h2>
+
+<p>Every orchestrator integration is the same three moves against <code class="inline code">PUT /mockserver/serviceChaos</code>:</p>
+
+<ol>
+    <li><strong>Inject</strong> at the start of the experiment — register a chaos profile for the target host, <em>with a <code class="inline code">ttlMillis</code></em>.</li>
+    <li><strong>Verify</strong> your steady-state hypothesis — does the application degrade gracefully (retries, fallback, circuit breaker) while the dependency is broken?</li>
+    <li><strong>Revert</strong> at the end — clear the chaos (and the TTL guarantees it reverts even if this step never runs).</li>
+</ol>
+
+<pre class="code"><code class="code"># 1. inject — break payments.svc for the planned 5-minute experiment window
+curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"payments.svc","chaos":{"errorStatus":503,"errorProbability":0.3,"latency":{"timeUnit":"MILLISECONDS","value":500}},"ttlMillis":300000}'
+
+# 2. verify — your orchestrator runs its steady-state probes against the app here
+
+# 3. revert — clear the chaos (TTL already guarantees auto-revert as a backstop)
+curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"payments.svc","remove":true}'</code></pre>
+
+<p><strong>Always set <code class="inline code">ttlMillis</code> when an orchestrator owns the experiment.</strong> Orchestrators crash, time out, get cancelled, and sometimes skip their rollback step. The TTL is a <strong>dead-man's switch</strong>: MockServer reverts the fault on its own after the window elapses, so a failed experiment can never leave a dependency permanently broken. Match the TTL to (or slightly above) the experiment's planned duration. See <a href="/mock_server/chaos_testing.html#service_scoped_chaos">Service-scoped Chaos</a>.</p>
+
+<a id="chaos_toolkit" class="anchor" href="#chaos_toolkit">&nbsp;</a>
+
+<h2>Chaos Toolkit</h2>
+
+<p><a href="https://chaostoolkit.org">Chaos Toolkit</a> experiments map cleanly onto the inject/verify/revert pattern: the <code class="inline code">method</code> registers the chaos, the <code class="inline code">steady-state-hypothesis</code> asserts the application copes, and <code class="inline code">rollbacks</code> clears it. The built-in <code class="inline code">http</code> provider sends the control-plane call directly — no custom extension needed.</p>
+
+<pre class="code"><code class="code">{
+  "title": "Payments API tolerates a flaky upstream",
+  "description": "Inject 30% 503s + 500ms latency into payments.svc and assert the checkout still succeeds",
+  "steady-state-hypothesis": {
+    "title": "Checkout stays healthy",
+    "probes": [
+      {
+        "type": "probe",
+        "name": "checkout-returns-2xx",
+        "tolerance": 200,
+        "provider": { "type": "http", "url": "http://app:8080/checkout/health", "method": "GET" }
+      }
+    ]
+  },
+  "method": [
+    {
+      "type": "action",
+      "name": "break-payments-upstream",
+      "provider": {
+        "type": "http",
+        "url": "http://mockserver:1080/mockserver/serviceChaos",
+        "method": "PUT",
+        "headers": { "Content-Type": "application/json" },
+        "arguments": {
+          "host": "payments.svc",
+          "chaos": { "errorStatus": 503, "errorProbability": 0.3, "latency": { "timeUnit": "MILLISECONDS", "value": 500 } },
+          "ttlMillis": 300000
+        }
+      },
+      "pauses": { "after": 60 }
+    }
+  ],
+  "rollbacks": [
+    {
+      "type": "action",
+      "name": "heal-payments-upstream",
+      "provider": {
+        "type": "http",
+        "url": "http://mockserver:1080/mockserver/serviceChaos",
+        "method": "PUT",
+        "headers": { "Content-Type": "application/json" },
+        "arguments": { "host": "payments.svc", "remove": true }
+      }
+    }
+  ]
+}</code></pre>
+
+<p>The <code class="inline code">Content-Type: application/json</code> header is what makes the built-in <code class="inline code">http</code> provider send <code class="inline code">arguments</code> as the JSON request body (rather than form data) on a <code class="inline code">PUT</code> — so the chaos profile reaches MockServer as the JSON it expects. The <code class="inline code">ttlMillis</code> of <code class="inline code">300000</code> means that even if the run is interrupted before <code class="inline code">rollbacks</code> executes, the chaos reverts after five minutes.</p>
+
+<a id="aws_fis" class="anchor" href="#aws_fis">&nbsp;</a>
+
+<h2>AWS Fault Injection Service (FIS)</h2>
+
+<p><a href="https://docs.aws.amazon.com/fis/">AWS FIS</a> has no generic HTTP action, so wrap the control-plane call in an SSM <code class="inline code">RunShellScript</code> document run against the host (EC2 instance or container task) that can reach MockServer. FIS stop conditions and timeouts halt the experiment but do not roll back an already-executed SSM command, so they will not undo a registered fault — the <code class="inline code">ttlMillis</code> (matched to the action <code class="inline code">duration</code>) is the backstop that guarantees recovery.</p>
+
+<pre class="code"><code class="code">{
+  "description": "Break payments.svc via MockServer for 5 minutes",
+  "actions": {
+    "break-payments-upstream": {
+      "actionId": "aws:ssm:send-command",
+      "parameters": {
+        "documentArn": "arn:aws:ssm:us-east-1::document/AWS-RunShellScript",
+        "duration": "PT5M",
+        "documentParameters": "{\"commands\":[\"curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos -H 'Content-Type: application/json' -d '{\\\"host\\\":\\\"payments.svc\\\",\\\"chaos\\\":{\\\"errorStatus\\\":503,\\\"errorProbability\\\":0.3},\\\"ttlMillis\\\":300000}'\"]}"
+      },
+      "targets": { "Instances": "mockserver-host" }
+    }
+  },
+  "targets": {
+    "mockserver-host": {
+      "resourceType": "aws:ec2:instance",
+      "resourceTags": { "Name": "mockserver" },
+      "selectionMode": "ALL"
+    }
+  },
+  "stopConditions": [
+    { "source": "aws:cloudwatch:alarm", "value": "arn:aws:cloudwatch:us-east-1:111122223333:alarm:checkout-error-rate" }
+  ],
+  "roleArn": "arn:aws:iam::111122223333:role/fis-mockserver-role"
+}</code></pre>
+
+<p>The <code class="inline code">PT5M</code> action duration and the <code class="inline code">ttlMillis</code> of <code class="inline code">300000</code> are deliberately the same: when the CloudWatch stop condition fires (or the duration elapses), the TTL has MockServer revert the fault without needing a second SSM command.</p>
+
+<a id="azure_chaos_studio" class="anchor" href="#azure_chaos_studio">&nbsp;</a>
+
+<h2>Azure Chaos Studio</h2>
+
+<p><a href="https://learn.microsoft.com/azure/chaos-studio/">Azure Chaos Studio</a> likewise has no generic HTTP fault, so trigger the control-plane call from a step it can drive — an Azure Automation runbook, a Logic App, or a pipeline task wrapped around the Chaos Studio experiment. As with FIS, set a <code class="inline code">ttlMillis</code> so the fault reverts even if the runbook or pipeline does not reach its cleanup step.</p>
+
+<p>An Azure Automation PowerShell runbook step:</p>
+
+<pre class="code"><code class="code">Invoke-RestMethod -Method Put `
+  -Uri "http://mockserver:1080/mockserver/serviceChaos" `
+  -ContentType "application/json" `
+  -Body '{"host":"payments.svc","chaos":{"errorStatus":503,"errorProbability":0.3},"ttlMillis":300000}'</code></pre>
+
+<p>Or an Azure Pipelines / GitHub Actions step around the experiment:</p>
+
+<pre class="code"><code class="code">- script: |
+    curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
+      -H 'Content-Type: application/json' \
+      -d '{"host":"payments.svc","chaos":{"errorStatus":503,"errorProbability":0.3},"ttlMillis":300000}'
+  displayName: "Inject upstream chaos (auto-reverts in 5m)"</code></pre>
+
+<a id="litmuschaos" class="anchor" href="#litmuschaos">&nbsp;</a>
+
+<h2>LitmusChaos (Bring Your Own Chaos)</h2>
+
+<p><a href="https://litmuschaos.io">LitmusChaos</a> probes can both drive and verify the experiment. A <code class="inline code">cmdProbe</code> in <code class="inline code">SOT</code> (Start Of Test) mode registers the chaos, an <code class="inline code">httpProbe</code> verifies the application still serves traffic, and a second <code class="inline code">cmdProbe</code> in <code class="inline code">EOT</code> (End Of Test) mode clears it. The <code class="inline code">ttlMillis</code> covers the case where the experiment pod is evicted before the EOT probe runs.</p>
+
+<pre class="code"><code class="code">probe:
+  - name: inject-mockserver-chaos
+    type: cmdProbe
+    mode: SOT
+    cmdProbe/inputs:
+      command: "curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos -H 'Content-Type: application/json' -d '{\"host\":\"payments.svc\",\"chaos\":{\"errorStatus\":503,\"errorProbability\":0.3},\"ttlMillis\":300000}'"
+      source:
+        image: "curlimages/curl:latest"
+      comparator:
+        type: "int"
+        criteria: "=="
+        value: "0"
+  - name: checkout-stays-healthy
+    type: httpProbe
+    mode: Continuous
+    httpProbe/inputs:
+      url: "http://app:8080/checkout/health"
+      method:
+        get:
+          criteria: "=="
+          responseCode: "200"
+    runProperties:
+      probeTimeout: 5s
+      interval: 5s
+  - name: clear-mockserver-chaos
+    type: cmdProbe
+    mode: EOT
+    cmdProbe/inputs:
+      command: "curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos -H 'Content-Type: application/json' -d '{\"clear\":true}'"
+      source:
+        image: "curlimages/curl:latest"
+      comparator:
+        type: "int"
+        criteria: "=="
+        value: "0"</code></pre>
+
+<a id="generic" class="anchor" href="#generic">&nbsp;</a>
+
+<h2>Any scheduler or pipeline</h2>
+
+<p>Because the integration point is a single HTTP call with a built-in safety timer, you do not need a dedicated chaos platform at all. A cron job, a CI pipeline, a k6 <code class="inline code">setup()</code>/<code class="inline code">teardown()</code>, an AWS Step Functions state, a Gremlin scenario hook, or a load-test harness can each drive a game-day exercise with one <code class="inline code">curl</code>:</p>
+
+<pre class="code"><code class="code"># a self-contained, self-healing game-day fault: one call, auto-reverts in 10 minutes
+curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
+  -H 'Content-Type: application/json' \
+  -d '{"host":"payments.svc","chaos":{"errorStatus":503,"errorProbability":0.5,"latency":{"timeUnit":"MILLISECONDS","value":1000}},"ttlMillis":600000}'</code></pre>
+
+<a id="observability" class="anchor" href="#observability">&nbsp;</a>
+
+<h2>Observing the experiment</h2>
+
+<p>While an experiment runs you can confirm what is active and watch the countdown:</p>
+
+<pre class="code"><code class="code"># shows each registered host, its profile, and the remaining TTL countdown
+curl -sf http://mockserver:1080/mockserver/serviceChaos
+# -&gt; { "services": { "payments.svc": { ... } }, "ttlRemainingMillis": { "payments.svc": 248123 } }</code></pre>
+
+<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, the <code class="inline code">mock_server_active_service_chaos</code> Prometheus gauge reports how many hosts currently have active service-scoped chaos. Because it drops to 0 as profiles are cleared or their TTLs lapse, <code class="inline code">mock_server_active_service_chaos &gt; 0</code> is a natural alert for "a chaos experiment is still live" — a useful guard against an orchestrator that forgot to clean up. See <a href="/mock_server/chaos_testing.html#chaos_observability">Observability</a>.</p>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> — chaos profile fields, service-scoped chaos, and the TTL dead-man's switch</li>
+    <li><a href="/mock_server/chaos_testing_kubernetes.html">Chaos Proxy in Kubernetes</a> — deploy MockServer in-path as a reverse, egress, or sidecar proxy</li>
+    <li><a href="/mock_server/mockserver_ui.html">Dashboard UI</a> — the Chaos tab for registering, watching and clearing service-scoped chaos by hand</li>
+    <li><a href="/mock_server/configuration_properties.html">Configuration Properties</a> — control-plane authentication and metrics configuration</li>
+</ul>
+
+<a id="faq" class="anchor" href="#faq">&nbsp;</a>
+
+<h2>FAQ</h2>
+
+<button id="button_faq_drive_external" class="accordion">How do I drive MockServer chaos from an external chaos engineering tool?</button>
+<div class="panel">
+    <p>Any orchestrator that can make an HTTP call (or run a shell step) can drive MockServer's service-scoped chaos through <code class="inline code">PUT /mockserver/serviceChaos</code>. Register a chaos profile for an upstream host at the start of the experiment, run your steady-state checks, then clear it at the end. Always include a <code class="inline code">ttlMillis</code> so the fault auto-reverts even if the orchestrator never sends the clear. See <a href="#the_pattern">The integration pattern</a> above.</p>
+</div>
+
+<button id="button_faq_crash_safe" class="accordion">What happens if my chaos experiment crashes before it removes the fault?</button>
+<div class="panel">
+    <p>Add a <code class="inline code">ttlMillis</code> (time-to-live) to the registration. MockServer auto-reverts the chaos that many milliseconds after it is registered, so the injected fault self-heals even if the orchestrator crashes, times out, or its rollback step never runs. This dead-man's-switch is the recommended safety net for every orchestrator integration.</p>
+</div>
+
+<button id="button_faq_native_fault" class="accordion">Does AWS FIS or Azure Chaos Studio have a native MockServer fault?</button>
+<div class="panel">
+    <p>No. Neither has a generic HTTP action, so you wrap a control-plane call in a step they can run — an SSM <code class="inline code">RunShellScript</code> document for <a href="#aws_fis">AWS FIS</a>, or an Azure Automation runbook / pipeline step for <a href="#azure_chaos_studio">Azure Chaos Studio</a>. Because those tools cannot guarantee a rollback step runs, set a <code class="inline code">ttlMillis</code> matched to the experiment duration so MockServer reverts the fault on its own.</p>
+</div>
+
+<button id="button_faq_auth" class="accordion">How do I call the chaos control plane when authentication is enabled?</button>
+<div class="panel">
+    <p>The <code class="inline code">/mockserver/serviceChaos</code> endpoint is protected by control-plane authentication when it is configured (mTLS or a JWT). Supply the same credentials your other control-plane calls use — for a JWT, add an <code class="inline code">Authorization: Bearer &lt;token&gt;</code> header to the <code class="inline code">curl</code> / HTTP request. See <a href="/mock_server/configuration_properties.html">Configuration Properties</a>.</p>
+</div>

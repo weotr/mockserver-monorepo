@@ -390,6 +390,8 @@ GET /mockserver/serviceChaos</code></pre>
 
 <p>The <a href="/mock_server/mockserver_ui.html">dashboard UI</a> also has a <strong>Chaos</strong> tab for managing service-scoped chaos interactively: register a host with an error status / error probability / drop probability / latency (and an optional TTL), see every active registration with a summary of its faults, watch the live TTL auto-revert countdown, and remove a single host or clear them all.</p>
 
+<p>Because the control plane is a single HTTP call with a built-in TTL safety timer, it is also the integration point for external chaos orchestrators — register the fault at the start of an experiment, verify the application copes, and let the TTL revert it even if the orchestrator never sends the clear. See <a href="/mock_server/chaos_testing_orchestrators.html">Driving MockServer from Chaos Orchestrators</a> for Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos recipes.</p>
+
 <a id="gradual_degradation" class="anchor" href="#gradual_degradation">&nbsp;</a>
 
 <h2>Gradual Degradation</h2>
