@@ -3182,6 +3182,33 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldAddCorsHeadersToServiceChaosResponsesWithoutEnableCorsForApi() {
+        // the dashboard may be served from another origin (e.g. the UI dev server) — the
+        // service-chaos control-plane responses must carry CORS headers even when
+        // enableCORSForAPI is off (the default here), mirroring the metrics / MCP endpoints
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        HttpRequest getRequest = request("/mockserver/serviceChaos")
+            .withMethod("GET")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(getRequest, getWriter, false), is(true));
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        assertThat(getWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+
+        FakeResponseWriter putWriter = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withHeader("Origin", "http://localhost:3000")
+            .withBody("{\"host\":\"upstream.svc\",\"chaos\":{\"errorStatus\":503}}");
+        assertThat(httpState.handle(putRequest, putWriter, false), is(true));
+        assertThat(putWriter.response.getStatusCode(), is(200));
+        assertThat(putWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+    }
+
+    @Test
     public void shouldRejectServiceChaosWithTtlBelowOne() throws Exception {
         FakeResponseWriter writer = new FakeResponseWriter();
         HttpRequest putRequest = request("/mockserver/serviceChaos")

@@ -6,6 +6,7 @@ import org.mockserver.authentication.AuthenticationHandler;
 import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
 import org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.cors.CORSHeaders;
 import org.mockserver.file.FileStore;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcProtoFileCompiler;
@@ -82,6 +83,10 @@ public class HttpState {
     // mockserver
     private final RequestMatchers requestMatchers;
     private final Configuration configuration;
+    // Adds CORS headers to dashboard-facing control-plane responses (e.g. service
+    // chaos) so the dashboard works when served from another origin (a dev server),
+    // matching the unconditional CORS already applied by the metrics and MCP endpoints.
+    private final CORSHeaders corsHeaders;
     private final MockServerLogger mockServerLogger;
     private final WebSocketClientRegistry webSocketClientRegistry;
     // serializers
@@ -134,6 +139,7 @@ public class HttpState {
 
     public HttpState(Configuration configuration, MockServerLogger mockServerLogger, Scheduler scheduler) {
         this.configuration = configuration;
+        this.corsHeaders = new CORSHeaders(configuration);
         this.mockServerLogger = mockServerLogger.setHttpStateHandler(this);
         this.scheduler = scheduler;
         this.webSocketClientRegistry = new WebSocketClientRegistry(configuration, mockServerLogger);
@@ -1296,7 +1302,7 @@ public class HttpState {
             } else if (request.matches("PUT", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, handleServiceChaosPut(request), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosPut(request)), true);
                 }
                 canHandle.complete(true);
 
@@ -1570,7 +1576,7 @@ public class HttpState {
             }
             if (request.matches("GET", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, handleServiceChaosGet(), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosGet()), true);
                 }
                 return true;
             }
@@ -1762,6 +1768,20 @@ public class HttpState {
         } catch (Exception e) {
             return serviceChaosError(objectMapper, "failed to process service chaos request: " + e.getMessage());
         }
+    }
+
+    /**
+     * Add CORS headers to a dashboard-facing control-plane response unconditionally,
+     * so the dashboard works when served from a different origin (e.g. the UI dev
+     * server) without requiring {@code enableCORSForAPI} to be set. This mirrors the
+     * always-on CORS already applied by the metrics ({@code MetricsHandler}) and MCP
+     * endpoints. {@code CORSHeaders.addCORSHeaders} is idempotent
+     * ({@code setHeaderIfNotAlreadyExists}), so it composes safely with the
+     * conditional CORS that {@code ResponseWriter} may also apply.
+     */
+    private HttpResponse withDashboardCORS(HttpRequest request, HttpResponse response) {
+        corsHeaders.addCORSHeaders(request, response);
+        return response;
     }
 
     private HttpResponse handleServiceChaosGet() {
