@@ -154,6 +154,19 @@ public class ServiceChaosRegistryTest {
     }
 
     @Test
+    public void activeCountExcludesExpiredEntries() {
+        FakeClock clock = new FakeClock();
+        ServiceChaosRegistry registry = new ServiceChaosRegistry(clock::get);
+        registry.put("ephemeral", httpChaosProfile().withErrorStatus(503), 5_000L);
+        registry.put("persistent", httpChaosProfile().withErrorStatus(500)); // no ttl
+
+        assertThat("both live", registry.activeCount(), is(2));
+
+        clock.advance(5_000L); // ephemeral expires (still present in the map until lazily evicted)
+        assertThat("expired entry not counted", registry.activeCount(), is(1));
+    }
+
+    @Test
     public void getDoesNotEvictARefreshedEntry() {
         // a re-registration after expiry must survive the lazy-eviction of the old entry
         FakeClock clock = new FakeClock();

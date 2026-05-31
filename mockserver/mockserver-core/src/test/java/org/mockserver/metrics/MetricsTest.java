@@ -2,14 +2,19 @@ package org.mockserver.metrics;
 
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.prometheus.metrics.model.snapshots.CounterSnapshot;
+import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
 import io.prometheus.metrics.model.snapshots.MetricSnapshot;
 import io.prometheus.metrics.model.snapshots.MetricSnapshots;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockserver.mock.action.http.ServiceChaosRegistry;
+import org.mockserver.model.HttpChaosProfile;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.model.HttpChaosProfile.httpChaosProfile;
 
 public class MetricsTest {
 
@@ -19,6 +24,11 @@ public class MetricsTest {
         // registry so each test starts with a clean slate — prevents
         // order-dependent failures caused by the CAS guard in Metrics.
         Metrics.resetAdditionalMetricsForTesting();
+    }
+
+    @After
+    public void clearServiceChaos() {
+        ServiceChaosRegistry.getInstance().reset();
     }
 
     @Test
@@ -95,6 +105,37 @@ public class MetricsTest {
         Metrics.incrementHttpChaosInjected(null);
     }
 
+    @Test
+    public void registersActiveServiceChaosGauge() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        assertThat(scrapeContains("mock_server_active_service_chaos"), is(true));
+    }
+
+    @Test
+    public void activeServiceChaosGaugeReflectsLiveRegistry() {
+        new Metrics(configuration().metricsEnabled(true));
+        HttpChaosProfile profile = httpChaosProfile().withErrorStatus(503);
+
+        assertThat("no chaos registered", scrapeGaugeValue("mock_server_active_service_chaos"), is(0.0));
+
+        ServiceChaosRegistry.getInstance().put("upstream-a.svc", profile);
+        ServiceChaosRegistry.getInstance().put("upstream-b.svc", profile);
+        assertThat("scrape reads the live registry", scrapeGaugeValue("mock_server_active_service_chaos"), is(2.0));
+
+        ServiceChaosRegistry.getInstance().remove("upstream-a.svc");
+        assertThat("gauge follows removals", scrapeGaugeValue("mock_server_active_service_chaos"), is(1.0));
+
+        ServiceChaosRegistry.getInstance().reset();
+        assertThat("gauge drops to zero when cleared", scrapeGaugeValue("mock_server_active_service_chaos"), is(0.0));
+    }
+
+    @Test
+    public void getActiveServiceChaosCountDoesNotThrowWhenDisabled() {
+        // safe to call regardless of whether metrics are enabled (reads the registry directly)
+        assertThat(Metrics.getActiveServiceChaosCount(), is(0L));
+    }
+
     private static boolean scrapeContains(String name) {
         MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
         for (MetricSnapshot snapshot : snapshots) {
@@ -103,6 +144,18 @@ public class MetricsTest {
             }
         }
         return false;
+    }
+
+    private static double scrapeGaugeValue(String name) {
+        MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
+        for (MetricSnapshot snapshot : snapshots) {
+            if (snapshot.getMetadata().getName().equals(name) && snapshot instanceof GaugeSnapshot gaugeSnapshot) {
+                for (GaugeSnapshot.GaugeDataPointSnapshot dataPoint : gaugeSnapshot.getDataPoints()) {
+                    return dataPoint.getValue();
+                }
+            }
+        }
+        return 0.0;
     }
 
     private static double scrapeCounterValue(String name, String labelName, String labelValue) {

@@ -46,6 +46,32 @@ public class OtelMetricsExporterTest {
     }
 
     @Test
+    public void exportsActiveServiceChaosGauge() {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance()
+            .put("upstream.svc", org.mockserver.model.HttpChaosProfile.httpChaosProfile().withErrorStatus(503));
+
+        InMemoryMetricReader reader = InMemoryMetricReader.create();
+        OtelMetricsExporter exporter = OtelMetricsExporter.startWithReader(reader);
+        try {
+            Collection<MetricData> collected = reader.collectAllMetrics();
+            Set<String> names = collected.stream().map(MetricData::getName).collect(Collectors.toSet());
+
+            assertThat(names, hasItem("mock_server_active_service_chaos"));
+
+            MetricData gauge = collected.stream()
+                .filter(m -> m.getName().equals("mock_server_active_service_chaos"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("mock_server_active_service_chaos not exported"));
+            long value = gauge.getLongGaugeData().getPoints().iterator().next().getValue();
+            assertThat(value, is(1L));
+        } finally {
+            exporter.stop();
+            org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        }
+    }
+
+    @Test
     public void exportsJvmAndSlowRequestMetrics() {
         InMemoryMetricReader reader = InMemoryMetricReader.create();
         OtelMetricsExporter exporter = OtelMetricsExporter.startWithReader(reader);

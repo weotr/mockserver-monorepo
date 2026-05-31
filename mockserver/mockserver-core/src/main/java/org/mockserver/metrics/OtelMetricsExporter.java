@@ -79,6 +79,7 @@ public class OtelMetricsExporter {
      *   <li>A gauge mirroring the slow-request counter so OTLP-only consumers
      *       can observe it without a Prometheus scrape.</li>
      *   <li>A gauge mirroring the per-fault-type chaos-injection counter.</li>
+     *   <li>A gauge mirroring the active service-scoped chaos count.</li>
      *   <li>A histogram for request-handling duration (seconds), fed from the
      *       same observation path as the Prometheus histogram.</li>
      * </ul>
@@ -101,6 +102,7 @@ public class OtelMetricsExporter {
         registerJvmMetrics(meter);
         registerSlowRequestCounter(meter);
         registerChaosCounter(meter);
+        registerActiveServiceChaosGauge(meter);
         registerRequestDurationHistogram(meter);
         return new OtelMetricsExporter(provider);
     }
@@ -193,6 +195,13 @@ public class OtelMetricsExporter {
                         Attributes.of(AttributeKey.stringKey("fault_type"), faultType));
                 }
             });
+    }
+
+    private static void registerActiveServiceChaosGauge(Meter meter) {
+        meter.gaugeBuilder("mock_server_active_service_chaos")
+            .setDescription("Number of hosts with a currently-active service-scoped chaos profile (mirrors Prometheus gauge)")
+            .ofLongs()
+            .buildWithCallback(m -> m.record(Metrics.getActiveServiceChaosCount()));
     }
 
     private static void registerRequestDurationHistogram(Meter meter) {

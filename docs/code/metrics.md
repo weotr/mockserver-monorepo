@@ -119,6 +119,12 @@ Example PromQL:
 rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 ```
 
+### Active Service-Scoped Chaos Gauge
+
+`mock_server_active_service_chaos` is a Prometheus `GaugeWithCallback` reporting the number of hosts with a currently-active service-scoped chaos profile (`ServiceChaosRegistry`). It is a *callback* gauge — the callback reads `Metrics.getActiveServiceChaosCount()` → `ServiceChaosRegistry.getInstance().activeCount()` at scrape time rather than tracking the value imperatively, so TTL auto-revert (which removes a profile without any `put`/`remove` call) is reflected without extra plumbing. It is registered once when `metricsEnabled` is `true`; the count drops to 0 as profiles are cleared or their TTLs lapse, which makes `mock_server_active_service_chaos > 0` a natural "chaos still live" alert.
+
+Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`registerChaosCounter` / `registerActiveServiceChaosGauge`) so OTLP-only consumers can observe them without a Prometheus scrape.
+
 ### How Metrics Are Incremented
 
 - `HttpActionHandler` calls `metrics.increment(action.getType())` after dispatching each action, which maps the `Action.Type` enum to the corresponding `*_ACTIONS_COUNT` gauge

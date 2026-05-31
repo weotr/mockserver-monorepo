@@ -468,7 +468,7 @@ GET /mockserver/serviceChaos</code></pre>
 
 <h2>Observability</h2>
 
-<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, MockServer exposes a Prometheus counter that tracks every chaos fault injected:</p>
+<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, MockServer exposes Prometheus metrics for chaos: a counter that tracks every fault injected, and a gauge for the number of hosts with currently-active service-scoped chaos:</p>
 
 <table class="table-standard">
     <thead>
@@ -486,17 +486,28 @@ GET /mockserver/serviceChaos</code></pre>
             <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code></td>
             <td>Cumulative count of HTTP chaos faults injected, split by fault type</td>
         </tr>
+        <tr>
+            <td><code class="inline code">mock_server_active_service_chaos</code></td>
+            <td>Gauge</td>
+            <td><em>none</em></td>
+            <td>Number of hosts with a currently-active service-scoped chaos profile; drops to 0 as profiles are cleared or their TTLs lapse</td>
+        </tr>
     </tbody>
 </table>
 
 <p>This counter is also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section (visible only when the metric has non-zero data).</p>
+
+<p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape.</p>
 
 <p>Example PromQL queries:</p>
 <pre class="code"><code class="code"># Rate of error faults injected over the last 5 minutes
 rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 
 # Total latency faults injected
-mock_server_http_chaos_injected_total{fault_type="latency"}</code></pre>
+mock_server_http_chaos_injected_total{fault_type="latency"}
+
+# Alert while any service-scoped chaos is still live
+mock_server_active_service_chaos &gt; 0</code></pre>
 
 <a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
 

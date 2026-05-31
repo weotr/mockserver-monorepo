@@ -162,6 +162,28 @@ public class ServiceChaosRegistry {
         return result;
     }
 
+    /**
+     * Number of hosts with a currently-active (non-expired) service-scoped chaos
+     * profile. Backs the {@code mock_server_active_service_chaos} gauge so an
+     * operator can alert on "chaos is still live" — the value drops to 0 as
+     * profiles are cleared or their TTLs lapse. Counts without allocating a
+     * snapshot map.
+     *
+     * <p>Iterates the {@link ConcurrentHashMap} weakly-consistently, so under
+     * concurrent registration/removal the count may transiently reflect a mix of
+     * pre- and post-mutation state — acceptable for a gauge metric.
+     */
+    public int activeCount() {
+        long now = clock.getAsLong();
+        int count = 0;
+        for (Entry entry : byHost.values()) {
+            if (!entry.isExpired(now)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /** Clear all service-scoped chaos. Called on server reset and for test isolation. */
     public void reset() {
         byHost.clear();

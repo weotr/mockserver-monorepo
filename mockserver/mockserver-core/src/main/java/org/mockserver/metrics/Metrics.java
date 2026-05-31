@@ -2,11 +2,13 @@ package org.mockserver.metrics;
 
 import io.prometheus.metrics.core.metrics.Counter;
 import io.prometheus.metrics.core.metrics.Gauge;
+import io.prometheus.metrics.core.metrics.GaugeWithCallback;
 import io.prometheus.metrics.core.metrics.Histogram;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.mock.action.http.ServiceChaosRegistry;
 import org.mockserver.model.Action;
 
 import java.util.Arrays;
@@ -59,6 +61,14 @@ public class Metrics {
                 .name("mock_server_http_chaos_injected")
                 .help("Total HTTP chaos faults injected by type")
                 .labelNames("fault_type")
+                .register();
+            // Callback gauge: read the live registry at scrape time rather than
+            // tracking it imperatively, so TTL auto-revert (which removes a profile
+            // without a put/remove call) is reflected without any extra plumbing.
+            GaugeWithCallback.builder()
+                .name("mock_server_active_service_chaos")
+                .help("Number of hosts with a currently-active service-scoped chaos profile")
+                .callback(callback -> callback.call(getActiveServiceChaosCount()))
                 .register();
             if (Boolean.TRUE.equals(configuration.metricsRequestDurationRouteLabels())) {
                 requestDurationByMethodSeconds = Histogram.builder()
@@ -218,6 +228,16 @@ public class Metrics {
         if (counter != null && faultType != null) {
             counter.labelValues(faultType).inc();
         }
+    }
+
+    /**
+     * Number of hosts with a currently-active service-scoped chaos profile.
+     * Backs the {@code mock_server_active_service_chaos} Prometheus gauge and its
+     * OTLP mirror; reads the registry directly (not gated on {@code metricsEnabled},
+     * the gauge is only registered when metrics are on).
+     */
+    public static long getActiveServiceChaosCount() {
+        return ServiceChaosRegistry.getInstance().activeCount();
     }
 
     public void increment(Name name) {
