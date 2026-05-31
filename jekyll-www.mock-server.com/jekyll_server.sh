@@ -24,6 +24,12 @@ if [ ! -d vendor/bundle ] || [ Gemfile -nt vendor/bundle ] || [ Gemfile.lock -nt
   rbenv exec bundle install --quiet
 fi
 
+# Clear the destination (_site) and incremental build metadata/cache
+# (.jekyll-metadata, .jekyll-cache, .sass-cache) so a stale incremental build
+# never leaves old artefacts behind — every run starts from a clean rebuild.
+echo "--- Cleaning previous build output and metadata (jekyll clean)..."
+rbenv exec bundle exec jekyll clean
+
 echo "--- Starting Jekyll with live reload on http://127.0.0.1:${PORT}/"
 rbenv exec bundle exec jekyll serve \
   --livereload \
