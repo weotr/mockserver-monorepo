@@ -129,7 +129,23 @@ public class HttpRequestToJavaSerializer implements ToJavaSerializer<HttpRequest
                             output.append(", \"").append(StringEscapeUtils.escapeJava(graphQLBody.getVariablesSchema())).append("\"");
                         }
                     }
-                    output.append("))");
+                    output.append(")");
+                    if (graphQLBody.getSelectionSetMatchType() != null) {
+                        appendNewLineAndIndent((numberOfSpacesToIndent + 2) * INDENT_SIZE, output);
+                        output.append(".withSelectionSetMatchType(SelectionSetMatchType.").append(graphQLBody.getSelectionSetMatchType().name()).append(")");
+                    }
+                    if (graphQLBody.getFields() != null && !graphQLBody.getFields().isEmpty()) {
+                        appendNewLineAndIndent((numberOfSpacesToIndent + 2) * INDENT_SIZE, output);
+                        output.append(".withFields(");
+                        for (int fi = 0; fi < graphQLBody.getFields().size(); fi++) {
+                            if (fi > 0) {
+                                output.append(", ");
+                            }
+                            output.append("\"").append(StringEscapeUtils.escapeJava(graphQLBody.getFields().get(fi))).append("\"");
+                        }
+                        output.append(")");
+                    }
+                    output.append(")");
                 } else if (request.getBody() instanceof BinaryBody binaryBody) {
                     appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output);
                     output.append(".withBody(new Base64Converter().base64StringToBytes(\"").append(base64Converter.bytesToBase64String(binaryBody.getRawBytes())).append("\"))");

@@ -1,5 +1,8 @@
 package org.mockserver.model;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 public class GraphQLBody extends Body<String> {
@@ -7,6 +10,8 @@ public class GraphQLBody extends Body<String> {
     private final String query;
     private final String operationName;
     private final String variablesSchema;
+    private SelectionSetMatchType selectionSetMatchType;
+    private List<String> fields;
 
     public GraphQLBody(String query) {
         this(query, null, null);
@@ -43,6 +48,32 @@ public class GraphQLBody extends Body<String> {
         return variablesSchema;
     }
 
+    public SelectionSetMatchType getSelectionSetMatchType() {
+        return selectionSetMatchType;
+    }
+
+    public GraphQLBody withSelectionSetMatchType(SelectionSetMatchType selectionSetMatchType) {
+        this.hashCode = 0;
+        this.selectionSetMatchType = selectionSetMatchType;
+        return this;
+    }
+
+    public List<String> getFields() {
+        return fields;
+    }
+
+    public GraphQLBody withFields(String... fields) {
+        this.hashCode = 0;
+        this.fields = fields != null ? Arrays.asList(fields) : null;
+        return this;
+    }
+
+    public GraphQLBody withFields(List<String> fields) {
+        this.hashCode = 0;
+        this.fields = fields;
+        return this;
+    }
+
     @Override
     public String getValue() {
         return query;
@@ -65,13 +96,15 @@ public class GraphQLBody extends Body<String> {
         GraphQLBody that = (GraphQLBody) o;
         return Objects.equals(query, that.query) &&
             Objects.equals(operationName, that.operationName) &&
-            Objects.equals(variablesSchema, that.variablesSchema);
+            Objects.equals(variablesSchema, that.variablesSchema) &&
+            selectionSetMatchType == that.selectionSetMatchType &&
+            Objects.equals(fields, that.fields);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), query, operationName, variablesSchema);
+            hashCode = Objects.hash(super.hashCode(), query, operationName, variablesSchema, selectionSetMatchType, fields);
         }
         return hashCode;
     }

@@ -10,6 +10,8 @@ import org.mockserver.cors.CORSHeaders;
 import org.mockserver.file.FileStore;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcProtoFileCompiler;
+import org.mockserver.llm.ParsedConversation;
+import org.mockserver.llm.ParsedMessage;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.mock.crud.CrudActionHandler;
 import org.mockserver.mock.crud.CrudDataStore;
@@ -109,6 +111,9 @@ public class HttpState {
     private GrpcProtoDescriptorStore grpcDescriptorStore;
     private final FileStore fileStore = new FileStore();
     private final CrudDispatcher crudDispatcher = new CrudDispatcher();
+    // optional — set by LifeCycle when a runtime LLM backend is configured
+    private volatile org.mockserver.llm.client.LlmCompletionService llmCompletionService;
+    private volatile org.mockserver.llm.client.LlmBackend llmBackend;
 
     public static void setPort(final HttpRequest request) {
         if (request != null && request.getSocketAddress() != null) {
@@ -207,6 +212,18 @@ public class HttpState {
         return configuration;
     }
 
+    /**
+     * Install the LLM completion service and default backend for runtime features
+     * that call out to an LLM (e.g. AI stub generation). Called by LifeCycle when
+     * a backend is configured; null-safe — when not called the stub generation
+     * endpoint falls back to template-based stubs.
+     */
+    public void setLlmCompletionService(org.mockserver.llm.client.LlmCompletionService llmCompletionService,
+                                        org.mockserver.llm.client.LlmBackend llmBackend) {
+        this.llmCompletionService = llmCompletionService;
+        this.llmBackend = llmBackend;
+    }
+
     public MockServerLogger getMockServerLogger() {
         return mockServerLogger;
     }
@@ -287,6 +304,7 @@ public class HttpState {
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -1445,6 +1463,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleGrpcHealthPut(request), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/grpc/clear", "/grpc/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1547,6 +1572,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/generateExpectation", "/generateExpectation")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleGenerateExpectation(request), true);
+                }
+                canHandle.complete(true);
+
             } else {
 
                 canHandle.complete(false);
@@ -1577,6 +1609,22 @@ public class HttpState {
             if (request.matches("GET", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleGrpcHealthGet(), true);
+                }
+                return true;
+            }
+            return false;
+
+        } else if (request.matches("PATCH")) {
+
+            if (request.matches("PATCH", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosPatch(request)), true);
                 }
                 return true;
             }
@@ -1770,6 +1818,42 @@ public class HttpState {
         }
     }
 
+    private HttpResponse handleServiceChaosPatch(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return serviceChaosError(objectMapper, "request body is required with 'host' and 'chaos' fields");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String host = node.path("host").asText(null);
+            if (isBlank(host)) {
+                return serviceChaosError(objectMapper, "'host' field is required");
+            }
+            if (!node.hasNonNull("chaos")) {
+                return serviceChaosError(objectMapper, "'chaos' field is required with at least one field to patch");
+            }
+            org.mockserver.serialization.model.HttpChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.HttpChaosProfileDTO.class);
+            org.mockserver.model.HttpChaosProfile partial = dto.buildObject();
+            org.mockserver.mock.action.http.ServiceChaosRegistry registry = org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance();
+            org.mockserver.model.HttpChaosProfile updated = registry.patch(host, partial);
+            logServiceChaos(request, "patched service-scoped chaos for host:{}", host);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "patched");
+            result.put("host", host);
+            if (updated != null) {
+                result.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(updated)));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return serviceChaosError(objectMapper, "invalid chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return serviceChaosError(objectMapper, "failed to process service chaos patch: " + e.getMessage());
+        }
+    }
+
     /**
      * Add CORS headers to a dashboard-facing control-plane response unconditionally,
      * so the dashboard works when served from a different origin (e.g. the UI dev
@@ -1828,6 +1912,237 @@ public class HttpState {
         } catch (Exception jsonError) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to process service chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGenerateExpectation(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return generateExpectationError(objectMapper, "request body is required with 'request' field");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            if (!node.hasNonNull("request")) {
+                return generateExpectationError(objectMapper, "'request' field is required (the unmatched HttpRequest)");
+            }
+            boolean preview = node.path("preview").asBoolean(true);
+            int limit = node.path("limit").asInt(1);
+            if (limit < 1) {
+                limit = 1;
+            }
+            if (limit > 5) {
+                limit = 5;
+            }
+
+            // Deserialize the unmatched request
+            HttpRequest unmatchedRequest;
+            try {
+                RequestDefinition rd = getRequestDefinitionSerializer().deserialize(
+                    objectMapper.writeValueAsString(node.get("request")));
+                if (rd instanceof HttpRequest) {
+                    unmatchedRequest = (HttpRequest) rd;
+                } else {
+                    unmatchedRequest = request().withPath("/");
+                }
+            } catch (Exception deserializeEx) {
+                return generateExpectationError(objectMapper, "failed to parse 'request' field: " + deserializeEx.getMessage());
+            }
+
+            // Retrieve context: up to 10 active expectations
+            List<Expectation> contextExpectations = requestMatchers.retrieveActiveExpectations(null);
+            if (contextExpectations.size() > 10) {
+                contextExpectations = contextExpectations.subList(0, 10);
+            }
+
+            // Check if LLM is available
+            org.mockserver.llm.client.LlmCompletionService service = this.llmCompletionService;
+            org.mockserver.llm.client.LlmBackend backend = this.llmBackend;
+            if (service == null || backend == null) {
+                // Fallback: generate a simple template-based stub without LLM
+                Expectation suggestion = generateSimpleStub(unmatchedRequest);
+                List<Expectation> suggestions = Collections.singletonList(suggestion);
+                if (!preview) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+                return buildGenerateExpectationResponse(objectMapper, suggestions, 0.5, preview,
+                    "Generated from request pattern (no LLM backend configured)");
+            }
+
+            // Build prompt and call LLM
+            org.mockserver.llm.StubGenerationPromptBuilder promptBuilder = new org.mockserver.llm.StubGenerationPromptBuilder();
+            String prompt = promptBuilder.build(unmatchedRequest, contextExpectations);
+
+            ParsedConversation conversation = ParsedConversation.of(Collections.singletonList(
+                new ParsedMessage(ParsedMessage.Role.USER, prompt, null, null)));
+            java.util.Optional<org.mockserver.model.Completion> completionOpt = service.complete(backend, conversation);
+
+            if (!completionOpt.isPresent() || isBlank(completionOpt.get().getText())) {
+                // LLM call failed or returned empty — fall back to template
+                Expectation suggestion = generateSimpleStub(unmatchedRequest);
+                List<Expectation> suggestions = Collections.singletonList(suggestion);
+                if (!preview) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+                return buildGenerateExpectationResponse(objectMapper, suggestions, 0.3, preview,
+                    "LLM call returned no result, falling back to template");
+            }
+
+            String llmResponse = completionOpt.get().getText();
+
+            // Parse LLM response as Expectation JSON
+            List<Expectation> suggestions = new ArrayList<>();
+            try {
+                String jsonStr = extractJsonFromLlmResponse(llmResponse);
+                Expectation[] parsed = getExpectationSerializer().deserializeArray(jsonStr, true);
+                for (int i = 0; i < Math.min(parsed.length, limit); i++) {
+                    suggestions.add(parsed[i]);
+                }
+            } catch (Exception parseEx) {
+                // fallback to simple stub if LLM response unparseable
+                suggestions.add(generateSimpleStub(unmatchedRequest));
+            }
+
+            if (!preview && !suggestions.isEmpty()) {
+                for (Expectation suggestion : suggestions) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+            }
+
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("generated {} expectation suggestion(s) via LLM for path:{}")
+                        .setArguments(suggestions.size(),
+                            unmatchedRequest.getPath() != null ? unmatchedRequest.getPath().getValue() : "/")
+                );
+            }
+
+            return buildGenerateExpectationResponse(objectMapper, suggestions, suggestions.isEmpty() ? 0.0 : 0.75, preview, null);
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("failed to generate expectation:{}").setArguments(e.getMessage())
+                    .setThrowable(e)
+            );
+            return generateExpectationError(objectMapper, "failed to generate expectation");
+        }
+    }
+
+    private HttpResponse buildGenerateExpectationResponse(com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                                                          List<Expectation> suggestions, double confidence,
+                                                          boolean preview, String explanation) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode suggestionsArray = result.putArray("suggestions");
+            for (Expectation suggestion : suggestions) {
+                suggestionsArray.add(objectMapper.readTree(getExpectationSerializer().serialize(suggestion)));
+            }
+            result.put("confidence", confidence);
+            result.put("preview", preview);
+            if (explanation != null) {
+                result.put("explanation", explanation);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to serialize response\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private Expectation generateSimpleStub(HttpRequest unmatchedRequest) {
+        String method = unmatchedRequest.getMethod() != null ? unmatchedRequest.getMethod().getValue() : "GET";
+        int statusCode = "POST".equalsIgnoreCase(method) ? 201 : "DELETE".equalsIgnoreCase(method) ? 204 : 200;
+        return new Expectation(
+            HttpRequest.request()
+                .withMethod(method)
+                .withPath(unmatchedRequest.getPath() != null ? unmatchedRequest.getPath().getValue() : "/")
+        ).thenRespond(
+            HttpResponse.response()
+                .withStatusCode(statusCode)
+                .withBody("{\"status\":\"ok\"}", MediaType.JSON_UTF_8)
+        );
+    }
+
+    private static String extractJsonFromLlmResponse(String text) {
+        if (text == null) {
+            return "{}";
+        }
+        String stripped = text.trim();
+        // Strip markdown code fences if present
+        if (stripped.startsWith("```")) {
+            int start = stripped.indexOf('\n');
+            int end = stripped.lastIndexOf("```");
+            if (start > 0 && end > start) {
+                stripped = stripped.substring(start + 1, end).trim();
+            }
+        }
+        return stripped;
+    }
+
+    private HttpResponse generateExpectationError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to generate expectation\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGrpcHealthPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with 'service' and 'status' fields\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String service = node.path("service").asText("");
+            String statusStr = node.path("status").asText(null);
+            if (isBlank(statusStr)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'status' field is required (UNKNOWN, SERVING, NOT_SERVING, SERVICE_UNKNOWN)\"}", MediaType.JSON_UTF_8);
+            }
+            org.mockserver.grpc.ServingStatus status;
+            try {
+                status = org.mockserver.grpc.ServingStatus.valueOf(statusStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"invalid status value, must be one of: UNKNOWN, SERVING, NOT_SERVING, SERVICE_UNKNOWN\"}", MediaType.JSON_UTF_8);
+            }
+            org.mockserver.grpc.GrpcHealthRegistry.getInstance().setStatus(service, status);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("service", service);
+            result.put("servingStatus", status.name());
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to set gRPC health status: " + e.getMessage() + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGrpcHealthGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.grpc.GrpcHealthRegistry registry = org.mockserver.grpc.GrpcHealthRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            registry.entries().forEach((service, status) ->
+                result.put(service.isEmpty() ? "_default" : service, status.name()));
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get gRPC health status\"}", MediaType.JSON_UTF_8);
         }
     }
 

@@ -194,7 +194,7 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
                     break;
                 case GRAPHQL:
                     GraphQLBody graphQLBody = (GraphQLBody) body;
-                    bodyMatcher = new GraphQLMatcher(mockServerLogger, graphQLBody.getQuery(), graphQLBody.getOperationName(), graphQLBody.getVariablesSchema());
+                    bodyMatcher = new GraphQLMatcher(mockServerLogger, graphQLBody);
                     break;
                 case BINARY:
                     BinaryBody binaryBody = (BinaryBody) body;

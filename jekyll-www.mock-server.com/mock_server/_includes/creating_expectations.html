@@ -627,6 +627,14 @@ new MockServerClient("localhost", 1080)
     <li><strong>query</strong> (required) - the GraphQL query string. Whitespace is normalized before comparison, so <span class="inline_code">{ user { name } }</span> matches <span class="inline_code">{\n  user {\n    name\n  }\n}</span></li>
     <li><strong>operationName</strong> (optional) - match the operation name exactly, or using a regex pattern (e.g. <span class="inline_code">Get.*</span>)</li>
     <li><strong>variablesSchema</strong> (optional) - a <a target="_blank" href="https://json-schema.org/" rel="noopener noreferrer">JSON Schema</a> to validate the <span class="inline_code">variables</span> field</li>
+    <li><strong>selectionSetMatchType</strong> (optional) - controls how the selection set (fields) is compared. Values:
+        <ul>
+            <li><span class="inline_code">NORMALISED_STRING</span> (default) - whitespace-normalised string comparison of the full query</li>
+            <li><span class="inline_code">AST_EXACT</span> - matches operation type, name, and the exact set of top-level field names (ignores whitespace, nested fields, and argument differences)</li>
+            <li><span class="inline_code">AST_SUBSET</span> - matches when the expected top-level fields are a subset of the actual request's fields (useful when the request may contain additional fields)</li>
+        </ul>
+    </li>
+    <li><strong>fields</strong> (optional) - explicit list of top-level field names to match in AST modes. If not specified, fields are extracted from the <span class="inline_code">query</span> string</li>
 </ul>
 
 <p><strong>Example - match a GraphQL query:</strong></p>
@@ -677,6 +685,41 @@ new MockServerClient("localhost", 1080)
     "httpResponse": {
         "statusCode": 200,
         "body": "{\"data\": {\"createUser\": {\"id\": \"123\", \"name\": \"Alice\"}}}"
+    }
+}</code></pre>
+
+<p><strong>Example - AST subset matching (match any query containing a "users" field):</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/graphql",
+        "body": {
+            "type": "GRAPHQL",
+            "query": "query { users { id } }",
+            "selectionSetMatchType": "AST_SUBSET",
+            "fields": ["users"]
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\": {\"users\": [{\"id\": \"1\", \"name\": \"Alice\"}]}}"
+    }
+}</code></pre>
+
+<p><strong>Example - AST exact matching (match a query with exactly these top-level fields):</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/graphql",
+        "body": {
+            "type": "GRAPHQL",
+            "query": "query GetDashboard { user profile settings }",
+            "selectionSetMatchType": "AST_EXACT"
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\": {\"user\": {}, \"profile\": {}, \"settings\": {}}}"
     }
 }</code></pre>
 

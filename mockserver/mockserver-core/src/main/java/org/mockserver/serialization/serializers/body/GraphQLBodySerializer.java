@@ -32,6 +32,16 @@ public class GraphQLBodySerializer extends StdSerializer<GraphQLBody> {
         if (graphQLBody.getVariablesSchema() != null) {
             jgen.writeStringField("variablesSchema", graphQLBody.getVariablesSchema());
         }
+        if (graphQLBody.getSelectionSetMatchType() != null) {
+            jgen.writeStringField("selectionSetMatchType", graphQLBody.getSelectionSetMatchType().name());
+        }
+        if (graphQLBody.getFields() != null && !graphQLBody.getFields().isEmpty()) {
+            jgen.writeArrayFieldStart("fields");
+            for (String field : graphQLBody.getFields()) {
+                jgen.writeString(field);
+            }
+            jgen.writeEndArray();
+        }
         jgen.writeEndObject();
     }
 }

@@ -292,8 +292,41 @@ Static factory: `FileBody.fileBody(filePath)`, `FileBody.fileBody(filePath, cont
 | `query` | `String` | GraphQL query string, normalized before comparison (whitespace collapsed, comments stripped) |
 | `operationName` | `String` | Optional operation name filter; supports exact match or regex |
 | `variablesSchema` | `String` | Optional JSON Schema that the request's `variables` object must validate against |
+| `selectionSetMatchType` | `SelectionSetMatchType` | Controls how the selection set is compared (default: `NORMALISED_STRING`) |
+| `fields` | `List<String>` | Explicit list of top-level field names to match (optional; extracted from `query` if not set) |
 
 `GraphQLMatcher` (`org.mockserver.matchers.GraphQLMatcher`) parses the incoming request body as JSON, extracts the `query`, `operationName`, and `variables` fields, and matches each against the expectation. The `GraphQLBodyDTO` handles serialization. Static factory: `GraphQLBody.graphQL(query)`, `GraphQLBody.graphQL(query, operationName)`, `GraphQLBody.graphQL(query, operationName, variablesSchema)`.
+
+##### SelectionSetMatchType
+
+The `SelectionSetMatchType` enum (`org.mockserver.model.SelectionSetMatchType`) controls how GraphQL body matching compares the selection set:
+
+| Value | Behaviour |
+|-------|-----------|
+| `NORMALISED_STRING` | Default. Whitespace-normalised string comparison of the full query (existing behaviour). |
+| `AST_EXACT` | Extracts operation type, operation name, and top-level field names; all must match exactly. Whitespace and nested field details are ignored. |
+| `AST_SUBSET` | Like `AST_EXACT`, but the expected fields only need to be a *subset* of the actual request's top-level fields. Useful for matching requests that contain additional fields beyond what the test cares about. |
+
+AST modes use a lightweight parser (`GraphQLAstMatcher`) that extracts operation type/name and top-level fields without a full GraphQL grammar dependency. It handles comments, string literals, argument lists, and nested braces.
+
+**Example -- AST_SUBSET matching:**
+
+```java
+GraphQLBody.graphQL("query { users { id } }")
+    .withSelectionSetMatchType(SelectionSetMatchType.AST_SUBSET)
+    .withFields("users");
+// Matches any query with operation type "query" that includes a top-level "users" field,
+// regardless of what other fields are present.
+```
+
+**Example -- AST_EXACT matching:**
+
+```java
+GraphQLBody.graphQL("query GetUser { user profile }")
+    .withSelectionSetMatchType(SelectionSetMatchType.AST_EXACT);
+// Matches only queries with operation type "query", name "GetUser", and exactly
+// the top-level fields "user" and "profile" (in any order, with any sub-selections).
+```
 
 ### ConnectionOptions
 
@@ -446,6 +479,7 @@ classDiagram
     BodyMatcher <|-- BinaryMatcher
     BodyMatcher <|-- ParameterStringMatcher
     BodyMatcher <|-- GraphQLMatcher
+    GraphQLMatcher --> GraphQLAstMatcher : delegates AST modes
     BodyMatcher <|-- MultiValueMapMatcher
     BodyMatcher <|-- HashMapMatcher
     BodyMatcher <|-- BooleanMatcher

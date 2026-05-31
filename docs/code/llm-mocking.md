@@ -345,6 +345,58 @@ Both use the OTLP HTTP/protobuf exporter with the JDK HttpClient sender (no gRPC
 
 The MCP tool resolves a backend via `LlmBackendResolver` and is **disabled** (returns `{disabled:true}`) when none is configured. When configured, it builds a transient `NettyHttpClient`-backed transport for the live calls. Because it needs real API keys/tokens and is inherently non-deterministic against a live API, it belongs in an opt-in/scheduled CI lane (see `docs/infrastructure/ci-cd.md`), never the per-commit build. No dashboard control — it is an operational/CI tool.
 
+## AI-Powered Stub Generation
+
+`PUT /mockserver/generateExpectation` infers a plausible MockServer expectation from an unmatched HTTP request, optionally calling a configured LLM backend for intelligent generation.
+
+### Request format
+
+```json
+{
+  "request": { "method": "GET", "path": "/api/users/42" },
+  "preview": true,
+  "limit": 1
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `request` | object | *required* | The unmatched `HttpRequest` to generate a stub for |
+| `preview` | boolean | `true` | When `true`, returns the suggestion without registering it; `false` registers immediately |
+| `limit` | integer | `1` | Number of suggestions to return (1-5) |
+
+### Response format
+
+```json
+{
+  "suggestions": [ { "httpRequest": { ... }, "httpResponse": { ... } } ],
+  "confidence": 0.75,
+  "preview": true,
+  "explanation": "Generated from request pattern (no LLM backend configured)"
+}
+```
+
+### Behaviour
+
+1. **LLM-powered** (when a runtime LLM backend is configured via `LlmBackendResolver`): `StubGenerationPromptBuilder` builds a prompt containing the unmatched request details and up to 10 existing expectations as context. The prompt is sent via `LlmCompletionService` and the response is parsed as expectation JSON. If the LLM response is unparseable, falls back to template generation.
+
+2. **Template fallback** (no LLM backend): generates a simple expectation matching the request's method and path with an appropriate status code (200 for GET, 201 for POST, 204 for DELETE) and a `{"status":"ok"}` body. Confidence is reported as `0.5`.
+
+### Wiring
+
+- `HttpState` holds an optional `LlmCompletionService` + `LlmBackend` pair, set by `LifeCycle.installLlmCompletionServiceIfAvailable()` at boot when a backend resolves via `LlmBackendResolver`.
+- The handler uses `RequestMatchers.retrieveActiveExpectations(null)` to obtain context expectations.
+- When `preview=false`, generated expectations are registered via `RequestMatchers.add(expectation, Cause.API)`.
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| `llm/StubGenerationPromptBuilder.java` | Builds the LLM prompt from the unmatched request + existing expectations context |
+| `llm/StubGenerationResult.java` | Result DTO with suggestions, confidence, explanation, raw LLM response |
+| `mock/HttpState.handleGenerateExpectation()` | Control-plane handler for `PUT /mockserver/generateExpectation` |
+| `mock/HttpState.generateSimpleStub()` | Template-based fallback when no LLM is available |
+
 ## MCP server conformance testing
 
 `run_mcp_contract_test` (MCP) verifies that a target **MCP (Model Context Protocol) server** correctly implements the protocol over Streamable HTTP. It is deterministic and involves no LLM — it checks the *protocol*, not any tool's semantics.
@@ -439,5 +491,7 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `fixture/FixtureRedactor.java` | Masks sensitive headers and (optional) JSON body fields when recording fixtures |
 | `llm/drift/StructuralShapeDiff.java` | Pure JSON shape diff (added/removed/type-changed paths) |
 | `llm/drift/DriftDetector.java` + `DriftReport.java` | Replays a cassette against the live provider and reports structural drift, fail-closed |
+| `llm/StubGenerationPromptBuilder.java` | Builds the LLM prompt for AI stub generation from unmatched requests |
+| `llm/StubGenerationResult.java` | Result DTO for stub generation (suggestions, confidence, explanation) |
 | `metrics/OtelMetricsExporter.java` | Optional OTLP metrics export bridging the Prometheus gauges (off by default) |
 | `telemetry/GenAiSpanExporter.java` + `GenAiSpans.java` + `OtelEndpoints.java` | Optional explicit GenAI span export per served completion (off by default) |

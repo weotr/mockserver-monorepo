@@ -5,9 +5,12 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.mockserver.grpc.GrpcException;
 import org.mockserver.grpc.GrpcFrameCodec;
+import org.mockserver.grpc.GrpcHealthCheckHandler;
+import org.mockserver.grpc.GrpcHealthRegistry;
 import org.mockserver.grpc.GrpcJsonMessageConverter;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcStatusMapper;
+import org.mockserver.grpc.ServingStatus;
 import com.google.protobuf.Descriptors;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -21,15 +24,37 @@ public class GrpcToHttpRequestHandler extends SimpleChannelInboundHandler<HttpRe
 
     private final MockServerLogger mockServerLogger;
     private final GrpcProtoDescriptorStore descriptorStore;
+    private final GrpcHealthCheckHandler healthCheckHandler;
 
     public GrpcToHttpRequestHandler(MockServerLogger mockServerLogger, GrpcProtoDescriptorStore descriptorStore) {
+        this(mockServerLogger, descriptorStore, new GrpcHealthCheckHandler(GrpcHealthRegistry.getInstance()));
+    }
+
+    public GrpcToHttpRequestHandler(MockServerLogger mockServerLogger, GrpcProtoDescriptorStore descriptorStore, GrpcHealthCheckHandler healthCheckHandler) {
         this.mockServerLogger = mockServerLogger;
         this.descriptorStore = descriptorStore;
+        this.healthCheckHandler = healthCheckHandler;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, HttpRequest request) {
         String contentType = request.getFirstHeader("content-type");
+        // Handle gRPC health check without requiring a descriptor
+        if (GrpcStatusMapper.isGrpcContentType(contentType) && healthCheckHandler != null) {
+            String path = request.getPath() != null ? request.getPath().getValue() : "";
+            if (healthCheckHandler.isHealthCheckRequest(path)) {
+                String serviceName = healthCheckHandler.decodeServiceName(request.getBodyAsRawBytes());
+                ServingStatus status = healthCheckHandler.getStatus(serviceName);
+                byte[] responseBody = healthCheckHandler.encodeResponse(status);
+                org.mockserver.model.HttpResponse healthResponse = org.mockserver.model.HttpResponse.response()
+                    .withStatusCode(200)
+                    .withHeader("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE)
+                    .withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, "0")
+                    .withBody(responseBody);
+                ctx.writeAndFlush(healthResponse);
+                return;
+            }
+        }
         if (GrpcStatusMapper.isGrpcContentType(contentType) && descriptorStore.hasServices()) {
             try {
                 HttpRequest converted = convertGrpcRequest(request);

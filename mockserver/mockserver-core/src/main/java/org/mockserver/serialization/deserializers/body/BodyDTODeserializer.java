@@ -85,9 +85,15 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         String graphQLQuery = null;
         String graphQLOperationName = null;
         String graphQLVariablesSchema = null;
+        SelectionSetMatchType graphQLSelectionSetMatchType = null;
+        @SuppressWarnings("unchecked")
+        List<String> graphQLFields = null;
         String queryFieldValue = null;
         String operationNameFieldValue = null;
         String variablesSchemaFieldValue = null;
+        SelectionSetMatchType selectionSetMatchTypeFieldValue = null;
+        @SuppressWarnings("unchecked")
+        List<String> fieldsFieldValue = null;
         if (currentToken == JsonToken.START_OBJECT) {
             @SuppressWarnings("unchecked") Map<Object, Object> body = (Map<Object, Object>) ctxt.readValue(jsonParser, Map.class);
             for (Map.Entry<Object, Object> entry : body.entrySet()) {
@@ -136,6 +142,17 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
                             }
                             graphQLVariablesSchema = jsonBodyObjectWriter.writeValueAsString(graphQLMap.get("variablesSchema"));
+                        }
+                        if (graphQLMap.containsKey("selectionSetMatchType")) {
+                            try {
+                                graphQLSelectionSetMatchType = SelectionSetMatchType.valueOf(String.valueOf(graphQLMap.get("selectionSetMatchType")));
+                            } catch (IllegalArgumentException ignored) {
+                            }
+                        }
+                        if (graphQLMap.containsKey("fields") && graphQLMap.get("fields") instanceof List) {
+                            graphQLFields = ((List<?>) graphQLMap.get("fields")).stream()
+                                .map(String::valueOf)
+                                .collect(java.util.stream.Collectors.toList());
                         }
                     }
                     if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "filePath") && type != Body.Type.PARAMETERS) {
@@ -312,6 +329,17 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             variablesSchemaFieldValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
                         }
                     }
+                    if (key.equalsIgnoreCase("selectionSetMatchType") && entry.getValue() instanceof String) {
+                        try {
+                            selectionSetMatchTypeFieldValue = SelectionSetMatchType.valueOf(String.valueOf(entry.getValue()));
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+                    if (key.equalsIgnoreCase("fields") && entry.getValue() instanceof List) {
+                        fieldsFieldValue = ((List<?>) entry.getValue()).stream()
+                            .map(String::valueOf)
+                            .collect(java.util.stream.Collectors.toList());
+                    }
                     if (key.equalsIgnoreCase("parameters")) {
                         if (objectMapper == null) {
                             objectMapper = ObjectMapperFactory.createObjectMapper();
@@ -391,11 +419,20 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         ), not);
                         break;
                     case GRAPHQL:
-                        result = new GraphQLBodyDTO(new GraphQLBody(
+                        GraphQLBody graphQLBody = new GraphQLBody(
                             graphQLQuery != null ? graphQLQuery : queryFieldValue,
                             graphQLOperationName != null ? graphQLOperationName : operationNameFieldValue,
                             graphQLVariablesSchema != null ? graphQLVariablesSchema : variablesSchemaFieldValue
-                        ), not);
+                        );
+                        SelectionSetMatchType resolvedMatchType = graphQLSelectionSetMatchType != null ? graphQLSelectionSetMatchType : selectionSetMatchTypeFieldValue;
+                        if (resolvedMatchType != null) {
+                            graphQLBody.withSelectionSetMatchType(resolvedMatchType);
+                        }
+                        List<String> resolvedFields = graphQLFields != null ? graphQLFields : fieldsFieldValue;
+                        if (resolvedFields != null) {
+                            graphQLBody.withFields(resolvedFields);
+                        }
+                        result = new GraphQLBodyDTO(graphQLBody, not);
                         break;
                     case FILE:
                         result = new FileBodyDTO(new FileBody(valueJsonValue, contentType), not);
