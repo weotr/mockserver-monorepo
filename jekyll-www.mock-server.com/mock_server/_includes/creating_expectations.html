@@ -377,6 +377,60 @@ conversation()
 
 <p>Scenarios are independent of each other — different scenario names maintain separate state. All scenario states are reset when MockServer is <a href="/mock_server/clearing_and_resetting.html">reset</a>.</p>
 
+<a id="timed_scenario_flows" class="anchor" href="#timed_scenario_flows">&nbsp;</a>
+
+<h4>Timed and Triggered Scenario Flows</h4>
+
+<p>Beyond expectation-driven state transitions, MockServer supports <strong>timed auto-transitions</strong> and <strong>external triggers</strong> via REST endpoints. These let you model scenarios where state changes happen after a time delay (e.g. a background process completing) or are driven externally by a test harness.</p>
+
+<p><strong>Get current state:</strong></p>
+<pre class="prettyprint lang-bash code"><code class="code"># Returns {"scenarioName": "DeployFlow", "currentState": "Started"}
+curl -X GET http://localhost:1080/mockserver/scenario/DeployFlow</code></pre>
+
+<p><strong>Set state immediately:</strong></p>
+<pre class="prettyprint lang-bash code"><code class="code"># Set the scenario to "Deploying" state
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying"}'</code></pre>
+
+<p><strong>Set state with timed auto-transition:</strong> The scenario enters "Deploying" immediately, then automatically transitions to "Deployed" after 5 seconds (if still in "Deploying").</p>
+<pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying", "transitionAfterMs": 5000, "nextState": "Deployed"}'</code></pre>
+
+<p><strong>External trigger:</strong> Advance the scenario to a specific state from your test harness or CI pipeline.</p>
+<pre class="prettyprint lang-bash code"><code class="code"># Jump directly to "Failed" state
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"newState": "Failed"}'</code></pre>
+
+<p><strong>Example - Deployment Pipeline Flow:</strong> Combine expectation-based matching with timed transitions to model a deployment that takes time to complete.</p>
+<pre class="prettyprint lang-java code"><code class="code">// Step 1: Register expectations for each state
+// When Deploying, GET /status returns "in progress"
+{
+    "httpRequest": { "method": "GET", "path": "/status" },
+    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"deploying\"}" },
+    "scenarioName": "DeployFlow",
+    "scenarioState": "Deploying"
+}
+
+// When Deployed, GET /status returns "complete"
+{
+    "httpRequest": { "method": "GET", "path": "/status" },
+    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"complete\"}" },
+    "scenarioName": "DeployFlow",
+    "scenarioState": "Deployed"
+}
+
+// Step 2: Start the flow with a timed transition
+// PUT /mockserver/scenario/DeployFlow
+// Body: {"state": "Deploying", "transitionAfterMs": 3000, "nextState": "Deployed"}
+//
+// Now: GET /status returns "deploying"
+// After 3 seconds: GET /status returns "complete"</code></pre>
+
+<p>Timed transitions are guarded: the transition only fires if the scenario is still in the expected <span class="inline_code">currentState</span> when the timer expires. If the scenario has already moved to a different state (e.g. via an external trigger or expectation match), the timed transition becomes a no-op. Scheduling a new transition for the same scenario cancels any pending one.</p>
+
 <a id="sequential_responses" class="anchor" href="#sequential_responses">&nbsp;</a>
 
 <h4>Sequential / Cycling Responses</h4>

@@ -297,6 +297,7 @@ public class HttpState {
 
     public void reset() {
         requestMatchers.reset();
+        requestMatchers.getScenarioManager().cancelAllPendingTransitions();
         mockServerLog.reset();
         webSocketClientRegistry.reset();
         crudDispatcher.reset();
@@ -1579,6 +1580,16 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT") && request.getPath() != null
+                && request.getPath().getValue() != null
+                && (request.getPath().getValue().startsWith(PATH_PREFIX + "/scenario/")
+                    || request.getPath().getValue().startsWith("/scenario/"))) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleScenarioPut(request), true);
+                }
+                canHandle.complete(true);
+
             } else {
 
                 canHandle.complete(false);
@@ -1615,6 +1626,15 @@ public class HttpState {
             if (request.matches("GET", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, handleGrpcHealthGet(), true);
+                }
+                return true;
+            }
+            if (request.matches("GET") && request.getPath() != null
+                && request.getPath().getValue() != null
+                && (request.getPath().getValue().startsWith(PATH_PREFIX + "/scenario/")
+                    || request.getPath().getValue().startsWith("/scenario/"))) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleScenarioGet(request), true);
                 }
                 return true;
             }
@@ -1912,6 +1932,162 @@ public class HttpState {
         } catch (Exception jsonError) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to process service chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- Scenario endpoint helpers ---
+
+    /**
+     * Extracts the scenario name from a request path.
+     * Handles both {@code /mockserver/scenario/{name}} and {@code /scenario/{name}} prefixes.
+     * Returns the full remaining path after the prefix (which may include "/trigger" suffix).
+     */
+    private String extractScenarioPath(HttpRequest request) {
+        String path = request.getPath().getValue();
+        String prefixFull = PATH_PREFIX + "/scenario/";
+        String prefixShort = "/scenario/";
+        if (path.startsWith(prefixFull)) {
+            return path.substring(prefixFull.length());
+        } else if (path.startsWith(prefixShort)) {
+            return path.substring(prefixShort.length());
+        }
+        return null;
+    }
+
+    /**
+     * Handles PUT /mockserver/scenario/{name} and PUT /mockserver/scenario/{name}/trigger.
+     * <p>
+     * PUT /mockserver/scenario/{name}:
+     *   Body: {"state": "Running"} — set state immediately
+     *   Body: {"state": "Running", "transitionAfterMs": 5000, "nextState": "Finished"} — set state and schedule timed transition
+     * <p>
+     * PUT /mockserver/scenario/{name}/trigger:
+     *   Body: {"newState": "Step3"} — set state to newState immediately
+     */
+    private HttpResponse handleScenarioPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String scenarioPath = extractScenarioPath(request);
+            if (isBlank(scenarioPath)) {
+                return scenarioError(objectMapper, "scenario name is required in the path");
+            }
+
+            boolean isTrigger = scenarioPath.endsWith("/trigger");
+            String scenarioName = isTrigger ? scenarioPath.substring(0, scenarioPath.length() - "/trigger".length()) : scenarioPath;
+
+            if (isBlank(scenarioName)) {
+                return scenarioError(objectMapper, "scenario name is required in the path");
+            }
+
+            ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+            String body = request.getBodyAsJsonOrXmlString();
+
+            if (isTrigger) {
+                // PUT /mockserver/scenario/{name}/trigger — external trigger to set state
+                if (isBlank(body)) {
+                    return scenarioError(objectMapper, "request body is required with 'newState' field");
+                }
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+                String newState = node.path("newState").asText(null);
+                if (isBlank(newState)) {
+                    return scenarioError(objectMapper, "'newState' field is required");
+                }
+                scenarioManager.setState(scenarioName, newState);
+                logScenario(request, "triggered scenario state transition for scenario:{} to state:{}", scenarioName, newState);
+
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("scenarioName", scenarioName);
+                result.put("currentState", newState);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            } else {
+                // PUT /mockserver/scenario/{name} — set state, optionally schedule transition
+                if (isBlank(body)) {
+                    return scenarioError(objectMapper, "request body is required with 'state' field");
+                }
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+                String state = node.path("state").asText(null);
+                if (isBlank(state)) {
+                    return scenarioError(objectMapper, "'state' field is required");
+                }
+                scenarioManager.setState(scenarioName, state);
+                logScenario(request, "set scenario state for scenario:{} to state:{}", scenarioName, state);
+
+                // optional timed transition
+                Long transitionAfterMs = node.hasNonNull("transitionAfterMs") ? node.get("transitionAfterMs").asLong() : null;
+                String nextState = node.path("nextState").asText(null);
+
+                if (transitionAfterMs != null && transitionAfterMs > 0 && isNotBlank(nextState)) {
+                    TimedScenarioTransition transition = new TimedScenarioTransition()
+                        .withScenarioName(scenarioName)
+                        .withCurrentState(state)
+                        .withNextState(nextState)
+                        .withTransitionAfterMs(transitionAfterMs);
+                    scenarioManager.scheduleTransition(transition, scheduler);
+                    logScenario(request, "scheduled timed transition for scenario:{} from state:{} to state:{} after {}ms",
+                        scenarioName, state, nextState, String.valueOf(transitionAfterMs));
+                }
+
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("scenarioName", scenarioName);
+                result.put("currentState", state);
+                if (transitionAfterMs != null && transitionAfterMs > 0 && isNotBlank(nextState)) {
+                    result.put("nextState", nextState);
+                    result.put("transitionAfterMs", transitionAfterMs);
+                }
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+        } catch (Exception e) {
+            return scenarioError(objectMapper, "failed to process scenario request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles GET /mockserver/scenario/{name} — returns the current state of a scenario.
+     */
+    private HttpResponse handleScenarioGet(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String scenarioPath = extractScenarioPath(request);
+            if (isBlank(scenarioPath)) {
+                return scenarioError(objectMapper, "scenario name is required in the path");
+            }
+
+            ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+            String currentState = scenarioManager.getState(scenarioPath);
+
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("scenarioName", scenarioPath);
+            result.put("currentState", currentState);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return scenarioError(objectMapper, "failed to get scenario state: " + e.getMessage());
+        }
+    }
+
+    private void logScenario(HttpRequest request, String messageFormat, String... args) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                    .setLogLevel(Level.INFO)
+                    .setHttpRequest(request)
+                    .setMessageFormat(messageFormat)
+                    .setArguments((Object[]) args)
+            );
+        }
+    }
+
+    private HttpResponse scenarioError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process scenario request\"}", MediaType.JSON_UTF_8);
         }
     }
 

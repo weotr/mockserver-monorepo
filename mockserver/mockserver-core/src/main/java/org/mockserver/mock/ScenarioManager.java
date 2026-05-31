@@ -1,9 +1,15 @@
 package org.mockserver.mock;
 
+import org.mockserver.model.Delay;
+import org.mockserver.model.TimedScenarioTransition;
+import org.mockserver.scheduler.Scheduler;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class ScenarioManager {
 
@@ -163,5 +169,63 @@ public class ScenarioManager {
      */
     public Map<ScenarioKey, String> getAllStatesStructured() {
         return new LinkedHashMap<>(scenarioStates);
+    }
+
+    // --- Timed transitions ---
+
+    /**
+     * Generation counter per scenario name for logical cancellation of
+     * pending timed transitions. When a new transition is scheduled (or an
+     * explicit cancel is requested), the generation is bumped so any
+     * previously submitted runnable becomes a no-op when it fires.
+     */
+    private final ConcurrentHashMap<String, Long> transitionGenerations = new ConcurrentHashMap<>();
+
+    /**
+     * Schedules a timed transition: after {@code transition.getTransitionAfterMs()} ms,
+     * if the scenario is still in {@code transition.getCurrentState()}, it will be
+     * advanced to {@code transition.getNextState()}.
+     * <p>
+     * Only one pending transition per scenario is logically active; scheduling a
+     * new transition for the same scenario logically cancels any pending one
+     * (the stale runnable becomes a no-op via generation counters).
+     *
+     * @param transition the transition descriptor (must have scenarioName, currentState, nextState, transitionAfterMs)
+     * @param scheduler  the MockServer scheduler to use for delayed execution
+     */
+    public void scheduleTransition(TimedScenarioTransition transition, Scheduler scheduler) {
+        String scenarioName = transition.getScenarioName();
+        String currentState = transition.getCurrentState();
+        String nextState = transition.getNextState();
+        long delayMs = transition.getTransitionAfterMs();
+
+        // bump generation to logically cancel any pending transition for this scenario
+        long generation = transitionGenerations.merge(scenarioName, 1L, Long::sum);
+
+        Delay delay = new Delay(MILLISECONDS, delayMs);
+        scheduler.submitAsync(() -> {
+            // only fire if this generation is still current (not cancelled)
+            Long currentGen = transitionGenerations.get(scenarioName);
+            if (currentGen != null && currentGen == generation) {
+                matchesAndTransition(scenarioName, currentState, nextState);
+            }
+        }, delay);
+    }
+
+    /**
+     * Cancels any pending timed transition for the given scenario name.
+     */
+    public void cancelPendingTransition(String scenarioName) {
+        if (scenarioName != null) {
+            // bump generation so any pending transition runnable becomes a no-op
+            transitionGenerations.merge(scenarioName, 1L, Long::sum);
+        }
+    }
+
+    /**
+     * Cancels all pending timed transitions and clears generation counters.
+     */
+    public void cancelAllPendingTransitions() {
+        transitionGenerations.clear();
     }
 }

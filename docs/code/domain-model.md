@@ -404,6 +404,23 @@ Expectation.when(request)      // RequestDefinition
 
 Scenario fields are optional. When `scenarioName` and `scenarioState` are set, the expectation only matches when the named scenario is in the required state. After matching, the scenario transitions to `newScenarioState` (if set). All scenarios start in the `"Started"` state. State is managed by `ScenarioManager` in `RequestMatchers`.
 
+#### Timed and Triggered Scenario Flows
+
+Beyond expectation-driven transitions, scenarios support timed auto-transitions and external triggers via REST endpoints:
+
+**Timed auto-transitions** (`TimedScenarioTransition` model): A scenario can be configured to automatically advance from one state to another after a delay. The `ScenarioManager.scheduleTransition()` method accepts a `TimedScenarioTransition` and a `Scheduler`, using generation-based cancellation to ensure only the latest scheduled transition for a given scenario fires. The transition only fires if the scenario is still in the expected `currentState`.
+
+**REST endpoints for external control:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| `GET` | `/mockserver/scenario/{name}` | — | Returns `{"scenarioName": "...", "currentState": "..."}` |
+| `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running"}` | Sets state immediately |
+| `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running", "transitionAfterMs": 5000, "nextState": "Finished"}` | Sets state and schedules timed transition |
+| `PUT` | `/mockserver/scenario/{name}/trigger` | `{"newState": "Step3"}` | Sets state to `newState` immediately (external trigger) |
+
+These endpoints are handled in `HttpState.handleScenarioPut()` and `HttpState.handleScenarioGet()`, authenticated via the control plane authentication handler.
+
 #### Sequential/Cycling Responses (`httpResponses`)
 
 An expectation can return multiple responses by setting `httpResponses` (a `List<HttpResponse>`) instead of `httpResponse`. Each match returns the next response, cycling back to the first after the last. The `responseMode` field (`ResponseMode.SEQUENTIAL` or `ResponseMode.RANDOM`) controls selection. Sequential mode uses `(matchCount - 1) % size` because `matchCount` is incremented in `consumeMatch()` before `getPrimaryAction()` is called.
