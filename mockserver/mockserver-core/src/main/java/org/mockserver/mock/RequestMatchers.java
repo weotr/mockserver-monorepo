@@ -531,6 +531,33 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         }
     }
 
+    /**
+     * Returns every active expectation whose request matcher matches the given concrete
+     * incoming request, using <em>forward</em> matching (the same direction used when
+     * serving — "does this expectation match this request?"). This differs from
+     * {@link #retrieveActiveExpectations(RequestDefinition)}, which treats its argument
+     * as a filter and reverse-matches it against each expectation's definition.
+     *
+     * <p>Used by drift analysis on the proxy-forward path: a forwarded request needs the
+     * set of <em>other</em> matching stubs (e.g. a lower-priority response-type baseline)
+     * to diff the real upstream response against. Reverse/filter matching cannot be used
+     * there because the concrete request carries headers/cookies that bare stub
+     * definitions do not, so it would never match.
+     */
+    public List<Expectation> retrieveExpectationsMatchingRequest(RequestDefinition requestDefinition) {
+        List<Expectation> expectations = new ArrayList<>();
+        if (requestDefinition == null) {
+            return expectations;
+        }
+        getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
+            if ((httpRequestMatcher.isResponseInProgress() || httpRequestMatcher.isActive())
+                && httpRequestMatcher.matches(requestDefinition)) {
+                expectations.add(httpRequestMatcher.getExpectation());
+            }
+        });
+        return expectations;
+    }
+
     public List<HttpRequestMatcher> retrieveRequestMatchers(RequestDefinition requestDefinition) {
         if (requestDefinition == null) {
             return httpRequestMatchers.stream()

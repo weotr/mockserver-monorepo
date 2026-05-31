@@ -21,10 +21,19 @@ function stubServiceChaos(initial: {
   const puts: PutCall[] = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (_url: string, init?: RequestInit) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'PUT') {
         puts.push({ body: JSON.parse(String(init.body)) as Record<string, unknown> });
         return { ok: true, status: 200, statusText: 'ok', json: async () => ({ status: 'ok' }) };
+      }
+      // The panel also fetches the gRPC-health and TCP-chaos sections on mount; return
+      // their own (empty) shapes so they don't get served the serviceChaos snapshot.
+      const u = String(url);
+      if (u.includes('/grpc/health')) {
+        return { ok: true, status: 200, statusText: 'ok', json: async () => ({}) };
+      }
+      if (u.includes('/tcpChaos')) {
+        return { ok: true, status: 200, statusText: 'ok', json: async () => ({ hosts: {} }) };
       }
       return { ok: true, status: 200, statusText: 'ok', json: async () => state };
     }),

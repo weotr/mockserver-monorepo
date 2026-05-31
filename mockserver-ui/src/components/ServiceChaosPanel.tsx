@@ -264,9 +264,9 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     return () => clearInterval(interval);
   }, []);
 
-  // Poll gRPC health status when the section is expanded.
+  // Fetch gRPC health on mount (so the collapsed header chip shows the real count),
+  // then keep polling only while the section is expanded.
   useEffect(() => {
-    if (!grpcExpanded) return;
     let cancelled = false;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -278,7 +278,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       } catch {
         // ignore
       } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), 10000);
+        if (!cancelled && grpcExpanded) timer = setTimeout(() => void poll(), 10000);
       }
     }
 
@@ -290,9 +290,9 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     };
   }, [connectionParams, grpcExpanded, refreshTick]);
 
-  // Poll TCP chaos status when the section is expanded.
+  // Fetch TCP chaos on mount (so the collapsed header chip shows the real count),
+  // then keep polling only while the section is expanded.
   useEffect(() => {
-    if (!tcpExpanded) return;
     let cancelled = false;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -304,7 +304,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       } catch {
         // ignore
       } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (!cancelled && tcpExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
       }
     }
 
@@ -412,10 +412,12 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     });
   }, [connectionParams, runAction]);
 
-  const grpcServices = useMemo(() => Object.keys(grpcHealth).sort(), [grpcHealth]);
+  // Null-safe: a control-plane response with an unexpected/missing shape must never
+  // crash the panel (Object.keys(undefined) throws). Default to an empty set.
+  const grpcServices = useMemo(() => Object.keys(grpcHealth ?? {}).sort(), [grpcHealth]);
 
   // TCP chaos helpers
-  const tcpHosts = useMemo(() => Object.keys(tcpData.hosts).sort(), [tcpData.hosts]);
+  const tcpHosts = useMemo(() => Object.keys(tcpData?.hosts ?? {}).sort(), [tcpData?.hosts]);
 
   const tcpRemainingTtl = (host: string): number | undefined => {
     const atPoll = tcpData.ttlRemainingMillis?.[host];

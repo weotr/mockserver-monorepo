@@ -382,7 +382,11 @@ public class HttpState {
         if (requestMatchers.isEmpty()) {
             return Collections.emptyList();
         } else {
-            return requestMatchers.retrieveActiveExpectations(request);
+            // Forward matching ("does each expectation match this concrete request?"),
+            // NOT the filter/reverse semantics of retrieveActiveExpectations — the
+            // incoming request carries headers/cookies bare stubs lack, so reverse
+            // matching would return nothing (this is what silently broke drift analysis).
+            return requestMatchers.retrieveExpectationsMatchingRequest(request);
         }
     }
 
