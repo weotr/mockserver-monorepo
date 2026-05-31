@@ -53,6 +53,7 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("jsonRpc".toLowerCase(), Body.Type.JSON_RPC);
         fieldNameToType.put("graphql".toLowerCase(), Body.Type.GRAPHQL);
         fieldNameToType.put("filePath".toLowerCase(), Body.Type.FILE);
+        fieldNameToType.put("moduleName".toLowerCase(), Body.Type.WASM);
     }
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(BodyDTODeserializer.class);
@@ -155,7 +156,7 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 .collect(java.util.stream.Collectors.toList());
                         }
                     }
-                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "filePath") && type != Body.Type.PARAMETERS) {
+                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "filePath", "moduleName") && type != Body.Type.PARAMETERS) {
                         String fieldName = String.valueOf(entry.getKey()).toLowerCase();
                         if (fieldNameToType.containsKey(fieldName)) {
                             type = fieldNameToType.get(fieldName);
@@ -436,6 +437,9 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         break;
                     case FILE:
                         result = new FileBodyDTO(new FileBody(valueJsonValue, contentType), not);
+                        break;
+                    case WASM:
+                        result = new WasmBodyDTO(new WasmBody(valueJsonValue), not);
                         break;
                 }
             } else if (body.size() > 0) {

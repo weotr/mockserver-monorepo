@@ -53,6 +53,7 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("xpath".toLowerCase(), Body.Type.XPATH);
         fieldNameToType.put("jsonRpc".toLowerCase(), Body.Type.JSON_RPC);
         fieldNameToType.put("graphql".toLowerCase(), Body.Type.GRAPHQL);
+        fieldNameToType.put("moduleName".toLowerCase(), Body.Type.WASM);
     }
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(StrictBodyDTODeserializer.class);
@@ -162,7 +163,7 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 .collect(java.util.stream.Collectors.toList());
                         }
                     }
-                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes") && type != Body.Type.PARAMETERS) {
+                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "moduleName") && type != Body.Type.PARAMETERS) {
                         String fieldName = String.valueOf(entry.getKey()).toLowerCase();
                         if (fieldNameToType.containsKey(fieldName)) {
                             type = fieldNameToType.get(fieldName);
@@ -424,6 +425,9 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             graphQLBody.withFields(resolvedFields);
                         }
                         result = new GraphQLBodyDTO(graphQLBody, not);
+                        break;
+                    case WASM:
+                        result = new WasmBodyDTO(new WasmBody(valueJsonValue), not);
                         break;
                 }
             }

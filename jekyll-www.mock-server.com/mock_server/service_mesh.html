@@ -1,0 +1,125 @@
+---
+title: Service Mesh / Sidecar Mode
+shortTitle: Service Mesh
+description: Run MockServer as a Kubernetes sidecar with transparent proxy interception and xDS route discovery for service mesh integration.
+layout: page
+pageOrder: 3
+section: 'Chaos Testing'
+subsection: true
+sitemap:
+  priority: 0.7
+  changefreq: 'monthly'
+  lastmod: 2026-05-31T08:00:00+00:00
+keywords: service mesh, sidecar proxy, transparent proxy, xds, istio, envoy, kubernetes sidecar, iptables redirect, mockserver sidecar
+---
+
+<p>MockServer can run as a <strong>Kubernetes sidecar</strong> with transparent HTTP proxy interception and a simplified xDS route discovery endpoint. This enables service mesh integration patterns where MockServer intercepts traffic destined for external services without any application code changes.</p>
+
+<h2>Transparent Proxy Mode</h2>
+
+<p>When <code class="inline code">transparentProxyEnabled</code> is set to <code class="inline code">true</code>, MockServer treats all incoming HTTP connections as proxy requests. Instead of requiring clients to send explicit HTTP CONNECT requests or configure proxy settings, it uses the <code class="inline code">Host</code> header from each request to determine the forwarding target.</p>
+
+<p>This works with Linux <code class="inline code">iptables</code> REDIRECT rules that redirect outbound traffic to MockServer's port, making the interception completely transparent to the application.</p>
+
+<h3>How it works</h3>
+
+<ol>
+    <li>An init container sets up iptables rules to redirect outbound HTTP/HTTPS traffic to MockServer's port</li>
+    <li>MockServer reads the <code class="inline code">Host</code> header from each incoming request</li>
+    <li>If an expectation matches, MockServer returns the mock response</li>
+    <li>Otherwise, MockServer forwards the request to the original target (resolved from the Host header)</li>
+</ol>
+
+<h3>Configuration</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code class="inline code">transparentProxyEnabled</code></td><td><code class="inline code">false</code></td><td>Enable transparent proxy mode</td></tr>
+    </tbody>
+</table>
+
+<p>Environment variable: <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED</code></p>
+
+<h3>iptables init container example</h3>
+
+<p>Add an init container to your Pod spec to redirect outbound traffic to MockServer:</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">initContainers:
+  - name: iptables-init
+    image: alpine:3.19
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"]
+    command:
+      - sh
+      - -c
+      - |
+        # Redirect HTTP and HTTPS to MockServer
+        iptables -t nat -A OUTPUT -p tcp --dport 80 -j REDIRECT --to-port 1080
+        iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 1080
+        # Exclude MockServer's own traffic to avoid loops
+        iptables -t nat -I OUTPUT -m owner --uid-owner 65534 -j RETURN</code></pre>
+
+<h2>xDS Route Discovery Endpoint</h2>
+
+<p>When <code class="inline code">xdsEnabled</code> is set to <code class="inline code">true</code>, MockServer exposes a REST endpoint that returns active expectations as a simplified xDS RouteConfiguration JSON structure. This can be consumed by custom tooling or monitoring dashboards.</p>
+
+<h3>Endpoint</h3>
+
+<pre class="prettyprint code"><code class="code">GET /mockserver/xds/routes</code></pre>
+
+<h3>Response example</h3>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "name" : "mockserver_routes",
+  "virtual_hosts" : [ {
+    "name" : "mockserver",
+    "domains" : [ "*" ],
+    "routes" : [ {
+      "match" : {
+        "path" : "/api/users",
+        "method" : "GET"
+      },
+      "expectationId" : "abc-123"
+    } ]
+  } ]
+}</code></pre>
+
+<h3>Configuration</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code class="inline code">xdsEnabled</code></td><td><code class="inline code">false</code></td><td>Enable xDS route discovery endpoint</td></tr>
+        <tr><td><code class="inline code">xdsPort</code></td><td><code class="inline code">18000</code></td><td>Port for xDS endpoint (reserved for future gRPC use)</td></tr>
+    </tbody>
+</table>
+
+<p>Environment variables: <code class="inline code">MOCKSERVER_XDS_ENABLED</code>, <code class="inline code">MOCKSERVER_XDS_PORT</code></p>
+
+<h2>Helm Chart</h2>
+
+<p>The MockServer Helm chart includes sidecar configuration values:</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">sidecar:
+  enabled: false
+  transparentProxy: false
+  xdsEnabled: false
+  xdsPort: 18000</code></pre>
+
+<p>When <code class="inline code">sidecar.transparentProxy</code> is <code class="inline code">true</code>, the chart sets <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true</code> in the deployment.</p>
+
+<p>When <code class="inline code">sidecar.xdsEnabled</code> is <code class="inline code">true</code>, the chart sets both <code class="inline code">MOCKSERVER_XDS_ENABLED=true</code> and <code class="inline code">MOCKSERVER_XDS_PORT</code>.</p>
+
+<h2>Limitations</h2>
+
+<ul>
+    <li><strong>REST-only xDS</strong> -- the current implementation provides a REST JSON endpoint, not the full xDS gRPC streaming protocol. This is sufficient for simple tooling and can be extended in future.</li>
+    <li><strong>Host header based</strong> -- the transparent proxy uses the Host header for target resolution, not Linux's <code class="inline code">SO_ORIGINAL_DST</code> socket option. This works for HTTP traffic where the Host header is set correctly.</li>
+    <li><strong>iptables not automatic</strong> -- an init container or external mechanism must configure traffic redirection.</li>
+</ul>

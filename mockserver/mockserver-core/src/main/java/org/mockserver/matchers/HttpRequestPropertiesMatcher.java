@@ -200,6 +200,10 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
                     BinaryBody binaryBody = (BinaryBody) body;
                     bodyMatcher = new BinaryMatcher(mockServerLogger, binaryBody.getValue());
                     break;
+                case WASM:
+                    WasmBody wasmBody = (WasmBody) body;
+                    bodyMatcher = new WasmBodyMatcher(wasmBody.getModuleName());
+                    break;
             }
             if (body.isNot()) {
                 //noinspection ConstantConditions

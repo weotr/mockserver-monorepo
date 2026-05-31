@@ -309,6 +309,7 @@ public class HttpState {
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
         org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reset();
         org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
+        org.mockserver.wasm.WasmStore.getInstance().reset();
         org.mockserver.mock.drift.DriftStore.getInstance().clear();
         org.mockserver.mock.replay.ReplayOrchestrator.getInstance().reset();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
@@ -1491,6 +1492,30 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String moduleName = request.getFirstQueryStringParameter("name");
+                        if (isBlank(moduleName)) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                        } else {
+                            byte[] bodyBytes = request.getBodyAsRawBytes();
+                            if (bodyBytes != null && bodyBytes.length > 0) {
+                                org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
+                                responseWriter.writeResponse(request, response()
+                                    .withStatusCode(CREATED.code())
+                                    .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8), true);
+                            } else {
+                                responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                            }
+                        }
+                    } catch (Exception e) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/files/store", "/files/store")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1665,9 +1690,32 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                        com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
+                        for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
+                            modulesArray.add(name);
+                        }
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8), true);
+                    } catch (Exception e) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/drift", "/drift")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, handleDriftGet(request), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/xds/routes", "/xds/routes")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handleXdsRoutes(), true);
                 }
                 return true;
             }
@@ -1711,6 +1759,24 @@ public class HttpState {
             if (request.matches("PATCH", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosPatch(request)), true);
+                }
+                return true;
+            }
+            return false;
+
+        } else if (request.matches("DELETE")) {
+
+            if (request.matches("DELETE", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    String moduleName = request.getFirstQueryStringParameter("name");
+                    if (isBlank(moduleName)) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                    } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
+                        org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
+                        responseWriter.writeResponse(request, OK);
+                    } else {
+                        responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                    }
                 }
                 return true;
             }
@@ -2532,6 +2598,23 @@ public class HttpState {
         } catch (Exception e) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to get gRPC health status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleXdsRoutes() {
+        if (!Boolean.TRUE.equals(configuration.xdsEnabled())) {
+            return response().withStatusCode(NOT_FOUND.code())
+                .withBody("{\"error\":\"xDS is not enabled (set xdsEnabled=true)\"}", MediaType.JSON_UTF_8);
+        }
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            List<Expectation> active = requestMatchers.retrieveActiveExpectations(null);
+            java.util.Map<String, Object> config = new org.mockserver.xds.XdsRouteBuilder().buildRouteConfiguration(active);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(config), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to build xDS route configuration\"}", MediaType.JSON_UTF_8);
         }
     }
 

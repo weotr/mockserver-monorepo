@@ -102,6 +102,16 @@ spec:
             - name: MOCKSERVER_INITIALIZATION_JSON_PATH
               value: {{ .Values.app.persistence.mountPath }}/persistedExpectations.json
 {{- end }}
+{{- if .Values.sidecar.transparentProxy }}
+            - name: MOCKSERVER_TRANSPARENT_PROXY_ENABLED
+              value: "true"
+{{- end }}
+{{- if .Values.sidecar.xdsEnabled }}
+            - name: MOCKSERVER_XDS_ENABLED
+              value: "true"
+            - name: MOCKSERVER_XDS_PORT
+              value: {{ .Values.sidecar.xdsPort | quote }}
+{{- end }}
           volumeMounts:
             - name: config-volume
               mountPath: /config

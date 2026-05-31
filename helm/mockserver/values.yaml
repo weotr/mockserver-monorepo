@@ -147,4 +147,11 @@ tolerations: []
 
 affinity: {}
 
+# Sidecar / transparent proxy mode
+sidecar:
+  enabled: false
+  transparentProxy: false
+  xdsEnabled: false
+  xdsPort: 18000
+
 imagePullSecrets: []

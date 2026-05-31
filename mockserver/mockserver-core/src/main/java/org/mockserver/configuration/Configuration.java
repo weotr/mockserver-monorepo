@@ -43,6 +43,8 @@ public class Configuration {
     private Boolean otelPropagateTraceContext;
     private Boolean otelGenerateTraceId;
     private Boolean mcpEnabled;
+    private Boolean wasmEnabled;
+    private Integer wasmMaxMemoryPages;
     private String grpcDescriptorDirectory;
     private String grpcProtoDirectory;
     private Boolean grpcEnabled;
@@ -211,6 +213,11 @@ public class Configuration {
     // outbound - fixed private key & x509
     private String forwardProxyPrivateKey;
     private String forwardProxyCertificateChain;
+
+    // service mesh / sidecar
+    private Boolean transparentProxyEnabled;
+    private Boolean xdsEnabled;
+    private Integer xdsPort;
 
 
     public Level logLevel() {
@@ -419,6 +426,30 @@ public class Configuration {
 
     public Configuration mcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
+        return this;
+    }
+
+    public Boolean wasmEnabled() {
+        if (wasmEnabled == null) {
+            return ConfigurationProperties.wasmEnabled();
+        }
+        return wasmEnabled;
+    }
+
+    public Configuration wasmEnabled(Boolean wasmEnabled) {
+        this.wasmEnabled = wasmEnabled;
+        return this;
+    }
+
+    public Integer wasmMaxMemoryPages() {
+        if (wasmMaxMemoryPages == null) {
+            return ConfigurationProperties.wasmMaxMemoryPages();
+        }
+        return wasmMaxMemoryPages;
+    }
+
+    public Configuration wasmMaxMemoryPages(Integer wasmMaxMemoryPages) {
+        this.wasmMaxMemoryPages = wasmMaxMemoryPages;
         return this;
     }
 
@@ -2562,6 +2593,66 @@ public class Configuration {
     public Configuration forwardProxyCertificateChain(String forwardProxyCertificateChain) {
         fileExists(forwardProxyCertificateChain);
         this.forwardProxyCertificateChain = forwardProxyCertificateChain;
+        return this;
+    }
+
+    public Boolean transparentProxyEnabled() {
+        if (transparentProxyEnabled == null) {
+            return ConfigurationProperties.transparentProxyEnabled();
+        }
+        return transparentProxyEnabled;
+    }
+
+    /**
+     * Enable transparent HTTP proxy mode where all connections are treated as proxy
+     * requests using the Host header as the forwarding target. This enables
+     * iptables REDIRECT-based interception without CONNECT.
+     * <p>
+     * The default is false
+     *
+     * @param transparentProxyEnabled enable transparent proxy mode
+     */
+    public Configuration transparentProxyEnabled(Boolean transparentProxyEnabled) {
+        this.transparentProxyEnabled = transparentProxyEnabled;
+        return this;
+    }
+
+    public Boolean xdsEnabled() {
+        if (xdsEnabled == null) {
+            return ConfigurationProperties.xdsEnabled();
+        }
+        return xdsEnabled;
+    }
+
+    /**
+     * Enable the xDS route discovery endpoint at GET /mockserver/xds/routes which
+     * returns active expectations as a simplified xDS RouteConfiguration JSON structure.
+     * <p>
+     * The default is false
+     *
+     * @param xdsEnabled enable xDS route discovery endpoint
+     */
+    public Configuration xdsEnabled(Boolean xdsEnabled) {
+        this.xdsEnabled = xdsEnabled;
+        return this;
+    }
+
+    public Integer xdsPort() {
+        if (xdsPort == null) {
+            return ConfigurationProperties.xdsPort();
+        }
+        return xdsPort;
+    }
+
+    /**
+     * The port used for the xDS route discovery endpoint.
+     * <p>
+     * The default is 18000
+     *
+     * @param xdsPort port for xDS endpoint
+     */
+    public Configuration xdsPort(Integer xdsPort) {
+        this.xdsPort = xdsPort;
         return this;
     }
 

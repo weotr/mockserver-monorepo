@@ -1,0 +1,35 @@
+<a id="wasm_configuration" class="anchor" href="#wasm_configuration">&nbsp;</a>
+
+<h2>WASM Configuration:</h2>
+
+<button id="button_configuration_wasm_enabled" class="accordion title"><strong>Enable WASM Body Matching</strong></button>
+<div class="panel title">
+    <p>Enable or disable WASM body matching. When enabled, users can upload WebAssembly modules as custom body matchers. WASM modules run inside a pure-Java interpreter (chicory) and are sandboxed from the host. See <a href="/mock_server/wasm_rules.html">WASM Custom Rules</a> for details.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.wasmEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.wasmEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_WASM_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.wasmEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.wasmEnabled="true"</code></pre>
+</div>
+
+<button id="button_configuration_wasm_max_memory_pages" class="accordion title"><strong>WASM Maximum Memory Pages</strong></button>
+<div class="panel title">
+    <p>Maximum number of WASM linear memory pages allowed per module. Each page is 64 KiB, so the default of 256 pages allows up to 16 MiB of linear memory per WASM module. Increase this if your WASM modules need to process large request bodies.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">256</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.wasmMaxMemoryPages(int pages)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.wasmMaxMemoryPages=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_WASM_MAX_MEMORY_PAGES=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.wasmMaxMemoryPages=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.wasmMaxMemoryPages="512"</code></pre>
+</div>

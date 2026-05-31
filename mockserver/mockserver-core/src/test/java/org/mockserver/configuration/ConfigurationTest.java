@@ -2582,4 +2582,79 @@ public class ConfigurationTest {
         assertThat(configuration.x509CertificatePath(), equalTo(valid));
     }
 
+    @Test
+    public void shouldSetAndGetTransparentProxyEnabled() {
+        boolean original = ConfigurationProperties.transparentProxyEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.transparentProxyEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.transparentProxyEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.transparentProxyEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.transparentProxyEnabled"), equalTo("true"));
+            assertThat(configuration.transparentProxyEnabled(), equalTo(true));
+
+            // when - setter
+            configuration.transparentProxyEnabled(false);
+
+            // then - getter
+            assertThat(configuration.transparentProxyEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.transparentProxyEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetXdsEnabled() {
+        boolean original = ConfigurationProperties.xdsEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.xdsEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.xdsEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.xdsEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.xdsEnabled"), equalTo("true"));
+            assertThat(configuration.xdsEnabled(), equalTo(true));
+
+            // when - setter
+            configuration.xdsEnabled(false);
+
+            // then - getter
+            assertThat(configuration.xdsEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.xdsEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetXdsPort() {
+        int original = ConfigurationProperties.xdsPort();
+        try {
+            // then - default value
+            assertThat(configuration.xdsPort(), equalTo(18000));
+
+            // when - system property setter
+            ConfigurationProperties.xdsPort(19000);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.xdsPort(), equalTo(19000));
+            assertThat(System.getProperty("mockserver.xdsPort"), equalTo("19000"));
+            assertThat(configuration.xdsPort(), equalTo(19000));
+
+            // when - setter
+            configuration.xdsPort(20000);
+
+            // then - getter
+            assertThat(configuration.xdsPort(), equalTo(20000));
+        } finally {
+            ConfigurationProperties.xdsPort(original);
+        }
+    }
+
 }

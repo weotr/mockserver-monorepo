@@ -117,6 +117,10 @@ public class ConfigurationProperties {
     // body matching extensions
     private static final String MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS = "mockserver.customJsonUnitMatchersClass";
 
+    // WASM
+    private static final String MOCKSERVER_WASM_ENABLED = "mockserver.wasmEnabled";
+    private static final String MOCKSERVER_WASM_MAX_MEMORY_PAGES = "mockserver.wasmMaxMemoryPages";
+
     // gRPC
     private static final String MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY = "mockserver.grpcDescriptorDirectory";
     private static final String MOCKSERVER_GRPC_PROTO_DIRECTORY = "mockserver.grpcProtoDirectory";
@@ -243,6 +247,11 @@ public class ConfigurationProperties {
     // outbound - fixed private key & x509
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_PRIVATE_KEY = "mockserver.forwardProxyPrivateKey";
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATE_CHAIN = "mockserver.forwardProxyCertificateChain";
+
+    // service mesh / sidecar
+    private static final String MOCKSERVER_TRANSPARENT_PROXY_ENABLED = "mockserver.transparentProxyEnabled";
+    private static final String MOCKSERVER_XDS_ENABLED = "mockserver.xdsEnabled";
+    private static final String MOCKSERVER_XDS_PORT = "mockserver.xdsPort";
 
     // properties file
     private static final String MOCKSERVER_PROPERTY_FILE = "mockserver.propertyFile";
@@ -480,6 +489,22 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MCP_ENABLED, "" + enable);
     }
 
+    public static boolean wasmEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_WASM_ENABLED, "MOCKSERVER_WASM_ENABLED", "" + false));
+    }
+
+    public static void wasmEnabled(boolean enable) {
+        setProperty(MOCKSERVER_WASM_ENABLED, "" + enable);
+    }
+
+    public static int wasmMaxMemoryPages() {
+        return readIntegerProperty(MOCKSERVER_WASM_MAX_MEMORY_PAGES, "MOCKSERVER_WASM_MAX_MEMORY_PAGES", 256);
+    }
+
+    public static void wasmMaxMemoryPages(int pages) {
+        setProperty(MOCKSERVER_WASM_MAX_MEMORY_PAGES, "" + pages);
+    }
+
     public static String grpcDescriptorDirectory() {
         return readPropertyHierarchically(PROPERTIES, MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY, "MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY", "");
     }
@@ -526,6 +551,32 @@ public class ConfigurationProperties {
 
     public static void dnsPort(int port) {
         setProperty(MOCKSERVER_DNS_PORT, "" + port);
+    }
+
+    // service mesh / sidecar
+
+    public static boolean transparentProxyEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TRANSPARENT_PROXY_ENABLED, "MOCKSERVER_TRANSPARENT_PROXY_ENABLED", "" + false));
+    }
+
+    public static void transparentProxyEnabled(boolean enable) {
+        setProperty(MOCKSERVER_TRANSPARENT_PROXY_ENABLED, "" + enable);
+    }
+
+    public static boolean xdsEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_XDS_ENABLED, "MOCKSERVER_XDS_ENABLED", "" + false));
+    }
+
+    public static void xdsEnabled(boolean enable) {
+        setProperty(MOCKSERVER_XDS_ENABLED, "" + enable);
+    }
+
+    public static int xdsPort() {
+        return readIntegerProperty(MOCKSERVER_XDS_PORT, "MOCKSERVER_XDS_PORT", 18000);
+    }
+
+    public static void xdsPort(int port) {
+        setProperty(MOCKSERVER_XDS_PORT, "" + port);
     }
 
     public static Map<String, String> logLevelOverrides() {

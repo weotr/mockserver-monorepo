@@ -25,6 +25,7 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [LLM Mocking](code/llm-mocking.md) | Medium | LLM response builder, provider codecs, streaming physics, conversation matchers, isolation, MCP tools, dashboard |
 | [Configuration Reference](code/configuration-reference.md) | Low | Property mechanism, resolution order, four equivalent forms, how to add a property |
 | [Drift Detection](code/drift-detection.md) | Low | Mock drift detection: comparing forwarded responses against stub expectations |
+| [WASM Rules](code/wasm-rules.md) | Low | WASM custom rule engine: chicory interpreter, module ABI, REST endpoints, configuration |
 
 ### Infrastructure
 

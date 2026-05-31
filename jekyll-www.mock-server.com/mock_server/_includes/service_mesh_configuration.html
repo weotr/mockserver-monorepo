@@ -1,0 +1,54 @@
+<a id="service_mesh_configuration" class="anchor" href="#service_mesh_configuration">&nbsp;</a>
+
+<h2>Service Mesh / Sidecar Configuration:</h2>
+
+<p>These properties configure MockServer for running as a Kubernetes sidecar with transparent proxy interception and xDS route discovery. See <a href="/mock_server/service_mesh.html">Service Mesh / Sidecar Mode</a> for a full usage guide.</p>
+
+<button id="button_configuration_transparent_proxy_enabled" class="accordion title"><strong>Transparent Proxy Enabled</strong></button>
+<div class="panel title">
+    <p>Enable transparent HTTP proxy mode where all connections are treated as proxy requests using the Host header as the forwarding target. This enables iptables REDIRECT-based interception without requiring clients to send explicit HTTP CONNECT requests or configure proxy settings.</p>
+    <p>When enabled, MockServer reads the <span class="inline_code">Host</span> header from each incoming request to determine the forwarding target. If an expectation matches, MockServer returns the mock response; otherwise it forwards to the original target.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.transparentProxyEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.transparentProxyEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEnabled="true"</code></pre>
+</div>
+
+<button id="button_configuration_xds_enabled" class="accordion title"><strong>xDS Enabled</strong></button>
+<div class="panel title">
+    <p>Enable the xDS route discovery endpoint at <span class="inline_code">GET /mockserver/xds/routes</span>. When enabled, this endpoint returns active expectations as a simplified xDS RouteConfiguration JSON structure that can be consumed by custom tooling or monitoring dashboards.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.xdsEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.xdsEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_XDS_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.xdsEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.xdsEnabled="true"</code></pre>
+</div>
+
+<button id="button_configuration_xds_port" class="accordion title"><strong>xDS Port</strong></button>
+<div class="panel title">
+    <p>The port for the xDS route discovery endpoint. Currently reserved for future gRPC-based xDS support. The REST endpoint at <span class="inline_code">/mockserver/xds/routes</span> is served on the main MockServer port.</p>
+    <p>Type: <span class="keyword">integer</span> Default: <span class="this_value">18000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.xdsPort(int port)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.xdsPort=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_XDS_PORT=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.xdsPort=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.xdsPort="18000"</code></pre>
+</div>

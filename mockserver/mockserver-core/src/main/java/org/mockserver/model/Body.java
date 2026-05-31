@@ -69,6 +69,7 @@ public abstract class Body<T> extends Not {
         GRAPHQL,
         LOG_EVENT,
         FILE,
+        WASM,
     }
 
     @Override

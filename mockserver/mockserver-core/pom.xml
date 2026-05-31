@@ -143,6 +143,13 @@
             <artifactId>datafaker</artifactId>
         </dependency>
 
+        <!-- WASM (chicory pure-Java interpreter) -->
+        <dependency>
+            <groupId>com.dylibso.chicory</groupId>
+            <artifactId>runtime</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- javascript (GraalVM polyglot) -->
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
