@@ -17,6 +17,7 @@ import TrafficInspector from './components/TrafficInspector';
 import SessionInspector from './components/SessionInspector';
 import ComposerView from './components/ComposerView';
 import LibraryView from './components/LibraryView';
+import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DebugMismatchDialog from './components/DebugMismatchDialog';
 import type { RequestFilter } from './types';
 
@@ -108,6 +109,7 @@ export default function App() {
               <MetricsView connectionParams={params} />
             </Suspense>
           )}
+          {view === 'chaos' && <ServiceChaosPanel connectionParams={params} />}
         </Box>
         <DebugMismatchDialog />
       </DebugMismatchContext.Provider>

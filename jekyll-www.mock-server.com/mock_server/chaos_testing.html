@@ -388,6 +388,8 @@ GET /mockserver/serviceChaos</code></pre>
 
 <p>Besides the REST endpoint, convenience wrappers are available in the client libraries — Java (<code class="inline code">mockServerClient.setServiceChaos(host, chaos)</code> / <code class="inline code">removeServiceChaos(host)</code> / <code class="inline code">clearServiceChaos()</code> / <code class="inline code">serviceChaosStatus()</code>), Node (<code class="inline code">setServiceChaos</code> / <code class="inline code">removeServiceChaos</code> / <code class="inline code">clearServiceChaos</code> / <code class="inline code">serviceChaosStatus</code>), Python (<code class="inline code">set_service_chaos</code> / <code class="inline code">remove_service_chaos</code> / <code class="inline code">clear_service_chaos</code> / <code class="inline code">service_chaos_status</code>), and Ruby (the same snake-case names) — and via the <code class="inline code">manage_service_chaos</code> MCP tool (<code class="inline code">action</code> of <code class="inline code">register</code> / <code class="inline code">remove</code> / <code class="inline code">clear</code>) for AI assistants.</p>
 
+<p>The <a href="/mock_server/mockserver_ui.html">dashboard UI</a> also has a <strong>Chaos</strong> tab for managing service-scoped chaos interactively: register a host with an error status / error probability / drop probability / latency (and an optional TTL), see every active registration with a summary of its faults, watch the live TTL auto-revert countdown, and remove a single host or clear them all.</p>
+
 <a id="gradual_degradation" class="anchor" href="#gradual_degradation">&nbsp;</a>
 
 <h2>Gradual Degradation</h2>

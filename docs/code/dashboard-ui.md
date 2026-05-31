@@ -92,9 +92,9 @@ The `DashboardWebSocketHandler` implements both `MockServerLogListener` and `Moc
 
 ## Top-Level Views
 
-The dashboard has **six top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, and **Metrics**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'metrics'`.
+The dashboard has **seven top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Metrics**, and **Chaos**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'metrics' | 'chaos'`.
 
-The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, and Metrics.
+The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Metrics, and Chaos.
 
 ```mermaid
 graph TB
@@ -140,6 +140,16 @@ It renders:
 - a per-action breakdown of the `*_actions_count` gauges, plus the served MockServer version from `mock_server_build_info`.
 
 There is **no charting dependency** (inline SVG) and no server change required. Because metrics are off by default, a 404 is treated as a first-class `disabled` state that shows the user how to enable them (`metricsEnabled`) rather than an error.
+
+## Chaos View
+
+`ServiceChaosPanel.tsx` (view = `chaos`) manages **service-scoped chaos** interactively. Like the Metrics view it **polls** rather than using the WebSocket — `GET /mockserver/serviceChaos` every 4s via the control-plane helpers in `lib/serviceChaos.ts` (`fetchServiceChaos` / `registerServiceChaos` / `removeServiceChaos` / `clearServiceChaos`). It renders:
+- a **register form** — host plus error status / error probability / drop probability / latency-ms / optional TTL-ms fields; only the populated fields are sent in the `chaos` object (`buildChaosProfile`), and the register is rejected client-side if no fault is set,
+- a list of **active registrations**, each with a `summarizeChaosProfile` chip breakdown of its faults and a per-host **Remove** button,
+- a **live TTL auto-revert countdown** chip for any TTL-bearing registration — the remaining ms returned by the server's `ttlRemainingMillis` is decremented client-side by a 1s tick between polls (`formatTtl`),
+- a **Clear all** button.
+
+`lib/serviceChaos.ts` is framework-agnostic (plain `fetch`) so it is unit-tested independently of the component; it surfaces the server's `{"error": ...}` message on a 4xx.
 
 ## Dashboard View
 
