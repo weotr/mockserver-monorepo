@@ -653,6 +653,7 @@ public class McpToolRegistry {
         properties.putObject("action").put("type", "string").put("description", "One of: register (set a host's chaos), remove (clear one host), clear (clear all)");
         properties.putObject("host").put("type", "string").put("description", "Upstream host to break (required for register/remove); matched case-insensitively, ignoring any :port");
         properties.putObject("chaos").put("type", "object").put("description", "The HttpChaosProfile to apply (required for register): same fields as the create_expectation 'chaos' block (errorStatus, errorProbability, dropConnectionProbability, latency, truncateBodyAtFraction, malformedBody, slowResponseChunkSize/Delay, quota*, degradationRampMillis, etc.)");
+        properties.putObject("ttlMillis").put("type", "integer").put("description", "Optional time-to-live for a 'register': the chaos auto-reverts after this many ms (a dead-man's switch so chaos self-heals if no clear is sent). Omit for chaos that persists until explicitly cleared.");
         schema.putArray("required").add("action");
 
         tools.put("manage_service_chaos", new ToolDefinition(
@@ -699,8 +700,19 @@ public class McpToolRegistry {
                         // validation (IllegalArgumentException from withX) or malformed chaos JSON
                         return errorResult("invalid chaos profile: " + e.getMessage());
                     }
-                    registry.put(host, profile);
-                    return objectMapper.createObjectNode().put("status", "registered").put("host", host);
+                    long ttlMillis = 0L;
+                    if (params.hasNonNull("ttlMillis")) {
+                        ttlMillis = params.path("ttlMillis").asLong(0L);
+                        if (ttlMillis < 1) {
+                            return errorResult("'ttlMillis' must be >= 1 when supplied");
+                        }
+                    }
+                    registry.put(host, profile, ttlMillis);
+                    ObjectNode registered = objectMapper.createObjectNode().put("status", "registered").put("host", host);
+                    if (ttlMillis > 0) {
+                        registered.put("ttlMillis", ttlMillis);
+                    }
+                    return registered;
                 }
                 default:
                     return errorResult("unknown action '" + action + "', must be one of: register, remove, clear");

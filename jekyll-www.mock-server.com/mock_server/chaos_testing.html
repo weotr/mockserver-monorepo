@@ -367,6 +367,10 @@ schema_faq:
 PUT /mockserver/serviceChaos
 { "host": "payments.svc", "chaos": { "errorStatus": 503, "errorProbability": 0.3, "latency": { "timeUnit": "MILLISECONDS", "value": 500 } } }
 
+// one call = "break payments.svc for 5 minutes, then auto-heal" (time-boxed chaos)
+PUT /mockserver/serviceChaos
+{ "host": "payments.svc", "chaos": { "errorStatus": 503, "errorProbability": 0.3 }, "ttlMillis": 300000 }
+
 // remove the profile for a host
 PUT /mockserver/serviceChaos
 { "host": "payments.svc", "remove": true }
@@ -379,6 +383,8 @@ PUT /mockserver/serviceChaos
 GET /mockserver/serviceChaos</code></pre>
 
 <p><strong>How it works:</strong> on a matched <em>forward</em> expectation that has no <code class="inline code">chaos</code> of its own, MockServer looks up the profile registered for the request's <code class="inline code">Host</code> header (matched case-insensitively, ignoring any <code class="inline code">:port</code>) and applies it to the forwarded response. An expectation that defines its own <code class="inline code">chaos</code> always takes precedence. The anonymous, unmatched proxy fall-through path is not affected, and the registrations are cleared on server reset. Because a service-scoped profile has no single owning expectation, the per-expectation count window, outage window and degradation ramp are not anchored — service-scoped profiles are best used for the steady-state faults (errors, drops, latency, body corruption, slow response, and the host-independent quota).</p>
+
+<p><strong>Time-to-live (auto-revert):</strong> add an optional <code class="inline code">ttlMillis</code> to a registration and the chaos automatically reverts that many milliseconds later — a "dead-man's switch" so the fault self-heals even if the matching clear is never sent (for example, an external chaos orchestrator crashes mid-experiment). It is the time-boxed one-shot form: a single call breaks a host for a bounded window. Expiry is measured with the controllable clock, so it tracks real time by default but is deterministic under <code class="inline code">PUT /mockserver/clock</code> freeze/advance. Without <code class="inline code">ttlMillis</code> a registration persists until explicitly cleared or the server is reset. <code class="inline code">GET /mockserver/serviceChaos</code> reports a <code class="inline code">ttlRemainingMillis</code> map alongside the active profiles, so you can see the countdown for each time-boxed registration.</p>
 
 <p>Besides the REST endpoint, convenience wrappers are available in the client libraries — Java (<code class="inline code">mockServerClient.setServiceChaos(host, chaos)</code> / <code class="inline code">removeServiceChaos(host)</code> / <code class="inline code">clearServiceChaos()</code> / <code class="inline code">serviceChaosStatus()</code>), Node (<code class="inline code">setServiceChaos</code> / <code class="inline code">removeServiceChaos</code> / <code class="inline code">clearServiceChaos</code> / <code class="inline code">serviceChaosStatus</code>), Python (<code class="inline code">set_service_chaos</code> / <code class="inline code">remove_service_chaos</code> / <code class="inline code">clear_service_chaos</code> / <code class="inline code">service_chaos_status</code>), and Ruby (the same snake-case names) — and via the <code class="inline code">manage_service_chaos</code> MCP tool (<code class="inline code">action</code> of <code class="inline code">register</code> / <code class="inline code">remove</code> / <code class="inline code">clear</code>) for AI assistants.</p>
 

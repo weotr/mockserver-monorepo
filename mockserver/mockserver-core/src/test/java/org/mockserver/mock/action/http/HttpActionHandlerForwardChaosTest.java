@@ -347,6 +347,40 @@ public class HttpActionHandlerForwardChaosTest {
         assertThat(responseCaptor.getValue().getBodyAsString(), is("upstream body"));
     }
 
+    @Test
+    public void serviceChaosWithTtlAutoRevertsOnForwardPath() {
+        try {
+            // freeze the controllable clock so the TTL is deterministic (the registry uses TimeService)
+            org.mockserver.time.TimeService.freeze(java.time.Instant.ofEpochMilli(2_000_000L));
+            HttpRequest request = request("some_path").withHeader("host", "upstream.svc");
+            HttpResponse upstreamResponse = response("upstream body").withStatusCode(200).withDelay(milliseconds(0));
+            HttpForward forward = forward().withHost("localhost").withPort(1090);
+            // register service chaos with a 5s TTL
+            ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503).withErrorProbability(1.0), 5_000L);
+            Expectation expectation = new Expectation(request).thenForward(forward);
+            when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+
+            // within the TTL -> service chaos applies (503)
+            when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(completedForwardResult(upstreamResponse));
+            actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+            ArgumentCaptor<HttpResponse> within = ArgumentCaptor.forClass(HttpResponse.class);
+            verify(mockResponseWriter).writeResponse(eq(request), within.capture(), eq(false));
+            assertThat("within TTL the service chaos fires", within.getValue().getStatusCode(), is(503));
+
+            // advance past the TTL -> chaos auto-reverts, the upstream response passes through
+            org.mockserver.time.TimeService.advance(java.time.Duration.ofMillis(5_000L));
+            reset(mockResponseWriter);
+            when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(completedForwardResult(upstreamResponse));
+            actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+            ArgumentCaptor<HttpResponse> after = ArgumentCaptor.forClass(HttpResponse.class);
+            verify(mockResponseWriter).writeResponse(eq(request), after.capture(), eq(false));
+            assertThat("after TTL the chaos has reverted", after.getValue().getStatusCode(), is(200));
+            assertThat(after.getValue().getBodyAsString(), is("upstream body"));
+        } finally {
+            org.mockserver.time.TimeService.reset();
+        }
+    }
+
     // ---- Latency injection test (non-blocking via scheduler) ----
 
     @Test

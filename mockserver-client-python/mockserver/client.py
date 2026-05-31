@@ -131,9 +131,14 @@ class MockServerClient:
         """Query the current clock status."""
         return self._run(self._async_client.clock_status())
 
-    def set_service_chaos(self, host: str, chaos: HttpChaosProfile) -> dict:
-        """Register a service-scoped HTTP chaos profile for an upstream host."""
-        return self._run(self._async_client.set_service_chaos(host, chaos))
+    def set_service_chaos(
+        self, host: str, chaos: HttpChaosProfile, ttl_millis: int | None = None
+    ) -> dict:
+        """Register a service-scoped HTTP chaos profile for an upstream host.
+
+        If *ttl_millis* is set, the chaos auto-reverts after that many milliseconds.
+        """
+        return self._run(self._async_client.set_service_chaos(host, chaos, ttl_millis))
 
     def remove_service_chaos(self, host: str) -> dict:
         """Remove the service-scoped chaos profile registered for *host*."""

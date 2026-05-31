@@ -820,6 +820,17 @@ RSpec.describe MockServer::Client do
         }
       expect(result['status']).to eq('registered')
     end
+
+    it 'includes ttlMillis when supplied' do
+      stub_request(:put, "#{base_url}/mockserver/serviceChaos")
+        .to_return(status: 200, body: JSON.generate({ 'status' => 'registered', 'host' => 'payments.svc', 'ttlMillis' => 300000 }))
+
+      chaos = MockServer::HttpChaosProfile.new(error_status: 503)
+      client.set_service_chaos('payments.svc', chaos, 300000)
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/serviceChaos")
+        .with { |r| JSON.parse(r.body)['ttlMillis'] == 300000 }
+    end
   end
 
   describe '#remove_service_chaos' do

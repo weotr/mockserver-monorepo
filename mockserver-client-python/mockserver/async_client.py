@@ -227,14 +227,22 @@ class AsyncMockServerClient:
             )
         return json.loads(response_body) if response_body else {}
 
-    async def set_service_chaos(self, host: str, chaos: HttpChaosProfile) -> dict:
+    async def set_service_chaos(
+        self, host: str, chaos: HttpChaosProfile, ttl_millis: int | None = None
+    ) -> dict:
         """Register a service-scoped HTTP chaos profile for an upstream *host*.
 
         The profile is applied to every matched forward expectation to that host
         that does not define its own chaos (an expectation's own chaos always
         wins). The host is matched case-insensitively, ignoring any ``:port``.
+
+        If *ttl_millis* is set, the chaos auto-reverts after that many milliseconds
+        (a dead-man's switch so it self-heals even if no clear is sent).
         """
-        body = json.dumps({"host": host, "chaos": chaos.to_dict()})
+        payload: dict = {"host": host, "chaos": chaos.to_dict()}
+        if ttl_millis is not None:
+            payload["ttlMillis"] = ttl_millis
+        body = json.dumps(payload)
         status, response_body = await self._request("PUT", "/mockserver/serviceChaos", body)
         if status >= 400:
             raise MockServerError(

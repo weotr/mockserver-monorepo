@@ -1086,9 +1086,14 @@ var mockServerClient;
          *
          * @param serviceHost  the upstream host to break
          * @param chaos        the HttpChaosProfile to apply to that host
+         * @param ttlMillis    optional; if set, the chaos auto-reverts after this many ms
          */
-        var setServiceChaos = function (serviceHost, chaos) {
-            return makeRequest(host, port, "/mockserver/serviceChaos", {host: serviceHost, chaos: chaos});
+        var setServiceChaos = function (serviceHost, chaos, ttlMillis) {
+            var body = {host: serviceHost, chaos: chaos};
+            if (ttlMillis && ttlMillis > 0) {
+                body.ttlMillis = ttlMillis;
+            }
+            return makeRequest(host, port, "/mockserver/serviceChaos", body);
         };
         /**
          * Remove the service-scoped chaos profile registered for the given host.

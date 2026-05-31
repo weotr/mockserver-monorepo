@@ -397,7 +397,20 @@ class TestSyncServiceChaos:
             sent = json.loads(SyncMockHandler.last_request_body)
             assert sent["host"] == "payments.svc"
             assert sent["chaos"]["errorStatus"] == 503
+            assert "ttlMillis" not in sent
             assert result["status"] == "registered"
+
+    def test_set_service_chaos_with_ttl(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"status": "registered", "host": "payments.svc", "ttlMillis": 300000})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.set_service_chaos(
+                "payments.svc",
+                HttpChaosProfile(error_status=503),
+                ttl_millis=300000,
+            )
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["host"] == "payments.svc"
+            assert sent["ttlMillis"] == 300000
 
     def test_remove_service_chaos(self, sync_mock_server):
         SyncMockHandler.response_body = json.dumps({"status": "removed", "host": "payments.svc"})

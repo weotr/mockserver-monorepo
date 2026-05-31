@@ -74,7 +74,7 @@ export interface MockServerClient {
 
     clockStatus(): Promise<ClockStatus>;
 
-    setServiceChaos(host: string, chaos: HttpChaosProfile): Promise<RequestResponse>;
+    setServiceChaos(host: string, chaos: HttpChaosProfile, ttlMillis?: number): Promise<RequestResponse>;
 
     removeServiceChaos(host: string): Promise<RequestResponse>;
 

@@ -1732,15 +1732,28 @@ public class HttpState {
                 return response().withStatusCode(OK.code())
                     .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
             }
+            // optional time-to-live (auto-revert): the registration auto-expires after this many ms
+            long ttlMillis = 0L;
+            if (node.hasNonNull("ttlMillis")) {
+                ttlMillis = node.path("ttlMillis").asLong(0L);
+                if (ttlMillis < 1) {
+                    return serviceChaosError(objectMapper, "'ttlMillis' must be >= 1 when supplied");
+                }
+            }
             // register/replace — deserialize through the DTO so range validation runs
             org.mockserver.serialization.model.HttpChaosProfileDTO dto =
                 objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.HttpChaosProfileDTO.class);
             org.mockserver.model.HttpChaosProfile profile = dto.buildObject();
-            registry.put(host, profile);
-            logServiceChaos(request, "registered service-scoped chaos for host:{}", host);
+            registry.put(host, profile, ttlMillis);
+            logServiceChaos(request, ttlMillis > 0
+                ? "registered service-scoped chaos (ttl " + ttlMillis + "ms) for host:{}"
+                : "registered service-scoped chaos for host:{}", host);
             com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
             result.put("status", "registered");
             result.put("host", host);
+            if (ttlMillis > 0) {
+                result.put("ttlMillis", ttlMillis);
+            }
             return response().withStatusCode(OK.code())
                 .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
         } catch (IllegalArgumentException e) {
@@ -1754,10 +1767,17 @@ public class HttpState {
     private HttpResponse handleServiceChaosGet() {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
         try {
+            org.mockserver.mock.action.http.ServiceChaosRegistry registry = org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance();
             com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
             com.fasterxml.jackson.databind.node.ObjectNode services = result.putObject("services");
-            org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().entries().forEach((host, profile) ->
+            registry.entries().forEach((host, profile) ->
                 services.set(host, objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(profile))));
+            // remaining time-to-live (ms) for any TTL-bearing registration, so an operator/orchestrator can see the countdown
+            java.util.Map<String, Long> ttlRemaining = registry.ttlRemainingMillis();
+            if (!ttlRemaining.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ObjectNode ttlNode = result.putObject("ttlRemainingMillis");
+                ttlRemaining.forEach((h, ms) -> ttlNode.put(h, ms.longValue()));
+            }
             return response().withStatusCode(OK.code())
                 .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
         } catch (Exception e) {

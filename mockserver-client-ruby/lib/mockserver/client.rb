@@ -210,9 +210,12 @@ module MockServer
     # matched case-insensitively, ignoring any +:port+.
     # @param host [String] the upstream host to break
     # @param chaos [HttpChaosProfile] the chaos profile to apply
+    # @param ttl_millis [Integer, nil] if set, the chaos auto-reverts after this many ms
     # @return [Hash] response with status and host
-    def set_service_chaos(host, chaos)
-      body = JSON.generate({ 'host' => host, 'chaos' => chaos.to_h })
+    def set_service_chaos(host, chaos, ttl_millis = nil)
+      payload = { 'host' => host, 'chaos' => chaos.to_h }
+      payload['ttlMillis'] = ttl_millis unless ttl_millis.nil?
+      body = JSON.generate(payload)
       status, response_body = request('PUT', '/mockserver/serviceChaos', body)
       if status >= 400
         raise Error, "Failed to set service chaos (status=#{status}): #{response_body}"

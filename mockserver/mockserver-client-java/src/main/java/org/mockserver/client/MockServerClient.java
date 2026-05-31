@@ -1912,11 +1912,29 @@ public class MockServerClient implements Stoppable {
      * @return this MockServerClient
      */
     public MockServerClient setServiceChaos(String host, HttpChaosProfile chaos) {
+        return setServiceChaos(host, chaos, 0L);
+    }
+
+    /**
+     * Register a service-scoped HTTP chaos profile for an upstream host that
+     * auto-reverts after {@code ttlMillis} milliseconds (a "dead-man's switch" so
+     * the chaos self-heals even if {@link #removeServiceChaos(String)} /
+     * {@link #clearServiceChaos()} is never called). See {@code PUT /mockserver/serviceChaos}.
+     *
+     * @param host      the upstream host to break
+     * @param chaos     the chaos profile to apply to that host's forwarded responses
+     * @param ttlMillis milliseconds after which the chaos auto-reverts; {@code <= 0} means no expiry
+     * @return this MockServerClient
+     */
+    public MockServerClient setServiceChaos(String host, HttpChaosProfile chaos, long ttlMillis) {
         try {
             com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
             com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
             body.put("host", host);
             body.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(chaos)));
+            if (ttlMillis > 0) {
+                body.put("ttlMillis", ttlMillis);
+            }
             sendRequest(
                 request()
                     .withMethod("PUT")

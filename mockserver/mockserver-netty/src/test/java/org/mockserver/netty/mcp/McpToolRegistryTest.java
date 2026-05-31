@@ -208,8 +208,10 @@ public class McpToolRegistryTest {
             registerParams.put("action", "register");
             registerParams.put("host", "payments.svc");
             registerParams.set("chaos", chaos);
+            registerParams.put("ttlMillis", 300000);
             JsonNode registered = toolRegistry.callTool("manage_service_chaos", registerParams);
             assertThat(registered.path("status").asText(), is("registered"));
+            assertThat(registered.path("ttlMillis").asLong(), is(300000L));
             assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().get("payments.svc"), is(notNullValue()));
 
             // remove

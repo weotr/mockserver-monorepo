@@ -3160,6 +3160,39 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldRegisterServiceChaosWithTtl() throws Exception {
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"host\":\"upstream.svc\",\"chaos\":{\"errorStatus\":503},\"ttlMillis\":300000}");
+        assertThat(httpState.handle(putRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(200));
+        String body = writer.response.getBodyAsString();
+        assertThat(body, containsString("\"status\" : \"registered\""));
+        assertThat(body, containsString("\"ttlMillis\" : 300000"));
+        assertThat(org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().get("upstream.svc"), is(notNullValue()));
+
+        // GET surfaces a remaining-TTL countdown for the registration
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        assertThat(httpState.handle(request("/mockserver/serviceChaos").withMethod("GET"), getWriter, false), is(true));
+        assertThat(getWriter.response.getBodyAsString(), containsString("ttlRemainingMillis"));
+
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+    }
+
+    @Test
+    public void shouldRejectServiceChaosWithTtlBelowOne() throws Exception {
+        FakeResponseWriter writer = new FakeResponseWriter();
+        HttpRequest putRequest = request("/mockserver/serviceChaos")
+            .withMethod("PUT")
+            .withBody("{\"host\":\"upstream.svc\",\"chaos\":{\"errorStatus\":503},\"ttlMillis\":0}");
+        assertThat(httpState.handle(putRequest, writer, false), is(true));
+        assertThat(writer.response.getStatusCode(), is(400));
+        assertThat(writer.response.getBodyAsString(), containsString("'ttlMillis' must be >= 1"));
+    }
+
+    @Test
     public void shouldRejectClockWithEmptyBody() throws Exception {
         // given
         FakeResponseWriter responseWriter = new FakeResponseWriter();

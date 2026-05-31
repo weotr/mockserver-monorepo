@@ -1497,6 +1497,21 @@ public class MockServerClientTest {
         assertThat(sent.getPath().getValue(), is("/mockserver/serviceChaos"));
         assertThat(sent.getBodyAsString(), containsString("\"host\":\"payments.svc\""));
         assertThat(sent.getBodyAsString(), containsString("\"errorStatus\":503"));
+        assertThat("no ttl when not requested", sent.getBodyAsString().contains("ttlMillis"), is(false));
+    }
+
+    @Test
+    public void shouldSendSetServiceChaosRequestWithTtl() {
+        // when
+        mockServerClient.setServiceChaos("payments.svc", HttpChaosProfile.httpChaosProfile().withErrorStatus(503), 300000L);
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/serviceChaos"));
+        assertThat(sent.getBodyAsString(), containsString("\"host\":\"payments.svc\""));
+        assertThat(sent.getBodyAsString(), containsString("\"ttlMillis\":300000"));
     }
 
     @Test
