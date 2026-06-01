@@ -1,0 +1,20 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpOverrideForwardedRequest": {
+    "httpRequest": {
+      "path": "/some/other/path",
+      "headers": {
+        "Host": [
+          "any.host.com"
+        ]
+      },
+      "socketAddress": {
+        "host": "target.host.com",
+        "port": 1234,
+        "scheme": "HTTPS"
+      }
+    }
+  }
+}

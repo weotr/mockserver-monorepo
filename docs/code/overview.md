@@ -22,8 +22,8 @@ mockserver-monorepo/
 │   ├── mockserver-spring-test-listener/               # Spring test integration
 │   ├── mockserver-spring-test-listener-no-dependencies/ # ↑ shaded, zero transitive deps
 │   ├── mockserver-integration-testing/                # Integration-test helpers
-│   ├── mockserver-integration-testing-no-dependencies/# ↑ shaded, zero transitive deps
-│   └── mockserver-examples/        # Usage examples (not published for consumption)
+│   └── mockserver-integration-testing-no-dependencies/# ↑ shaded, zero transitive deps
+├── examples/                       # Runnable usage examples — java/node/python/ruby/curl/json/docker-compose/wasm/chaos
 ├── mockserver-ui/                  # React dashboard UI (Vite + TypeScript)
 ├── mockserver-node/                # Node.js MockServer launcher (npm)
 ├── mockserver-client-node/         # Node.js/browser client library (npm)
@@ -69,7 +69,7 @@ Everything published to Maven Central under `org.mock-server` is produced by a m
 | `mockserver-junit-jupiter/` | `mockserver-junit-jupiter` + `mockserver-junit-jupiter-no-dependencies` | JUnit 5 extension. |
 | `mockserver-spring-test-listener/` | `mockserver-spring-test-listener` + `mockserver-spring-test-listener-no-dependencies` | Spring `TestExecutionListener`. |
 | `mockserver-integration-testing/` | `mockserver-integration-testing` + `mockserver-integration-testing-no-dependencies` | Integration-test helpers. |
-| `mockserver-examples/` | `mockserver-examples` | Published, but documents usage rather than being a consumer dependency. |
+| `examples/java/` (repo root) | `mockserver-examples` | Published, but documents usage rather than being a consumer dependency. Relocated from `mockserver/mockserver-examples/`; still a reactor module via `../examples/java`. |
 | `mockserver/mockserver-maven-plugin/` | `mockserver-maven-plugin` | Maven plugin (`pre-integration-test` / `post-integration-test` hooks). Inherits its version from `mockserver/pom.xml` and uses `${project.version}` for internal mockserver-* dependency refs, but is NOT a child module of `mockserver/pom.xml` — built and deployed by the dedicated `:java: Maven Plugin` step in `.buildkite/release-pipeline.yml`, separately from the main reactor. |
 
 The `*-no-dependencies` form is a real sibling module (e.g. `mockserver/mockserver-netty-no-dependencies/pom.xml`) — *not* a classifier on the source artifactId. Each sibling module is a thin pom that pulls in the source module as its single compile dependency, then runs `maven-shade-plugin` with `<shadedArtifactAttached>false</shadedArtifactAttached>` so the shaded jar IS the module's main artifact. This structure lets `central-publishing-maven-plugin` upload everything to Maven Central via the standard bundle flow under each artifact's natural coordinates. Before 6.0.0, the shaded jars were renamed at deploy time via `gpg:sign-and-deploy-file` and published under both `<classifier>shaded</classifier>` and the `-no-dependencies` artifactId; that dual-publish path was removed when the deploy mechanism switched to Sonatype Central Portal in 6.0.0.

@@ -1,0 +1,15 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/payments"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"status\": \"ok\"}"
+  },
+  "chaos": {
+    "errorStatus": 503,
+    "retryAfter": "30",
+    "errorProbability": 1.0
+  }
+}

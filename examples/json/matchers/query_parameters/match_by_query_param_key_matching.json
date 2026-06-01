@@ -1,0 +1,26 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "queryStringParameters": {
+      "keyMatchStyle": "MATCHING_KEY",
+      "multiValuedParameter": [
+        {
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Z0-9-]+$"
+          }
+        }
+      ],
+      "maxItemCount": [
+        {
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/orders"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"orders\": []}"
+  },
+  "chaos": {
+    "errorStatus": 500,
+    "errorProbability": 1.0,
+    "degradationRampMillis": 60000
+  }
+}

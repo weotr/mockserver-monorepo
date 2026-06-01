@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponseTemplate": {
+    "template": "return {'statusCode': 200,'cookies': {'session': request.headers['session-id'][0]},'headers': {'Date': Date()}, 'body': {method: request.method, path: request.path, body: request.body}};",
+    "templateType": "JAVASCRIPT"
+  }
+}

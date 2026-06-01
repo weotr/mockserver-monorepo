@@ -1,0 +1,18 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpOverrideForwardedRequest": {
+    "httpRequest": {
+      "path": "/some/other/path",
+      "headers": {
+        "Host": [
+          "target.host.com"
+        ]
+      }
+    },
+    "httpResponse": {
+      "body": "some_overridden_body"
+    }
+  }
+}

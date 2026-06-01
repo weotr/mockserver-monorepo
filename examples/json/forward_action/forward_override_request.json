@@ -1,0 +1,15 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpOverrideForwardedRequest": {
+    "httpRequest": {
+      "path": "/some/other/path",
+      "headers": {
+        "Host": [
+          "target.host.com"
+        ]
+      }
+    }
+  }
+}

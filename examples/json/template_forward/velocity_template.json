@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpForwardTemplate": {
+    "template": "{'path' : \"/somePath\", 'queryStringParameters' : { 'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]},'cookies' : {'SessionId' : \"$!request.cookies['SessionId']\"},'headers' : {'Host' : [ \"localhost:1081\" ]}, 'body': \"{'name': 'value'}\"}",
+    "templateType": "VELOCITY"
+  }
+}

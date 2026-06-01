@@ -1,0 +1,13 @@
+{
+  "httpRequest": {
+    "path": "/some/path/{cartId}",
+    "pathParameters": {
+      "cartId": [
+        "[A-Z0-9\\-]+"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/inventory"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"items\": [\"widget-a\", \"widget-b\"]}"
+  },
+  "chaos": {
+    "latency": {
+      "timeUnit": "MILLISECONDS",
+      "value": 0,
+      "distribution": {
+        "type": "GAUSSIAN",
+        "mean": 200,
+        "stdDev": 50
+      }
+    }
+  }
+}

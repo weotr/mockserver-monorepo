@@ -3,7 +3,7 @@
 set -euo pipefail
 
 INTEGRATION_TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-EXAMPLES_DIR="${INTEGRATION_TESTS_DIR}/../mockserver/mockserver-examples/docker_compose_examples"
+EXAMPLES_DIR="${INTEGRATION_TESTS_DIR}/../examples/docker-compose"
 
 # Overlays use the `!reset` / `!override` YAML merge tags introduced in Docker
 # Compose v2.22 (August 2023). Without these, host port-publishing from the

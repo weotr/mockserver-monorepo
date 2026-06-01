@@ -1,0 +1,8 @@
+{
+  "httpRequest": {
+    "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

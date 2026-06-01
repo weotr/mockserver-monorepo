@@ -1,0 +1,13 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponseTemplate": {
+    "template": "if (request.method === 'POST' && request.path === '/somePath') { return {'statusCode': 200, 'body': {name: 'value'}}; } else { return {'statusCode': 406, 'body': request.body};}",
+    "templateType": "JAVASCRIPT",
+    "delay": {
+      "timeUnit": "MINUTES",
+      "value": 2
+    }
+  }
+}

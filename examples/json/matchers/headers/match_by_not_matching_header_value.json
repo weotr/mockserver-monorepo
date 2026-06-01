@@ -1,0 +1,16 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "headers": {
+      "Accept": [
+        "!application/json"
+      ],
+      "Accept-Encoding": [
+        "!.*gzip.*"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

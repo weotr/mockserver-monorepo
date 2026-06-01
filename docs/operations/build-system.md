@@ -41,7 +41,7 @@ The project comprises 11 Maven modules:
 | `mockserver-spring-test-listener` | jar (+shaded) | Spring Test integration |
 | `mockserver-testing` | jar | Shared test utilities |
 | `mockserver-integration-testing` | jar (+shaded) | Integration test base classes |
-| `mockserver-examples` | jar | Usage examples |
+| `mockserver-examples` (at repo-root `examples/java`) | jar | Usage examples |
 
 ### Quick Reference
 

@@ -1,0 +1,21 @@
+{
+  "httpRequest": {
+    "body": {
+      "type": "JSON",
+      "json": {
+        "id": 1,
+        "name": "A green door",
+        "price": "${json-unit.ignore-element}",
+        "enabled": "${json-unit.any-boolean}",
+        "tags": [
+          "home",
+          "green"
+        ]
+      }
+    }
+  },
+  "httpResponse": {
+    "statusCode": 202,
+    "body": "some_response_body"
+  }
+}

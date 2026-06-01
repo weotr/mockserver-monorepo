@@ -45,7 +45,7 @@ You are a test runner for the MockServer codebase. Your job is to run the approp
 | `mockserver-spring-test-listener/` | `mockserver-spring-test-listener` |
 | `mockserver-testing/` | `mockserver-testing` |
 | `mockserver-integration-testing/` | `mockserver-integration-testing` |
-| `mockserver-examples/` | `mockserver-examples` |
+| `examples/java/` | `mockserver-examples` |
 
 ## Workflow
 

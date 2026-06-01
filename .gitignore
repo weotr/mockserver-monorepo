@@ -179,3 +179,8 @@ kube_config.yaml
 
 # Flatten Maven Plugin generated file
 .flattened-pom.xml
+
+# Python bytecode (e.g. from running examples/python) #
+########################################################
+__pycache__/
+*.pyc

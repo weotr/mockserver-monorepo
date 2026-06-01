@@ -1,0 +1,10 @@
+{
+    "$schema": "https://raw.githubusercontent.com/tinygo-org/tinygo/release/targets/target.schema.json",
+    "inherits": ["wasm-unknown"],
+    "ldflags": [
+        "--no-entry",
+        "--export-memory",
+        "--initial-memory=65536",
+        "--max-memory=16777216"
+    ]
+}

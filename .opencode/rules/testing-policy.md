@@ -38,7 +38,7 @@ If unit tests already passed earlier in this conversation for the exact same cha
 | `mockserver-spring-test-listener/` | `mockserver-spring-test-listener` |
 | `mockserver-testing/` | `mockserver-testing` |
 | `mockserver-integration-testing/` | `mockserver-integration-testing` |
-| `mockserver-examples/` | `mockserver-examples` |
+| `examples/java/` | `mockserver-examples` |
 
 ## Maven Test Commands
 

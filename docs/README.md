@@ -87,8 +87,8 @@ mockserver-monorepo/
 │   ├── mockserver-junit-jupiter/   # JUnit 5 integration
 │   ├── mockserver-spring-test-listener/ # Spring test integration
 │   ├── mockserver-testing/         # Shared test utilities
-│   ├── mockserver-integration-testing/ # Integration test infrastructure
-│   └── mockserver-examples/        # Usage examples & Docker Compose samples
+│   └── mockserver-integration-testing/ # Integration test infrastructure
+├── examples/                       # Runnable usage examples (java/node/python/ruby/curl/json/docker-compose/wasm/chaos)
 ├── mockserver-ui/                  # React dashboard UI (Vite + TypeScript)
 ├── mockserver-node/                # Node.js MockServer launcher (npm)
 ├── mockserver-client-node/         # Node.js/browser client library (npm)

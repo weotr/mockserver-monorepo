@@ -1,0 +1,10 @@
+{
+  "httpResponse": {
+    "headers": {
+      "Content-Type": [
+        "plain/text"
+      ]
+    },
+    "body": "some_response_body"
+  }
+}
