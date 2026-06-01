@@ -77,6 +77,19 @@ describe('AppBar', () => {
     expect(props.onClearServer).toHaveBeenCalledOnce();
   });
 
+  it('shows the Mocks tab label (not Composer)', () => {
+    renderAppBar();
+    expect(screen.getByText('Mocks')).toBeInTheDocument();
+    expect(screen.queryByText('Composer')).not.toBeInTheDocument();
+  });
+
+  it('does not show a standalone MCP tab', () => {
+    renderAppBar();
+    // The MCP tab was removed and folded into the Mocks page
+    const mcpButton = screen.queryByRole('button', { name: /MCP tools view/i });
+    expect(mcpButton).not.toBeInTheDocument();
+  });
+
   it('calls onClearLogs when clear server logs is clicked', async () => {
     const user = userEvent.setup();
     const { props } = renderAppBar();

@@ -21,7 +21,6 @@ import ComposerView from './components/ComposerView';
 import LibraryView from './components/LibraryView';
 import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DriftPanel from './components/DriftPanel';
-import McpToolsPanel from './components/McpToolsPanel';
 import DebugMismatchDialog from './components/DebugMismatchDialog';
 import GenerateStubDialog from './components/GenerateStubDialog';
 import type { RequestFilter } from './types';
@@ -123,7 +122,6 @@ export default function App() {
           )}
           {view === 'chaos' && <ServiceChaosPanel connectionParams={params} />}
           {view === 'drift' && <DriftPanel connectionParams={params} />}
-          {view === 'mcp-tools' && <McpToolsPanel connectionParams={params} />}
         </Box>
         <DebugMismatchDialog />
         <GenerateStubDialog

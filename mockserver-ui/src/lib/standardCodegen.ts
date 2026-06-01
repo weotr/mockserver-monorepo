@@ -20,7 +20,13 @@ export type StandardActionType =
   | 'callback'
   | 'template'
   | 'error'
-  | 'websocket';
+  | 'websocket'
+  | 'sse'
+  | 'binary_response'
+  | 'dns_response'
+  | 'forward_template'
+  | 'forward_class_callback'
+  | 'grpc_stream';
 
 export interface StandardMatcher {
   id: string;
@@ -121,6 +127,79 @@ export interface StandardWebSocketState {
   matchers: WebSocketMatcherDraft[];
 }
 
+// ---------------------------------------------------------------------------
+// SSE response state (JSON key: httpSseResponse)
+// SseEvent fields: event, data, id, retry, delay
+// ---------------------------------------------------------------------------
+
+export interface StandardSseEventDraft {
+  event: string;
+  data: string;
+  id: string;
+  retry: string; // numeric string or empty
+}
+
+export interface StandardSseState {
+  statusCode: number;
+  headers: string; // "Name: value" lines
+  events: StandardSseEventDraft[];
+  closeConnection: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Binary response state (JSON key: binaryResponse)
+// BinaryResponse fields: binaryData (byte[], serialised as base64)
+// ---------------------------------------------------------------------------
+
+export interface StandardBinaryResponseState {
+  binaryData: string; // base64-encoded
+}
+
+// ---------------------------------------------------------------------------
+// DNS response state (JSON key: dnsResponse)
+// DnsResponse fields: responseCode (enum), answerRecords, authorityRecords, additionalRecords
+// ---------------------------------------------------------------------------
+
+export type DnsResponseCodeName = 'NOERROR' | 'FORMERR' | 'SERVFAIL' | 'NXDOMAIN' | 'NOTIMP' | 'REFUSED';
+
+export interface StandardDnsState {
+  responseCode: DnsResponseCodeName;
+  answerRecords: string; // JSON array text for simplicity
+}
+
+// ---------------------------------------------------------------------------
+// Forward template state (JSON key: httpForwardTemplate)
+// Same shape as httpResponseTemplate: templateType + template
+// ---------------------------------------------------------------------------
+
+export interface StandardForwardTemplateState {
+  templateType: 'VELOCITY' | 'JAVASCRIPT' | 'MUSTACHE';
+  template: string;
+}
+
+// ---------------------------------------------------------------------------
+// Forward class callback state (JSON key: httpForwardClassCallback)
+// Same shape as httpResponseClassCallback: callbackClass FQCN
+// ---------------------------------------------------------------------------
+
+export interface StandardForwardClassCallbackState {
+  callbackClass: string;
+}
+
+// ---------------------------------------------------------------------------
+// gRPC stream response state (JSON key: grpcStreamResponse)
+// GrpcStreamResponse fields: statusName, statusMessage, headers, messages[], closeConnection
+// GrpcStreamMessage fields: json, delay
+// ---------------------------------------------------------------------------
+
+export interface StandardGrpcStreamState {
+  statusName: string;
+  statusMessage: string;
+  headers: string; // "Name: value" lines
+  messages: string; // one JSON message per line
+  closeConnection: boolean;
+}
+
 export type ChaosDelayUnit = 'MILLISECONDS' | 'SECONDS' | 'MINUTES';
 
 /**
@@ -148,6 +227,12 @@ export interface StandardActionPayload {
   template?: StandardTemplateState;
   error?: StandardErrorState;
   websocket?: StandardWebSocketState;
+  sse?: StandardSseState;
+  binaryResponse?: StandardBinaryResponseState;
+  dnsResponse?: StandardDnsState;
+  forwardTemplate?: StandardForwardTemplateState;
+  forwardClassCallback?: StandardForwardClassCallbackState;
+  grpcStream?: StandardGrpcStreamState;
   chaos?: StandardChaosDraft;
 }
 
@@ -351,6 +436,86 @@ export function buildExpectationJson(
           });
         }
         out['httpWebSocketResponse'] = wsPayload;
+      }
+      break;
+    case 'sse':
+      if (action.sse) {
+        const sse = action.sse;
+        const ssePayload: Record<string, unknown> = {};
+        if (sse.statusCode) ssePayload['statusCode'] = sse.statusCode;
+        const sseHeaders = parseKeyValueLines(sse.headers, ':');
+        if (sseHeaders) ssePayload['headers'] = sseHeaders;
+        if (sse.events.length > 0) {
+          ssePayload['events'] = sse.events
+            .filter((ev) => ev.data.trim() || ev.event.trim())
+            .map((ev) => {
+              const evObj: Record<string, unknown> = {};
+              if (ev.event.trim()) evObj['event'] = ev.event.trim();
+              if (ev.data.trim()) evObj['data'] = ev.data.trim();
+              if (ev.id.trim()) evObj['id'] = ev.id.trim();
+              const retryNum = parseInt(ev.retry, 10);
+              if (!isNaN(retryNum) && retryNum > 0) evObj['retry'] = retryNum;
+              return evObj;
+            });
+        }
+        if (sse.closeConnection) ssePayload['closeConnection'] = true;
+        out['httpSseResponse'] = ssePayload;
+      }
+      break;
+    case 'binary_response':
+      if (action.binaryResponse) {
+        const binPayload: Record<string, unknown> = {};
+        if (action.binaryResponse.binaryData.trim()) {
+          binPayload['binaryData'] = action.binaryResponse.binaryData.trim();
+        }
+        out['binaryResponse'] = binPayload;
+      }
+      break;
+    case 'dns_response':
+      if (action.dnsResponse) {
+        const dnsPayload: Record<string, unknown> = {};
+        if (action.dnsResponse.responseCode) {
+          dnsPayload['responseCode'] = action.dnsResponse.responseCode;
+        }
+        if (action.dnsResponse.answerRecords.trim()) {
+          try {
+            dnsPayload['answerRecords'] = JSON.parse(action.dnsResponse.answerRecords.trim());
+          } catch {
+            // leave raw if not valid JSON
+          }
+        }
+        out['dnsResponse'] = dnsPayload;
+      }
+      break;
+    case 'forward_template':
+      if (action.forwardTemplate) {
+        out['httpForwardTemplate'] = {
+          templateType: action.forwardTemplate.templateType,
+          template: action.forwardTemplate.template,
+        };
+      }
+      break;
+    case 'forward_class_callback':
+      if (action.forwardClassCallback) {
+        out['httpForwardClassCallback'] = {
+          callbackClass: action.forwardClassCallback.callbackClass.trim(),
+        };
+      }
+      break;
+    case 'grpc_stream':
+      if (action.grpcStream) {
+        const grpc = action.grpcStream;
+        const grpcPayload: Record<string, unknown> = {};
+        if (grpc.statusName.trim()) grpcPayload['statusName'] = grpc.statusName.trim();
+        if (grpc.statusMessage.trim()) grpcPayload['statusMessage'] = grpc.statusMessage.trim();
+        const grpcHeaders = parseKeyValueLines(grpc.headers, ':');
+        if (grpcHeaders) grpcPayload['headers'] = grpcHeaders;
+        const grpcMsgLines = grpc.messages.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (grpcMsgLines.length > 0) {
+          grpcPayload['messages'] = grpcMsgLines.map((json) => ({ json }));
+        }
+        if (grpc.closeConnection) grpcPayload['closeConnection'] = true;
+        out['grpcStreamResponse'] = grpcPayload;
       }
       break;
   }
@@ -609,6 +774,73 @@ function actionToJava(action: StandardActionPayload): string {
       lines.push(')');
       return lines.join('\n');
     }
+    case 'sse': {
+      const sse = action.sse;
+      if (!sse) return '.respond(sseResponse())';
+      const lines = ['.respond(', '    sseResponse()'];
+      if (sse.statusCode) lines.push(`        .withStatusCode(${sse.statusCode})`);
+      for (const ev of sse.events) {
+        if (ev.data.trim() || ev.event.trim()) {
+          let evChain = 'sseEvent()';
+          if (ev.event.trim()) evChain += `.withEvent("${escapeJava(ev.event.trim())}")`;
+          if (ev.data.trim()) evChain += `.withData("${escapeJava(ev.data.trim())}")`;
+          if (ev.id.trim()) evChain += `.withId("${escapeJava(ev.id.trim())}")`;
+          lines.push(`        .withEvent(${evChain})`);
+        }
+      }
+      if (sse.closeConnection) lines.push('        .withCloseConnection(true)');
+      lines.push(')');
+      return lines.join('\n');
+    }
+    case 'binary_response': {
+      const bin = action.binaryResponse;
+      if (!bin) return '.respond(binaryResponse())';
+      const lines = ['.respond(', '    binaryResponse()'];
+      if (bin.binaryData.trim()) {
+        lines.push(`        .withBinaryData(Base64.getDecoder().decode("${escapeJava(bin.binaryData.trim())}"))`);
+      }
+      lines.push(')');
+      return lines.join('\n');
+    }
+    case 'dns_response': {
+      const dns = action.dnsResponse;
+      if (!dns) return '.respond(dnsResponse())';
+      const lines = ['.respond(', '    dnsResponse()'];
+      if (dns.responseCode) lines.push(`        .withResponseCode(DnsResponseCode.${dns.responseCode})`);
+      lines.push(')');
+      return lines.join('\n');
+    }
+    case 'forward_template': {
+      const ft = action.forwardTemplate;
+      if (!ft) return '.forward(template(TemplateType.VELOCITY, ""))';
+      return [
+        '.forward(',
+        `    template(TemplateType.${ft.templateType}, "${escapeJava(ft.template)}")`,
+        ')',
+      ].join('\n');
+    }
+    case 'forward_class_callback': {
+      const fc = action.forwardClassCallback;
+      if (!fc) return '.forward(callback())';
+      return [
+        '.forward(',
+        '    callback()',
+        `        .withCallbackClass("${escapeJava(fc.callbackClass)}")`,
+        ')',
+      ].join('\n');
+    }
+    case 'grpc_stream': {
+      const grpc = action.grpcStream;
+      if (!grpc) return '.respond(grpcStreamResponse())';
+      const lines = ['.respond(', '    grpcStreamResponse()'];
+      if (grpc.statusName.trim()) lines.push(`        .withStatusName("${escapeJava(grpc.statusName.trim())}")`);
+      if (grpc.statusMessage.trim()) lines.push(`        .withStatusMessage("${escapeJava(grpc.statusMessage.trim())}")`);
+      const grpcMsgLines = grpc.messages.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (const msg of grpcMsgLines) lines.push(`        .withMessage("${escapeJava(msg)}")`);
+      if (grpc.closeConnection) lines.push('        .withCloseConnection(true)');
+      lines.push(')');
+      return lines.join('\n');
+    }
   }
 }
 
@@ -654,6 +886,20 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
     lines.push('import static org.mockserver.model.HttpWebSocketResponse.webSocketResponse;');
     lines.push('import static org.mockserver.model.WebSocketMessage.webSocketMessage;');
   }
+  if (action.type === 'sse') {
+    lines.push('import static org.mockserver.model.HttpSseResponse.sseResponse;');
+    lines.push('import static org.mockserver.model.SseEvent.sseEvent;');
+  }
+  if (action.type === 'binary_response') {
+    lines.push('import static org.mockserver.model.BinaryResponse.binaryResponse;');
+  }
+  if (action.type === 'dns_response') {
+    lines.push('import static org.mockserver.model.DnsResponse.dnsResponse;');
+    lines.push('import org.mockserver.model.DnsResponseCode;');
+  }
+  if (action.type === 'grpc_stream') {
+    lines.push('import static org.mockserver.model.GrpcStreamResponse.grpcStreamResponse;');
+  }
   const chaosHasLatency = hasChaos && action.chaos?.latencyValue != null;
   if ((action.type === 'error' && action.error?.delayValue) || chaosHasLatency) {
     lines.push('import org.mockserver.model.Delay;');
@@ -662,7 +908,7 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
   if (hasChaos) {
     lines.push('import static org.mockserver.model.HttpChaosProfile.httpChaosProfile;');
   }
-  if ((action.type === 'error' && action.error?.responseBytesB64.trim()) || matcher.bodyBinary) {
+  if ((action.type === 'error' && action.error?.responseBytesB64.trim()) || action.type === 'binary_response' || matcher.bodyBinary) {
     lines.push('import java.util.Base64;');
   }
   lines.push('');

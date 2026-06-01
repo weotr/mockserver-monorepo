@@ -18,6 +18,8 @@ import MetricsLineChart from './MetricsLineChart';
 const LATENCY_METRIC = 'mock_server_request_duration_seconds';
 const CHAOS_METRIC = 'mock_server_http_chaos_injected_total';
 const ACTIVE_CHAOS_METRIC = 'mock_server_active_service_chaos';
+const EXPECTATIONS_BY_TYPE_METRIC = 'mock_server_expectations_by_type';
+const MCP_TOOL_CALLS_METRIC = 'mock_server_mcp_tool_calls_total';
 
 // All HTTP chaos fault types, in display order. Any fault_type the server emits
 // that is not listed here still renders (appended, title-cased) so the UI never
@@ -26,6 +28,14 @@ const CHAOS_FAULT_ORDER = ['drop', 'error', 'latency', 'truncate', 'malformed', 
 
 function chaosFaultLabel(faultType: string): string {
   return faultType.charAt(0).toUpperCase() + faultType.slice(1);
+}
+
+/** Converts e.g. "RESPONSE_TEMPLATE" to "Response template". */
+function prettyEnumLabel(raw: string): string {
+  return raw
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/^./, (c) => c.toUpperCase());
 }
 
 /** fault_type values present in the metric, ordered by CHAOS_FAULT_ORDER then first-seen. */
@@ -97,6 +107,30 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
   );
   const chaosEnabled = latest ? (hasMetric(latest.samples, CHAOS_METRIC) || activeServiceChaosEnabled) : false;
   const chaosHasData = chaosFaultTotals.some((f) => f.value > 0) || activeChaosTotal > 0;
+
+  // Expectations by type — gauge labeled by action_type
+  const expectationActionTypes = latest
+    ? labelValues(latest.samples, EXPECTATIONS_BY_TYPE_METRIC, 'action_type')
+    : [];
+  const expectationsByType = latest
+    ? expectationActionTypes
+        .map((at) => ({ actionType: at, value: metricValueByLabel(latest.samples, EXPECTATIONS_BY_TYPE_METRIC, 'action_type', at) }))
+        .filter((r) => r.value > 0)
+        .sort((a, b) => b.value - a.value)
+    : [];
+  const expectationsByTypeEnabled = expectationsByType.length > 0;
+
+  // MCP tool calls — counter labeled by tool (shown cumulative like actions-executed)
+  const mcpToolNames = latest
+    ? labelValues(latest.samples, MCP_TOOL_CALLS_METRIC, 'tool')
+    : [];
+  const mcpToolRows = latest
+    ? mcpToolNames
+        .map((t) => ({ tool: t, value: metricValueByLabel(latest.samples, MCP_TOOL_CALLS_METRIC, 'tool', t) }))
+        .filter((r) => r.value > 0)
+        .sort((a, b) => b.value - a.value)
+    : [];
+  const mcpToolCallsEnabled = mcpToolRows.length > 0;
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -271,6 +305,44 @@ MOCKSERVER_METRICS_ENABLED=true`}
                     data: gaugeSeries(history, r.name),
                     label: r.label.charAt(0).toUpperCase() + r.label.slice(1),
                   }))}
+              />
+            )}
+          </Paper>
+
+          {/* Expectations by type — one line per action_type label (gauge) */}
+          <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">Expectations by type</Typography>
+            {!expectationsByTypeEnabled ? (
+              <Typography variant="body2" sx={{ mt: 0.5 }} color="text.secondary">
+                No expectations configured.
+              </Typography>
+            ) : (
+              <MetricsLineChart
+                height={200}
+                valueFormatter={(v) => Math.round(v).toLocaleString()}
+                series={expectationsByType.map((r) => ({
+                  data: gaugeSeriesByLabel(history, EXPECTATIONS_BY_TYPE_METRIC, 'action_type', r.actionType),
+                  label: prettyEnumLabel(r.actionType),
+                }))}
+              />
+            )}
+          </Paper>
+
+          {/* MCP tool calls — one line per tool label (counter, shown cumulative) */}
+          <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">MCP tool calls</Typography>
+            {!mcpToolCallsEnabled ? (
+              <Typography variant="body2" sx={{ mt: 0.5 }} color="text.secondary">
+                No MCP tool calls recorded.
+              </Typography>
+            ) : (
+              <MetricsLineChart
+                height={200}
+                valueFormatter={(v) => Math.round(v).toLocaleString()}
+                series={mcpToolRows.map((r) => ({
+                  data: gaugeSeriesByLabel(history, MCP_TOOL_CALLS_METRIC, 'tool', r.tool),
+                  label: r.tool,
+                }))}
               />
             )}
           </Paper>

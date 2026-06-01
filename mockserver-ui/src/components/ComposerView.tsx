@@ -30,13 +30,22 @@ import {
   type GraphQLMatcherOptions,
   type StandardForwardFallbackState,
   type WebSocketFrameType,
+  type StandardSseState,
+  type StandardSseEventDraft,
+  type StandardBinaryResponseState,
+  type StandardDnsState,
+  type DnsResponseCodeName,
+  type StandardForwardTemplateState,
+  type StandardForwardClassCallbackState,
+  type StandardGrpcStreamState,
 } from '../lib/standardCodegen';
+import McpToolsPanel from './McpToolsPanel';
 
 // ---------------------------------------------------------------------------
 // Response action types
 // ---------------------------------------------------------------------------
 
-type ExpectationKind = 'standard' | 'llm_conversation';
+type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp';
 
 type ActionType =
   | 'static'
@@ -46,7 +55,13 @@ type ActionType =
   | 'callback'
   | 'template'
   | 'error'
-  | 'websocket';
+  | 'websocket'
+  | 'sse'
+  | 'binary_response'
+  | 'dns_response'
+  | 'forward_template'
+  | 'forward_class_callback'
+  | 'grpc_stream';
 
 interface ActionTypeMeta {
   value: ActionType;
@@ -63,6 +78,12 @@ const ACTION_TYPES: ActionTypeMeta[] = [
   { value: 'template', label: 'Response template', description: 'Velocity / JavaScript / Mustache templates for dynamic responses.' },
   { value: 'error', label: 'Error / fault injection', description: 'Drop the connection mid-request or send arbitrary bytes as the response.' },
   { value: 'websocket', label: 'WebSocket response', description: 'Upgrade to a WebSocket connection and send messages, with optional bidirectional frame matchers.' },
+  { value: 'sse', label: 'SSE response', description: 'Server-Sent Events stream with typed events, data, and optional retry/close.' },
+  { value: 'binary_response', label: 'Binary response', description: 'Return raw binary data (base64-encoded) as the response body.' },
+  { value: 'dns_response', label: 'DNS response', description: 'Return a DNS response with a response code and answer records.' },
+  { value: 'forward_template', label: 'Forward template', description: 'Forward the request upstream using a Velocity / JavaScript / Mustache template to build the forwarded request.' },
+  { value: 'forward_class_callback', label: 'Forward class callback', description: 'Forward the request upstream via a server-side Java class implementing ExpectationForwardCallback.' },
+  { value: 'grpc_stream', label: 'gRPC stream response', description: 'Return a gRPC streaming response with status, messages, and optional close.' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -523,6 +544,12 @@ interface ActionPrefill {
   templateState?: TemplateState;
   errorState?: ErrorState;
   websocketState?: WebSocketState;
+  sseState?: StandardSseState;
+  binaryResponseState?: StandardBinaryResponseState;
+  dnsResponseState?: StandardDnsState;
+  forwardTemplateState?: StandardForwardTemplateState;
+  forwardClassCallbackState?: StandardForwardClassCallbackState;
+  grpcStreamState?: StandardGrpcStreamState;
 }
 
 function unwrapBody(body: unknown): string {
@@ -707,6 +734,91 @@ function actionFromExpectation(item: JsonListItem): ActionPrefill | null {
         messages: msgs,
         closeConnection: ws['closeConnection'] === true,
         matchers,
+      },
+    };
+  }
+
+  // SSE response
+  if (v['httpSseResponse'] && typeof v['httpSseResponse'] === 'object') {
+    const sse = v['httpSseResponse'] as Record<string, unknown>;
+    const rawEvents = Array.isArray(sse['events']) ? (sse['events'] as Record<string, unknown>[]) : [];
+    const events: StandardSseEventDraft[] = rawEvents.map((ev) => ({
+      event: typeof ev['event'] === 'string' ? (ev['event'] as string) : '',
+      data: typeof ev['data'] === 'string' ? (ev['data'] as string) : '',
+      id: typeof ev['id'] === 'string' ? (ev['id'] as string) : '',
+      retry: typeof ev['retry'] === 'number' ? String(ev['retry']) : '',
+    }));
+    return {
+      type: 'sse',
+      sseState: {
+        statusCode: typeof sse['statusCode'] === 'number' ? (sse['statusCode'] as number) : 200,
+        headers: headersToText(sse['headers']),
+        events: events.length > 0 ? events : [{ event: '', data: '', id: '', retry: '' }],
+        closeConnection: sse['closeConnection'] === true,
+      },
+    };
+  }
+
+  // Binary response
+  if (v['binaryResponse'] && typeof v['binaryResponse'] === 'object') {
+    const bin = v['binaryResponse'] as Record<string, unknown>;
+    // binaryData is a byte[] serialised as base64 by Jackson
+    const data = typeof bin['binaryData'] === 'string' ? (bin['binaryData'] as string) : '';
+    return {
+      type: 'binary_response',
+      binaryResponseState: { binaryData: data },
+    };
+  }
+
+  // DNS response
+  if (v['dnsResponse'] && typeof v['dnsResponse'] === 'object') {
+    const dns = v['dnsResponse'] as Record<string, unknown>;
+    const validCodes: DnsResponseCodeName[] = ['NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED'];
+    const rc = validCodes.includes(dns['responseCode'] as DnsResponseCodeName) ? (dns['responseCode'] as DnsResponseCodeName) : 'NOERROR';
+    const answerRecords = Array.isArray(dns['answerRecords']) ? JSON.stringify(dns['answerRecords'], null, 2) : '';
+    return {
+      type: 'dns_response',
+      dnsResponseState: { responseCode: rc, answerRecords },
+    };
+  }
+
+  // Forward template
+  if (v['httpForwardTemplate'] && typeof v['httpForwardTemplate'] === 'object') {
+    const ft = v['httpForwardTemplate'] as Record<string, unknown>;
+    const tt = ft['templateType'];
+    return {
+      type: 'forward_template',
+      forwardTemplateState: {
+        templateType: tt === 'JAVASCRIPT' || tt === 'MUSTACHE' ? tt : 'VELOCITY',
+        template: typeof ft['template'] === 'string' ? (ft['template'] as string) : '',
+      },
+    };
+  }
+
+  // Forward class callback
+  if (v['httpForwardClassCallback'] && typeof v['httpForwardClassCallback'] === 'object') {
+    const fc = v['httpForwardClassCallback'] as Record<string, unknown>;
+    return {
+      type: 'forward_class_callback',
+      forwardClassCallbackState: {
+        callbackClass: typeof fc['callbackClass'] === 'string' ? (fc['callbackClass'] as string) : '',
+      },
+    };
+  }
+
+  // gRPC stream response
+  if (v['grpcStreamResponse'] && typeof v['grpcStreamResponse'] === 'object') {
+    const grpc = v['grpcStreamResponse'] as Record<string, unknown>;
+    const rawMsgs = Array.isArray(grpc['messages']) ? (grpc['messages'] as Record<string, unknown>[]) : [];
+    const msgs = rawMsgs.map((m) => typeof m['json'] === 'string' ? m['json'] as string : '').join('\n');
+    return {
+      type: 'grpc_stream',
+      grpcStreamState: {
+        statusName: typeof grpc['statusName'] === 'string' ? (grpc['statusName'] as string) : '',
+        statusMessage: typeof grpc['statusMessage'] === 'string' ? (grpc['statusMessage'] as string) : '',
+        headers: headersToText(grpc['headers']),
+        messages: msgs,
+        closeConnection: grpc['closeConnection'] === true,
       },
     };
   }
@@ -1434,6 +1546,350 @@ function ChaosPanel({
 }
 
 // ---------------------------------------------------------------------------
+// SSE response panel
+// ---------------------------------------------------------------------------
+
+function SsePanel({
+  state,
+  setState,
+}: {
+  state: StandardSseState;
+  setState: (s: StandardSseState) => void;
+}) {
+  const addEvent = () => {
+    setState({ ...state, events: [...state.events, { event: '', data: '', id: '', retry: '' }] });
+  };
+  const removeEvent = (idx: number) => {
+    setState({ ...state, events: state.events.filter((_, i) => i !== idx) });
+  };
+  const updateEvent = (idx: number, patch: Partial<StandardSseEventDraft>) => {
+    setState({
+      ...state,
+      events: state.events.map((ev, i) => (i === idx ? { ...ev, ...patch } : ev)),
+    });
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Stream Server-Sent Events to the client. Each event has an optional type, data payload,
+        ID, and retry interval.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Status code"
+          size="small"
+          type="number"
+          value={state.statusCode}
+          onChange={(e) => setState({ ...state, statusCode: Number(e.target.value) || 200 })}
+          sx={{ width: 130 }}
+        />
+      </Box>
+      <TextField
+        label="Headers (Name: value per line)"
+        multiline
+        minRows={2}
+        maxRows={4}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'Cache-Control: no-cache'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Events
+        </Typography>
+        <Button size="small" variant="outlined" onClick={addEvent}>
+          Add event
+        </Button>
+      </Box>
+      {state.events.map((ev, idx) => (
+        <Paper key={idx} variant="outlined" sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              label="Event type"
+              size="small"
+              sx={{ flex: 1 }}
+              value={ev.event}
+              onChange={(e) => updateEvent(idx, { event: e.target.value })}
+              placeholder="message"
+            />
+            <TextField
+              label="ID"
+              size="small"
+              sx={{ width: 100 }}
+              value={ev.id}
+              onChange={(e) => updateEvent(idx, { id: e.target.value })}
+            />
+            <TextField
+              label="Retry (ms)"
+              size="small"
+              type="number"
+              sx={{ width: 100 }}
+              value={ev.retry}
+              onChange={(e) => updateEvent(idx, { retry: e.target.value })}
+            />
+            <Button
+              size="small"
+              color="error"
+              variant="outlined"
+              onClick={() => removeEvent(idx)}
+              sx={{ minWidth: 'auto', px: 1 }}
+            >
+              Remove
+            </Button>
+          </Box>
+          <TextField
+            label="Data"
+            multiline
+            minRows={2}
+            maxRows={6}
+            value={ev.data}
+            onChange={(e) => updateEvent(idx, { data: e.target.value })}
+            placeholder='{"update":"value"}'
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+          />
+        </Paper>
+      ))}
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.closeConnection}
+            onChange={(e) => setState({ ...state, closeConnection: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Close connection after events
+          </Typography>
+        }
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Binary response panel
+// ---------------------------------------------------------------------------
+
+function BinaryResponsePanel({
+  state,
+  setState,
+}: {
+  state: StandardBinaryResponseState;
+  setState: (s: StandardBinaryResponseState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return raw binary data as the response body. Provide the data as a base64-encoded string.
+      </Typography>
+      <TextField
+        label="Binary data (base64)"
+        multiline
+        minRows={4}
+        maxRows={12}
+        value={state.binaryData}
+        onChange={(e) => setState({ ...state, binaryData: e.target.value })}
+        placeholder="SGVsbG8sIFdvcmxkIQ=="
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DNS response panel
+// ---------------------------------------------------------------------------
+
+function DnsResponsePanel({
+  state,
+  setState,
+}: {
+  state: StandardDnsState;
+  setState: (s: StandardDnsState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return a DNS response with a response code and answer records. Records are provided as a JSON
+        array of objects with name, type, value, ttl, etc.
+      </Typography>
+      <TextField
+        label="Response code"
+        size="small"
+        select
+        value={state.responseCode}
+        onChange={(e) => setState({ ...state, responseCode: e.target.value as DnsResponseCodeName })}
+        sx={{ width: 200 }}
+      >
+        {(['NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED'] as const).map((rc) => (
+          <MenuItem key={rc} value={rc}>{rc}</MenuItem>
+        ))}
+      </TextField>
+      <TextField
+        label="Answer records (JSON array)"
+        multiline
+        minRows={4}
+        maxRows={12}
+        value={state.answerRecords}
+        onChange={(e) => setState({ ...state, answerRecords: e.target.value })}
+        placeholder={'[\n  { "name": "example.com", "type": "A", "value": "127.0.0.1", "ttl": 300 }\n]'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+        helperText="Each record supports: name, type (A/AAAA/CNAME/MX/SRV/TXT/PTR), value, ttl, priority, weight, port. Advanced records are best authored via the REST API."
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Forward template panel
+// ---------------------------------------------------------------------------
+
+function ForwardTemplatePanel({
+  state,
+  setState,
+}: {
+  state: StandardForwardTemplateState;
+  setState: (s: StandardForwardTemplateState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Build the forwarded request dynamically using a template engine. The template receives
+        a <code>request</code> object. This is the forward-direction counterpart of the response template.
+      </Typography>
+      <TextField
+        label="Template engine"
+        size="small"
+        select
+        value={state.templateType}
+        onChange={(e) => setState({ ...state, templateType: e.target.value as StandardForwardTemplateState['templateType'] })}
+        sx={{ width: 200 }}
+      >
+        <MenuItem value="VELOCITY">Velocity</MenuItem>
+        <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
+        <MenuItem value="MUSTACHE">Mustache</MenuItem>
+      </TextField>
+      <TextField
+        label="Template body"
+        multiline
+        minRows={6}
+        maxRows={20}
+        value={state.template}
+        onChange={(e) => setState({ ...state, template: e.target.value })}
+        placeholder='return { "method": request.method, "path": "/upstream" + request.path };'
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Forward class callback panel
+// ---------------------------------------------------------------------------
+
+function ForwardClassCallbackPanel({
+  state,
+  setState,
+}: {
+  state: StandardForwardClassCallbackState;
+  setState: (s: StandardForwardClassCallbackState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Invoke a Java class implementing <code>ExpectationForwardCallback</code> on
+        the MockServer instance to build the forwarded request dynamically. The class must already
+        be on MockServer's classpath.
+      </Typography>
+      <TextField
+        label="Callback class (fully-qualified name)"
+        size="small"
+        value={state.callbackClass}
+        onChange={(e) => setState({ ...state, callbackClass: e.target.value })}
+        placeholder="com.example.MyForwardCallback"
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// gRPC stream response panel
+// ---------------------------------------------------------------------------
+
+function GrpcStreamPanel({
+  state,
+  setState,
+}: {
+  state: StandardGrpcStreamState;
+  setState: (s: StandardGrpcStreamState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return a gRPC streaming response. Each message is a JSON-encoded protobuf payload
+        sent as a stream frame.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Status name"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.statusName}
+          onChange={(e) => setState({ ...state, statusName: e.target.value })}
+          placeholder="OK"
+        />
+        <TextField
+          label="Status message"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.statusMessage}
+          onChange={(e) => setState({ ...state, statusMessage: e.target.value })}
+          placeholder="optional status detail"
+        />
+      </Box>
+      <TextField
+        label="Headers (Name: value per line)"
+        multiline
+        minRows={2}
+        maxRows={4}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'grpc-encoding: identity'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <TextField
+        label="Messages (one JSON per line)"
+        multiline
+        minRows={4}
+        maxRows={12}
+        value={state.messages}
+        onChange={(e) => setState({ ...state, messages: e.target.value })}
+        placeholder={'{"name":"Alice"}\n{"name":"Bob"}'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.closeConnection}
+            onChange={(e) => setState({ ...state, closeConnection: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Close connection after messages
+          </Typography>
+        }
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -1496,6 +1952,33 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     closeConnection: false,
     matchers: [],
   });
+  const [sseState, setSseState] = useState<StandardSseState>({
+    statusCode: 200,
+    headers: '',
+    events: [{ event: '', data: '', id: '', retry: '' }],
+    closeConnection: false,
+  });
+  const [binaryResponseState, setBinaryResponseState] = useState<StandardBinaryResponseState>({
+    binaryData: '',
+  });
+  const [dnsResponseState, setDnsResponseState] = useState<StandardDnsState>({
+    responseCode: 'NOERROR',
+    answerRecords: '',
+  });
+  const [forwardTemplateState, setForwardTemplateState] = useState<StandardForwardTemplateState>({
+    templateType: 'VELOCITY',
+    template: '',
+  });
+  const [forwardClassCallbackState, setForwardClassCallbackState] = useState<StandardForwardClassCallbackState>({
+    callbackClass: '',
+  });
+  const [grpcStreamState, setGrpcStreamState] = useState<StandardGrpcStreamState>({
+    statusName: '',
+    statusMessage: '',
+    headers: '',
+    messages: '',
+    closeConnection: false,
+  });
 
   // Chaos profile — cross-cutting, applies regardless of action type
   // (except httpError which is already a fault action).
@@ -1552,6 +2035,12 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       if (prefill.templateState) setTemplateState(prefill.templateState);
       if (prefill.errorState) setErrorState(prefill.errorState);
       if (prefill.websocketState) setWebsocketState(prefill.websocketState);
+      if (prefill.sseState) setSseState(prefill.sseState);
+      if (prefill.binaryResponseState) setBinaryResponseState(prefill.binaryResponseState);
+      if (prefill.dnsResponseState) setDnsResponseState(prefill.dnsResponseState);
+      if (prefill.forwardTemplateState) setForwardTemplateState(prefill.forwardTemplateState);
+      if (prefill.forwardClassCallbackState) setForwardClassCallbackState(prefill.forwardClassCallbackState);
+      if (prefill.grpcStreamState) setGrpcStreamState(prefill.grpcStreamState);
 
       // Repopulate chaos panel from an existing expectation
       const existingChaos = chaosFromExpectation(item.value);
@@ -1583,12 +2072,10 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
       <Box sx={{ maxWidth: 920, mx: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-          Compose a new expectation
+          Mocks
         </Typography>
 
-        {/* Top-level kind selector — LLM Conversation is structurally
-            different from a standard HTTP expectation (multiple expectations
-            with scenario state) so it gets its own form path entirely. */}
+        {/* Top-level kind selector — each kind has a different form path. */}
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
             Expectation kind
@@ -1597,25 +2084,49 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
             row
             value={kind}
             onChange={(e) => {
-              setKind(e.target.value as ExpectationKind);
+              const newKind = e.target.value as ExpectationKind;
+              setKind(newKind);
               setLoadFromKey('');
               setLlmScenarioName('');
+              // gRPC pre-shapes the matcher for gRPC conventions
+              if (newKind === 'grpc') {
+                setMatcher((prev) => ({
+                  ...prev,
+                  method: 'POST',
+                  path: prev.path || '/package.Service/Method',
+                }));
+                setActionType('grpc_stream');
+              }
+              // MCP defaults to static response (which becomes an MCP tool)
+              if (newKind === 'mcp') {
+                setActionType('static');
+              }
             }}
           >
             <FormControlLabel
               value="standard"
               control={<Radio size="small" />}
-              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>Standard HTTP expectation</Typography>}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>HTTP</Typography>}
             />
             <FormControlLabel
               value="llm_conversation"
               control={<Radio size="small" />}
               label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>LLM Conversation</Typography>}
             />
+            <FormControlLabel
+              value="grpc"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>gRPC</Typography>}
+            />
+            <FormControlLabel
+              value="mcp"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>MCP</Typography>}
+            />
           </RadioGroup>
         </Paper>
 
-        {kind === 'standard' && (
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp') && (
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
               <TextField
@@ -1703,8 +2214,22 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </>
         )}
 
-        {kind === 'standard' && (
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp') && (
           <>
+            {kind === 'grpc' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                gRPC requests are transcoded to HTTP and matched by normal expectations. The matcher
+                is pre-shaped with POST and a <code>/package.Service/Method</code> path pattern.
+                Choose a standard HTTP response or a gRPC stream response action.
+              </Alert>
+            )}
+            {kind === 'mcp' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                MCP tools are generated automatically from HTTP response expectations — create a
+                response mock and it appears as a callable tool on the MCP endpoint. The derived tools
+                are shown below after you register.
+              </Alert>
+            )}
             {/* Step 1: matcher */}
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
@@ -1712,9 +2237,10 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               </Typography>
               <MatcherPanel matcher={matcher} setMatcher={setMatcher} />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
-                Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the
-                socket-address override, and client certificate chains are not yet
-                exposed in the form — use the REST API or raw JSON for those.
+                {kind === 'grpc'
+                  ? 'gRPC path convention: /package.Service/Method. gRPC clients send Content-Type: application/grpc — add it to the matcher headers to restrict to gRPC traffic only.'
+                  : 'Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the socket-address override, and client certificate chains are not yet exposed in the form — use the REST API or raw JSON for those.'}
+                {' '}Object callbacks (httpResponseObjectCallback / httpForwardObjectCallback) require live WebSocket registration and are not form-authorable.
               </Typography>
             </Paper>
 
@@ -1776,6 +2302,24 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               {actionType === 'websocket' && (
                 <WebSocketPanel state={websocketState} setState={setWebsocketState} />
               )}
+              {actionType === 'sse' && (
+                <SsePanel state={sseState} setState={setSseState} />
+              )}
+              {actionType === 'binary_response' && (
+                <BinaryResponsePanel state={binaryResponseState} setState={setBinaryResponseState} />
+              )}
+              {actionType === 'dns_response' && (
+                <DnsResponsePanel state={dnsResponseState} setState={setDnsResponseState} />
+              )}
+              {actionType === 'forward_template' && (
+                <ForwardTemplatePanel state={forwardTemplateState} setState={setForwardTemplateState} />
+              )}
+              {actionType === 'forward_class_callback' && (
+                <ForwardClassCallbackPanel state={forwardClassCallbackState} setState={setForwardClassCallbackState} />
+              )}
+              {actionType === 'grpc_stream' && (
+                <GrpcStreamPanel state={grpcStreamState} setState={setGrpcStreamState} />
+              )}
             </Paper>
 
             {/* Chaos / fault injection — optional, cross-cutting. Not shown
@@ -1826,6 +2370,12 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 closeConnection: websocketState.closeConnection,
                 matchers: websocketState.matchers,
               };
+              if (actionType === 'sse') currentAction.sse = sseState;
+              if (actionType === 'binary_response') currentAction.binaryResponse = binaryResponseState;
+              if (actionType === 'dns_response') currentAction.dnsResponse = dnsResponseState;
+              if (actionType === 'forward_template') currentAction.forwardTemplate = forwardTemplateState;
+              if (actionType === 'forward_class_callback') currentAction.forwardClassCallback = forwardClassCallbackState;
+              if (actionType === 'grpc_stream') currentAction.grpcStream = grpcStreamState;
               if (chaosEnabled && actionType !== 'error') currentAction.chaos = chaosState;
 
               const dispatchRegister = () => void handleRegister(currentAction);
@@ -1853,6 +2403,12 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                   case 'error':
                     return errorState.dropConnection || errorState.responseBytesB64.trim().length > 0;
                   case 'websocket': return true;
+                  case 'sse': return sseState.events.some((ev) => ev.data.trim().length > 0 || ev.event.trim().length > 0);
+                  case 'binary_response': return binaryResponseState.binaryData.trim().length > 0;
+                  case 'dns_response': return true;
+                  case 'forward_template': return forwardTemplateState.template.trim().length > 0;
+                  case 'forward_class_callback': return forwardClassCallbackState.callbackClass.trim().length > 0;
+                  case 'grpc_stream': return true;
                 }
               })();
 
@@ -1895,6 +2451,13 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 </Paper>
               );
             })()}
+
+            {/* MCP kind: show derived tools below the form */}
+            {kind === 'mcp' && (
+              <Paper variant="outlined" sx={{ p: 0 }}>
+                <McpToolsPanel connectionParams={connectionParams} />
+              </Paper>
+            )}
           </>
         )}
 

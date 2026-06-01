@@ -185,4 +185,68 @@ describe('MetricsView', () => {
     await waitFor(() => expect(screen.getByText('Throughput (derived)')).toBeInTheDocument());
     expect(screen.queryByText('HTTP Chaos Faults')).not.toBeInTheDocument();
   });
+
+  it('renders the Expectations by type chart with per-label lines', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_expectations_by_type{action_type="RESPONSE"} 3.0',
+        'mock_server_expectations_by_type{action_type="FORWARD"} 1.0',
+        'mock_server_expectations_by_type{action_type="LLM_RESPONSE"} 0.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Expectations by type')).toBeInTheDocument());
+    // zero-value types are filtered out, so LLM_RESPONSE should not appear
+    expect(screen.queryByText('No expectations configured.')).not.toBeInTheDocument();
+  });
+
+  it('shows empty state for Expectations by type when no expectations exist', async () => {
+    stubFetch(200, 'requests_received_count 5.0\n');
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Expectations by type')).toBeInTheDocument());
+    expect(screen.getByText('No expectations configured.')).toBeInTheDocument();
+  });
+
+  it('renders the MCP tool calls chart with per-tool lines', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_mcp_tool_calls_total{tool="list_mock_tools"} 5.0',
+        'mock_server_mcp_tool_calls_total{tool="create_expectation"} 2.0',
+        'mock_server_mcp_tool_calls_total{tool="unused_tool"} 0.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('MCP tool calls')).toBeInTheDocument());
+    // zero-value tools are filtered out
+    expect(screen.queryByText('No MCP tool calls recorded.')).not.toBeInTheDocument();
+  });
+
+  it('shows empty state for MCP tool calls when no calls exist', async () => {
+    stubFetch(200, 'requests_received_count 5.0\n');
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('MCP tool calls')).toBeInTheDocument());
+    expect(screen.getByText('No MCP tool calls recorded.')).toBeInTheDocument();
+  });
+
+  it('hides zero-value expectation types from the chart', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_expectations_by_type{action_type="RESPONSE"} 3.0',
+        'mock_server_expectations_by_type{action_type="FORWARD"} 0.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Expectations by type')).toBeInTheDocument());
+    // Only RESPONSE (non-zero) should appear; FORWARD (zero) should be filtered
+    expect(screen.queryByText('No expectations configured.')).not.toBeInTheDocument();
+  });
 });

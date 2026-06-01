@@ -31,7 +31,6 @@ import type { SelectChangeEvent } from '@mui/material/Select';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import BuildIcon from '@mui/icons-material/Build';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useState, useEffect } from 'react';
@@ -196,9 +195,9 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             <AccountTreeIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
             Sessions
           </ToggleButton>
-          <ToggleButton value="composer" aria-label="Compose new expectations">
+          <ToggleButton value="composer" aria-label="Mocks view">
             <PostAddIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
-            Composer
+            Mocks
           </ToggleButton>
           <ToggleButton value="library" aria-label="Library of captured content">
             <Inventory2Icon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
@@ -215,10 +214,6 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           <ToggleButton value="metrics" aria-label="Metrics view">
             <SpeedIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
             Metrics
-          </ToggleButton>
-          <ToggleButton value="mcp-tools" aria-label="MCP tools view">
-            <SmartToyIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
-            MCP
           </ToggleButton>
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />

@@ -10,7 +10,12 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift';
+
+/** Map legacy/removed ViewMode values to their replacement. */
+const VIEW_MIGRATION: Record<string, ViewMode> = {
+  'mcp-tools': 'composer',
+};
 
 interface DashboardState {
   logMessages: LogMessage[];
@@ -171,7 +176,10 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       generateStubError: null,
     }),
 
-  setView: (view) => set({ view, selectedTrafficIndex: null }),
+  setView: (view) => {
+    const resolved = VIEW_MIGRATION[view as string] ?? view;
+    set({ view: resolved, selectedTrafficIndex: null });
+  },
   setRequestFilter: (filter) => set({ requestFilter: filter }),
   setFilterEnabled: (enabled) => set({ filterEnabled: enabled }),
   setFilterExpanded: (expanded) => set({ filterExpanded: expanded }),

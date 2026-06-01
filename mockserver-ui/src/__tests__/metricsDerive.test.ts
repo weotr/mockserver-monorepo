@@ -46,4 +46,48 @@ describe('metricsDerive', () => {
     expect(latestRate(history, 'requests_received_count')).toBe(25);
     expect(latestRate([snap(0, 0)], 'requests_received_count')).toBe(0);
   });
+
+  it('gaugeSeriesByLabel tracks expectations_by_type per action_type over time', () => {
+    const history: MetricsSnapshot[] = [
+      {
+        at: 0,
+        samples: [
+          { name: 'mock_server_expectations_by_type', labels: { action_type: 'RESPONSE' }, value: 3 },
+          { name: 'mock_server_expectations_by_type', labels: { action_type: 'FORWARD' }, value: 1 },
+        ],
+      },
+      {
+        at: 1000,
+        samples: [
+          { name: 'mock_server_expectations_by_type', labels: { action_type: 'RESPONSE' }, value: 5 },
+          { name: 'mock_server_expectations_by_type', labels: { action_type: 'FORWARD' }, value: 2 },
+        ],
+      },
+    ];
+    expect(gaugeSeriesByLabel(history, 'mock_server_expectations_by_type', 'action_type', 'RESPONSE')).toEqual([3, 5]);
+    expect(gaugeSeriesByLabel(history, 'mock_server_expectations_by_type', 'action_type', 'FORWARD')).toEqual([1, 2]);
+    // absent label value returns zeros
+    expect(gaugeSeriesByLabel(history, 'mock_server_expectations_by_type', 'action_type', 'ERROR')).toEqual([0, 0]);
+  });
+
+  it('gaugeSeriesByLabel tracks mcp_tool_calls_total per tool over time', () => {
+    const history: MetricsSnapshot[] = [
+      {
+        at: 0,
+        samples: [
+          { name: 'mock_server_mcp_tool_calls_total', labels: { tool: 'list_mock_tools' }, value: 5 },
+          { name: 'mock_server_mcp_tool_calls_total', labels: { tool: 'create_expectation' }, value: 2 },
+        ],
+      },
+      {
+        at: 1000,
+        samples: [
+          { name: 'mock_server_mcp_tool_calls_total', labels: { tool: 'list_mock_tools' }, value: 8 },
+          { name: 'mock_server_mcp_tool_calls_total', labels: { tool: 'create_expectation' }, value: 3 },
+        ],
+      },
+    ];
+    expect(gaugeSeriesByLabel(history, 'mock_server_mcp_tool_calls_total', 'tool', 'list_mock_tools')).toEqual([5, 8]);
+    expect(gaugeSeriesByLabel(history, 'mock_server_mcp_tool_calls_total', 'tool', 'create_expectation')).toEqual([2, 3]);
+  });
 });
