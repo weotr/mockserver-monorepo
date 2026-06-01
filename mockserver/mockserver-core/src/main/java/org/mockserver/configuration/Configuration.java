@@ -220,6 +220,11 @@ public class Configuration {
     // service mesh / sidecar
     private Boolean transparentProxyEnabled;
 
+    // async messaging defaults
+    private String asyncKafkaBootstrapServers;
+    private String asyncMqttBrokerUrl;
+    private Integer asyncRecordedMessageMaxEntries;
+
 
     public Level logLevel() {
         if (logLevel == null) {
@@ -2627,6 +2632,62 @@ public class Configuration {
      */
     public Configuration transparentProxyEnabled(Boolean transparentProxyEnabled) {
         this.transparentProxyEnabled = transparentProxyEnabled;
+        return this;
+    }
+
+    // async messaging defaults
+
+    public String asyncKafkaBootstrapServers() {
+        if (asyncKafkaBootstrapServers == null) {
+            return ConfigurationProperties.asyncKafkaBootstrapServers();
+        }
+        return asyncKafkaBootstrapServers;
+    }
+
+    /**
+     * Default Kafka bootstrap servers for async messaging. Used when a
+     * {@code PUT /mockserver/asyncapi} request omits {@code brokerConfig.kafkaBootstrapServers}.
+     *
+     * @param asyncKafkaBootstrapServers the default Kafka bootstrap servers
+     */
+    public Configuration asyncKafkaBootstrapServers(String asyncKafkaBootstrapServers) {
+        this.asyncKafkaBootstrapServers = asyncKafkaBootstrapServers;
+        return this;
+    }
+
+    public String asyncMqttBrokerUrl() {
+        if (asyncMqttBrokerUrl == null) {
+            return ConfigurationProperties.asyncMqttBrokerUrl();
+        }
+        return asyncMqttBrokerUrl;
+    }
+
+    /**
+     * Default MQTT broker URL for async messaging. Used when a
+     * {@code PUT /mockserver/asyncapi} request omits {@code brokerConfig.mqttBrokerUrl}.
+     *
+     * @param asyncMqttBrokerUrl the default MQTT broker URL
+     */
+    public Configuration asyncMqttBrokerUrl(String asyncMqttBrokerUrl) {
+        this.asyncMqttBrokerUrl = asyncMqttBrokerUrl;
+        return this;
+    }
+
+    public Integer asyncRecordedMessageMaxEntries() {
+        if (asyncRecordedMessageMaxEntries == null) {
+            return ConfigurationProperties.asyncRecordedMessageMaxEntries();
+        }
+        return asyncRecordedMessageMaxEntries;
+    }
+
+    /**
+     * Maximum number of recorded messages retained per channel in async
+     * messaging subscribers. Default is 1000.
+     *
+     * @param asyncRecordedMessageMaxEntries the maximum entries per channel
+     */
+    public Configuration asyncRecordedMessageMaxEntries(Integer asyncRecordedMessageMaxEntries) {
+        this.asyncRecordedMessageMaxEntries = asyncRecordedMessageMaxEntries;
         return this;
     }
 

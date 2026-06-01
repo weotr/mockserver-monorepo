@@ -19,6 +19,7 @@ import org.mockserver.async.subscribe.MessageSubscriber;
 import org.mockserver.async.subscribe.MqttMessageSubscriber;
 import org.mockserver.async.subscribe.RecordedMessage;
 import org.mockserver.async.validation.AsyncApiSchemaValidator;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -137,6 +138,8 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
      * is handled by the caller's catch block calling {@link #resetInternal()}.
      */
     private void createBrokerConnections(AsyncApiSpec spec, BrokerConfig brokerConfig) {
+        int maxRecordedMessages = ConfigurationProperties.asyncRecordedMessageMaxEntries();
+
         if (brokerConfig.kafkaBootstrapServers != null) {
             MessagePublisher publisher = new KafkaMessagePublisher(brokerConfig.kafkaBootstrapServers);
             activePublishers.add(publisher);
@@ -158,7 +161,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
                 String groupId = brokerConfig.kafkaGroupId != null
                     ? brokerConfig.kafkaGroupId : "mockserver-async-consumer";
                 KafkaMessageSubscriber subscriber = new KafkaMessageSubscriber(
-                    brokerConfig.kafkaBootstrapServers, groupId);
+                    brokerConfig.kafkaBootstrapServers, groupId, maxRecordedMessages);
                 activeSubscribers.add(subscriber);
                 for (AsyncApiChannel channel : spec.getChannels()) {
                     subscriber.subscribe(channel.getName());
@@ -189,7 +192,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
                 String subClientId = brokerConfig.mqttClientId != null
                     ? brokerConfig.mqttClientId + "-sub" : "mockserver-mqtt-sub";
                 MqttMessageSubscriber subscriber = new MqttMessageSubscriber(
-                    brokerConfig.mqttBrokerUrl, subClientId, qos);
+                    brokerConfig.mqttBrokerUrl, subClientId, qos, maxRecordedMessages);
                 activeSubscribers.add(subscriber);
                 for (AsyncApiChannel channel : spec.getChannels()) {
                     subscriber.subscribe(channel.getName());
@@ -513,18 +516,30 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     private BrokerConfig parseBrokerConfig(JsonNode node) {
-        if (node == null) {
-            return BrokerConfig.defaultConfig();
-        }
         BrokerConfig config = new BrokerConfig();
-        config.kafkaBootstrapServers = textOrNull(node, "kafkaBootstrapServers");
-        config.mqttBrokerUrl = textOrNull(node, "mqttBrokerUrl");
-        config.mqttClientId = textOrNull(node, "mqttClientId");
-        config.kafkaGroupId = textOrNull(node, "kafkaGroupId");
-        config.publishOnLoad = boolOrDefault(node, "publishOnLoad", true);
-        config.consume = boolOrDefault(node, "consume", false);
-        config.publishIntervalMillis = longOrDefault(node, "publishIntervalMillis", 0);
-        config.mqttQos = intOrDefault(node, "mqttQos", 1);
+        if (node != null) {
+            config.kafkaBootstrapServers = textOrNull(node, "kafkaBootstrapServers");
+            config.mqttBrokerUrl = textOrNull(node, "mqttBrokerUrl");
+            config.mqttClientId = textOrNull(node, "mqttClientId");
+            config.kafkaGroupId = textOrNull(node, "kafkaGroupId");
+            config.publishOnLoad = boolOrDefault(node, "publishOnLoad", true);
+            config.consume = boolOrDefault(node, "consume", false);
+            config.publishIntervalMillis = longOrDefault(node, "publishIntervalMillis", 0);
+            config.mqttQos = intOrDefault(node, "mqttQos", 1);
+        }
+        // Fall back to ConfigurationProperties defaults when request values are absent
+        if (config.kafkaBootstrapServers == null) {
+            String configDefault = ConfigurationProperties.asyncKafkaBootstrapServers();
+            if (configDefault != null && !configDefault.isEmpty()) {
+                config.kafkaBootstrapServers = configDefault;
+            }
+        }
+        if (config.mqttBrokerUrl == null) {
+            String configDefault = ConfigurationProperties.asyncMqttBrokerUrl();
+            if (configDefault != null && !configDefault.isEmpty()) {
+                config.mqttBrokerUrl = configDefault;
+            }
+        }
         return config;
     }
 

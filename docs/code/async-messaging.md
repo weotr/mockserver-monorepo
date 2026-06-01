@@ -255,6 +255,36 @@ The `mockserver-async` module is wired into the running server:
 | `AsyncApiControlPlaneVerifyTest` | Message verification: count semantics (atLeast/atMost/exactly), payload substring, JSON path matching, error cases |
 | `AsyncApiControlPlaneRegistryTest` | SPI holder delegation (including verify) and not-available responses (in core) |
 
+## Configuration Properties (Async Defaults)
+
+The following `ConfigurationProperties` provide server-wide defaults for async messaging. Values set via the request body's `brokerConfig` take precedence over these defaults.
+
+| Property Key | Env Var | Type | Default | Description |
+|-------------|---------|------|---------|-------------|
+| `mockserver.asyncKafkaBootstrapServers` | `MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS` | String | `""` (none) | Default Kafka bootstrap servers; used when `brokerConfig.kafkaBootstrapServers` is absent |
+| `mockserver.asyncMqttBrokerUrl` | `MOCKSERVER_ASYNC_MQTT_BROKER_URL` | String | `""` (none) | Default MQTT broker URL; used when `brokerConfig.mqttBrokerUrl` is absent |
+| `mockserver.asyncRecordedMessageMaxEntries` | `MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES` | int | `1000` | Maximum recorded messages per channel in subscriber stores |
+
+These properties follow the standard four-form pattern (system property, environment variable, property file, `Configuration` instance setter) used by all other MockServer configuration properties.
+
+## Java Client Helpers
+
+`MockServerClient` provides fluent helpers for the asyncapi control-plane:
+
+| Method | HTTP Call | Return / Throw |
+|--------|-----------|---------------|
+| `loadAsyncApi(String specOrWrappedJson)` | `PUT /mockserver/asyncapi` | JSON response string (spec info) |
+| `asyncApiStatus()` | `GET /mockserver/asyncapi` | JSON status string |
+| `verifyAsyncMessage(String verificationJson)` | `PUT /mockserver/asyncapi/verify` | Returns `this` on 202; throws `AssertionError` on 406 with the failure description |
+
+Example usage:
+```java
+MockServerClient client = new MockServerClient("localhost", 1080);
+client.loadAsyncApi("{\"spec\":{...}, \"brokerConfig\":{\"kafkaBootstrapServers\":\"localhost:9092\"}}");
+String status = client.asyncApiStatus();
+client.verifyAsyncMessage("{\"channel\":\"orders\",\"count\":{\"atLeast\":1}}");
+```
+
 ## Deferred (Honest List)
 
 The following items are **not yet implemented**:
@@ -265,5 +295,3 @@ The following items are **not yet implemented**:
 - **Correlation IDs**: AsyncAPI correlation ID definitions are not tracked
 - **Multi-message channels**: only the first message definition per channel is used
 - **Live-broker integration tests**: all tests use mocked producers/consumers; Testcontainers-based live-broker tests are a documented follow-up (testcontainers is not currently a test dependency)
-- **Client library helpers**: `mockserver-client-java` has no asyncapi helper methods yet (load/status/verify must be called via raw HTTP PUT/GET)
-- **ConfigurationProperties for async defaults**: async settings (recorded-message cap, broker defaults) are configured via the request body, not via `ConfigurationProperties`

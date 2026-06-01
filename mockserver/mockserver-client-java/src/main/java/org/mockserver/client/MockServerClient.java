@@ -2007,4 +2007,81 @@ public class MockServerClient implements Stoppable {
         );
         return httpResponse != null ? httpResponse.getBodyAsString() : "";
     }
+
+    // asyncapi control-plane helpers
+
+    /**
+     * Load an AsyncAPI spec into MockServer to start async messaging mocking.
+     * The body can be either a plain AsyncAPI document (JSON or YAML) or a
+     * wrapped body: {@code {"spec": <spec>, "brokerConfig": {...}}}.
+     *
+     * @param specOrWrappedJson the AsyncAPI spec or wrapped JSON body
+     * @return the JSON response from the server describing the loaded spec
+     */
+    public String loadAsyncApi(String specOrWrappedJson) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("asyncapi"))
+                .withBody(specOrWrappedJson != null ? specOrWrappedJson : "", StandardCharsets.UTF_8),
+            true
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Retrieve the current AsyncAPI mocking status including loaded spec info,
+     * active channels, and recorded messages.
+     *
+     * @return JSON string of the current async mocking status
+     */
+    public String asyncApiStatus() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("asyncapi")),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Verify async messages recorded by subscribers against the given criteria.
+     * The verification JSON must contain at least a {@code channel} field, and
+     * optionally {@code payloadSubstring}, {@code payloadJsonPath}, {@code expectedValue},
+     * and {@code count} (with {@code atLeast}, {@code atMost}, or {@code exactly}).
+     *
+     * @param verificationJson the verification criteria as JSON
+     * @throws AssertionError if the verification fails (server responds with 406)
+     */
+    public MockServerClient verifyAsyncMessage(String verificationJson) throws AssertionError {
+        if (verificationJson == null || verificationJson.isBlank()) {
+            throw new IllegalArgumentException("verifyAsyncMessage requires a non-null non-empty verification JSON string");
+        }
+
+        try {
+            HttpResponse httpResponse = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("asyncapi/verify"))
+                    .withBody(verificationJson, StandardCharsets.UTF_8),
+                false
+            );
+
+            if (httpResponse != null && httpResponse.getStatusCode() != null) {
+                if (httpResponse.getStatusCode() == 406) {
+                    throw new AssertionError(httpResponse.getBodyAsString());
+                }
+            }
+        } catch (AssertionError ae) {
+            throw ae;
+        } catch (AuthenticationException authenticationException) {
+            throw authenticationException;
+        } catch (Throwable throwable) {
+            throw new AssertionError(throwable.getMessage());
+        }
+        return clientClass.cast(this);
+    }
 }

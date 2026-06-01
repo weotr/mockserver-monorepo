@@ -252,6 +252,11 @@ public class ConfigurationProperties {
     // service mesh / sidecar
     private static final String MOCKSERVER_TRANSPARENT_PROXY_ENABLED = "mockserver.transparentProxyEnabled";
 
+    // async messaging defaults
+    private static final String MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS = "mockserver.asyncKafkaBootstrapServers";
+    private static final String MOCKSERVER_ASYNC_MQTT_BROKER_URL = "mockserver.asyncMqttBrokerUrl";
+    private static final String MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES = "mockserver.asyncRecordedMessageMaxEntries";
+
     // properties file
     private static final String MOCKSERVER_PROPERTY_FILE = "mockserver.propertyFile";
     public static final Properties PROPERTIES = readPropertyFile();
@@ -570,6 +575,46 @@ public class ConfigurationProperties {
 
     public static void transparentProxyEnabled(boolean enable) {
         setProperty(MOCKSERVER_TRANSPARENT_PROXY_ENABLED, "" + enable);
+    }
+
+    // async messaging defaults
+
+    /**
+     * Default Kafka bootstrap servers used when a {@code PUT /mockserver/asyncapi}
+     * request body does not include {@code brokerConfig.kafkaBootstrapServers}.
+     * Empty string means no default (broker must be specified per-request).
+     */
+    public static String asyncKafkaBootstrapServers() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS, "MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS", "");
+    }
+
+    public static void asyncKafkaBootstrapServers(String servers) {
+        setProperty(MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS, servers);
+    }
+
+    /**
+     * Default MQTT broker URL used when a {@code PUT /mockserver/asyncapi}
+     * request body does not include {@code brokerConfig.mqttBrokerUrl}.
+     * Empty string means no default (broker must be specified per-request).
+     */
+    public static String asyncMqttBrokerUrl() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASYNC_MQTT_BROKER_URL, "MOCKSERVER_ASYNC_MQTT_BROKER_URL", "");
+    }
+
+    public static void asyncMqttBrokerUrl(String url) {
+        setProperty(MOCKSERVER_ASYNC_MQTT_BROKER_URL, url);
+    }
+
+    /**
+     * Maximum number of recorded messages retained per channel in async
+     * messaging subscribers. Default is 1000.
+     */
+    public static int asyncRecordedMessageMaxEntries() {
+        return readIntegerProperty(MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES, "MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES", 1000);
+    }
+
+    public static void asyncRecordedMessageMaxEntries(int maxEntries) {
+        setProperty(MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES, "" + maxEntries);
     }
 
     public static Map<String, String> logLevelOverrides() {

@@ -1564,4 +1564,81 @@ public class MockServerClientTest {
         );
     }
 
+    // -------------------------------------------------------------------
+    // AsyncAPI Control-Plane
+    // -------------------------------------------------------------------
+
+    @Test
+    public void shouldSendLoadAsyncApiRequest() {
+        // when
+        mockServerClient.loadAsyncApi("{\"asyncapi\":\"2.6.0\"}");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/asyncapi"));
+        assertThat(sent.getBodyAsString(), containsString("asyncapi"));
+    }
+
+    @Test
+    public void shouldSendAsyncApiStatusRequest() {
+        // when
+        mockServerClient.asyncApiStatus();
+
+        // then
+        verify(mockHttpClient).sendRequest(
+            request()
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("GET")
+                .withPath("/mockserver/asyncapi"),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+    }
+
+    @Test
+    public void shouldSendVerifyAsyncMessageRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response()
+                .withStatusCode(202)
+                .withBody("")
+            );
+
+        // when
+        mockServerClient.verifyAsyncMessage("{\"channel\":\"orders\"}");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/asyncapi/verify"));
+        assertThat(sent.getBodyAsString(), containsString("channel"));
+    }
+
+    @Test
+    public void shouldThrowAssertionErrorOnVerifyAsyncMessageFailure() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response()
+                .withStatusCode(406)
+                .withBody("expected at least 1 message(s) matching channel 'orders' but found 0")
+            );
+
+        // when
+        AssertionError error = assertThrows(AssertionError.class,
+            () -> mockServerClient.verifyAsyncMessage("{\"channel\":\"orders\"}")
+        );
+
+        // then
+        assertThat(error.getMessage(), containsString("expected at least 1"));
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForNullVerifyAsyncMessage() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyAsyncMessage(null));
+    }
+
 }

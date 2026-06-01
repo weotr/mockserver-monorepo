@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.After;
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -307,5 +308,113 @@ public class AsyncApiControlPlaneImplTest {
             assertThat(e.getMessage(), containsString("Failed to load AsyncAPI spec"));
         }
         assertThat("load() should throw RuntimeException on failure", threw, is(true));
+    }
+
+    @Test
+    public void shouldFallBackToConfigDefaultKafkaBootstrapServers() throws Exception {
+        // Given: a config default for Kafka bootstrap servers (localhost resolves, even though
+        // no broker is listening — KafkaProducer constructor only validates DNS resolution)
+        String original = ConfigurationProperties.asyncKafkaBootstrapServers();
+        try {
+            ConfigurationProperties.asyncKafkaBootstrapServers("localhost:19999");
+
+            // When: loading a spec with a wrapped body that omits kafkaBootstrapServers
+            String wrappedBody = "{\n" +
+                "  \"spec\": {\n" +
+                "    \"asyncapi\": \"2.6.0\",\n" +
+                "    \"info\": { \"title\": \"Fallback Test\", \"version\": \"1.0.0\" },\n" +
+                "    \"channels\": { \"test\": { \"publish\": { \"message\": { \"payload\": { \"type\": \"string\" } } } } }\n" +
+                "  },\n" +
+                "  \"brokerConfig\": { \"publishOnLoad\": false }\n" +
+                "}";
+
+            JsonNode result = controlPlane.load(wrappedBody);
+
+            // Then: the spec loaded and a Kafka publisher was created using the config default
+            assertThat(result.get("loaded").asBoolean(), is(true));
+            assertThat(result.get("publishers").asInt(), is(1));
+        } finally {
+            ConfigurationProperties.asyncKafkaBootstrapServers(original);
+        }
+    }
+
+    @Test
+    public void shouldPreferRequestBodyKafkaOverConfigDefault() throws Exception {
+        // Given: a config default for Kafka bootstrap servers
+        String original = ConfigurationProperties.asyncKafkaBootstrapServers();
+        try {
+            ConfigurationProperties.asyncKafkaBootstrapServers("localhost:29999");
+
+            // When: loading a spec with an explicit kafkaBootstrapServers in the request body
+            String wrappedBody = "{\n" +
+                "  \"spec\": {\n" +
+                "    \"asyncapi\": \"2.6.0\",\n" +
+                "    \"info\": { \"title\": \"Override Test\", \"version\": \"1.0.0\" },\n" +
+                "    \"channels\": { \"test\": { \"publish\": { \"message\": { \"payload\": { \"type\": \"string\" } } } } }\n" +
+                "  },\n" +
+                "  \"brokerConfig\": { \"kafkaBootstrapServers\": \"localhost:19999\", \"publishOnLoad\": false }\n" +
+                "}";
+
+            JsonNode result = controlPlane.load(wrappedBody);
+
+            // Then: the spec loaded — request body value takes precedence
+            assertThat(result.get("loaded").asBoolean(), is(true));
+            assertThat(result.get("publishers").asInt(), is(1));
+        } finally {
+            ConfigurationProperties.asyncKafkaBootstrapServers(original);
+        }
+    }
+
+    @Test
+    public void shouldUseAsyncRecordedMessageMaxEntriesFromConfig() throws Exception {
+        // Given: a custom max entries config
+        int original = ConfigurationProperties.asyncRecordedMessageMaxEntries();
+        try {
+            ConfigurationProperties.asyncRecordedMessageMaxEntries(42);
+
+            // Then: the ConfigurationProperties value should be 42
+            assertThat(ConfigurationProperties.asyncRecordedMessageMaxEntries(), is(42));
+
+            // And when loading a spec without broker config (no broker connections),
+            // the config value is ready for use by createBrokerConnections
+            String spec = "{\n" +
+                "  \"asyncapi\": \"2.6.0\",\n" +
+                "  \"info\": { \"title\": \"Max Entries Test\", \"version\": \"1.0.0\" },\n" +
+                "  \"channels\": { \"ch1\": { \"publish\": { \"message\": { \"payload\": { \"type\": \"string\" } } } } }\n" +
+                "}";
+
+            JsonNode result = controlPlane.load(spec);
+            assertThat(result.get("loaded").asBoolean(), is(true));
+        } finally {
+            ConfigurationProperties.asyncRecordedMessageMaxEntries(original);
+        }
+    }
+
+    @Test
+    public void shouldNoBrokersWhenNoConfigDefaultAndNoRequestConfig() throws Exception {
+        // Given: no config defaults
+        String originalKafka = ConfigurationProperties.asyncKafkaBootstrapServers();
+        String originalMqtt = ConfigurationProperties.asyncMqttBrokerUrl();
+        try {
+            ConfigurationProperties.asyncKafkaBootstrapServers("");
+            ConfigurationProperties.asyncMqttBrokerUrl("");
+
+            // When: loading a plain spec (no broker config)
+            String spec = "{\n" +
+                "  \"asyncapi\": \"2.6.0\",\n" +
+                "  \"info\": { \"title\": \"No Broker\", \"version\": \"1.0.0\" },\n" +
+                "  \"channels\": { \"ch1\": { \"publish\": { \"message\": { \"payload\": { \"type\": \"string\" } } } } }\n" +
+                "}";
+
+            JsonNode result = controlPlane.load(spec);
+
+            // Then: no publishers or subscribers created
+            assertThat(result.get("loaded").asBoolean(), is(true));
+            assertThat(result.get("publishers").asInt(), is(0));
+            assertThat(result.get("subscribers").asInt(), is(0));
+        } finally {
+            ConfigurationProperties.asyncKafkaBootstrapServers(originalKafka);
+            ConfigurationProperties.asyncMqttBrokerUrl(originalMqtt);
+        }
     }
 }
