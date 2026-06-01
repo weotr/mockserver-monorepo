@@ -19,7 +19,7 @@ export async function importWsdl(
 ): Promise<unknown[]> {
   const res = await fetch(`${buildBaseUrl(params)}/mockserver/wsdl`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/xml' },
+    headers: { 'Content-Type': 'text/xml' },
     body: wsdl,
   });
   if (!res.ok) {

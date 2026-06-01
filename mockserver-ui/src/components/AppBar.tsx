@@ -28,6 +28,8 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import Select from '@mui/material/Select';
 import type { SelectChangeEvent } from '@mui/material/Select';
+import Snackbar from '@mui/material/Snackbar';
+import Alert from '@mui/material/Alert';
 import BuildIcon from '@mui/icons-material/Build';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
@@ -103,19 +105,18 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [toolsAnchorEl, setToolsAnchorEl] = useState<null | HTMLElement>(null);
   const [wsdlOpen, setWsdlOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    void fetchMode(connectionParams)
+    const controller = new AbortController();
+    void fetchMode(connectionParams, controller.signal)
       .then((r) => {
-        if (!cancelled) setModeState(r.mode);
+        if (!controller.signal.aborted) setModeState(r.mode);
       })
       .catch(() => {
         /* mode endpoint unavailable (older server) — hide the control */
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [connectionParams]);
 
   const handleModeChange = (event: SelectChangeEvent) => {
@@ -124,7 +125,10 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
     setModeState(next);
     void setServerMode(connectionParams, next)
       .then((r) => setModeState(r.mode))
-      .catch(() => setModeState(previous)); // revert on failure
+      .catch((e) => {
+        setModeState(previous); // revert on failure
+        setModeError(e instanceof Error ? e.message : 'Failed to change mode');
+      });
   };
 
   return (
@@ -338,6 +342,15 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           onClose={() => setPactOpen(false)}
           connectionParams={connectionParams}
         />
+        <Snackbar
+          open={modeError !== null}
+          autoHideDuration={4000}
+          onClose={() => setModeError(null)}
+        >
+          <Alert severity="error" onClose={() => setModeError(null)} sx={{ width: '100%' }}>
+            {modeError}
+          </Alert>
+        </Snackbar>
       </Toolbar>
     </MuiAppBar>
   );
