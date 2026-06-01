@@ -139,7 +139,9 @@ public class Configuration {
     private Boolean detailedVerificationFailures;
 
     // proxy
-    private Boolean attemptToProxyIfNoMatchingExpectation;
+    // volatile: mutated at runtime via PUT /mockserver/mode (control-plane thread) and read on the
+    // Netty request path (HttpActionHandler), so the write must be visible across I/O threads
+    private volatile Boolean attemptToProxyIfNoMatchingExpectation;
     private InetSocketAddress forwardHttpProxy;
     private InetSocketAddress forwardHttpsProxy;
     private InetSocketAddress forwardSocksProxy;

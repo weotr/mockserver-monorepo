@@ -111,6 +111,9 @@ public class HttpState {
     private GrpcProtoDescriptorStore grpcDescriptorStore;
     private final FileStore fileStore = new FileStore();
     private final CrudDispatcher crudDispatcher = new CrudDispatcher();
+    // last operating mode explicitly set via PUT /mockserver/mode (so GET round-trips CAPTURE,
+    // which shares the proxy-on-no-match flag with SPY); reconciled against the live flag on read
+    private volatile MockMode mockMode;
     // optional — set by LifeCycle when a runtime LLM backend is configured
     private volatile org.mockserver.llm.client.LlmCompletionService llmCompletionService;
     private volatile org.mockserver.llm.client.LlmBackend llmBackend;
@@ -1365,6 +1368,22 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/mode", "/mode")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        MockMode mode = MockMode.parse(request.getFirstQueryStringParameter("mode"));
+                        mockMode = mode;
+                        configuration.attemptToProxyIfNoMatchingExpectation(mode.proxyUnmatchedRequests());
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody("{\"mode\":\"" + mode + "\",\"proxyUnmatchedRequests\":" + mode.proxyUnmatchedRequests() + "}", MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, iae.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/clear", "/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1764,6 +1783,20 @@ public class HttpState {
             if (request.matches("GET", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/mode", "/mode")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    boolean proxyFlag = configuration.attemptToProxyIfNoMatchingExpectation();
+                    // report the last explicitly-set mode when it still agrees with the live flag
+                    // (so CAPTURE round-trips), otherwise derive the mode from the flag
+                    MockMode mode = (mockMode != null && mockMode.proxyUnmatchedRequests() == proxyFlag)
+                        ? mockMode
+                        : MockMode.fromProxyFlag(proxyFlag);
+                    responseWriter.writeResponse(request, response()
+                        .withStatusCode(OK.code())
+                        .withBody("{\"mode\":\"" + mode + "\",\"proxyUnmatchedRequests\":" + mode.proxyUnmatchedRequests() + "}", MediaType.JSON_UTF_8), true);
                 }
                 return true;
             }
