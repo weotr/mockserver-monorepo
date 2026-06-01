@@ -1,0 +1,288 @@
+/**
+ * ImportForm — bulk-import expectations from Expectation JSON, OpenAPI, WSDL,
+ * HAR (HTTP Archive), or a Postman collection. Renders as the entire form body
+ * when kind === 'import' in the Composer. Each format maps to a MockServer
+ * import endpoint (HAR and Postman share PUT /mockserver/import?format=...).
+ */
+import { useState, useCallback, useRef } from 'react';
+import Box from '@mui/material/Box';
+import Paper from '@mui/material/Paper';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import RadioGroup from '@mui/material/RadioGroup';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Radio from '@mui/material/Radio';
+import Button from '@mui/material/Button';
+import Alert from '@mui/material/Alert';
+import Snackbar from '@mui/material/Snackbar';
+import CircularProgress from '@mui/material/CircularProgress';
+import type { ConnectionParams } from '../hooks/useConnectionParams';
+import { importExpectationJson, importCollection } from '../lib/importMocks';
+import { importOpenApi } from '../lib/openapiImport';
+import { importWsdl } from '../lib/wsdlImport';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type ImportFormat = 'json' | 'openapi' | 'wsdl' | 'har' | 'postman';
+
+type ImportSource = 'paste' | 'url' | 'file';
+
+interface FormatMeta {
+  value: ImportFormat;
+  label: string;
+  description: string;
+  /** Whether the URL source is supported for this format. */
+  urlSupported: boolean;
+}
+
+const FORMATS: FormatMeta[] = [
+  { value: 'json', label: 'Expectation JSON', description: 'A single expectation object or a JSON array of expectations.', urlSupported: false },
+  { value: 'openapi', label: 'OpenAPI', description: 'An OpenAPI v3 spec (JSON/YAML) or a URL pointing to one.', urlSupported: true },
+  { value: 'wsdl', label: 'WSDL / SOAP', description: 'A WSDL 1.1 document. SOAP operations are converted to expectations.', urlSupported: false },
+  { value: 'har', label: 'HAR (HTTP Archive)', description: 'A HAR JSON file captured from browser DevTools or a proxy.', urlSupported: false },
+  { value: 'postman', label: 'Postman collection', description: 'A Postman collection (v2.x) JSON export; requests are converted to expectations.', urlSupported: false },
+];
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export interface ImportFormProps {
+  connectionParams: ConnectionParams;
+}
+
+export default function ImportForm({ connectionParams }: ImportFormProps) {
+  const [format, setFormat] = useState<ImportFormat>('json');
+  const [source, setSource] = useState<ImportSource>('paste');
+  const [payload, setPayload] = useState('');
+  const [urlValue, setUrlValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [snackMessage, setSnackMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const currentFormatMeta = FORMATS.find((f) => f.value === format)!;
+
+  // When switching format, reset source to 'paste' if URL is not supported.
+  const handleFormatChange = useCallback((newFormat: ImportFormat) => {
+    setFormat(newFormat);
+    const meta = FORMATS.find((f) => f.value === newFormat)!;
+    if (!meta.urlSupported && source === 'url') {
+      setSource('paste');
+    }
+    setError(null);
+  }, [source]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setPayload(reader.result);
+      }
+    };
+    reader.readAsText(file);
+    // Reset the input so the same file can be re-selected.
+    e.target.value = '';
+  }, []);
+
+  const handleImport = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const input = source === 'url' ? urlValue.trim() : payload.trim();
+      if (!input) {
+        throw new Error(source === 'url' ? 'Please enter a URL.' : 'Please provide content to import.');
+      }
+
+      let created: unknown[];
+      switch (format) {
+        case 'json':
+          created = await importExpectationJson(connectionParams, input);
+          break;
+        case 'openapi':
+          created = await importOpenApi(connectionParams, input);
+          break;
+        case 'wsdl':
+          created = await importWsdl(connectionParams, input);
+          break;
+        case 'har':
+          created = await importCollection(connectionParams, input, 'har');
+          break;
+        case 'postman':
+          created = await importCollection(connectionParams, input, 'postman');
+          break;
+      }
+      const count = created.length;
+      setSnackMessage(`Imported ${count} expectation${count === 1 ? '' : 's'}`);
+      // Clear the payload after a successful import so the user can import more.
+      setPayload('');
+      setUrlValue('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [format, source, payload, urlValue, connectionParams]);
+
+  return (
+    <>
+      {/* Format picker */}
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
+          Format
+        </Typography>
+        <RadioGroup
+          value={format}
+          onChange={(e) => handleFormatChange(e.target.value as ImportFormat)}
+        >
+          {FORMATS.map((f) => (
+            <FormControlLabel
+              key={f.value}
+              value={f.value}
+              control={<Radio size="small" />}
+              label={
+                <Box>
+                  <Typography variant="body2" sx={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                    {f.label}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                    {f.description}
+                  </Typography>
+                </Box>
+              }
+              sx={{ alignItems: 'flex-start', mb: 0.5 }}
+            />
+          ))}
+        </RadioGroup>
+      </Paper>
+
+      {/* Source picker + content input */}
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
+          Source
+        </Typography>
+        <RadioGroup
+          row
+          value={source}
+          onChange={(e) => {
+            setSource(e.target.value as ImportSource);
+            setError(null);
+          }}
+        >
+          <FormControlLabel
+            value="paste"
+            control={<Radio size="small" />}
+            label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>Paste</Typography>}
+          />
+          {currentFormatMeta.urlSupported && (
+            <FormControlLabel
+              value="url"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>URL</Typography>}
+            />
+          )}
+          <FormControlLabel
+            value="file"
+            control={<Radio size="small" />}
+            label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>File</Typography>}
+          />
+        </RadioGroup>
+
+        <Box sx={{ mt: 1.5 }}>
+          {source === 'url' && (
+            <TextField
+              label="Spec URL"
+              size="small"
+              fullWidth
+              value={urlValue}
+              onChange={(e) => setUrlValue(e.target.value)}
+              placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            />
+          )}
+          {(source === 'paste' || source === 'file') && (
+            <>
+              {source === 'file' && (
+                <Box sx={{ mb: 1 }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Choose file
+                  </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json,.yaml,.yml,.xml,.wsdl,.har"
+                    style={{ display: 'none' }}
+                    onChange={handleFileSelect}
+                    data-testid="import-file-input"
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ ml: 1, fontSize: '0.7rem' }}>
+                    The file contents will be loaded into the text area below.
+                  </Typography>
+                </Box>
+              )}
+              <TextField
+                label={`${currentFormatMeta.label} content`}
+                multiline
+                minRows={8}
+                maxRows={24}
+                fullWidth
+                value={payload}
+                onChange={(e) => setPayload(e.target.value)}
+                placeholder={
+                  format === 'json'
+                    ? '[\n  {\n    "httpRequest": { "method": "GET", "path": "/api/test" },\n    "httpResponse": { "statusCode": 200, "body": "{}" }\n  }\n]'
+                    : format === 'openapi'
+                      ? '{ "openapi": "3.0.0", "info": { "title": "Petstore", "version": "1.0" }, ... }'
+                      : format === 'wsdl'
+                        ? '<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" ...>'
+                        : format === 'postman'
+                          ? '{ "info": { "name": "My API", ... }, "item": [ ... ] }'
+                          : '{ "log": { "entries": [ ... ] } }'
+                }
+                slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+              />
+            </>
+          )}
+        </Box>
+      </Paper>
+
+      {/* Import button */}
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => void handleImport()}
+            disabled={busy || (source === 'url' ? !urlValue.trim() : !payload.trim())}
+            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            {busy ? 'Importing...' : 'Import'}
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+            {currentFormatMeta.label} will be sent to MockServer and converted to expectations.
+          </Typography>
+        </Box>
+      </Paper>
+
+      {error && (
+        <Alert severity="error" variant="outlined">{error}</Alert>
+      )}
+
+      <Snackbar
+        open={snackMessage !== null}
+        autoHideDuration={4000}
+        onClose={() => setSnackMessage(null)}
+        message={snackMessage ?? ''}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
+    </>
+  );
+}

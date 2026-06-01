@@ -40,12 +40,13 @@ import {
   type StandardGrpcStreamState,
 } from '../lib/standardCodegen';
 import McpToolsPanel from './McpToolsPanel';
+import ImportForm from './ImportForm';
 
 // ---------------------------------------------------------------------------
 // Response action types
 // ---------------------------------------------------------------------------
 
-type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp' | 'dns';
+type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp' | 'dns' | 'import';
 
 type ActionType =
   | 'static'
@@ -93,8 +94,11 @@ const ACTION_TYPES: ActionTypeMeta[] = [
  * DNS gets only dns_response.
  * MCP gets only static.
  * LLM has its own form path and does not use the ACTION_TYPES radio at all.
+ * Import has its own form path (bulk import from JSON/OpenAPI/WSDL/HAR).
  */
-const ACTION_TYPES_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'>, ActionType[]> = {
+type ActionKind = Exclude<ExpectationKind, 'llm_conversation' | 'import'>;
+
+const ACTION_TYPES_BY_KIND: Record<ActionKind, ActionType[]> = {
   standard: [
     'static', 'forward', 'forward_override', 'forward_fallback',
     'callback', 'template', 'error', 'websocket', 'sse',
@@ -106,7 +110,7 @@ const ACTION_TYPES_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'>,
 };
 
 /** Default action type when switching to a kind. */
-const DEFAULT_ACTION_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'>, ActionType> = {
+const DEFAULT_ACTION_BY_KIND: Record<ActionKind, ActionType> = {
   standard: 'static',
   grpc: 'grpc_stream',
   dns: 'dns_response',
@@ -117,7 +121,7 @@ const DEFAULT_ACTION_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'
  * Return the filtered ACTION_TYPES metadata for a given kind.
  * Preserves the ordering defined in ACTION_TYPES_BY_KIND.
  */
-function actionTypesForKind(k: Exclude<ExpectationKind, 'llm_conversation'>): ActionTypeMeta[] {
+function actionTypesForKind(k: ActionKind): ActionTypeMeta[] {
   const allowed = ACTION_TYPES_BY_KIND[k];
   return allowed.map((v) => ACTION_TYPES.find((a) => a.value === v)!);
 }
@@ -126,7 +130,7 @@ function actionTypesForKind(k: Exclude<ExpectationKind, 'llm_conversation'>): Ac
  * Infer the expectation kind from an action type.
  * Used when loading an existing expectation to auto-select the correct kind.
  */
-function kindForActionType(at: ActionType): Exclude<ExpectationKind, 'llm_conversation'> {
+function kindForActionType(at: ActionType): ActionKind {
   if (at === 'dns_response') return 'dns';
   if (at === 'grpc_stream') return 'grpc';
   return 'standard';
@@ -2137,16 +2141,25 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               setKind(newKind);
               setLoadFromKey('');
               setLlmScenarioName('');
-              // gRPC pre-shapes the matcher for gRPC conventions
+              // gRPC pre-shapes the matcher for gRPC conventions; leaving gRPC for
+              // another kind undoes that pre-shaping unless the user customised it,
+              // so the matcher no longer shows gRPC content under HTTP / DNS / MCP.
+              const GRPC_PATH = '/package.Service/Method';
               if (newKind === 'grpc') {
                 setMatcher((prev) => ({
                   ...prev,
                   method: 'POST',
-                  path: prev.path || '/package.Service/Method',
+                  path: prev.path || GRPC_PATH,
+                }));
+              } else if (kind === 'grpc') {
+                setMatcher((prev) => ({
+                  ...prev,
+                  method: prev.method === 'POST' ? 'GET' : prev.method,
+                  path: prev.path === GRPC_PATH ? '' : prev.path,
                 }));
               }
               // Reset actionType to a valid default for the new kind
-              if (newKind !== 'llm_conversation') {
+              if (newKind !== 'llm_conversation' && newKind !== 'import') {
                 const allowed = ACTION_TYPES_BY_KIND[newKind];
                 setActionType((prev) =>
                   allowed.includes(prev) ? prev : DEFAULT_ACTION_BY_KIND[newKind],
@@ -2178,6 +2191,11 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               value="mcp"
               control={<Radio size="small" />}
               label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>MCP</Typography>}
+            />
+            <FormControlLabel
+              value="import"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>Import</Typography>}
             />
           </RadioGroup>
         </Paper>
@@ -2270,6 +2288,10 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </>
         )}
 
+        {kind === 'import' && (
+          <ImportForm connectionParams={connectionParams} />
+        )}
+
         {(kind === 'standard' || kind === 'grpc' || kind === 'mcp' || kind === 'dns') && (
           <>
             {kind === 'grpc' && (
@@ -2315,7 +2337,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 2 · Respond with
               </Typography>
               <RadioGroup value={actionType} onChange={(e) => setActionType(e.target.value as ActionType)}>
-                {actionTypesForKind(kind as Exclude<ExpectationKind, 'llm_conversation'>).map((a) => (
+                {actionTypesForKind(kind as ActionKind).map((a) => (
                   <FormControlLabel
                     key={a.value}
                     value={a.value}

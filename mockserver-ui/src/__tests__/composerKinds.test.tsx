@@ -1,6 +1,6 @@
 /**
  * Tests for the Mocks (Composer) page restructure:
- * - Kind selector shows HTTP, LLM Conversation, gRPC, DNS, MCP
+ * - Kind selector shows HTTP, LLM Conversation, gRPC, DNS, MCP, Import
  * - Each kind shows only its valid action types (no cross-kind leakage)
  * - Switching kind resets actionType to a valid default
  * - Loading an existing expectation infers the correct kind
@@ -72,13 +72,14 @@ describe('ComposerView kinds', () => {
     expect(screen.getByText('Mocks')).toBeInTheDocument();
   });
 
-  it('shows all five kind options including DNS', () => {
+  it('shows all six kind options including DNS and Import', () => {
     renderComposer();
     expect(screen.getByLabelText('HTTP')).toBeInTheDocument();
     expect(screen.getByLabelText('LLM Conversation')).toBeInTheDocument();
     expect(screen.getByLabelText('gRPC')).toBeInTheDocument();
     expect(screen.getByLabelText('DNS')).toBeInTheDocument();
     expect(screen.getByLabelText('MCP')).toBeInTheDocument();
+    expect(screen.getByLabelText('Import')).toBeInTheDocument();
   });
 
   it('defaults to HTTP kind', () => {
@@ -241,6 +242,32 @@ describe('ComposerView kind-change default reset', () => {
     const respondSection = screen.getByText(/2 · Respond with/).closest('[class*="MuiPaper"]')!;
     const staticRadio = within(respondSection as HTMLElement).getByLabelText(/Static HTTP response/);
     expect(staticRadio).toBeChecked();
+  });
+
+  it('leaving gRPC clears the gRPC-shaped matcher path/method when not customised', async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    // Selecting gRPC pre-shapes the matcher to POST /package.Service/Method
+    await user.click(screen.getByLabelText('gRPC'));
+    expect((screen.getByLabelText('Path') as HTMLInputElement).value).toBe('/package.Service/Method');
+    // Switching to DNS must NOT leave the gRPC path/method behind
+    await user.click(screen.getByLabelText('DNS'));
+    expect((screen.getByLabelText('Path') as HTMLInputElement).value).toBe('');
+    // And switching to MCP from gRPC likewise clears it
+    await user.click(screen.getByLabelText('gRPC'));
+    await user.click(screen.getByLabelText('MCP'));
+    expect((screen.getByLabelText('Path') as HTMLInputElement).value).toBe('');
+  });
+
+  it('preserves a user-customised path when leaving gRPC', async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByLabelText('gRPC'));
+    const pathField = screen.getByLabelText('Path') as HTMLInputElement;
+    await user.clear(pathField);
+    await user.type(pathField, '/my.custom.Service/Call');
+    await user.click(screen.getByLabelText('HTTP'));
+    expect((screen.getByLabelText('Path') as HTMLInputElement).value).toBe('/my.custom.Service/Call');
   });
 });
 

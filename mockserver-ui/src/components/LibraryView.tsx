@@ -343,7 +343,7 @@ function WasmModulesTab({ connectionParams }: { connectionParams: ConnectionPara
       </Typography>
 
       {/* Upload form */}
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
         <TextField
           size="small"
           label="Module name"
@@ -357,6 +357,7 @@ function WasmModulesTab({ connectionParams }: { connectionParams: ConnectionPara
           variant="outlined"
           component="label"
           startIcon={<UploadFileIcon sx={{ fontSize: '0.875rem' }} />}
+          sx={{ height: 40 }}
         >
           Select .wasm
           <input
@@ -371,6 +372,7 @@ function WasmModulesTab({ connectionParams }: { connectionParams: ConnectionPara
           size="small"
           disabled={busy}
           onClick={() => void handleUpload()}
+          sx={{ height: 40 }}
         >
           Upload
         </Button>
