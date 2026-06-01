@@ -6,11 +6,13 @@ import Tooltip from '@mui/material/Tooltip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import HelpOutlinedIcon from '@mui/icons-material/HelpOutlined';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import type { LogEntryValue, MessagePart } from '../types';
 import JsonViewer from './JsonViewer';
 import BecauseSection from './BecauseSection';
 import CopyButton from './CopyButton';
 import { useDebugMismatchContext } from '../hooks/DebugMismatchContext';
+import { useGenerateStubContext } from '../hooks/GenerateStubContext';
 
 // ---------------------------------------------------------------------------
 // W3C traceparent pill (F8)
@@ -284,7 +286,10 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
   const canCollapse = collapsible && hasBody;
   const [expanded, setExpanded] = useState(false);
   const debugMismatch = useDebugMismatchContext();
-  const showWhyButton = isNotMatchedEntry(entry) && debugMismatch !== null;
+  const generateStub = useGenerateStubContext();
+  const isUnmatched = isNotMatchedEntry(entry);
+  const showWhyButton = isUnmatched && debugMismatch !== null;
+  const showGenerateStubButton = isUnmatched && generateStub !== null;
   const traceparent = useMemo(() => extractTraceparent(entry), [entry]);
 
   return (
@@ -342,6 +347,23 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
                   }}
                 >
                   <HelpOutlinedIcon sx={{ color: 'warning.main' }} />
+                </IconButton>
+              </Tooltip>
+            )}
+            {showGenerateStubButton && (
+              <Tooltip title="Generate an expectation for this unmatched request">
+                <IconButton
+                  size="small"
+                  sx={{ p: 0, ml: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.9rem' } }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const request = extractRequestFromEntry(entry);
+                    if (request && generateStub) {
+                      void generateStub(request);
+                    }
+                  }}
+                >
+                  <AutoFixHighIcon sx={{ color: 'info.main' }} />
                 </IconButton>
               </Tooltip>
             )}

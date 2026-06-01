@@ -162,6 +162,19 @@ There is **no charting dependency** (inline SVG) and no server change required. 
 | Received Requests | `RequestPanel` → `JsonListItem` | `recordedRequests` | All received HTTP requests with paired responses |
 | Proxied Requests | `RequestPanel` → `JsonListItem` | `proxiedRequests` | Forwarded requests with upstream responses |
 
+### Generate Stub on Unmatched Requests
+
+Log entries for unmatched requests (description contains `EXPECTATION_NOT_MATCHED`) show an
+extra "Generate Stub" action button (alongside the "Debug Mismatch / Why?" button) in
+`LogEntry`. It follows the same React-context pattern as Debug Mismatch: a nullable async
+callback is provided via `GenerateStubContext` (hook `useGenerateStubContext`) from `App`,
+backed by the `useGenerateStub` hook and Zustand UI state (`generateStubOpen` /
+`generateStubSuggestions` / `generateStubConfidence` / `generateStubLoading` /
+`generateStubError`). Clicking it extracts the request from the log entry, calls
+`PUT /mockserver/generateExpectation` via `lib/generateStub.ts`, and opens `GenerateStubDialog`
+with the returned suggestion(s) and confidence so the user can register the stub or open it in
+the Composer. The button is gated to unmatched entries only and hidden when no context is provided.
+
 ### Row Layout in Requests and Expectations
 
 Each collapsed item row has two lines:

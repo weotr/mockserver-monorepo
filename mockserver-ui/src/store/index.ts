@@ -40,6 +40,12 @@ interface DashboardState {
   debugMismatchResult: DebugMismatchResult | null;
   debugMismatchError: string | null;
 
+  generateStubOpen: boolean;
+  generateStubLoading: boolean;
+  generateStubSuggestions: Record<string, unknown>[];
+  generateStubConfidence: number;
+  generateStubError: string | null;
+
   selectedTrafficIndex: number | null;
 
   actionTypeFilter: string[];
@@ -71,6 +77,11 @@ interface DashboardState {
   closeDebugMismatch: () => void;
   setDebugMismatchLoading: (loading: boolean) => void;
   setDebugMismatchError: (error: string | null) => void;
+
+  openGenerateStub: (suggestions: Record<string, unknown>[], confidence: number) => void;
+  closeGenerateStub: () => void;
+  setGenerateStubLoading: (loading: boolean) => void;
+  setGenerateStubError: (error: string | null) => void;
 }
 
 function getInitialTheme(): ThemeMode {
@@ -111,6 +122,12 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   debugMismatchResult: null,
   debugMismatchError: null,
 
+  generateStubOpen: false,
+  generateStubLoading: false,
+  generateStubSuggestions: [],
+  generateStubConfidence: 0,
+  generateStubError: null,
+
   selectedTrafficIndex: null,
 
   actionTypeFilter: [],
@@ -146,6 +163,12 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       debugMismatchLoading: false,
       debugMismatchResult: null,
       debugMismatchError: null,
+
+      generateStubOpen: false,
+      generateStubLoading: false,
+      generateStubSuggestions: [],
+      generateStubConfidence: 0,
+      generateStubError: null,
     }),
 
   setView: (view) => set({ view, selectedTrafficIndex: null }),
@@ -180,4 +203,12 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   setDebugMismatchLoading: (loading) => set({ debugMismatchLoading: loading }),
   setDebugMismatchError: (error) =>
     set({ debugMismatchError: error, debugMismatchLoading: false }),
+
+  openGenerateStub: (suggestions, confidence) =>
+    set({ generateStubOpen: true, generateStubSuggestions: suggestions, generateStubConfidence: confidence, generateStubLoading: false, generateStubError: null }),
+  closeGenerateStub: () =>
+    set({ generateStubOpen: false, generateStubSuggestions: [], generateStubConfidence: 0, generateStubLoading: false, generateStubError: null }),
+  setGenerateStubLoading: (loading) => set({ generateStubLoading: loading }),
+  setGenerateStubError: (error) =>
+    set({ generateStubError: error, generateStubLoading: false }),
 }));

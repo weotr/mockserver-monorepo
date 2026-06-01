@@ -9,6 +9,8 @@ import { useConnectionParams } from './hooks/useConnectionParams';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useDebugMismatch } from './hooks/useDebugMismatch';
 import { DebugMismatchContext } from './hooks/DebugMismatchContext';
+import { useGenerateStub } from './hooks/useGenerateStub';
+import { GenerateStubContext } from './hooks/GenerateStubContext';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import AppBar from './components/AppBar';
 import FilterPanel from './components/FilterPanel';
@@ -21,6 +23,7 @@ import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DriftPanel from './components/DriftPanel';
 import McpToolsPanel from './components/McpToolsPanel';
 import DebugMismatchDialog from './components/DebugMismatchDialog';
+import GenerateStubDialog from './components/GenerateStubDialog';
 import type { RequestFilter } from './types';
 
 // Lazy-loaded so the @mui/x-charts bundle only loads when the Metrics tab is
@@ -33,9 +36,15 @@ export default function App() {
   const error = useDashboardStore((s) => s.error);
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
 
+  const generateStubOpen = useDashboardStore((s) => s.generateStubOpen);
+  const generateStubSuggestions = useDashboardStore((s) => s.generateStubSuggestions);
+  const generateStubConfidence = useDashboardStore((s) => s.generateStubConfidence);
+  const closeGenerateStub = useDashboardStore((s) => s.closeGenerateStub);
+
   const params = useConnectionParams();
   const { connect, sendFilter, clearServer } = useWebSocket(params);
   const { debugMismatch } = useDebugMismatch(params);
+  const { generateStub } = useGenerateStub(params);
   const initialConnectDone = useRef(false);
 
   useEffect(() => {
@@ -87,6 +96,7 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <DebugMismatchContext.Provider value={debugMismatch}>
+      <GenerateStubContext.Provider value={generateStub}>
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
           <AppBar
             onClearServer={handleClearServer}
@@ -116,6 +126,14 @@ export default function App() {
           {view === 'mcp-tools' && <McpToolsPanel connectionParams={params} />}
         </Box>
         <DebugMismatchDialog />
+        <GenerateStubDialog
+          open={generateStubOpen}
+          onClose={closeGenerateStub}
+          suggestions={generateStubSuggestions}
+          confidence={generateStubConfidence}
+          connectionParams={params}
+        />
+      </GenerateStubContext.Provider>
       </DebugMismatchContext.Provider>
     </ThemeProvider>
   );
