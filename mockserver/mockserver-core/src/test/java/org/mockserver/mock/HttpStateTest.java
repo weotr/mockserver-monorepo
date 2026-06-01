@@ -3258,4 +3258,90 @@ public class HttpStateTest {
         assertThat(responseWriter.response.getBodyAsString(), containsString("request body is required"));
     }
 
+    @Test
+    public void shouldHandleOidcRequestWithDefaults() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(6));
+
+        // Verify the discovery endpoint is now matchable
+        HttpResponse discoveryResponse = httpState.firstMatchingExpectation(
+            request("/.well-known/openid-configuration").withMethod("GET")
+        ).getHttpResponse();
+        assertThat(discoveryResponse, is(notNullValue()));
+        assertThat(discoveryResponse.getStatusCode(), is(200));
+        assertThat(discoveryResponse.getBodyAsString(), containsString("\"issuer\""));
+    }
+
+    @Test
+    public void shouldHandleOidcRequestWithCustomConfig() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("{\"issuer\":\"https://custom.idp\",\"subject\":\"custom-sub\",\"tokenPath\":\"/custom/token\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+
+        // Verify the token endpoint matches the custom path
+        Expectation tokenMatch = httpState.firstMatchingExpectation(
+            request("/custom/token").withMethod("POST")
+        );
+        assertThat(tokenMatch, is(notNullValue()));
+        assertThat(tokenMatch.getHttpResponse().getBodyAsString(), containsString("access_token"));
+    }
+
+    @Test
+    public void shouldHandleOidcRequestWithEmptyBody() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(6));
+    }
+
+    @Test
+    public void shouldHandleInvalidOidcRequest() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("{invalid json");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
 }
