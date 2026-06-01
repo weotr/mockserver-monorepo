@@ -76,6 +76,7 @@ required?"}
 | `PUT /mockserver/expectation` | Deserialize + add/update expectations |
 | `PUT /mockserver/openapi` | Convert OpenAPI spec to expectations |
 | `PUT /mockserver/wsdl` | Convert a WSDL 1.1 document (SOAP 1.1/1.2) to expectations |
+| `PUT /mockserver/pact` | Export active response expectations as a Pact v3 consumer contract (`?consumer=&provider=`) |
 | `PUT /mockserver/clear` | Clear expectations and/or logs by request matcher |
 | `PUT /mockserver/reset` | Reset all state (expectations, logs, WebSocket registry) |
 | `PUT /mockserver/retrieve` | Retrieve requests, responses, logs, or active expectations |

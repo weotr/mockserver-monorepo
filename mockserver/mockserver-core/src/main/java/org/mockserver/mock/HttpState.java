@@ -1336,6 +1336,35 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/pact", "/pact")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String consumer = request.getFirstQueryStringParameter("consumer");
+                        String provider = request.getFirstQueryStringParameter("provider");
+                        String pact = new org.mockserver.mock.pact.PactExporter()
+                            .export(requestMatchers.retrieveActiveExpectations(null), consumer, provider);
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody(pact, MediaType.JSON_UTF_8), true);
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for pact export:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/clear", "/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
