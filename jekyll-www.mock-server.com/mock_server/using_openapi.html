@@ -763,3 +763,38 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 </ol>
 
 <p>This feature works automatically when loading OpenAPI specifications via any method (REST API, Java client, initializer file, or classpath). No additional configuration is required.</p>
+
+<a id="generate_expectations_from_wsdl" class="anchor" href="#generate_expectations_from_wsdl">&nbsp;</a>
+
+<h2>Generate Expectations From WSDL (SOAP)</h2>
+
+<p>MockServer supports <strong>WSDL 1.1</strong> documents as an alternative to OpenAPI for generating mock expectations. Submitting a WSDL causes MockServer to create one expectation per SOAP operation found across all service/port bindings in the document.</p>
+
+<p>Both <strong>SOAP 1.1</strong> and <strong>SOAP 1.2</strong> bindings are supported. Each generated expectation:</p>
+<ul>
+    <li><strong>Matches</strong> <span class="inline_code">POST</span> requests to the path taken from the <span class="inline_code">soap:address</span> (or <span class="inline_code">soap12:address</span>) <span class="inline_code">location</span> attribute, plus one of:
+        <ul>
+            <li>the <span class="inline_code">SOAPAction</span> header (SOAP 1.1), when a <span class="inline_code">soapAction</span> is declared on the binding operation;</li>
+            <li>the <span class="inline_code">action</span> parameter of the <span class="inline_code">content-type</span> header (SOAP 1.2), when a <span class="inline_code">soapAction</span> is declared;</li>
+            <li>or an XPath body check on the operation element local-name (fallback when no SOAP action is declared in the WSDL).</li>
+        </ul>
+    </li>
+    <li><strong>Responds</strong> with HTTP 200 and a skeleton SOAP envelope containing a <span class="inline_code">&lt;{Operation}Response/&gt;</span> element in the WSDL target namespace.</li>
+</ul>
+
+<p>The WSDL document is parsed with XXE protections (DOCTYPE and external entity resolution disabled) so that importing an untrusted WSDL cannot trigger an XML External Entity attack.</p>
+
+<p>MockServer returns HTTP 201 with the created expectations as JSON.</p>
+
+<a id="generate_expectations_from_wsdl_example" class="anchor" href="#generate_expectations_from_wsdl_example">&nbsp;</a>
+
+<button id="button_wsdl_rest" class="accordion">generate expectations from a WSDL document</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/wsdl" \
+  -H "content-type: text/xml" \
+  --data-binary @my-service.wsdl</code></pre>
+        <p>The request body must be a raw WSDL 1.1 XML document. MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>

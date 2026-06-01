@@ -53,6 +53,7 @@ sitemap:
         <tr><td><a href="#detect_llm_drift"><code>detect_llm_drift</code></a></td><td>Replay a cassette against the live provider and report structural drift</td><td>High</td></tr>
         <tr><td><a href="#mock_adversarial_llm_response"><code>mock_adversarial_llm_response</code></a></td><td>Mock a hostile/malformed LLM response to test agent resilience</td><td>High</td></tr>
         <tr><td><a href="#run_mcp_contract_test"><code>run_mcp_contract_test</code></a></td><td>Check a target MCP server conforms to the protocol over Streamable HTTP</td><td>High</td></tr>
+        <tr><td><a href="#list_mock_tools"><code>list_mock_tools</code></a></td><td>Generate MCP tool definitions from the current active mock expectations</td><td>High</td></tr>
         <tr><td><a href="#raw_expectation"><code>raw_expectation</code></a></td><td>Full expectation JSON passthrough</td><td>Low</td></tr>
         <tr><td><a href="#raw_retrieve"><code>raw_retrieve</code></a></td><td>Full retrieve with correlation ID filtering</td><td>Low</td></tr>
         <tr><td><a href="#raw_verify"><code>raw_verify</code></a></td><td>Full verification JSON</td><td>Low</td></tr>
@@ -1368,6 +1369,52 @@ sitemap:
     "isError": false
   }
 }</code></pre>
+
+<a id="list_mock_tools" class="anchor" href="#list_mock_tools">&nbsp;</a>
+
+<h3>list_mock_tools</h3>
+
+<p>Generates <a target="_blank" href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol</a> tool definitions from the <strong>current active response expectations</strong>, so an AI agent can discover the mocked endpoints as callable tools without prior knowledge of the API. This tool takes <strong>no parameters</strong>.</p>
+
+<p>Each response expectation with a concrete method and path matcher becomes one tool entry:</p>
+<ul>
+    <li><strong>name</strong> &mdash; derived from the HTTP method and path in lower snake_case (e.g. <span class="inline_code">get_api_users</span>), deduplicated and truncated to 64 characters.</li>
+    <li><strong>description</strong> &mdash; <span class="inline_code">Mock for METHOD path</span>.</li>
+    <li><strong>inputSchema</strong> &mdash; exposes any query parameters declared on the expectation as string properties, plus an optional <span class="inline_code">body</span> property when the expectation matches on a request body.</li>
+    <li><strong>_mockserver</strong> &mdash; annotation object with <span class="inline_code">method</span>, <span class="inline_code">path</span>, and <span class="inline_code">expectationId</span> so a caller can route an invocation back to the mock.</li>
+</ul>
+
+<p>Expectations whose method or path is a notted matcher, or that have no response action, are skipped.</p>
+
+<p><strong>Example request (no arguments required):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 50,
+  "method": "tools/call",
+  "params": {
+    "name": "list_mock_tools",
+    "arguments": {}
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 50,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"tools\":[{\"name\":\"get_api_users\",\"description\":\"Mock for GET /api/users\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}},\"_mockserver\":{\"method\":\"GET\",\"path\":\"/api/users\",\"expectationId\":\"abc-123\"}},{\"name\":\"post_api_orders\",\"description\":\"Mock for POST /api/orders\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"body\":{\"description\":\"request body\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"object\"}]}}},\"_mockserver\":{\"method\":\"POST\",\"path\":\"/api/orders\",\"expectationId\":\"def-456\"}}],\"count\":2}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p>The <span class="inline_code">count</span> field gives the total number of tool definitions generated. Use this tool to let an agent inspect what a MockServer instance is currently set up to mock &mdash; for example, before deciding whether to call <a href="#create_expectation"><code>create_expectation</code></a> or to invoke an already-mocked endpoint.</p>
 
 <a id="low_level_tools" class="anchor" href="#low_level_tools">&nbsp;</a>
 
