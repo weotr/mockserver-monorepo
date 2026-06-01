@@ -147,6 +147,52 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `verify_sequence.json` | Verify a sequence of requests in order |
 | `verify_by_openapi.json` | Verify requests matching an OpenAPI operation |
 
+### forward_fallback/
+
+| File | Description |
+|------|-------------|
+| `forward_with_fallback.json` | Forward with fallback response on specific status codes or timeout |
+| `forward_with_fallback_default_codes.json` | Forward with fallback using default status code matching (500-599) |
+
+### websocket/
+
+| File | Description |
+|------|-------------|
+| `websocket_response.json` | WebSocket expectation with subprotocol and text messages |
+| `websocket_with_matchers.json` | WebSocket expectation with a message matcher (ping/pong) |
+
+### sse/
+
+| File | Description |
+|------|-------------|
+| `sse_response.json` | Server-Sent Events response with multiple events |
+
+### binary_response/
+
+| File | Description |
+|------|-------------|
+| `binary_response.json` | Return raw binary data (base64-encoded) |
+
+### dns_response/
+
+| File | Description |
+|------|-------------|
+| `dns_a_record.json` | DNS response with an A record |
+| `dns_nxdomain.json` | DNS NXDOMAIN response (domain not found) |
+
+### forward_class_callback/
+
+| File | Description |
+|------|-------------|
+| `forward_class_callback.json` | Forward requests using a Java class callback |
+
+### grpc_stream/
+
+| File | Description |
+|------|-------------|
+| `grpc_stream_response.json` | gRPC server-streaming response with delayed messages |
+| `grpc_stream_error.json` | gRPC error response (UNAVAILABLE) with connection close |
+
 ### openapi/
 
 | File | Description |

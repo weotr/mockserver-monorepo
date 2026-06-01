@@ -1163,6 +1163,218 @@ module MockServer
     end
   end
 
+  class GrpcStreamMessage
+    attr_accessor :json, :delay
+
+    def initialize(json: nil, delay: nil)
+      @json = json
+      @delay = delay
+    end
+
+    def to_h
+      result = {}
+      result['json'] = @json unless @json.nil?
+      result['delay'] = @delay.to_h if @delay
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        json:  data['json'],
+        delay: Delay.from_hash(data['delay'])
+      )
+    end
+  end
+
+  class GrpcStreamResponse
+    attr_accessor :status_name, :status_message, :headers, :messages,
+                  :close_connection, :delay, :primary
+
+    def initialize(status_name: nil, status_message: nil, headers: nil,
+                   messages: nil, close_connection: nil, delay: nil, primary: nil)
+      @status_name = status_name
+      @status_message = status_message
+      @headers = headers
+      @messages = messages
+      @close_connection = close_connection
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['statusName'] = @status_name unless @status_name.nil?
+      result['statusMessage'] = @status_message unless @status_message.nil?
+      result['headers'] = MockServer.serialize_key_multi_values(@headers) if @headers
+      result['messages'] = @messages&.map(&:to_h) if @messages
+      result['closeConnection'] = @close_connection unless @close_connection.nil?
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      messages_data = data['messages']
+      messages = messages_data&.map { |m| GrpcStreamMessage.from_hash(m) }
+      new(
+        status_name:      data['statusName'],
+        status_message:   data['statusMessage'],
+        headers:          MockServer.deserialize_key_multi_values(data['headers']),
+        messages:         messages,
+        close_connection: data['closeConnection'],
+        delay:            Delay.from_hash(data['delay']),
+        primary:          data['primary']
+      )
+    end
+  end
+
+  class BinaryResponse
+    attr_accessor :binary_data, :delay, :primary
+
+    def initialize(binary_data: nil, delay: nil, primary: nil)
+      @binary_data = binary_data
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['binaryData'] = @binary_data unless @binary_data.nil?
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        binary_data: data['binaryData'],
+        delay:       Delay.from_hash(data['delay']),
+        primary:     data['primary']
+      )
+    end
+  end
+
+  class DnsRecord
+    attr_accessor :name, :type, :dns_class, :ttl, :value,
+                  :priority, :weight, :port
+
+    def initialize(name: nil, type: nil, dns_class: nil, ttl: nil,
+                   value: nil, priority: nil, weight: nil, port: nil)
+      @name = name
+      @type = type
+      @dns_class = dns_class
+      @ttl = ttl
+      @value = value
+      @priority = priority
+      @weight = weight
+      @port = port
+    end
+
+    def to_h
+      result = {}
+      result['name'] = @name unless @name.nil?
+      result['type'] = @type unless @type.nil?
+      result['dnsClass'] = @dns_class unless @dns_class.nil?
+      result['ttl'] = @ttl unless @ttl.nil?
+      result['value'] = @value unless @value.nil?
+      result['priority'] = @priority unless @priority.nil?
+      result['weight'] = @weight unless @weight.nil?
+      result['port'] = @port unless @port.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        name:      data['name'],
+        type:      data['type'],
+        dns_class: data['dnsClass'],
+        ttl:       data['ttl'],
+        value:     data['value'],
+        priority:  data['priority'],
+        weight:    data['weight'],
+        port:      data['port']
+      )
+    end
+
+    def self.a_record(name, ip)
+      new(name: name, type: 'A', value: ip)
+    end
+
+    def self.aaaa_record(name, ip)
+      new(name: name, type: 'AAAA', value: ip)
+    end
+
+    def self.cname_record(name, cname)
+      new(name: name, type: 'CNAME', value: cname)
+    end
+
+    def self.mx_record(name, priority, exchange)
+      new(name: name, type: 'MX', priority: priority, value: exchange)
+    end
+
+    def self.srv_record(name, priority, weight, port, target)
+      new(name: name, type: 'SRV', priority: priority, weight: weight, port: port, value: target)
+    end
+
+    def self.txt_record(name, text)
+      new(name: name, type: 'TXT', value: text)
+    end
+
+    def self.ptr_record(name, pointer)
+      new(name: name, type: 'PTR', value: pointer)
+    end
+  end
+
+  class DnsResponse
+    attr_accessor :response_code, :answer_records, :authority_records,
+                  :additional_records, :delay, :primary
+
+    def initialize(response_code: nil, answer_records: nil, authority_records: nil,
+                   additional_records: nil, delay: nil, primary: nil)
+      @response_code = response_code
+      @answer_records = answer_records
+      @authority_records = authority_records
+      @additional_records = additional_records
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['responseCode'] = @response_code unless @response_code.nil?
+      result['answerRecords'] = @answer_records.map(&:to_h) if @answer_records
+      result['authorityRecords'] = @authority_records.map(&:to_h) if @authority_records
+      result['additionalRecords'] = @additional_records.map(&:to_h) if @additional_records
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      answer_data = data['answerRecords']
+      authority_data = data['authorityRecords']
+      additional_data = data['additionalRecords']
+      new(
+        response_code:    data['responseCode'],
+        answer_records:   answer_data&.map { |r| DnsRecord.from_hash(r) },
+        authority_records: authority_data&.map { |r| DnsRecord.from_hash(r) },
+        additional_records: additional_data&.map { |r| DnsRecord.from_hash(r) },
+        delay:            Delay.from_hash(data['delay']),
+        primary:          data['primary']
+      )
+    end
+  end
+
   class HttpChaosProfile
     attr_accessor :error_status, :error_probability, :drop_connection_probability,
                   :retry_after, :latency, :seed, :succeed_first, :fail_request_count,
@@ -1289,7 +1501,9 @@ module MockServer
                   :http_forward_template, :http_forward_class_callback,
                   :http_forward_object_callback, :http_override_forwarded_request,
                   :http_error, :times, :time_to_live, :chaos,
-                  :http_sse_response, :http_websocket_response, :after_actions,
+                  :http_sse_response, :http_websocket_response,
+                  :grpc_stream_response, :binary_response, :dns_response,
+                  :after_actions,
                   :http_responses, :response_mode,
                   :scenario_name, :scenario_state, :new_scenario_state
 
@@ -1299,7 +1513,9 @@ module MockServer
                    http_forward_template: nil, http_forward_class_callback: nil,
                    http_forward_object_callback: nil, http_override_forwarded_request: nil,
                    http_error: nil, times: nil, time_to_live: nil, chaos: nil,
-                   http_sse_response: nil, http_websocket_response: nil, after_actions: nil,
+                   http_sse_response: nil, http_websocket_response: nil,
+                   grpc_stream_response: nil, binary_response: nil, dns_response: nil,
+                   after_actions: nil,
                    http_responses: nil, response_mode: nil,
                    scenario_name: nil, scenario_state: nil, new_scenario_state: nil)
       @id = id
@@ -1321,6 +1537,9 @@ module MockServer
       @chaos = chaos
       @http_sse_response = http_sse_response
       @http_websocket_response = http_websocket_response
+      @grpc_stream_response = grpc_stream_response
+      @binary_response = binary_response
+      @dns_response = dns_response
       @after_actions = after_actions
       @http_responses = http_responses
       @response_mode = response_mode
@@ -1354,6 +1573,9 @@ module MockServer
         'httpError'                    => @http_error&.to_h,
         'httpSseResponse'              => @http_sse_response&.to_h,
         'httpWebSocketResponse'        => @http_websocket_response&.to_h,
+        'grpcStreamResponse'           => @grpc_stream_response&.to_h,
+        'binaryResponse'               => @binary_response&.to_h,
+        'dnsResponse'                  => @dns_response&.to_h,
         'afterActions'                 => after_actions_h,
         'httpResponses'                => @http_responses&.map(&:to_h),
         'responseMode'                 => @response_mode,
@@ -1393,6 +1615,9 @@ module MockServer
         http_error:                      HttpError.from_hash(data['httpError']),
         http_sse_response:               HttpSseResponse.from_hash(data['httpSseResponse']),
         http_websocket_response:         HttpWebSocketResponse.from_hash(data['httpWebSocketResponse']),
+        grpc_stream_response:            GrpcStreamResponse.from_hash(data['grpcStreamResponse']),
+        binary_response:                 BinaryResponse.from_hash(data['binaryResponse']),
+        dns_response:                    DnsResponse.from_hash(data['dnsResponse']),
         after_actions:                   after_actions,
         http_responses:                  data['httpResponses']&.map { |r| HttpResponse.from_hash(r) },
         response_mode:                   data['responseMode'],

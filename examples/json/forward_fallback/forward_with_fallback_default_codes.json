@@ -1,0 +1,16 @@
+{
+  "httpRequest": {
+    "path": "/api/upstream"
+  },
+  "httpForwardWithFallback": {
+    "httpForward": {
+      "scheme": "HTTP",
+      "host": "upstream.local",
+      "port": 8080
+    },
+    "fallbackResponse": {
+      "statusCode": 200,
+      "body": "{\"fallback\": true}"
+    }
+  }
+}

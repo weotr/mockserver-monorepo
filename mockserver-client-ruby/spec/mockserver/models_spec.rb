@@ -1862,6 +1862,360 @@ RSpec.describe 'MockServer models' do
   end
 
   # -------------------------------------------------------------------
+  # GrpcStreamMessage
+  # -------------------------------------------------------------------
+  describe MockServer::GrpcStreamMessage do
+    it 'has nil defaults' do
+      msg = MockServer::GrpcStreamMessage.new
+      expect(msg.json).to be_nil
+      expect(msg.delay).to be_nil
+    end
+
+    it 'serializes to hash' do
+      msg = MockServer::GrpcStreamMessage.new(json: '{"id": 1}')
+      expect(msg.to_h).to eq({ 'json' => '{"id": 1}' })
+    end
+
+    it 'serializes with delay' do
+      msg = MockServer::GrpcStreamMessage.new(
+        json: '{"id": 1}',
+        delay: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 500)
+      )
+      expect(msg.to_h).to eq({
+        'json' => '{"id": 1}',
+        'delay' => { 'timeUnit' => 'MILLISECONDS', 'value' => 500 }
+      })
+    end
+
+    it 'deserializes from hash' do
+      msg = MockServer::GrpcStreamMessage.from_hash({
+        'json' => '{"id": 2}',
+        'delay' => { 'timeUnit' => 'SECONDS', 'value' => 1 }
+      })
+      expect(msg.json).to eq('{"id": 2}')
+      expect(msg.delay.time_unit).to eq('SECONDS')
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::GrpcStreamMessage.from_hash(nil)).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::GrpcStreamMessage.new(
+        json: '{"test": true}',
+        delay: MockServer::Delay.new(time_unit: 'SECONDS', value: 2)
+      )
+      roundtrip = MockServer::GrpcStreamMessage.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # GrpcStreamResponse
+  # -------------------------------------------------------------------
+  describe MockServer::GrpcStreamResponse do
+    it 'has nil defaults' do
+      resp = MockServer::GrpcStreamResponse.new
+      expect(resp.status_name).to be_nil
+      expect(resp.status_message).to be_nil
+      expect(resp.headers).to be_nil
+      expect(resp.messages).to be_nil
+      expect(resp.close_connection).to be_nil
+    end
+
+    it 'serializes to hash' do
+      resp = MockServer::GrpcStreamResponse.new(
+        status_name: 'OK',
+        messages: [
+          MockServer::GrpcStreamMessage.new(json: '{"id": 1}'),
+          MockServer::GrpcStreamMessage.new(
+            json: '{"id": 2}',
+            delay: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 100)
+          )
+        ],
+        close_connection: true
+      )
+      result = resp.to_h
+      expect(result['statusName']).to eq('OK')
+      expect(result['closeConnection']).to be(true)
+      expect(result['messages'].length).to eq(2)
+      expect(result['messages'][0]).to eq({ 'json' => '{"id": 1}' })
+    end
+
+    it 'deserializes from hash' do
+      resp = MockServer::GrpcStreamResponse.from_hash({
+        'statusName' => 'OK',
+        'statusMessage' => 'Done',
+        'messages' => [
+          { 'json' => '{"id": 1}' },
+          { 'json' => '{"id": 2}', 'delay' => { 'timeUnit' => 'SECONDS', 'value' => 1 } }
+        ],
+        'closeConnection' => true
+      })
+      expect(resp.status_name).to eq('OK')
+      expect(resp.status_message).to eq('Done')
+      expect(resp.messages.length).to eq(2)
+      expect(resp.messages[1].delay.time_unit).to eq('SECONDS')
+      expect(resp.close_connection).to be(true)
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::GrpcStreamResponse.from_hash(nil)).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::GrpcStreamResponse.new(
+        status_name: 'OK',
+        messages: [MockServer::GrpcStreamMessage.new(json: '{"r": 1}')],
+        close_connection: false,
+        delay: MockServer::Delay.new(time_unit: 'SECONDS', value: 1)
+      )
+      roundtrip = MockServer::GrpcStreamResponse.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'serializes under grpcStreamResponse key in expectation' do
+      exp = MockServer::Expectation.new(
+        http_request: MockServer::HttpRequest.new(path: '/grpc'),
+        grpc_stream_response: MockServer::GrpcStreamResponse.new(
+          status_name: 'OK',
+          messages: [MockServer::GrpcStreamMessage.new(json: '{"id": 1}')]
+        )
+      )
+      h = exp.to_h
+      expect(h).to have_key('grpcStreamResponse')
+      expect(h['grpcStreamResponse']['statusName']).to eq('OK')
+      expect(h).not_to have_key('httpResponse')
+    end
+
+    it 'deserializes from grpcStreamResponse key in expectation' do
+      exp = MockServer::Expectation.from_hash({
+        'httpRequest' => { 'path' => '/grpc' },
+        'grpcStreamResponse' => {
+          'statusName' => 'OK',
+          'messages' => [{ 'json' => '{"id": 1}' }]
+        }
+      })
+      expect(exp.grpc_stream_response).not_to be_nil
+      expect(exp.grpc_stream_response.status_name).to eq('OK')
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # BinaryResponse
+  # -------------------------------------------------------------------
+  describe MockServer::BinaryResponse do
+    it 'has nil defaults' do
+      resp = MockServer::BinaryResponse.new
+      expect(resp.binary_data).to be_nil
+      expect(resp.delay).to be_nil
+    end
+
+    it 'serializes to hash' do
+      resp = MockServer::BinaryResponse.new(binary_data: 'AQID')
+      expect(resp.to_h).to eq({ 'binaryData' => 'AQID' })
+    end
+
+    it 'serializes with delay' do
+      resp = MockServer::BinaryResponse.new(
+        binary_data: 'AQID',
+        delay: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 100)
+      )
+      result = resp.to_h
+      expect(result).to eq({
+        'binaryData' => 'AQID',
+        'delay' => { 'timeUnit' => 'MILLISECONDS', 'value' => 100 }
+      })
+    end
+
+    it 'deserializes from hash' do
+      resp = MockServer::BinaryResponse.from_hash({ 'binaryData' => 'dGVzdA==' })
+      expect(resp.binary_data).to eq('dGVzdA==')
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::BinaryResponse.from_hash(nil)).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::BinaryResponse.new(
+        binary_data: 'SGVsbG8=',
+        delay: MockServer::Delay.new(time_unit: 'SECONDS', value: 1)
+      )
+      roundtrip = MockServer::BinaryResponse.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'serializes under binaryResponse key in expectation' do
+      exp = MockServer::Expectation.new(
+        http_request: MockServer::HttpRequest.new(path: '/bin'),
+        binary_response: MockServer::BinaryResponse.new(binary_data: 'AQID')
+      )
+      h = exp.to_h
+      expect(h).to have_key('binaryResponse')
+      expect(h['binaryResponse']['binaryData']).to eq('AQID')
+      expect(h).not_to have_key('httpResponse')
+    end
+
+    it 'deserializes from binaryResponse key in expectation' do
+      exp = MockServer::Expectation.from_hash({
+        'httpRequest' => { 'path' => '/bin' },
+        'binaryResponse' => { 'binaryData' => 'AQID' }
+      })
+      expect(exp.binary_response).not_to be_nil
+      expect(exp.binary_response.binary_data).to eq('AQID')
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # DnsRecord
+  # -------------------------------------------------------------------
+  describe MockServer::DnsRecord do
+    it 'has nil defaults' do
+      rec = MockServer::DnsRecord.new
+      expect(rec.name).to be_nil
+      expect(rec.type).to be_nil
+    end
+
+    it 'creates an A record via factory' do
+      rec = MockServer::DnsRecord.a_record('example.com', '1.2.3.4')
+      expect(rec.name).to eq('example.com')
+      expect(rec.type).to eq('A')
+      expect(rec.value).to eq('1.2.3.4')
+    end
+
+    it 'creates a CNAME record via factory' do
+      rec = MockServer::DnsRecord.cname_record('www.example.com', 'example.com')
+      expect(rec.type).to eq('CNAME')
+    end
+
+    it 'creates an MX record via factory' do
+      rec = MockServer::DnsRecord.mx_record('example.com', 10, 'mail.example.com')
+      expect(rec.type).to eq('MX')
+      expect(rec.priority).to eq(10)
+    end
+
+    it 'creates an SRV record via factory' do
+      rec = MockServer::DnsRecord.srv_record('_sip._tcp.example.com', 10, 20, 5060, 'sip.example.com')
+      expect(rec.type).to eq('SRV')
+      expect(rec.weight).to eq(20)
+      expect(rec.port).to eq(5060)
+    end
+
+    it 'serializes to hash' do
+      rec = MockServer::DnsRecord.new(name: 'example.com', type: 'A', value: '1.2.3.4', ttl: 300, dns_class: 'IN')
+      expect(rec.to_h).to eq({
+        'name' => 'example.com',
+        'type' => 'A',
+        'dnsClass' => 'IN',
+        'ttl' => 300,
+        'value' => '1.2.3.4'
+      })
+    end
+
+    it 'deserializes from hash' do
+      rec = MockServer::DnsRecord.from_hash({
+        'name' => 'example.com',
+        'type' => 'A',
+        'dnsClass' => 'IN',
+        'ttl' => 300,
+        'value' => '1.2.3.4'
+      })
+      expect(rec.name).to eq('example.com')
+      expect(rec.type).to eq('A')
+      expect(rec.dns_class).to eq('IN')
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::DnsRecord.from_hash(nil)).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::DnsRecord.new(name: 'example.com', type: 'MX', priority: 10, value: 'mail.example.com', ttl: 600)
+      roundtrip = MockServer::DnsRecord.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # DnsResponse
+  # -------------------------------------------------------------------
+  describe MockServer::DnsResponse do
+    it 'has nil defaults' do
+      resp = MockServer::DnsResponse.new
+      expect(resp.response_code).to be_nil
+      expect(resp.answer_records).to be_nil
+    end
+
+    it 'serializes to hash' do
+      resp = MockServer::DnsResponse.new(
+        response_code: 'NOERROR',
+        answer_records: [
+          MockServer::DnsRecord.new(name: 'example.com', type: 'A', value: '1.2.3.4')
+        ]
+      )
+      result = resp.to_h
+      expect(result['responseCode']).to eq('NOERROR')
+      expect(result['answerRecords'].length).to eq(1)
+      expect(result['answerRecords'][0]['type']).to eq('A')
+    end
+
+    it 'deserializes from hash' do
+      resp = MockServer::DnsResponse.from_hash({
+        'responseCode' => 'NXDOMAIN',
+        'answerRecords' => [
+          { 'name' => 'example.com', 'type' => 'A', 'value' => '1.2.3.4' }
+        ]
+      })
+      expect(resp.response_code).to eq('NXDOMAIN')
+      expect(resp.answer_records.length).to eq(1)
+      expect(resp.answer_records[0].value).to eq('1.2.3.4')
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::DnsResponse.from_hash(nil)).to be_nil
+    end
+
+    it 'round-trips correctly' do
+      original = MockServer::DnsResponse.new(
+        response_code: 'NOERROR',
+        answer_records: [MockServer::DnsRecord.a_record('example.com', '1.2.3.4')],
+        authority_records: [MockServer::DnsRecord.cname_record('www.example.com', 'example.com')],
+        additional_records: [MockServer::DnsRecord.txt_record('example.com', 'v=spf1')],
+        delay: MockServer::Delay.new(time_unit: 'MILLISECONDS', value: 50)
+      )
+      roundtrip = MockServer::DnsResponse.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'serializes under dnsResponse key in expectation' do
+      exp = MockServer::Expectation.new(
+        http_request: MockServer::HttpRequest.new(path: '/dns'),
+        dns_response: MockServer::DnsResponse.new(
+          response_code: 'NOERROR',
+          answer_records: [MockServer::DnsRecord.a_record('example.com', '1.2.3.4')]
+        )
+      )
+      h = exp.to_h
+      expect(h).to have_key('dnsResponse')
+      expect(h['dnsResponse']['responseCode']).to eq('NOERROR')
+      expect(h).not_to have_key('httpResponse')
+    end
+
+    it 'deserializes from dnsResponse key in expectation' do
+      exp = MockServer::Expectation.from_hash({
+        'httpRequest' => { 'path' => '/dns' },
+        'dnsResponse' => {
+          'responseCode' => 'NOERROR',
+          'answerRecords' => [{ 'name' => 'example.com', 'type' => 'A', 'value' => '1.2.3.4' }]
+        }
+      })
+      expect(exp.dns_response).not_to be_nil
+      expect(exp.dns_response.response_code).to eq('NOERROR')
+    end
+  end
+
+  # -------------------------------------------------------------------
   # Helper functions
   # -------------------------------------------------------------------
   describe 'MockServer.to_camel' do

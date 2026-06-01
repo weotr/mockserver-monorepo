@@ -1,0 +1,16 @@
+{
+  "httpRequest": {
+    "path": "/dns/lookup"
+  },
+  "dnsResponse": {
+    "responseCode": "NOERROR",
+    "answerRecords": [
+      {
+        "name": "example.com",
+        "type": "A",
+        "value": "93.184.216.34",
+        "ttl": 300
+      }
+    ]
+  }
+}

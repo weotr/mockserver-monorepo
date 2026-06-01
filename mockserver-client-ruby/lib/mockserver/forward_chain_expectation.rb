@@ -121,5 +121,65 @@ module MockServer
       @expectation.http_websocket_response = websocket_response
       @client.upsert(@expectation)
     end
+
+    # Set a gRPC stream response action.
+    # @param grpc_stream_response [GrpcStreamResponse]
+    # @return [Array<Expectation>]
+    def respond_with_grpc_stream(grpc_stream_response)
+      unless grpc_stream_response.is_a?(GrpcStreamResponse)
+        raise TypeError,
+              "Expected GrpcStreamResponse, got #{grpc_stream_response.class.name}"
+      end
+      @expectation.grpc_stream_response = grpc_stream_response
+      @client.upsert(@expectation)
+    end
+
+    # Set a binary response action.
+    # @param binary_response [BinaryResponse]
+    # @return [Array<Expectation>]
+    def respond_with_binary(binary_response)
+      unless binary_response.is_a?(BinaryResponse)
+        raise TypeError,
+              "Expected BinaryResponse, got #{binary_response.class.name}"
+      end
+      @expectation.binary_response = binary_response
+      @client.upsert(@expectation)
+    end
+
+    # Set a DNS response action.
+    # @param dns_response [DnsResponse]
+    # @return [Array<Expectation>]
+    def respond_with_dns(dns_response)
+      unless dns_response.is_a?(DnsResponse)
+        raise TypeError,
+              "Expected DnsResponse, got #{dns_response.class.name}"
+      end
+      @expectation.dns_response = dns_response
+      @client.upsert(@expectation)
+    end
+
+    # Set a forward template action.
+    # @param template [HttpTemplate]
+    # @return [Array<Expectation>]
+    def forward_with_template(template)
+      unless template.is_a?(HttpTemplate)
+        raise TypeError,
+              "Expected HttpTemplate, got #{template.class.name}"
+      end
+      @expectation.http_forward_template = template
+      @client.upsert(@expectation)
+    end
+
+    # Set a forward class callback action.
+    # @param class_callback [HttpClassCallback]
+    # @return [Array<Expectation>]
+    def forward_with_class_callback(class_callback)
+      unless class_callback.is_a?(HttpClassCallback)
+        raise TypeError,
+              "Expected HttpClassCallback, got #{class_callback.class.name}"
+      end
+      @expectation.http_forward_class_callback = class_callback
+      @client.upsert(@expectation)
+    end
   end
 end

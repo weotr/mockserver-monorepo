@@ -62,6 +62,21 @@ class SyncForwardChainExpectation:
     def respond_with_websocket(self, websocket_response) -> list[Expectation]:
         return self._run(self._async_chain.respond_with_websocket(websocket_response))
 
+    def respond_with_grpc_stream(self, grpc_stream_response) -> list[Expectation]:
+        return self._run(self._async_chain.respond_with_grpc_stream(grpc_stream_response))
+
+    def respond_with_binary(self, binary_response) -> list[Expectation]:
+        return self._run(self._async_chain.respond_with_binary(binary_response))
+
+    def respond_with_dns(self, dns_response) -> list[Expectation]:
+        return self._run(self._async_chain.respond_with_dns(dns_response))
+
+    def forward_with_template(self, template) -> list[Expectation]:
+        return self._run(self._async_chain.forward_with_template(template))
+
+    def forward_with_class_callback(self, class_callback) -> list[Expectation]:
+        return self._run(self._async_chain.forward_with_class_callback(class_callback))
+
     def error(self, error: HttpError) -> list[Expectation]:
         return self._run(self._async_chain.error(error))
 

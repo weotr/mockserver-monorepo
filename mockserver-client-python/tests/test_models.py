@@ -3,12 +3,17 @@ from __future__ import annotations
 import pytest
 
 from mockserver.models import (
+    BinaryResponse,
     Body,
     ConnectionOptions,
     Delay,
     DelayDistribution,
+    DnsRecord,
+    DnsResponse,
     Expectation,
     ExpectationId,
+    GrpcStreamMessage,
+    GrpcStreamResponse,
     HttpChaosProfile,
     HttpClassCallback,
     HttpError,
@@ -2286,6 +2291,399 @@ class TestHttpChaosProfile:
         restored = HttpChaosProfile.from_dict(result)
         assert restored.outage_after_millis == 5000
         assert restored.outage_duration_millis == 10000
+
+
+class TestGrpcStreamMessage:
+    def test_defaults(self):
+        msg = GrpcStreamMessage()
+        assert msg.json is None
+        assert msg.delay is None
+
+    def test_construction(self):
+        msg = GrpcStreamMessage(json='{"id": 1}', delay=Delay(time_unit="SECONDS", value=1))
+        assert msg.json == '{"id": 1}'
+        assert msg.delay.time_unit == "SECONDS"
+
+    def test_to_dict(self):
+        msg = GrpcStreamMessage(json='{"hello": "world"}')
+        assert msg.to_dict() == {"json": '{"hello": "world"}'}
+
+    def test_to_dict_with_delay(self):
+        msg = GrpcStreamMessage(json='{"id": 1}', delay=Delay(time_unit="MILLISECONDS", value=500))
+        result = msg.to_dict()
+        assert result == {
+            "json": '{"id": 1}',
+            "delay": {"timeUnit": "MILLISECONDS", "value": 500},
+        }
+
+    def test_to_dict_empty(self):
+        msg = GrpcStreamMessage()
+        assert msg.to_dict() == {}
+
+    def test_from_dict(self):
+        msg = GrpcStreamMessage.from_dict({"json": '{"id": 2}', "delay": {"timeUnit": "SECONDS", "value": 1}})
+        assert msg.json == '{"id": 2}'
+        assert msg.delay.time_unit == "SECONDS"
+        assert msg.delay.value == 1
+
+    def test_from_dict_none(self):
+        assert GrpcStreamMessage.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = GrpcStreamMessage(json='{"test": true}', delay=Delay(time_unit="SECONDS", value=2))
+        restored = GrpcStreamMessage.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+
+class TestGrpcStreamResponse:
+    def test_defaults(self):
+        resp = GrpcStreamResponse()
+        assert resp.status_name is None
+        assert resp.status_message is None
+        assert resp.headers is None
+        assert resp.messages is None
+        assert resp.close_connection is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = GrpcStreamResponse(
+            status_name="OK",
+            status_message="Success",
+            messages=[GrpcStreamMessage(json='{"id": 1}')],
+            close_connection=True,
+        )
+        assert resp.status_name == "OK"
+        assert resp.status_message == "Success"
+        assert len(resp.messages) == 1
+        assert resp.close_connection is True
+
+    def test_to_dict(self):
+        resp = GrpcStreamResponse(
+            status_name="OK",
+            messages=[
+                GrpcStreamMessage(json='{"id": 1}'),
+                GrpcStreamMessage(json='{"id": 2}', delay=Delay(time_unit="MILLISECONDS", value=100)),
+            ],
+            close_connection=True,
+        )
+        result = resp.to_dict()
+        assert result["statusName"] == "OK"
+        assert result["closeConnection"] is True
+        assert len(result["messages"]) == 2
+        assert result["messages"][0] == {"json": '{"id": 1}'}
+        assert result["messages"][1] == {
+            "json": '{"id": 2}',
+            "delay": {"timeUnit": "MILLISECONDS", "value": 100},
+        }
+
+    def test_to_dict_empty(self):
+        resp = GrpcStreamResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = GrpcStreamResponse.from_dict({
+            "statusName": "OK",
+            "statusMessage": "Done",
+            "messages": [
+                {"json": '{"id": 1}'},
+                {"json": '{"id": 2}', "delay": {"timeUnit": "SECONDS", "value": 1}},
+            ],
+            "closeConnection": True,
+        })
+        assert resp.status_name == "OK"
+        assert resp.status_message == "Done"
+        assert len(resp.messages) == 2
+        assert resp.messages[1].delay.time_unit == "SECONDS"
+        assert resp.close_connection is True
+
+    def test_from_dict_none(self):
+        assert GrpcStreamResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = GrpcStreamResponse(
+            status_name="OK",
+            status_message="Completed",
+            messages=[
+                GrpcStreamMessage(json='{"result": "a"}'),
+                GrpcStreamMessage(json='{"result": "b"}', delay=Delay(time_unit="MILLISECONDS", value=200)),
+            ],
+            close_connection=False,
+            delay=Delay(time_unit="SECONDS", value=1),
+        )
+        restored = GrpcStreamResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'grpcStreamResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/grpc"),
+            grpc_stream_response=GrpcStreamResponse(
+                status_name="OK",
+                messages=[GrpcStreamMessage(json='{"id": 1}')],
+            ),
+        )
+        result = e.to_dict()
+        assert "grpcStreamResponse" in result
+        assert result["grpcStreamResponse"]["statusName"] == "OK"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'grpcStreamResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/grpc"},
+            "grpcStreamResponse": {
+                "statusName": "OK",
+                "messages": [{"json": '{"id": 1}'}],
+            },
+        })
+        assert e.grpc_stream_response is not None
+        assert e.grpc_stream_response.status_name == "OK"
+        assert len(e.grpc_stream_response.messages) == 1
+
+
+class TestBinaryResponse:
+    def test_defaults(self):
+        resp = BinaryResponse()
+        assert resp.binary_data is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = BinaryResponse(binary_data="AQID")
+        assert resp.binary_data == "AQID"
+
+    def test_to_dict(self):
+        resp = BinaryResponse(binary_data="AQID")
+        assert resp.to_dict() == {"binaryData": "AQID"}
+
+    def test_to_dict_with_delay(self):
+        resp = BinaryResponse(
+            binary_data="AQID",
+            delay=Delay(time_unit="MILLISECONDS", value=100),
+        )
+        result = resp.to_dict()
+        assert result == {
+            "binaryData": "AQID",
+            "delay": {"timeUnit": "MILLISECONDS", "value": 100},
+        }
+
+    def test_to_dict_empty(self):
+        resp = BinaryResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = BinaryResponse.from_dict({"binaryData": "dGVzdA=="})
+        assert resp.binary_data == "dGVzdA=="
+
+    def test_from_dict_none(self):
+        assert BinaryResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = BinaryResponse(
+            binary_data="SGVsbG8=",
+            delay=Delay(time_unit="SECONDS", value=1),
+        )
+        restored = BinaryResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'binaryResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/bin"),
+            binary_response=BinaryResponse(binary_data="AQID"),
+        )
+        result = e.to_dict()
+        assert "binaryResponse" in result
+        assert result["binaryResponse"]["binaryData"] == "AQID"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'binaryResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/bin"},
+            "binaryResponse": {"binaryData": "AQID"},
+        })
+        assert e.binary_response is not None
+        assert e.binary_response.binary_data == "AQID"
+
+
+class TestDnsRecord:
+    def test_defaults(self):
+        rec = DnsRecord()
+        assert rec.name is None
+        assert rec.type is None
+        assert rec.dns_class is None
+        assert rec.ttl is None
+        assert rec.value is None
+        assert rec.priority is None
+        assert rec.weight is None
+        assert rec.port is None
+
+    def test_a_record_factory(self):
+        rec = DnsRecord.a_record("example.com", "1.2.3.4")
+        assert rec.name == "example.com"
+        assert rec.type == "A"
+        assert rec.value == "1.2.3.4"
+
+    def test_aaaa_record_factory(self):
+        rec = DnsRecord.aaaa_record("example.com", "::1")
+        assert rec.type == "AAAA"
+
+    def test_cname_record_factory(self):
+        rec = DnsRecord.cname_record("www.example.com", "example.com")
+        assert rec.type == "CNAME"
+        assert rec.value == "example.com"
+
+    def test_mx_record_factory(self):
+        rec = DnsRecord.mx_record("example.com", 10, "mail.example.com")
+        assert rec.type == "MX"
+        assert rec.priority == 10
+        assert rec.value == "mail.example.com"
+
+    def test_srv_record_factory(self):
+        rec = DnsRecord.srv_record("_sip._tcp.example.com", 10, 20, 5060, "sip.example.com")
+        assert rec.type == "SRV"
+        assert rec.priority == 10
+        assert rec.weight == 20
+        assert rec.port == 5060
+        assert rec.value == "sip.example.com"
+
+    def test_txt_record_factory(self):
+        rec = DnsRecord.txt_record("example.com", "v=spf1 include:_spf.google.com ~all")
+        assert rec.type == "TXT"
+
+    def test_ptr_record_factory(self):
+        rec = DnsRecord.ptr_record("4.3.2.1.in-addr.arpa", "host.example.com")
+        assert rec.type == "PTR"
+
+    def test_to_dict(self):
+        rec = DnsRecord(name="example.com", type="A", value="1.2.3.4", ttl=300, dns_class="IN")
+        result = rec.to_dict()
+        assert result == {
+            "name": "example.com",
+            "type": "A",
+            "dnsClass": "IN",
+            "ttl": 300,
+            "value": "1.2.3.4",
+        }
+
+    def test_to_dict_empty(self):
+        rec = DnsRecord()
+        assert rec.to_dict() == {}
+
+    def test_from_dict(self):
+        rec = DnsRecord.from_dict({
+            "name": "example.com",
+            "type": "A",
+            "dnsClass": "IN",
+            "ttl": 300,
+            "value": "1.2.3.4",
+        })
+        assert rec.name == "example.com"
+        assert rec.type == "A"
+        assert rec.dns_class == "IN"
+        assert rec.ttl == 300
+        assert rec.value == "1.2.3.4"
+
+    def test_from_dict_none(self):
+        assert DnsRecord.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = DnsRecord(name="example.com", type="MX", priority=10, value="mail.example.com", ttl=600)
+        restored = DnsRecord.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+
+class TestDnsResponse:
+    def test_defaults(self):
+        resp = DnsResponse()
+        assert resp.response_code is None
+        assert resp.answer_records is None
+        assert resp.authority_records is None
+        assert resp.additional_records is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+        )
+        assert resp.response_code == "NOERROR"
+        assert len(resp.answer_records) == 1
+
+    def test_to_dict(self):
+        resp = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[
+                DnsRecord(name="example.com", type="A", value="1.2.3.4"),
+            ],
+            authority_records=[
+                DnsRecord(name="example.com", type="CNAME", value="other.com"),
+            ],
+        )
+        result = resp.to_dict()
+        assert result["responseCode"] == "NOERROR"
+        assert len(result["answerRecords"]) == 1
+        assert result["answerRecords"][0]["type"] == "A"
+        assert len(result["authorityRecords"]) == 1
+
+    def test_to_dict_empty(self):
+        resp = DnsResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = DnsResponse.from_dict({
+            "responseCode": "NXDOMAIN",
+            "answerRecords": [
+                {"name": "example.com", "type": "A", "value": "1.2.3.4"},
+            ],
+        })
+        assert resp.response_code == "NXDOMAIN"
+        assert len(resp.answer_records) == 1
+        assert resp.answer_records[0].value == "1.2.3.4"
+
+    def test_from_dict_none(self):
+        assert DnsResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+            authority_records=[DnsRecord.cname_record("www.example.com", "example.com")],
+            additional_records=[DnsRecord.txt_record("example.com", "v=spf1")],
+            delay=Delay(time_unit="MILLISECONDS", value=50),
+        )
+        restored = DnsResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'dnsResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/dns"),
+            dns_response=DnsResponse(
+                response_code="NOERROR",
+                answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+            ),
+        )
+        result = e.to_dict()
+        assert "dnsResponse" in result
+        assert result["dnsResponse"]["responseCode"] == "NOERROR"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'dnsResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/dns"},
+            "dnsResponse": {
+                "responseCode": "NOERROR",
+                "answerRecords": [{"name": "example.com", "type": "A", "value": "1.2.3.4"}],
+            },
+        })
+        assert e.dns_response is not None
+        assert e.dns_response.response_code == "NOERROR"
+        assert len(e.dns_response.answer_records) == 1
 
 
 class TestRequestDefinitionAlias:

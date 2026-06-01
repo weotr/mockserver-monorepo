@@ -45,7 +45,7 @@ import McpToolsPanel from './McpToolsPanel';
 // Response action types
 // ---------------------------------------------------------------------------
 
-type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp';
+type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp' | 'dns';
 
 type ActionType =
   | 'static'
@@ -85,6 +85,52 @@ const ACTION_TYPES: ActionTypeMeta[] = [
   { value: 'forward_class_callback', label: 'Forward class callback', description: 'Forward the request upstream via a server-side Java class implementing ExpectationForwardCallback.' },
   { value: 'grpc_stream', label: 'gRPC stream response', description: 'Return a gRPC streaming response with status, messages, and optional close.' },
 ];
+
+/**
+ * Which action types are valid for each expectation kind.
+ * HTTP ('standard') gets all HTTP action types but NOT dns_response or grpc_stream.
+ * gRPC gets grpc_stream (primary) + static (for unary RPCs).
+ * DNS gets only dns_response.
+ * MCP gets only static.
+ * LLM has its own form path and does not use the ACTION_TYPES radio at all.
+ */
+const ACTION_TYPES_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'>, ActionType[]> = {
+  standard: [
+    'static', 'forward', 'forward_override', 'forward_fallback',
+    'callback', 'template', 'error', 'websocket', 'sse',
+    'binary_response', 'forward_template', 'forward_class_callback',
+  ],
+  grpc: ['grpc_stream', 'static'],
+  dns: ['dns_response'],
+  mcp: ['static'],
+};
+
+/** Default action type when switching to a kind. */
+const DEFAULT_ACTION_BY_KIND: Record<Exclude<ExpectationKind, 'llm_conversation'>, ActionType> = {
+  standard: 'static',
+  grpc: 'grpc_stream',
+  dns: 'dns_response',
+  mcp: 'static',
+};
+
+/**
+ * Return the filtered ACTION_TYPES metadata for a given kind.
+ * Preserves the ordering defined in ACTION_TYPES_BY_KIND.
+ */
+function actionTypesForKind(k: Exclude<ExpectationKind, 'llm_conversation'>): ActionTypeMeta[] {
+  const allowed = ACTION_TYPES_BY_KIND[k];
+  return allowed.map((v) => ACTION_TYPES.find((a) => a.value === v)!);
+}
+
+/**
+ * Infer the expectation kind from an action type.
+ * Used when loading an existing expectation to auto-select the correct kind.
+ */
+function kindForActionType(at: ActionType): Exclude<ExpectationKind, 'llm_conversation'> {
+  if (at === 'dns_response') return 'dns';
+  if (at === 'grpc_stream') return 'grpc';
+  return 'standard';
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2026,6 +2072,9 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       // Detect the action shape and prefill the matching panel + switch the radio.
       const prefill = actionFromExpectation(item);
       if (!prefill) return;
+      // Infer the correct kind from the action type and switch to it.
+      const inferredKind = kindForActionType(prefill.type);
+      setKind(inferredKind);
       setActionType(prefill.type);
       if (prefill.staticState) setStaticState(prefill.staticState);
       if (prefill.forwardState) setForwardState(prefill.forwardState);
@@ -2095,11 +2144,13 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                   method: 'POST',
                   path: prev.path || '/package.Service/Method',
                 }));
-                setActionType('grpc_stream');
               }
-              // MCP defaults to static response (which becomes an MCP tool)
-              if (newKind === 'mcp') {
-                setActionType('static');
+              // Reset actionType to a valid default for the new kind
+              if (newKind !== 'llm_conversation') {
+                const allowed = ACTION_TYPES_BY_KIND[newKind];
+                setActionType((prev) =>
+                  allowed.includes(prev) ? prev : DEFAULT_ACTION_BY_KIND[newKind],
+                );
               }
             }}
           >
@@ -2119,6 +2170,11 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>gRPC</Typography>}
             />
             <FormControlLabel
+              value="dns"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>DNS</Typography>}
+            />
+            <FormControlLabel
               value="mcp"
               control={<Radio size="small" />}
               label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>MCP</Typography>}
@@ -2126,7 +2182,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </RadioGroup>
         </Paper>
 
-        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp') && (
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp' || kind === 'dns') && (
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
               <TextField
@@ -2214,13 +2270,20 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </>
         )}
 
-        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp') && (
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp' || kind === 'dns') && (
           <>
             {kind === 'grpc' && (
               <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
                 gRPC requests are transcoded to HTTP and matched by normal expectations. The matcher
                 is pre-shaped with POST and a <code>/package.Service/Method</code> path pattern.
                 Choose a standard HTTP response or a gRPC stream response action.
+              </Alert>
+            )}
+            {kind === 'dns' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                DNS expectations are served by the DNS handler on the MockServer DNS port. The
+                request matcher matches the DNS query name; the action returns a DNS response with
+                a response code and answer records.
               </Alert>
             )}
             {kind === 'mcp' && (
@@ -2239,7 +2302,9 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
                 {kind === 'grpc'
                   ? 'gRPC path convention: /package.Service/Method. gRPC clients send Content-Type: application/grpc — add it to the matcher headers to restrict to gRPC traffic only.'
-                  : 'Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the socket-address override, and client certificate chains are not yet exposed in the form — use the REST API or raw JSON for those.'}
+                  : kind === 'dns'
+                    ? 'DNS queries are matched by request path (the DNS name). Use the path field to specify the query name to match.'
+                    : 'Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the socket-address override, and client certificate chains are not yet exposed in the form — use the REST API or raw JSON for those.'}
                 {' '}Object callbacks (httpResponseObjectCallback / httpForwardObjectCallback) require live WebSocket registration and are not form-authorable.
               </Typography>
             </Paper>
@@ -2250,7 +2315,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 2 · Respond with
               </Typography>
               <RadioGroup value={actionType} onChange={(e) => setActionType(e.target.value as ActionType)}>
-                {ACTION_TYPES.map((a) => (
+                {actionTypesForKind(kind as Exclude<ExpectationKind, 'llm_conversation'>).map((a) => (
                   <FormControlLabel
                     key={a.value}
                     value={a.value}

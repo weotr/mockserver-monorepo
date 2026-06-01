@@ -177,6 +177,52 @@ These runnable shell scripts were extracted from the original reference markdown
 |------|-------------|
 | `reset.sh` | Reset MockServer (clear all state) |
 
+### forward_fallback/
+
+| File | Description |
+|------|-------------|
+| `forward_with_fallback.sh` | Forward with fallback response on specific status codes or timeout |
+| `forward_with_fallback_default_codes.sh` | Forward with fallback using default status code matching (500-599) |
+
+### websocket/
+
+| File | Description |
+|------|-------------|
+| `websocket_response.sh` | WebSocket expectation with subprotocol and text messages |
+| `websocket_with_matchers.sh` | WebSocket expectation with a message matcher (ping/pong) |
+
+### sse/
+
+| File | Description |
+|------|-------------|
+| `sse_response.sh` | Server-Sent Events response with multiple events |
+
+### binary_response/
+
+| File | Description |
+|------|-------------|
+| `binary_response.sh` | Return raw binary data (base64-encoded) |
+
+### dns_response/
+
+| File | Description |
+|------|-------------|
+| `dns_a_record.sh` | DNS response with an A record |
+| `dns_nxdomain.sh` | DNS NXDOMAIN response (domain not found) |
+
+### forward_class_callback/
+
+| File | Description |
+|------|-------------|
+| `forward_class_callback.sh` | Forward requests using a Java class callback |
+
+### grpc_stream/
+
+| File | Description |
+|------|-------------|
+| `grpc_stream_response.sh` | gRPC server-streaming response with delayed messages |
+| `grpc_stream_error.sh` | gRPC error response (UNAVAILABLE) with connection close |
+
 ### openapi/
 
 | File | Description |

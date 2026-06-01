@@ -1,0 +1,17 @@
+{
+  "httpRequest": {
+    "path": "/ws/chat"
+  },
+  "httpWebSocketResponse": {
+    "subprotocol": "chat",
+    "messages": [
+      {
+        "text": "welcome to the chat"
+      },
+      {
+        "text": "you are now connected"
+      }
+    ],
+    "closeConnection": false
+  }
+}

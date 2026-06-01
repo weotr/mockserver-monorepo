@@ -240,6 +240,57 @@ client.when(
             .withMessage("{\"greeting\": \"Hello Charlie\"}", delay(MILLISECONDS, 200))
     );</code></pre>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+    <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, KeyToMultiValue, GrpcStreamResponse, GrpcStreamMessage, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest(
+        method="POST",
+        path="/com.example.grpc.GreetingService/ListGreetings",
+        headers=[
+            KeyToMultiValue(name="x-grpc-service", values=["com.example.grpc.GreetingService"]),
+            KeyToMultiValue(name="x-grpc-method", values=["ListGreetings"])
+        ]
+    )
+).respond_with_grpc_stream(
+    GrpcStreamResponse(
+        status_name="OK",
+        messages=[
+            GrpcStreamMessage(json='{"greeting": "Hello Alice"}'),
+            GrpcStreamMessage(json='{"greeting": "Hello Bob"}', delay=Delay(time_unit="MILLISECONDS", value=100)),
+            GrpcStreamMessage(json='{"greeting": "Hello Charlie"}', delay=Delay(time_unit="MILLISECONDS", value=200))
+        ]
+    )
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+  HttpRequest.new(
+    method: 'POST',
+    path: '/com.example.grpc.GreetingService/ListGreetings',
+    headers: [
+      KeyToMultiValue.new(name: 'x-grpc-service', values: ['com.example.grpc.GreetingService']),
+      KeyToMultiValue.new(name: 'x-grpc-method', values: ['ListGreetings'])
+    ]
+  )
+).respond_with_grpc_stream(
+  GrpcStreamResponse.new(
+    status_name: 'OK',
+    messages: [
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Alice"}'),
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Bob"}', delay: Delay.new(time_unit: 'MILLISECONDS', value: 100)),
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Charlie"}', delay: Delay.new(time_unit: 'MILLISECONDS', value: 200))
+    ]
+  )
+)</code></pre>
+    </div>
 </div>
 
 <a id="client_streaming_rpc" class="anchor" href="#client_streaming_rpc">&nbsp;</a>
