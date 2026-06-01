@@ -92,15 +92,27 @@ The `DashboardWebSocketHandler` implements both `MockServerLogListener` and `Moc
 
 ## Top-Level Views
 
-The dashboard has **seven top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Chaos**, and **Metrics**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics'`.
+The dashboard has **nine top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Chaos**, **Drift**, **Metrics**, and **MCP Tools**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'`.
 
-The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Chaos, and Metrics.
+The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Chaos, Drift, Metrics, and MCP Tools.
+
+| View | Component | Description |
+|------|-----------|-------------|
+| `dashboard` | `DashboardGrid.tsx` | 2×2 grid of Log Messages, Active Expectations, Received Requests, Proxied Requests panels |
+| `traffic` | `TrafficInspector.tsx` | Full-width master/detail list of all captured traffic (mock-matched + proxied) |
+| `sessions` | `SessionInspector.tsx` | Swim-lane grouped view of isolated LLM conversation sessions |
+| `composer` | `ComposerView.tsx` | Unified expectation creator/editor for Standard HTTP and LLM Conversation expectations |
+| `library` | `LibraryView.tsx` | Fixture cassettes, run comparison, and export (HAR / OpenAPI / Postman / Bruno) |
+| `chaos` | `ServiceChaosPanel.tsx` | Service-scoped HTTP chaos registration, live TTL countdown, and clear-all |
+| `drift` | `DriftPanel.tsx` | Mock drift detection results: divergence records between forwarded responses and stub expectations |
+| `metrics` | `MetricsView.tsx` | Prometheus metrics polling: request counters, latency percentiles, JVM stats, chaos gauges |
+| `mcp-tools` | `McpToolsPanel.tsx` | Interactive MCP tool explorer for MockServer's own `/mockserver/mcp` control-plane tools |
 
 ```mermaid
 graph TB
     APP["App.tsx"]
     AB["AppBar.tsx
-6-button toggle strip"]
+9-button toggle strip"]
     FP["FilterPanel.tsx
 (dashboard, traffic, sessions only)"]
     DG["DashboardGrid.tsx
@@ -113,8 +125,14 @@ graph TB
 (view = 'composer')"]
     LV["LibraryView.tsx
 (view = 'library')"]
+    SCP["ServiceChaosPanel.tsx
+(view = 'chaos')"]
+    DP["DriftPanel.tsx
+(view = 'drift')"]
     MV["MetricsView.tsx
 (view = 'metrics')"]
+    MTP["McpToolsPanel.tsx
+(view = 'mcp-tools')"]
 
     APP --> AB
     APP --> FP
@@ -124,7 +142,10 @@ graph TB
     APP -->|view = sessions| SI
     APP -->|view = composer| CV
     APP -->|view = library| LV
+    APP -->|view = chaos| SCP
+    APP -->|view = drift| DP
     APP -->|view = metrics| MV
+    APP -->|view = mcp-tools| MTP
 ```
 
 ## Metrics View
@@ -316,7 +337,7 @@ Prior to this, any UI feature that called an MCP tool was broken with a session-
 
 ## AppBar Styling
 
-The AppBar renders the five toggle buttons (Dashboard / Traffic / Sessions / Composer / Library) as a `ToggleButtonGroup`. The HAR download lives in Library → Export rather than as a top-bar icon.
+The AppBar renders the nine toggle buttons (Dashboard / Traffic / Sessions / Composer / Library / Chaos / Drift / Metrics / MCP Tools) as a `ToggleButtonGroup`. The HAR download lives in Library → Export rather than as a top-bar icon.
 
 **Light mode**: toggle buttons use `primary.contrastText` (white) text with a translucent white border (`rgba(255,255,255,0.3)`) and a translucent-white selected state. The status chip uses pale colour tints (`#7fffa0` connected, `#ffd180` connecting, `#ff8a80` error) so colour semantics remain readable against the blue AppBar background.
 
@@ -353,7 +374,7 @@ The AppBar renders the five toggle buttons (Dashboard / Traffic / Sessions / Com
   receivedSearch: '',
   proxiedSearch: '',
   trafficSearch: '',
-  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library'
+  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'
   selectedTrafficIndex: null,
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -382,7 +403,7 @@ graph TB
 Orchestrator: theme, WebSocket, shortcuts"]
     AB["AppBar.tsx
 Title bar: status, theme, clear menu
-5-button view toggle"]
+9-button view toggle"]
     FP["FilterPanel.tsx
 Collapsible request filter form"]
     DG["DashboardGrid.tsx
@@ -462,7 +483,7 @@ Expandable match failure reasons"]
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 5-button view toggle |
+| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 9-button view toggle |
 | `FilterPanel` | `FilterPanel.tsx` | Collapsible request filter form (method, path, headers, query params, cookies) with debounced WebSocket send; shown on dashboard/traffic/sessions |
 | `DashboardGrid` | `DashboardGrid.tsx` | 2×2 CSS grid layout for the four panels |
 | `TrafficInspector` | `TrafficInspector.tsx` | Full-width master list + adaptive detail pane for all captured traffic (mock-matched + proxied) |

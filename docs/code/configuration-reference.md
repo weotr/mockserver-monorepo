@@ -34,14 +34,14 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 
 ## Property categories
 
-`mockserver.example.properties` groups the 49 properties into these blocks (in file order):
+`mockserver.example.properties` groups the core properties into blocks. `ConfigurationProperties.java` defines the full set — there are currently **143 properties** (one `private static final String MOCKSERVER_*` key constant per property). The categories below cover both the blocks in the example file and the additional groups defined only in `ConfigurationProperties.java`:
 
-| Category | Examples |
-|----------|----------|
+| Category | Representative properties |
+|----------|--------------------------|
 | Ports & proxy | `serverPort`, `proxyRemoteHost`, `proxyRemotePort` |
-| Logging | `logLevel`, `disableSystemOut`, `detailedMatchFailures`, `compactLogFormat`, `metricsEnabled` |
+| Logging | `logLevel`, `disableSystemOut`, `detailedMatchFailures`, `compactLogFormat`, `metricsEnabled`, `slowRequestThresholdMillis` |
 | Memory usage | `maxExpectations`, `maxLogEntries`, `maxWebSocketExpectations`, `outputMemoryUsageCsv` |
-| HTTP behaviour | `nioEventLoopThreadCount`, `actionHandlerThreadCount`, `webSocketClientEventLoopThreadCount`, `clientNioEventLoopThreadCount` |
+| HTTP behaviour | `nioEventLoopThreadCount`, `actionHandlerThreadCount`, `webSocketClientEventLoopThreadCount`, `clientNioEventLoopThreadCount`, `streamingResponsesEnabled`, `maxStreamingCaptureBytes` |
 | Initialisation | `initializationClass`, `initializationJsonPath`, `persistExpectations`, `persistedExpectationsPath` |
 | CORS | `enableCORSForAPI`, `enableCORSForAllResponses`, `corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders`, `corsAllowCredentials` |
 | Proxy auth | `forwardHttpsProxy`, `forwardSocksProxy`, `proxyAuthenticationUsername`, `proxyAuthenticationPassword`, `proxyAuthenticationRealm` |
@@ -51,8 +51,16 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | mTLS | `tlsMutualAuthenticationRequired`, `tlsMutualAuthenticationCertificateChain` |
 | TLS outbound | `forwardProxyTLSX509CertificatesTrustManagerType`, `forwardProxyTLSCustomTrustX509Certificates`, `forwardProxyPrivateKey`, `forwardProxyCertificateChain` |
 | Protocol selection | `tlsProtocols`, `proactivelyInitialiseTLS`, `useBouncyCastleForKeyAndCertificateGeneration`, `useSemicolonAsQueryParameterSeparator` |
+| MCP | `mcpEnabled` |
+| WASM rules | `wasmEnabled`, `wasmMaxMemoryPages` |
+| gRPC | `grpcEnabled`, `grpcDescriptorDirectory`, `grpcProtoDirectory`, `grpcProtocPath` |
+| DNS | `dnsEnabled`, `dnsPort` |
+| HTTP/3 (QUIC) | `http3Port` |
+| Service mesh / xDS / transparent proxy | `transparentProxyEnabled`, `xdsEnabled`, `xdsPort` |
+| OpenTelemetry | `otelMetricsEnabled`, `otelTracesEnabled`, `otelEndpoint`, `otelMetricsExportIntervalSeconds`, `otelPropagateTraceContext`, `otelGenerateTraceId` |
+| Drift detection | `driftSemanticAnalysisEnabled`, `driftResponseTimeThresholdMs` |
 
-The example file is short enough to read end-to-end (≈220 lines). Reading it once is the quickest way to discover what's tunable.
+The example file documents the most commonly tuned properties (≈220 lines). For the complete list including newer subsystems, read `ConfigurationProperties.java` or the consumer reference page.
 
 ## Adding a property
 

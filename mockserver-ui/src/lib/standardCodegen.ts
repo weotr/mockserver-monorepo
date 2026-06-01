@@ -79,7 +79,17 @@ export interface StandardErrorState {
 
 export type SelectionSetMatchType = 'NORMALISED_STRING' | 'AST_EXACT' | 'AST_SUBSET';
 
-export type BodyMatcherType = 'string' | 'graphql' | 'binary';
+export type BodyMatcherType =
+  | 'string'
+  | 'graphql'
+  | 'binary'
+  | 'json-schema'
+  | 'json-path'
+  | 'xml'
+  | 'xml-schema'
+  | 'xpath'
+  | 'regex'
+  | 'parameters';
 
 export interface GraphQLMatcherOptions {
   selectionSetMatchType: SelectionSetMatchType;
@@ -217,6 +227,21 @@ export function buildExpectationJson(
         if (fields.length > 0) gqlBody['fields'] = fields;
       }
       httpRequest['body'] = gqlBody;
+    } else if (matcher.bodyMatcherType === 'json-schema') {
+      httpRequest['body'] = { type: 'JSON_SCHEMA', jsonSchema: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'json-path') {
+      httpRequest['body'] = { type: 'JSON_PATH', jsonPath: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'xml') {
+      httpRequest['body'] = { type: 'XML', xml: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'xml-schema') {
+      httpRequest['body'] = { type: 'XML_SCHEMA', xmlSchema: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'xpath') {
+      httpRequest['body'] = { type: 'XPATH', xpath: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'regex') {
+      httpRequest['body'] = { type: 'REGEX', regex: matcher.body.trim() };
+    } else if (matcher.bodyMatcherType === 'parameters') {
+      const params = parseKeyValueLines(matcher.body, '=');
+      httpRequest['body'] = { type: 'PARAMETERS', parameters: params ?? {} };
     } else {
       httpRequest['body'] = matcher.body;
     }
@@ -447,6 +472,26 @@ function matcherToJava(matcher: StandardMatcher): string {
         }
       }
       lines.push(`    .withBody(${gql})`);
+    } else if (matcher.bodyMatcherType === 'json-schema') {
+      lines.push(`    .withBody(jsonSchema("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'json-path') {
+      lines.push(`    .withBody(jsonPath("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'xml') {
+      lines.push(`    .withBody(xml("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'xml-schema') {
+      lines.push(`    .withBody(xmlSchema("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'xpath') {
+      lines.push(`    .withBody(xpath("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'regex') {
+      lines.push(`    .withBody(regex("${escapeJava(matcher.body.trim())}"))`);
+    } else if (matcher.bodyMatcherType === 'parameters') {
+      const params = parseKeyValueLines(matcher.body, '=');
+      if (params) {
+        const paramEntries = Object.entries(params)
+          .map(([k, vs]) => `param("${escapeJava(k)}", ${vs.map((v) => `"${escapeJava(v)}"`).join(', ')})`)
+          .join(', ');
+        lines.push(`    .withBody(params(${paramEntries}))`);
+      }
     } else {
       lines.push(`    .withBody("${escapeJava(matcher.body)}")`);
     }

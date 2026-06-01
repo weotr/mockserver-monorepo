@@ -1211,6 +1211,65 @@ llmMock("/v1/messages")
 
 <p>For multi-turn LLM conversations with stateful scenario progression, see the <a href="#llm_conversation_example">LLM Conversation</a> example in the <a href="#stateful_scenarios">Stateful Scenarios</a> section.</p>
 
+<a id="websocket_response_action" class="anchor" href="#websocket_response_action">&nbsp;</a>
+
+<h3>WebSocket Response</h3>
+
+<p>A <strong>WebSocket response action</strong> (<span class="inline_code">httpWebSocketResponse</span>) accepts an HTTP Upgrade request and turns the connection into a WebSocket session. Two modes are available:</p>
+
+<ul>
+    <li><strong>Server-push</strong> — a fixed sequence of messages sent to the client immediately after the handshake, defined in the <span class="inline_code">messages</span> array.</li>
+    <li><strong>Bidirectional</strong> — incoming WebSocket frames are matched against a list of <span class="inline_code">matchers</span>; the first matching entry triggers its own response sequence. Matchers are evaluated in order; first match wins.</li>
+</ul>
+
+<p>Both modes can be combined in a single expectation: MockServer sends any <span class="inline_code">messages</span> immediately after the upgrade, then waits for incoming frames and applies <span class="inline_code">matchers</span> for each one received.</p>
+
+<h4>Bidirectional Frame Matching</h4>
+
+<p>Each entry in the <span class="inline_code">matchers</span> array contains:</p>
+
+<ul>
+    <li><strong>frameType</strong> — the WebSocket frame type to match: <span class="inline_code">TEXT</span>, <span class="inline_code">BINARY</span>, <span class="inline_code">PING</span>, <span class="inline_code">PONG</span>, or <span class="inline_code">ANY</span> (matches any type).</li>
+    <li><strong>textMatcher</strong> — optional substring or exact string the text frame payload must contain. Omit to match all frames of the given <span class="inline_code">frameType</span>.</li>
+    <li><strong>responses</strong> — the sequence of messages to send back when this matcher fires. Each entry has a <span class="inline_code">text</span> field (and an optional <span class="inline_code">delay</span>).</li>
+</ul>
+
+<h4>JSON Definition Format</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/ws/chat"
+    },
+    "httpWebSocketResponse": {
+        "messages": [
+            {"text": "{\"type\": \"connected\"}"}
+        ],
+        "matchers": [
+            {
+                "frameType": "TEXT",
+                "textMatcher": "ping",
+                "responses": [
+                    {"text": "{\"type\": \"pong\"}"}
+                ]
+            },
+            {
+                "frameType": "TEXT",
+                "textMatcher": "subscribe",
+                "responses": [
+                    {"text": "{\"type\": \"ack\"}"},
+                    {"text": "{\"type\": \"data\", \"value\": 42}"}
+                ]
+            }
+        ],
+        "closeConnection": false
+    }
+}</code></pre>
+
+<p>In this example, MockServer sends <span class="inline_code">{"type": "connected"}</span> immediately after the WebSocket upgrade. If the client then sends a frame containing <span class="inline_code">ping</span>, MockServer replies with <span class="inline_code">{"type": "pong"}</span>. A frame containing <span class="inline_code">subscribe</span> triggers a two-message reply sequence. Frames that match no entry are silently ignored.</p>
+
+<p>Bidirectional WebSocket expectations are also autherable in the dashboard Composer — select <strong>WebSocket response</strong> as the action type and use the <strong>Bidirectional frame matchers</strong> panel to add entries.</p>
+
 <a id="crud_simulation" class="anchor" href="#crud_simulation">&nbsp;</a>
 
 <h3>CRUD Simulation</h3>

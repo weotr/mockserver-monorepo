@@ -14,7 +14,7 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [Netty Pipeline](code/netty-pipeline.md) | Medium | Port unification, protocol detection, channel handlers, MCP handler, relay pattern |
 | [Request Processing](code/request-processing.md) | Medium | Mock matching, proxy forwarding, action dispatch, WAR bridge |
 | [Event System](code/event-system.md) | Medium | LMAX Disruptor ring buffer, verification, persistence, observers |
-| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, five top-level views (Dashboard / Traffic / Sessions / Composer / Library), WebSocket communication, data assembly |
+| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, nine top-level views (Dashboard / Traffic / Sessions / Composer / Library / Chaos / Drift / Metrics / MCP Tools), WebSocket communication, data assembly |
 | [Domain Model](code/domain-model.md) | Low | Model hierarchy, matchers, codecs, OpenAPI support, configuration (incl. MCP) |
 | [TLS & Security](code/tls-and-security.md) | Low | BouncyCastle CA, SNI, mTLS, JWT auth, control plane security |
 | [Client & Integrations](code/client-and-integrations.md) | Low | MockServerClient, JUnit 4/5, Spring, WebSocket callbacks |
@@ -39,6 +39,7 @@ AWS accounts, CI/CD pipelines, container images, and Kubernetes deployment.
 | [CI/CD](infrastructure/ci-cd.md) | Buildkite pipelines and GitHub Actions workflows |
 | [Docker](infrastructure/docker.md) | Docker images, variants, multi-arch builds, and Compose examples |
 | [Helm & Kubernetes](infrastructure/helm.md) | Helm charts, deployment templates, and Kind-based testing |
+| [Service Mesh / Sidecar](infrastructure/service-mesh.md) | Transparent HTTP interception, xDS route discovery, and Kubernetes sidecar deployment |
 | [AWS SES Email Forwarding](infrastructure/aws-ses-email-forwarding.md) | SES catch-all email forwarding for mock-server.com |
 
 ### Operations
@@ -103,7 +104,7 @@ mockserver-monorepo/
 ├── scripts/                        # Build, deploy, and utility scripts
 └── docs/                           # This documentation (you are here)
     ├── code/                       #   Code architecture (14 docs)
-    ├── infrastructure/             #   AWS, CI/CD, Docker, Helm (5 docs)
+    ├── infrastructure/             #   AWS, CI/CD, Docker, Helm, Service Mesh (6 docs)
     ├── operations/                 #   Build, release, deps, security, website, perf (11 docs)
     ├── plans/                      #   Active plans and RFCs (3 docs)
     └── testing.md                  #   Test frameworks, architecture, config, coverage, CI

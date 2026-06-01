@@ -423,6 +423,108 @@ This feature is distinct from `GrpcHealthRegistry` — gRPC fault injection fire
 | `GET /mockserver/grpcChaos` | Read all active profiles and TTL countdowns |
 | `PATCH /mockserver/grpcChaos` | JSON Merge Patch a single service's profile (preserves TTL) |
 
+See [Service-scoped chaos REST API](#service-scoped-chaos-rest-api) below for the full request/response shapes, which are identical across all three endpoints (substituting `service` for the key field and `GrpcChaosProfile` fields in the `chaos` object).
+
+### Service-Scoped Chaos REST API
+
+Three parallel REST APIs expose service-scoped chaos registration — one for each protocol layer. All three follow the same request/response structure; the differences are the endpoint path, the key field name (`host` vs `service`), and the profile type (`HttpChaosProfile` vs `TcpChaosProfile` vs `GrpcChaosProfile`).
+
+| Protocol | Endpoints | Key field | Profile type |
+|----------|-----------|-----------|--------------|
+| HTTP | `PUT/GET/PATCH /mockserver/serviceChaos` | `host` | `HttpChaosProfile` (see profile fields in the consumer chaos docs) |
+| TCP | `PUT/GET/PATCH /mockserver/tcpChaos` | `host` | `TcpChaosProfile` |
+| gRPC | `PUT/GET/PATCH /mockserver/grpcChaos` | `service` | `GrpcChaosProfile` (fields documented above) |
+
+#### PUT — register, remove, or clear
+
+Request body shapes (all fields except `clear`/`host`/`service` are optional):
+
+**Register or replace a profile** — sets or replaces the chaos profile for a single host/service:
+
+```json
+{
+  "host": "payments.internal:8080",
+  "chaos": { "errorStatus": 503, "errorProbability": 0.3 },
+  "ttlMillis": 60000
+}
+```
+
+- `ttlMillis` (optional, `>= 1`) — auto-reverts the registration after this many milliseconds. When the TTL expires the profile is removed and the host returns to normal behaviour.
+- Omitting `ttlMillis` registers the profile indefinitely.
+
+**Remove a single host** — omit `chaos` or supply `remove: true`:
+
+```json
+{ "host": "payments.internal:8080", "remove": true }
+```
+
+**Clear all registrations**:
+
+```json
+{ "clear": true }
+```
+
+`clear` and `host`/`service` are mutually exclusive.
+
+**Responses** — all 200 with a `status` field:
+
+| Scenario | Response body |
+|----------|--------------|
+| Registered | `{"status":"registered","host":"...","ttlMillis":60000}` (ttlMillis omitted when no TTL) |
+| Removed | `{"status":"removed","host":"..."}` |
+| Cleared | `{"status":"cleared"}` |
+| Error | 400 `{"error":"<message>"}` |
+
+#### GET — snapshot
+
+Returns all currently registered profiles. For `serviceChaos` the top-level key is `services`; for `tcpChaos` it is `hosts`. A `ttlRemainingMillis` map is included only when at least one TTL-bearing registration exists.
+
+`GET /mockserver/serviceChaos` example response:
+
+```json
+{
+  "services": {
+    "payments.internal:8080": { "errorStatus": 503, "errorProbability": 0.3 }
+  },
+  "ttlRemainingMillis": {
+    "payments.internal:8080": 42310
+  }
+}
+```
+
+`GET /mockserver/tcpChaos` uses `hosts` as the outer key instead of `services`.
+
+`GET /mockserver/grpcChaos` uses `services` and the keys are gRPC service names (e.g. `helloworld.Greeter`); an empty string key is the catch-all default profile.
+
+#### PATCH — merge-patch a single profile
+
+Only the fields present in the `chaos` object are updated; all other fields of the existing profile are preserved. The TTL on the existing registration is also preserved (the PATCH does not reset or remove it).
+
+Request body:
+
+```json
+{
+  "host": "payments.internal:8080",
+  "chaos": { "errorProbability": 0.5 }
+}
+```
+
+Both `host`/`service` and `chaos` are required. A missing key returns 400.
+
+Response body on success:
+
+```json
+{
+  "status": "patched",
+  "host": "payments.internal:8080",
+  "chaos": { "errorStatus": 503, "errorProbability": 0.5 }
+}
+```
+
+The `chaos` field in the response reflects the merged profile as serialised by the corresponding `*ChaosProfileDTO`.
+
+**Implementation references:** all nine handlers (`handleServiceChaosPut`, `handleServiceChaosPatch`, `handleServiceChaosGet`, `handleTcpChaosPut`, `handleTcpChaosPatch`, `handleTcpChaosGet`, `handleGrpcChaosPut`, `handleGrpcChaosPatch`, `handleGrpcChaosGet`) are in `mockserver/mockserver-core/src/main/java/org/mockserver/mock/HttpState.java` around lines 2070–2503.
+
 ### GraphQL-Semantic HTTP Chaos
 
 `HttpChaosProfile` carries four fields for injecting GraphQL-semantic errors into HTTP responses. These fields are part of the broader `HttpChaosProfile` model (documented on the consumer-facing chaos page) but are relevant here because they are specifically designed for testing GraphQL clients.

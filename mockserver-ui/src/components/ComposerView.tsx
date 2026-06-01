@@ -255,11 +255,18 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
                 bodyBinary: newType === 'binary',
               });
             }}
-            sx={{ width: 160 }}
+            sx={{ width: 190 }}
           >
             <MenuItem value="string">String / JSON</MenuItem>
             <MenuItem value="graphql">GraphQL</MenuItem>
             <MenuItem value="binary">Binary (base64)</MenuItem>
+            <MenuItem value="json-schema">JSON Schema</MenuItem>
+            <MenuItem value="json-path">JSON Path</MenuItem>
+            <MenuItem value="xml">XML</MenuItem>
+            <MenuItem value="xml-schema">XML Schema</MenuItem>
+            <MenuItem value="xpath">XPath</MenuItem>
+            <MenuItem value="regex">Regex</MenuItem>
+            <MenuItem value="parameters">Parameters</MenuItem>
           </TextField>
         </Box>
         <TextField
@@ -268,11 +275,25 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
               ? 'Body matcher (base64 bytes)'
               : matcher.bodyMatcherType === 'graphql'
                 ? 'GraphQL query'
-                : 'Body matcher (string or JSON)'
+                : matcher.bodyMatcherType === 'json-schema'
+                  ? 'JSON Schema'
+                  : matcher.bodyMatcherType === 'json-path'
+                    ? 'JSON Path expression'
+                    : matcher.bodyMatcherType === 'xml'
+                      ? 'XML body'
+                      : matcher.bodyMatcherType === 'xml-schema'
+                        ? 'XML Schema (XSD)'
+                        : matcher.bodyMatcherType === 'xpath'
+                          ? 'XPath expression'
+                          : matcher.bodyMatcherType === 'regex'
+                            ? 'Regex pattern'
+                            : matcher.bodyMatcherType === 'parameters'
+                              ? 'Parameters (key=value per line)'
+                              : 'Body matcher (string or JSON)'
           }
           fullWidth
           multiline
-          minRows={2}
+          minRows={matcher.bodyMatcherType === 'json-path' || matcher.bodyMatcherType === 'xpath' || matcher.bodyMatcherType === 'regex' ? 1 : 2}
           maxRows={10}
           value={matcher.body}
           onChange={(e) => setMatcher({ ...matcher, body: e.target.value })}
@@ -281,7 +302,21 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
               ? 'SGVsbG8sIFdvcmxkIQ=='
               : matcher.bodyMatcherType === 'graphql'
                 ? '{ hero { name } }'
-                : 'e.g. {"foo":"bar"}'
+                : matcher.bodyMatcherType === 'json-schema'
+                  ? '{"type":"object","properties":{"name":{"type":"string"}}}'
+                  : matcher.bodyMatcherType === 'json-path'
+                    ? '$.store.book[0].title'
+                    : matcher.bodyMatcherType === 'xml'
+                      ? '<root><element>value</element></root>'
+                      : matcher.bodyMatcherType === 'xml-schema'
+                        ? '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">...</xs:schema>'
+                        : matcher.bodyMatcherType === 'xpath'
+                          ? '/root/element[@attr="value"]'
+                          : matcher.bodyMatcherType === 'regex'
+                            ? '^Hello.*World$'
+                            : matcher.bodyMatcherType === 'parameters'
+                              ? 'username=admin\npassword=secret'
+                              : 'e.g. {"foo":"bar"}'
           }
           slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
         />
@@ -412,6 +447,37 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
       if (Array.isArray(b['fields'])) {
         graphqlOptions.fields = (b['fields'] as string[]).join(', ');
       }
+    } else if (b['type'] === 'JSON_SCHEMA' && typeof b['jsonSchema'] === 'string') {
+      bodyText = b['jsonSchema'] as string;
+      bodyMatcherType = 'json-schema';
+    } else if (b['type'] === 'JSON_PATH' && typeof b['jsonPath'] === 'string') {
+      bodyText = b['jsonPath'] as string;
+      bodyMatcherType = 'json-path';
+    } else if (b['type'] === 'XML' && typeof b['xml'] === 'string') {
+      bodyText = b['xml'] as string;
+      bodyMatcherType = 'xml';
+    } else if (b['type'] === 'XML_SCHEMA' && typeof b['xmlSchema'] === 'string') {
+      bodyText = b['xmlSchema'] as string;
+      bodyMatcherType = 'xml-schema';
+    } else if (b['type'] === 'XPATH' && typeof b['xpath'] === 'string') {
+      bodyText = b['xpath'] as string;
+      bodyMatcherType = 'xpath';
+    } else if (b['type'] === 'REGEX' && typeof b['regex'] === 'string') {
+      bodyText = b['regex'] as string;
+      bodyMatcherType = 'regex';
+    } else if (b['type'] === 'PARAMETERS' && b['parameters'] != null && typeof b['parameters'] === 'object') {
+      // Round-trip parameters back to key=value lines
+      const params = b['parameters'] as Record<string, unknown>;
+      const lines: string[] = [];
+      for (const [k, v] of Object.entries(params)) {
+        if (Array.isArray(v)) {
+          for (const vv of v as unknown[]) lines.push(`${k}=${String(vv)}`);
+        } else {
+          lines.push(`${k}=${String(v)}`);
+        }
+      }
+      bodyText = lines.join('\n');
+      bodyMatcherType = 'parameters';
     } else if (typeof b['string'] === 'string') {
       bodyText = b['string'];
     } else if (b['json'] != null) {
