@@ -85,7 +85,8 @@ public class McpToolRegistryTest {
         assertThat(tools.containsKey("verify_structured_output"), is(true));
         assertThat(tools.containsKey("verify_cost_budget"), is(true));
         assertThat(tools.containsKey("manage_service_chaos"), is(true));
-        assertThat(tools.size(), is(32));
+        assertThat(tools.containsKey("list_mock_tools"), is(true));
+        assertThat(tools.size(), is(33));
     }
 
     @Test
@@ -1992,5 +1993,25 @@ public class McpToolRegistryTest {
         JsonNode result = toolRegistry.callTool("create_expectation", params);
         assertThat(result.path("error").asBoolean(), is(true));
         assertThat(result.path("message").asText(), is("chaos latency timeUnit must be one of: NANOSECONDS, MICROSECONDS, MILLISECONDS, SECONDS, MINUTES, HOURS, DAYS"));
+    }
+
+    @Test
+    public void shouldGenerateMcpToolsFromMockExpectations() {
+        assertThat(toolRegistry.getTools().containsKey("list_mock_tools"), is(true));
+
+        ObjectNode createParams = objectMapper.createObjectNode();
+        createParams.put("method", "GET");
+        createParams.put("path", "/users");
+        createParams.put("statusCode", 200);
+        toolRegistry.callTool("create_expectation", createParams);
+
+        JsonNode result = toolRegistry.callTool("list_mock_tools", objectMapper.createObjectNode());
+
+        assertThat(result.path("count").asInt(), is(1));
+        JsonNode tool = result.path("tools").get(0);
+        assertThat(tool.path("name").asText(), is("get_users"));
+        assertThat(tool.path("description").asText(), is("Mock for GET /users"));
+        assertThat(tool.at("/_mockserver/method").asText(), is("GET"));
+        assertThat(tool.at("/_mockserver/path").asText(), is("/users"));
     }
 }

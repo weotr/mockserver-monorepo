@@ -31,6 +31,7 @@ import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
+import org.mockserver.mock.mcp.McpToolSchemaGenerator;
 import org.mockserver.mock.OpenAPIExpectation;
 import org.mockserver.model.*;
 import org.mockserver.openapi.OpenApiContractTest;
@@ -70,6 +71,7 @@ public class McpToolRegistry {
     private final Map<String, ToolDefinition> tools;
     private ExpectationSerializer expectationSerializer;
     private RequestDefinitionSerializer requestDefinitionSerializer;
+    private final McpToolSchemaGenerator mcpToolSchemaGenerator = new McpToolSchemaGenerator();
 
     public McpToolRegistry(HttpState httpState, LifeCycle server) {
         this.httpState = httpState;
@@ -139,6 +141,33 @@ public class McpToolRegistry {
         registerExplainAgentRun();
         registerDetectLlmDrift();
         registerMockAdversarialLlmResponse();
+        registerListMockTools();
+    }
+
+    private void registerListMockTools() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        schema.putObject("properties");
+
+        tools.put("list_mock_tools", new ToolDefinition(
+            "list_mock_tools",
+            "Generates Model Context Protocol tool definitions from the current mock expectations, so an agent can discover the mocked endpoints as callable tools. Each response expectation becomes one tool (name derived from method and path, inputSchema for query parameters and request body, plus a _mockserver annotation with the target method/path).",
+            schema,
+            this::handleListMockTools
+        ));
+    }
+
+    private JsonNode handleListMockTools(JsonNode params) {
+        try {
+            ArrayNode generated = mcpToolSchemaGenerator
+                .generate(httpState.getRequestMatchers().retrieveActiveExpectations(null));
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.set("tools", generated);
+            resultNode.put("count", generated.size());
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to generate mock tools", e);
+        }
     }
 
     private void registerCreateExpectation() {
