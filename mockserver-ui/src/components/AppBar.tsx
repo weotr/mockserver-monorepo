@@ -46,6 +46,7 @@ import {
   type MockServerMode,
 } from '../lib/mockServerMode';
 import WsdlImportDialog from './WsdlImportDialog';
+import OpenApiImportDialog from './OpenApiImportDialog';
 import PactExportDialog from './PactExportDialog';
 
 function statusColor(status: ConnectionStatus): 'success' | 'warning' | 'error' | 'default' {
@@ -104,6 +105,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [mode, setModeState] = useState<MockServerMode | null>(null);
   const [toolsAnchorEl, setToolsAnchorEl] = useState<null | HTMLElement>(null);
   const [wsdlOpen, setWsdlOpen] = useState(false);
+  const [openApiOpen, setOpenApiOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
 
@@ -315,6 +317,15 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         >
           <MenuItem
             onClick={() => {
+              setOpenApiOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><UploadFileIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Import OpenAPI…</ListItemText>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
               setWsdlOpen(true);
               setToolsAnchorEl(null);
             }}
@@ -332,6 +343,11 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             <ListItemText>Export Pact…</ListItemText>
           </MenuItem>
         </Menu>
+        <OpenApiImportDialog
+          open={openApiOpen}
+          onClose={() => setOpenApiOpen(false)}
+          connectionParams={connectionParams}
+        />
         <WsdlImportDialog
           open={wsdlOpen}
           onClose={() => setWsdlOpen(false)}
