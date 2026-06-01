@@ -77,6 +77,13 @@ interface FormState {
   dropProbability: string;
   latencyMs: string;
   ttlMs: string;
+  seed: string;
+  succeedFirst: string;
+  failRequestCount: string;
+  graphqlErrors: boolean;
+  graphqlErrorMessage: string;
+  graphqlErrorCode: string;
+  graphqlNullifyData: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -86,6 +93,13 @@ const EMPTY_FORM: FormState = {
   dropProbability: '',
   latencyMs: '',
   ttlMs: '',
+  seed: '',
+  succeedFirst: '',
+  failRequestCount: '',
+  graphqlErrors: false,
+  graphqlErrorMessage: '',
+  graphqlErrorCode: '',
+  graphqlNullifyData: true,
 };
 
 /** Parse a trimmed numeric field, or undefined when blank. NaN is treated as undefined. */
@@ -110,6 +124,18 @@ function buildChaosProfile(form: FormState): HttpChaosProfileDTO {
   if (dropProbability != null) profile.dropConnectionProbability = dropProbability;
   const latencyMs = num(form.latencyMs);
   if (latencyMs != null) profile.latency = { timeUnit: 'MILLISECONDS', value: latencyMs };
+  const seed = num(form.seed);
+  if (seed != null) profile.seed = seed;
+  const succeedFirst = num(form.succeedFirst);
+  if (succeedFirst != null) profile.succeedFirst = succeedFirst;
+  const failRequestCount = num(form.failRequestCount);
+  if (failRequestCount != null) profile.failRequestCount = failRequestCount;
+  if (form.graphqlErrors) {
+    profile.graphqlErrors = true;
+    if (form.graphqlErrorMessage.trim()) profile.graphqlErrorMessage = form.graphqlErrorMessage.trim();
+    if (form.graphqlErrorCode.trim()) profile.graphqlErrorCode = form.graphqlErrorCode.trim();
+    if (form.graphqlNullifyData) profile.graphqlNullifyData = true;
+  }
   return profile;
 }
 
@@ -130,9 +156,20 @@ function validateForm(form: FormState): string | null {
   const latencyMs = num(form.latencyMs);
   if (latencyMs != null && latencyMs < 0) return 'Latency must be 0 or greater';
   const ttl = num(form.ttlMs);
-  if (ttl != null && (!Number.isInteger(ttl) || ttl < 1)) return 'TTL must be a whole number of milliseconds ≥ 1';
+  if (ttl != null && (!Number.isInteger(ttl) || ttl < 1)) return 'TTL must be a whole number of milliseconds >= 1';
+  const succeedFirst = num(form.succeedFirst);
+  if (succeedFirst != null && (!Number.isInteger(succeedFirst) || succeedFirst < 0)) return 'Succeed first must be a whole number >= 0';
+  const failRequestCount = num(form.failRequestCount);
+  if (failRequestCount != null && (!Number.isInteger(failRequestCount) || failRequestCount < 1)) return 'Fail request count must be a whole number >= 1';
+  // GraphQL-semantic validation: if sub-fields are set, graphqlErrors must be on
+  if ((form.graphqlErrorMessage.trim() || form.graphqlErrorCode.trim() || form.graphqlNullifyData) && !form.graphqlErrors) {
+    // Only flag if the user actively set message/code — nullifyData defaults to true
+    if (form.graphqlErrorMessage.trim() || form.graphqlErrorCode.trim()) {
+      return 'GraphQL error message/code requires GraphQL errors to be enabled';
+    }
+  }
   if (summarizeChaosProfile(buildChaosProfile(form)).length === 0) {
-    return 'Set at least one fault (error status, drop, or latency)';
+    return 'Set at least one fault (error status, drop, latency, or GraphQL error)';
   }
   return null;
 }
@@ -142,6 +179,13 @@ interface EditFormState {
   errorProbability: string;
   dropProbability: string;
   latencyMs: string;
+  seed: string;
+  succeedFirst: string;
+  failRequestCount: string;
+  graphqlErrors: boolean;
+  graphqlErrorMessage: string;
+  graphqlErrorCode: string;
+  graphqlNullifyData: boolean;
 }
 
 // --- TCP chaos form state ---
@@ -215,37 +259,82 @@ interface GrpcChaosFormState {
   service: string;
   errorStatusCode: string;
   errorProbability: string;
+  errorMessage: string;
+  seed: string;
   latencyMs: string;
+  succeedFirst: string;
+  failRequestCount: string;
   quotaName: string;
   quotaLimit: string;
   quotaWindowMillis: string;
   ttlMs: string;
+  omitGrpcStatus: boolean;
+  corruptGrpcStatus: boolean;
+  customTrailers: string;
+  abortAfterMessages: string;
 }
 
 const EMPTY_GRPC_CHAOS_FORM: GrpcChaosFormState = {
   service: '',
   errorStatusCode: 'UNAVAILABLE',
   errorProbability: '',
+  errorMessage: '',
+  seed: '',
   latencyMs: '',
+  succeedFirst: '',
+  failRequestCount: '',
   quotaName: '',
   quotaLimit: '',
   quotaWindowMillis: '',
   ttlMs: '',
+  omitGrpcStatus: false,
+  corruptGrpcStatus: false,
+  customTrailers: '',
+  abortAfterMessages: '',
 };
+
+/** Parse "key=value" per line into a Record, ignoring blank/invalid lines. */
+function parseCustomTrailers(raw: string): Record<string, string> | undefined {
+  const lines = raw.split('\n').filter((l) => l.trim());
+  if (lines.length === 0) return undefined;
+  const result: Record<string, string> = {};
+  for (const line of lines) {
+    const eqIdx = line.indexOf('=');
+    if (eqIdx < 1) continue;
+    const key = line.slice(0, eqIdx).trim();
+    const value = line.slice(eqIdx + 1).trim();
+    if (key) result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
 
 function buildGrpcChaosProfile(form: GrpcChaosFormState): GrpcChaosProfileDTO {
   const profile: GrpcChaosProfileDTO = {};
   if (form.errorStatusCode) profile.errorStatusCode = form.errorStatusCode;
   const errorProbability = num(form.errorProbability);
   if (errorProbability != null) profile.errorProbability = errorProbability;
+  const errorMessage = form.errorMessage.trim();
+  if (errorMessage) profile.errorMessage = errorMessage;
+  const seed = num(form.seed);
+  if (seed != null) profile.seed = seed;
   const latencyMs = num(form.latencyMs);
   if (latencyMs != null) profile.latencyMs = latencyMs;
+  const succeedFirst = num(form.succeedFirst);
+  if (succeedFirst != null) profile.succeedFirst = succeedFirst;
+  const failRequestCount = num(form.failRequestCount);
+  if (failRequestCount != null) profile.failRequestCount = failRequestCount;
   const quotaName = form.quotaName.trim();
   if (quotaName) profile.quotaName = quotaName;
   const quotaLimit = num(form.quotaLimit);
   if (quotaLimit != null) profile.quotaLimit = quotaLimit;
   const quotaWindowMillis = num(form.quotaWindowMillis);
   if (quotaWindowMillis != null) profile.quotaWindowMillis = quotaWindowMillis;
+  if (form.omitGrpcStatus) profile.omitGrpcStatus = true;
+  if (form.corruptGrpcStatus) profile.corruptGrpcStatus = true;
+  const trailers = parseCustomTrailers(form.customTrailers);
+  if (trailers) profile.customTrailers = trailers;
+  const abortAfterMessages = num(form.abortAfterMessages);
+  if (abortAfterMessages != null) profile.abortAfterMessages = abortAfterMessages;
   return profile;
 }
 
@@ -253,7 +342,7 @@ function validateGrpcChaosForm(form: GrpcChaosFormState): string | null {
   if (form.service.trim() === '') return 'Service is required';
   const profile = buildGrpcChaosProfile(form);
   if (summarizeGrpcChaosProfile(profile).length === 0) {
-    return 'Set at least one fault (error code, latency, or quota)';
+    return 'Set at least one fault (error code, latency, quota, or streaming fault)';
   }
   const ep = num(form.errorProbability);
   if (ep != null && (ep < 0 || ep > 1)) return 'Error probability must be between 0 and 1';
@@ -261,6 +350,12 @@ function validateGrpcChaosForm(form: GrpcChaosFormState): string | null {
   if (latencyMs != null && latencyMs < 0) return 'Latency must be 0 or greater';
   const ttl = num(form.ttlMs);
   if (ttl != null && (!Number.isInteger(ttl) || ttl < 1)) return 'TTL must be a whole number of milliseconds >= 1';
+  const succeedFirst = num(form.succeedFirst);
+  if (succeedFirst != null && (!Number.isInteger(succeedFirst) || succeedFirst < 0)) return 'Succeed first must be a whole number >= 0';
+  const failRequestCount = num(form.failRequestCount);
+  if (failRequestCount != null && (!Number.isInteger(failRequestCount) || failRequestCount < 1)) return 'Fail request count must be a whole number >= 1';
+  const abortAfterMessages = num(form.abortAfterMessages);
+  if (abortAfterMessages != null && (!Number.isInteger(abortAfterMessages) || abortAfterMessages < 1)) return 'Abort after messages must be a whole number >= 1';
   return null;
 }
 
@@ -285,15 +380,25 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
 
   // Edit inline form state
   const [editingHost, setEditingHost] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<EditFormState>({ errorStatus: '', errorProbability: '', dropProbability: '', latencyMs: '' });
+  const [editForm, setEditForm] = useState<EditFormState>({
+    errorStatus: '', errorProbability: '', dropProbability: '', latencyMs: '',
+    seed: '', succeedFirst: '', failRequestCount: '',
+    graphqlErrors: false, graphqlErrorMessage: '', graphqlErrorCode: '', graphqlNullifyData: true,
+  });
 
-  // HTTP service chaos section expand state (the primary section — open by default,
+  // HTTP service chaos section expand state (the primary section -- open by default,
   // but collapsible for consistency with the gRPC and TCP sections).
   const [httpExpanded, setHttpExpanded] = useState(true);
 
+  // gRPC combined panel expand state
+  const [grpcPanelExpanded, setGrpcPanelExpanded] = useState(false);
+  // gRPC health sub-section expand state
+  const [grpcHealthExpanded, setGrpcHealthExpanded] = useState(false);
+  // gRPC fault injection sub-section expand state
+  const [grpcFaultExpanded, setGrpcFaultExpanded] = useState(false);
+
   // gRPC health state
   const [grpcHealth, setGrpcHealthState] = useState<Record<string, ServingStatus>>({});
-  const [grpcExpanded, setGrpcExpanded] = useState(false);
   const [grpcNewService, setGrpcNewService] = useState('');
   const [grpcNewStatus, setGrpcNewStatus] = useState<ServingStatus>('NOT_SERVING');
 
@@ -303,7 +408,6 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [tcpForm, setTcpForm] = useState<TcpFormState>(EMPTY_TCP_FORM);
 
   // gRPC fault injection chaos state
-  const [grpcChaosExpanded, setGrpcChaosExpanded] = useState(false);
   const [grpcChaosData, setGrpcChaosData] = useState<GrpcChaosResponse>({ services: {} });
   const [grpcChaosForm, setGrpcChaosForm] = useState<GrpcChaosFormState>(EMPTY_GRPC_CHAOS_FORM);
 
@@ -345,7 +449,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   }, []);
 
   // Fetch gRPC health on mount (so the collapsed header chip shows the real count),
-  // then keep polling only while the section is expanded.
+  // then keep polling only while the gRPC panel + health sub-section are expanded.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -358,7 +462,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       } catch {
         // ignore
       } finally {
-        if (!cancelled && grpcExpanded) timer = setTimeout(() => void poll(), 10000);
+        if (!cancelled && grpcPanelExpanded && grpcHealthExpanded) timer = setTimeout(() => void poll(), 10000);
       }
     }
 
@@ -368,7 +472,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [connectionParams, grpcExpanded, refreshTick]);
+  }, [connectionParams, grpcPanelExpanded, grpcHealthExpanded, refreshTick]);
 
   // Fetch TCP chaos on mount (so the collapsed header chip shows the real count),
   // then keep polling only while the section is expanded.
@@ -397,7 +501,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   }, [connectionParams, tcpExpanded, refreshTick]);
 
   // Fetch gRPC fault injection chaos on mount (so the collapsed header chip shows the real count),
-  // then keep polling only while the section is expanded.
+  // then keep polling only while the gRPC panel + fault sub-section are expanded.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -410,7 +514,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       } catch {
         // ignore
       } finally {
-        if (!cancelled && grpcChaosExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (!cancelled && grpcPanelExpanded && grpcFaultExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
       }
     }
 
@@ -420,7 +524,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [connectionParams, grpcChaosExpanded, refreshTick]);
+  }, [connectionParams, grpcPanelExpanded, grpcFaultExpanded, refreshTick]);
 
   const hosts = useMemo(() => Object.keys(data.services).sort(), [data.services]);
 
@@ -465,6 +569,9 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const setField = (field: keyof FormState) => (e: ChangeEvent<HTMLInputElement>) =>
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
+  const setFormToggle = (field: keyof FormState) => (_e: ChangeEvent<HTMLInputElement>, checked: boolean) =>
+    setForm((prev) => ({ ...prev, [field]: checked }));
+
   const handleStartEdit = useCallback((host: string) => {
     const profile = data.services[host] ?? {};
     setEditForm({
@@ -472,6 +579,13 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       errorProbability: profile.errorProbability != null ? String(profile.errorProbability) : '',
       dropProbability: profile.dropConnectionProbability != null ? String(profile.dropConnectionProbability) : '',
       latencyMs: profile.latency?.value != null ? String(profile.latency.value) : '',
+      seed: profile.seed != null ? String(profile.seed) : '',
+      succeedFirst: profile.succeedFirst != null ? String(profile.succeedFirst) : '',
+      failRequestCount: profile.failRequestCount != null ? String(profile.failRequestCount) : '',
+      graphqlErrors: profile.graphqlErrors ?? false,
+      graphqlErrorMessage: profile.graphqlErrorMessage ?? '',
+      graphqlErrorCode: profile.graphqlErrorCode ?? '',
+      graphqlNullifyData: profile.graphqlNullifyData ?? true,
     });
     setEditingHost(host);
   }, [data.services]);
@@ -493,6 +607,18 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     if (dp != null) partial.dropConnectionProbability = dp;
     const lm = num(editForm.latencyMs);
     if (lm != null) partial.latency = { timeUnit: 'MILLISECONDS', value: lm };
+    const seed = num(editForm.seed);
+    if (seed != null) partial.seed = seed;
+    const succeedFirst = num(editForm.succeedFirst);
+    if (succeedFirst != null) partial.succeedFirst = succeedFirst;
+    const failRequestCount = num(editForm.failRequestCount);
+    if (failRequestCount != null) partial.failRequestCount = failRequestCount;
+    if (editForm.graphqlErrors) {
+      partial.graphqlErrors = true;
+      if (editForm.graphqlErrorMessage.trim()) partial.graphqlErrorMessage = editForm.graphqlErrorMessage.trim();
+      if (editForm.graphqlErrorCode.trim()) partial.graphqlErrorCode = editForm.graphqlErrorCode.trim();
+      if (editForm.graphqlNullifyData) partial.graphqlNullifyData = true;
+    }
 
     const host = editingHost;
     void runAction(async () => {
@@ -503,6 +629,9 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
 
   const setEditField = (field: keyof EditFormState) => (e: ChangeEvent<HTMLInputElement>) =>
     setEditForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const setEditToggle = (field: keyof EditFormState) => (_e: ChangeEvent<HTMLInputElement>, checked: boolean) =>
+    setEditForm((prev) => ({ ...prev, [field]: checked }));
 
   const handleSetGrpcHealth = useCallback(() => {
     if (!grpcNewService.trim()) return;
@@ -561,8 +690,11 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     return Math.max(0, atPoll - (now - polledAt));
   };
 
-  const setGrpcChaosField = (field: keyof GrpcChaosFormState) => (e: ChangeEvent<HTMLInputElement>) =>
+  const setGrpcChaosField = (field: keyof GrpcChaosFormState) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setGrpcChaosForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const setGrpcChaosToggle = (field: keyof GrpcChaosFormState) => (_e: ChangeEvent<HTMLInputElement>, checked: boolean) =>
+    setGrpcChaosForm((prev) => ({ ...prev, [field]: checked }));
 
   const handleRegisterGrpcChaos = useCallback(() => {
     const validationError = validateGrpcChaosForm(grpcChaosForm);
@@ -578,6 +710,9 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       setGrpcChaosForm(EMPTY_GRPC_CHAOS_FORM);
     });
   }, [connectionParams, grpcChaosForm, runAction]);
+
+  // Combined gRPC active count (health overrides + fault injection services)
+  const grpcCombinedActiveCount = grpcServices.length + grpcChaosServices.length;
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -656,7 +791,28 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                 <TextField size="small" label="Drop prob" placeholder="0.2" value={form.dropProbability} onChange={setField('dropProbability')} sx={{ width: 100 }} />
                 <TextField size="small" label="Latency ms" placeholder="250" value={form.latencyMs} onChange={setField('latencyMs')} sx={{ width: 100 }} />
                 <TextField size="small" label="TTL ms" placeholder="60000" value={form.ttlMs} onChange={setField('ttlMs')} sx={{ width: 110 }} />
-                <Button variant="contained" size="small" disabled={busy} onClick={handleRegister} sx={{ mt: 0.25 }}>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField size="small" label="Seed" placeholder="42" value={form.seed} onChange={setField('seed')} sx={{ width: 90 }} />
+                <TextField size="small" label="Succeed first" placeholder="5" value={form.succeedFirst} onChange={setField('succeedFirst')} sx={{ width: 110 }} />
+                <TextField size="small" label="Fail count" placeholder="10" value={form.failRequestCount} onChange={setField('failRequestCount')} sx={{ width: 100 }} />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                <FormControlLabel
+                  control={<Switch size="small" checked={form.graphqlErrors} onChange={setFormToggle('graphqlErrors')} />}
+                  label="GraphQL errors"
+                />
+                {form.graphqlErrors && (
+                  <>
+                    <TextField size="small" label="Error message" placeholder="Internal error" value={form.graphqlErrorMessage} onChange={setField('graphqlErrorMessage')} sx={{ width: 160 }} />
+                    <TextField size="small" label="Error code" placeholder="INTERNAL_ERROR" value={form.graphqlErrorCode} onChange={setField('graphqlErrorCode')} sx={{ width: 160 }} />
+                    <FormControlLabel
+                      control={<Switch size="small" checked={form.graphqlNullifyData} onChange={setFormToggle('graphqlNullifyData')} />}
+                      label="Nullify data"
+                    />
+                  </>
+                )}
+                <Button variant="contained" size="small" disabled={busy} onClick={handleRegister} sx={{ ml: 'auto', mt: 0.25 }}>
                   Register
                 </Button>
               </Box>
@@ -710,13 +866,34 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                         </Tooltip>
                       </Box>
                       {isEditing && (
-                        <Box sx={{ display: 'flex', gap: 1, py: 0.75, pl: 2, flexWrap: 'wrap', alignItems: 'flex-start', bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
-                          <TextField size="small" label="Error status" value={editForm.errorStatus} onChange={setEditField('errorStatus')} sx={{ width: 110 }} />
-                          <TextField size="small" label="Error prob" value={editForm.errorProbability} onChange={setEditField('errorProbability')} sx={{ width: 100 }} />
-                          <TextField size="small" label="Drop prob" value={editForm.dropProbability} onChange={setEditField('dropProbability')} sx={{ width: 100 }} />
-                          <TextField size="small" label="Latency ms" value={editForm.latencyMs} onChange={setEditField('latencyMs')} sx={{ width: 100 }} />
-                          <Button size="small" variant="contained" disabled={busy} onClick={handleApplyEdit}>Apply</Button>
-                          <Button size="small" onClick={handleCancelEdit}>Cancel</Button>
+                        <Box sx={{ py: 0.75, pl: 2, bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
+                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                            <TextField size="small" label="Error status" value={editForm.errorStatus} onChange={setEditField('errorStatus')} sx={{ width: 110 }} />
+                            <TextField size="small" label="Error prob" value={editForm.errorProbability} onChange={setEditField('errorProbability')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Drop prob" value={editForm.dropProbability} onChange={setEditField('dropProbability')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Latency ms" value={editForm.latencyMs} onChange={setEditField('latencyMs')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Seed" value={editForm.seed} onChange={setEditField('seed')} sx={{ width: 90 }} />
+                            <TextField size="small" label="Succeed first" value={editForm.succeedFirst} onChange={setEditField('succeedFirst')} sx={{ width: 110 }} />
+                            <TextField size="small" label="Fail count" value={editForm.failRequestCount} onChange={setEditField('failRequestCount')} sx={{ width: 100 }} />
+                          </Box>
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <FormControlLabel
+                              control={<Switch size="small" checked={editForm.graphqlErrors} onChange={setEditToggle('graphqlErrors')} />}
+                              label="GraphQL errors"
+                            />
+                            {editForm.graphqlErrors && (
+                              <>
+                                <TextField size="small" label="Error message" value={editForm.graphqlErrorMessage} onChange={setEditField('graphqlErrorMessage')} sx={{ width: 160 }} />
+                                <TextField size="small" label="Error code" value={editForm.graphqlErrorCode} onChange={setEditField('graphqlErrorCode')} sx={{ width: 160 }} />
+                                <FormControlLabel
+                                  control={<Switch size="small" checked={editForm.graphqlNullifyData} onChange={setEditToggle('graphqlNullifyData')} />}
+                                  label="Nullify data"
+                                />
+                              </>
+                            )}
+                            <Button size="small" variant="contained" disabled={busy} onClick={handleApplyEdit}>Apply</Button>
+                            <Button size="small" onClick={handleCancelEdit}>Cancel</Button>
+                          </Box>
                         </Box>
                       )}
                     </Box>
@@ -728,215 +905,263 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
         </Collapse>
       </Paper>
 
-      {/* gRPC Health Chaos */}
-      <Paper variant="outlined" sx={{ p: 1.25 }}>
+      {/* gRPC Chaos (combined panel: Health Status + Fault Injection) */}
+      <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
         <Box
           sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
-          onClick={() => setGrpcExpanded((v) => !v)}
+          onClick={() => setGrpcPanelExpanded((v) => !v)}
         >
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-            gRPC Health Chaos
+            gRPC Chaos
           </Typography>
-          <Chip size="small" label={`${grpcServices.length} services`} variant="outlined" />
+          <Chip size="small" label={`${grpcCombinedActiveCount} active`} color={grpcCombinedActiveCount > 0 ? 'warning' : 'default'} variant="outlined" />
           <Box sx={{ flex: 1 }} />
-          <IconButton size="small" aria-label={grpcExpanded ? 'Collapse gRPC health' : 'Expand gRPC health'}>
-            {grpcExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          <IconButton size="small" aria-label={grpcPanelExpanded ? 'Collapse gRPC chaos' : 'Expand gRPC chaos'}>
+            {grpcPanelExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>
         </Box>
-        <Collapse in={grpcExpanded}>
+        <Collapse in={grpcPanelExpanded}>
           <Box sx={{ mt: 1 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Force a service&apos;s gRPC health-check response (e.g. NOT_SERVING) to simulate an
-              unhealthy or degraded service — exercising how clients and orchestrators
-              (Kubernetes readiness/liveness probes) react to a failing dependency.
-            </Typography>
-            {/* Set status form */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-              <TextField
-                size="small"
-                label="Service name"
-                placeholder="my.grpc.Service"
-                value={grpcNewService}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setGrpcNewService(e.target.value)}
-                sx={{ minWidth: 200 }}
-              />
-              <Select
-                size="small"
-                value={grpcNewStatus}
-                onChange={(e) => setGrpcNewStatus(e.target.value as ServingStatus)}
-                sx={{ minWidth: 160 }}
-              >
-                {SERVING_STATUSES.map((s) => (
-                  <MenuItem key={s} value={s}>{s}</MenuItem>
-                ))}
-              </Select>
-              <Button size="small" variant="contained" disabled={busy || !grpcNewService.trim()} onClick={handleSetGrpcHealth}>
-                Set Status
-              </Button>
-            </Box>
-            {/* Service list */}
-            {grpcServices.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                No gRPC health overrides set.
-              </Typography>
-            ) : (
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Service</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {grpcServices.map((svc) => (
-                      <TableRow key={svc}>
-                        <TableCell>
-                          <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{svc}</Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            size="small"
-                            label={grpcHealth[svc]}
-                            color={servingStatusColor(grpcHealth[svc]!)}
-                            sx={{ height: 20, fontSize: '0.65rem' }}
-                          />
-                        </TableCell>
-                        <TableCell align="right">
-                          <Tooltip title="Reset health override">
-                            <span>
-                              <IconButton
-                                size="small"
-                                aria-label={`Reset health for ${svc}`}
-                                disabled={busy}
-                                onClick={() => handleResetGrpcHealth(svc)}
-                              >
-                                <RestoreIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-        </Collapse>
-      </Paper>
 
-      {/* gRPC Fault Injection */}
-      <Paper variant="outlined" sx={{ p: 1.25, mt: 1.5 }}>
-        <Box
-          sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
-          onClick={() => setGrpcChaosExpanded((v) => !v)}
-        >
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-            gRPC Fault Injection
-          </Typography>
-          <Chip size="small" label={`${grpcChaosServices.length} services`} color={grpcChaosServices.length > 0 ? 'warning' : 'default'} variant="outlined" />
-          <Box sx={{ flex: 1 }} />
-          <Tooltip title="Clear gRPC fault injection chaos">
-            <span>
-              <Button
-                size="small"
-                color="error"
-                startIcon={<DeleteSweepIcon fontSize="small" />}
-                disabled={busy || grpcChaosServices.length === 0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void runAction(() => clearGrpcChaos(connectionParams));
-                }}
-              >
-                Clear gRPC
-              </Button>
-            </span>
-          </Tooltip>
-          <IconButton size="small" aria-label={grpcChaosExpanded ? 'Collapse gRPC fault injection' : 'Expand gRPC fault injection'}>
-            {grpcChaosExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-          </IconButton>
-        </Box>
-        <Collapse in={grpcChaosExpanded} unmountOnExit>
-          <Box sx={{ mt: 1 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Inject gRPC status errors (UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, &hellip;) and
-              latency on matched RPC calls &mdash; distinct from the health-check status above.
-            </Typography>
-
-            {/* gRPC Chaos Register form */}
+            {/* --- gRPC Health Status sub-section --- */}
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
-              <Typography variant="caption" color="text.secondary">Register gRPC chaos for a service</Typography>
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} sx={{ minWidth: 200 }} />
-                <Select
-                  size="small"
-                  value={grpcChaosForm.errorStatusCode}
-                  onChange={(e) => setGrpcChaosForm((prev) => ({ ...prev, errorStatusCode: e.target.value }))}
-                  sx={{ minWidth: 180 }}
-                >
-                  {GRPC_STATUS_CODES.map((code) => (
-                    <MenuItem key={code} value={code}>{code}</MenuItem>
-                  ))}
-                </Select>
-                <TextField size="small" label="Error prob" placeholder="0.5" value={grpcChaosForm.errorProbability} onChange={setGrpcChaosField('errorProbability')} sx={{ width: 100 }} />
-                <TextField size="small" label="Latency ms" placeholder="200" value={grpcChaosForm.latencyMs} onChange={setGrpcChaosField('latencyMs')} sx={{ width: 100 }} />
-                <TextField size="small" label="TTL ms" placeholder="60000" value={grpcChaosForm.ttlMs} onChange={setGrpcChaosField('ttlMs')} sx={{ width: 110 }} />
+              <Box
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+                onClick={() => setGrpcHealthExpanded((v) => !v)}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  Health Status
+                </Typography>
+                <Chip size="small" label={`${grpcServices.length} services`} variant="outlined" />
+                <Box sx={{ flex: 1 }} />
+                <IconButton size="small" aria-label={grpcHealthExpanded ? 'Collapse gRPC health' : 'Expand gRPC health'}>
+                  {grpcHealthExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                </IconButton>
               </Box>
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Quota name" placeholder="rpc-quota" value={grpcChaosForm.quotaName} onChange={setGrpcChaosField('quotaName')} sx={{ width: 140 }} />
-                <TextField size="small" label="Quota limit" placeholder="100" value={grpcChaosForm.quotaLimit} onChange={setGrpcChaosField('quotaLimit')} sx={{ width: 100 }} />
-                <TextField size="small" label="Quota window ms" placeholder="60000" value={grpcChaosForm.quotaWindowMillis} onChange={setGrpcChaosField('quotaWindowMillis')} sx={{ width: 130 }} />
-                <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterGrpcChaos} sx={{ ml: 'auto', mt: 0.25 }}>
-                  Register
-                </Button>
-              </Box>
+              <Collapse in={grpcHealthExpanded}>
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Force a service&apos;s gRPC health-check response (e.g. NOT_SERVING) to simulate an
+                    unhealthy or degraded service — exercising how clients and orchestrators
+                    (Kubernetes readiness/liveness probes) react to a failing dependency.
+                  </Typography>
+                  {/* Set status form */}
+                  <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <TextField
+                      size="small"
+                      label="Service name"
+                      placeholder="my.grpc.Service"
+                      value={grpcNewService}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setGrpcNewService(e.target.value)}
+                      sx={{ minWidth: 200 }}
+                    />
+                    <Select
+                      size="small"
+                      value={grpcNewStatus}
+                      onChange={(e) => setGrpcNewStatus(e.target.value as ServingStatus)}
+                      sx={{ minWidth: 160 }}
+                    >
+                      {SERVING_STATUSES.map((s) => (
+                        <MenuItem key={s} value={s}>{s}</MenuItem>
+                      ))}
+                    </Select>
+                    <Button size="small" variant="contained" disabled={busy || !grpcNewService.trim()} onClick={handleSetGrpcHealth}>
+                      Set Status
+                    </Button>
+                  </Box>
+                  {/* Service list */}
+                  {grpcServices.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                      No gRPC health overrides set.
+                    </Typography>
+                  ) : (
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Service</TableCell>
+                            <TableCell>Status</TableCell>
+                            <TableCell align="right">Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {grpcServices.map((svc) => (
+                            <TableRow key={svc}>
+                              <TableCell>
+                                <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{svc}</Typography>
+                              </TableCell>
+                              <TableCell>
+                                <Chip
+                                  size="small"
+                                  label={grpcHealth[svc]}
+                                  color={servingStatusColor(grpcHealth[svc]!)}
+                                  sx={{ height: 20, fontSize: '0.65rem' }}
+                                />
+                              </TableCell>
+                              <TableCell align="right">
+                                <Tooltip title="Reset health override">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      aria-label={`Reset health for ${svc}`}
+                                      disabled={busy}
+                                      onClick={() => handleResetGrpcHealth(svc)}
+                                    >
+                                      <RestoreIcon fontSize="small" />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Box>
+              </Collapse>
             </Paper>
 
-            {/* gRPC Chaos Active registrations */}
-            {grpcChaosServices.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                No gRPC fault injection chaos registered.
-              </Typography>
-            ) : (
-              <Box>
-                {grpcChaosServices.map((service) => {
-                  const ttl = grpcChaosRemainingTtl(service);
-                  return (
-                    <Box key={service} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap' }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 200 }}>{service}</Typography>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
-                        {summarizeGrpcChaosProfile(grpcChaosData.services[service] ?? {}).map((part) => (
-                          <Chip key={part} size="small" label={part} variant="outlined" />
-                        ))}
-                      </Box>
-                      {ttl != null && (
-                        <Chip size="small" color="warning" label={`auto-revert in ${formatTtl(ttl)}`} />
-                      )}
-                      <Tooltip title="Remove gRPC chaos for this service">
-                        <span>
-                          <IconButton
-                            size="small"
-                            aria-label={`Remove gRPC chaos for ${service}`}
-                            disabled={busy}
-                            onClick={() => void runAction(() => removeGrpcChaos(connectionParams, service))}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    </Box>
-                  );
-                })}
+            {/* --- gRPC Fault Injection sub-section --- */}
+            <Paper variant="outlined" sx={{ p: 1 }}>
+              <Box
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+                onClick={() => setGrpcFaultExpanded((v) => !v)}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  Fault Injection
+                </Typography>
+                <Chip size="small" label={`${grpcChaosServices.length} services`} color={grpcChaosServices.length > 0 ? 'warning' : 'default'} variant="outlined" />
+                <Box sx={{ flex: 1 }} />
+                <Tooltip title="Clear gRPC fault injection chaos">
+                  <span>
+                    <Button
+                      size="small"
+                      color="error"
+                      startIcon={<DeleteSweepIcon fontSize="small" />}
+                      disabled={busy || grpcChaosServices.length === 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void runAction(() => clearGrpcChaos(connectionParams));
+                      }}
+                    >
+                      Clear gRPC
+                    </Button>
+                  </span>
+                </Tooltip>
+                <IconButton size="small" aria-label={grpcFaultExpanded ? 'Collapse gRPC fault injection' : 'Expand gRPC fault injection'}>
+                  {grpcFaultExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                </IconButton>
               </Box>
-            )}
+              <Collapse in={grpcFaultExpanded} unmountOnExit>
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Inject gRPC status errors (UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, &hellip;) and
+                    latency on matched RPC calls &mdash; distinct from the health-check status above.
+                  </Typography>
+
+                  {/* gRPC Chaos Register form */}
+                  <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+                    <Typography variant="caption" color="text.secondary">Register gRPC chaos for a service</Typography>
+                    {/* Row 1: core fields */}
+                    <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                      <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} sx={{ minWidth: 200 }} />
+                      <Select
+                        size="small"
+                        value={grpcChaosForm.errorStatusCode}
+                        onChange={(e) => setGrpcChaosForm((prev) => ({ ...prev, errorStatusCode: e.target.value }))}
+                        sx={{ minWidth: 180 }}
+                      >
+                        {GRPC_STATUS_CODES.map((code) => (
+                          <MenuItem key={code} value={code}>{code}</MenuItem>
+                        ))}
+                      </Select>
+                      <TextField size="small" label="Error prob" placeholder="0.5" value={grpcChaosForm.errorProbability} onChange={setGrpcChaosField('errorProbability')} sx={{ width: 100 }} />
+                      <TextField size="small" label="Error message" placeholder="service unavailable" value={grpcChaosForm.errorMessage} onChange={setGrpcChaosField('errorMessage')} sx={{ width: 160 }} />
+                      <TextField size="small" label="Latency ms" placeholder="200" value={grpcChaosForm.latencyMs} onChange={setGrpcChaosField('latencyMs')} sx={{ width: 100 }} />
+                      <TextField size="small" label="TTL ms" placeholder="60000" value={grpcChaosForm.ttlMs} onChange={setGrpcChaosField('ttlMs')} sx={{ width: 110 }} />
+                    </Box>
+                    {/* Row 2: quota + count-window + seed */}
+                    <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                      <TextField size="small" label="Quota name" placeholder="rpc-quota" value={grpcChaosForm.quotaName} onChange={setGrpcChaosField('quotaName')} sx={{ width: 140 }} />
+                      <TextField size="small" label="Quota limit" placeholder="100" value={grpcChaosForm.quotaLimit} onChange={setGrpcChaosField('quotaLimit')} sx={{ width: 100 }} />
+                      <TextField size="small" label="Quota window ms" placeholder="60000" value={grpcChaosForm.quotaWindowMillis} onChange={setGrpcChaosField('quotaWindowMillis')} sx={{ width: 130 }} />
+                      <TextField size="small" label="Seed" placeholder="42" value={grpcChaosForm.seed} onChange={setGrpcChaosField('seed')} sx={{ width: 90 }} />
+                      <TextField size="small" label="Succeed first" placeholder="5" value={grpcChaosForm.succeedFirst} onChange={setGrpcChaosField('succeedFirst')} sx={{ width: 110 }} />
+                      <TextField size="small" label="Fail count" placeholder="10" value={grpcChaosForm.failRequestCount} onChange={setGrpcChaosField('failRequestCount')} sx={{ width: 100 }} />
+                    </Box>
+                    {/* Row 3: streaming/trailer faults */}
+                    <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <FormControlLabel control={<Switch size="small" checked={grpcChaosForm.omitGrpcStatus} onChange={setGrpcChaosToggle('omitGrpcStatus')} />} label="Omit grpc-status" />
+                      <FormControlLabel control={<Switch size="small" checked={grpcChaosForm.corruptGrpcStatus} onChange={setGrpcChaosToggle('corruptGrpcStatus')} />} label="Corrupt grpc-status" />
+                      <TextField size="small" label="Abort after N msgs" placeholder="3" value={grpcChaosForm.abortAfterMessages} onChange={setGrpcChaosField('abortAfterMessages')} sx={{ width: 140 }} />
+                    </Box>
+                    {/* Row 4: custom trailers textarea + register button */}
+                    <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                      <TextField
+                        size="small"
+                        label="Custom trailers (key=value per line)"
+                        placeholder={'x-debug-id=abc123\nx-retry=true'}
+                        value={grpcChaosForm.customTrailers}
+                        onChange={setGrpcChaosField('customTrailers')}
+                        multiline
+                        minRows={2}
+                        maxRows={4}
+                        sx={{ minWidth: 280, flex: 1 }}
+                      />
+                      <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterGrpcChaos} sx={{ ml: 'auto', mt: 0.25 }}>
+                        Register
+                      </Button>
+                    </Box>
+                  </Paper>
+
+                  {/* gRPC Chaos Active registrations */}
+                  {grpcChaosServices.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                      No gRPC fault injection chaos registered.
+                    </Typography>
+                  ) : (
+                    <Box>
+                      {grpcChaosServices.map((service) => {
+                        const ttl = grpcChaosRemainingTtl(service);
+                        return (
+                          <Box key={service} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap' }}>
+                            <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 200 }}>{service}</Typography>
+                            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
+                              {summarizeGrpcChaosProfile(grpcChaosData.services[service] ?? {}).map((part) => (
+                                <Chip key={part} size="small" label={part} variant="outlined" />
+                              ))}
+                            </Box>
+                            {ttl != null && (
+                              <Chip size="small" color="warning" label={`auto-revert in ${formatTtl(ttl)}`} />
+                            )}
+                            <Tooltip title="Remove gRPC chaos for this service">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  aria-label={`Remove gRPC chaos for ${service}`}
+                                  disabled={busy}
+                                  onClick={() => void runAction(() => removeGrpcChaos(connectionParams, service))}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  )}
+                </Box>
+              </Collapse>
+            </Paper>
+
           </Box>
         </Collapse>
       </Paper>
 
       {/* TCP-Layer Chaos */}
-      <Paper variant="outlined" sx={{ p: 1.25, mt: 1.5 }}>
+      <Paper variant="outlined" sx={{ p: 1.25 }}>
         <Box
           sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
           onClick={() => setTcpExpanded((v) => !v)}

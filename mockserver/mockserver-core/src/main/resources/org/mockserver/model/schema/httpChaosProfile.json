@@ -89,6 +89,22 @@
       "type": "integer",
       "minimum": 1,
       "description": "Gradual degradation: ramp errorProbability and dropConnectionProbability linearly from 0 to their configured values over this many milliseconds from the first match"
+    },
+    "graphqlErrors": {
+      "type": "boolean",
+      "description": "Rewrite the response body as a GraphQL error envelope (HTTP 200, {\"data\":null,\"errors\":[...]})"
+    },
+    "graphqlErrorMessage": {
+      "type": "string",
+      "description": "The error message in errors[0].message; defaults to 'simulated GraphQL error' when graphqlErrors is true and this is unset"
+    },
+    "graphqlErrorCode": {
+      "type": "string",
+      "description": "Optional value for errors[0].extensions.code (e.g. 'INTERNAL_SERVER_ERROR'); extensions object is omitted when unset"
+    },
+    "graphqlNullifyData": {
+      "type": "boolean",
+      "description": "When true (default), data is null; when false, attempt to preserve the original response body JSON as the data value"
     }
   }
 }

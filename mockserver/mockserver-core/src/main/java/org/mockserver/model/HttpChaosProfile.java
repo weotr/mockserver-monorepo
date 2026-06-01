@@ -106,6 +106,10 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
     private Long quotaWindowMillis;    // stateful quota: window length in milliseconds (>= 1)
     private Integer quotaErrorStatus;  // stateful quota: status when exceeded (default 429)
     private Long degradationRampMillis; // gradual degradation: ramp errorProbability/dropConnectionProbability from 0 to full over this many ms from first match (>= 1)
+    private Boolean graphqlErrors;     // when true, rewrite the response body as a GraphQL error envelope (HTTP 200 + {"data":null,"errors":[...]})
+    private String graphqlErrorMessage; // the message in errors[0].message; default "simulated GraphQL error" when graphqlErrors=true and unset
+    private String graphqlErrorCode;   // optional value for errors[0].extensions.code (e.g. "INTERNAL_SERVER_ERROR"); omit extensions when null
+    private Boolean graphqlNullifyData; // when true (default), data is null; when false, attempt to preserve original body JSON as data
 
     public static HttpChaosProfile httpChaosProfile() {
         return new HttpChaosProfile();
@@ -340,6 +344,46 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
         return degradationRampMillis;
     }
 
+    public HttpChaosProfile withGraphqlErrors(Boolean graphqlErrors) {
+        this.graphqlErrors = graphqlErrors;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Boolean getGraphqlErrors() {
+        return graphqlErrors;
+    }
+
+    public HttpChaosProfile withGraphqlErrorMessage(String graphqlErrorMessage) {
+        this.graphqlErrorMessage = graphqlErrorMessage;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getGraphqlErrorMessage() {
+        return graphqlErrorMessage;
+    }
+
+    public HttpChaosProfile withGraphqlErrorCode(String graphqlErrorCode) {
+        this.graphqlErrorCode = graphqlErrorCode;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getGraphqlErrorCode() {
+        return graphqlErrorCode;
+    }
+
+    public HttpChaosProfile withGraphqlNullifyData(Boolean graphqlNullifyData) {
+        this.graphqlNullifyData = graphqlNullifyData;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Boolean getGraphqlNullifyData() {
+        return graphqlNullifyData;
+    }
+
     /**
      * Returns the gradual-degradation ramp factor in {@code [0.0, 1.0]} for the
      * given timing. When {@code degradationRampMillis} is {@code null} there is no
@@ -396,7 +440,11 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
             .withQuotaLimit(quotaLimit)
             .withQuotaWindowMillis(quotaWindowMillis)
             .withQuotaErrorStatus(quotaErrorStatus)
-            .withDegradationRampMillis(degradationRampMillis);
+            .withDegradationRampMillis(degradationRampMillis)
+            .withGraphqlErrors(graphqlErrors)
+            .withGraphqlErrorMessage(graphqlErrorMessage)
+            .withGraphqlErrorCode(graphqlErrorCode)
+            .withGraphqlNullifyData(graphqlNullifyData);
     }
 
     /**
@@ -487,13 +535,17 @@ public class HttpChaosProfile extends ObjectWithJsonToString {
             Objects.equals(quotaLimit, that.quotaLimit) &&
             Objects.equals(quotaWindowMillis, that.quotaWindowMillis) &&
             Objects.equals(quotaErrorStatus, that.quotaErrorStatus) &&
-            Objects.equals(degradationRampMillis, that.degradationRampMillis);
+            Objects.equals(degradationRampMillis, that.degradationRampMillis) &&
+            Objects.equals(graphqlErrors, that.graphqlErrors) &&
+            Objects.equals(graphqlErrorMessage, that.graphqlErrorMessage) &&
+            Objects.equals(graphqlErrorCode, that.graphqlErrorCode) &&
+            Objects.equals(graphqlNullifyData, that.graphqlNullifyData);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(errorStatus, retryAfter, errorProbability, dropConnectionProbability, latency, seed, succeedFirst, failRequestCount, outageAfterMillis, outageDurationMillis, truncateBodyAtFraction, malformedBody, slowResponseChunkSize, slowResponseChunkDelay, quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus, degradationRampMillis);
+            hashCode = Objects.hash(errorStatus, retryAfter, errorProbability, dropConnectionProbability, latency, seed, succeedFirst, failRequestCount, outageAfterMillis, outageDurationMillis, truncateBodyAtFraction, malformedBody, slowResponseChunkSize, slowResponseChunkDelay, quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus, degradationRampMillis, graphqlErrors, graphqlErrorMessage, graphqlErrorCode, graphqlNullifyData);
         }
         return hashCode;
     }

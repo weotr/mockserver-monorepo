@@ -455,6 +455,20 @@ const SERVICE_CHAOS = [
     host: 'recommendations.svc',
     chaos: { latency: { timeUnit: 'MILLISECONDS', value: 1200 } },
   },
+  {
+    host: 'graphql-gateway.svc',
+    chaos: {
+      errorStatus: 200,
+      graphqlErrors: true,
+      graphqlErrorMessage: 'Rate limit exceeded',
+      graphqlErrorCode: 'RATE_LIMITED',
+      graphqlNullifyData: true,
+      seed: 42,
+      succeedFirst: 3,
+      failRequestCount: 10,
+    },
+    ttlMillis: 900000,
+  },
 ];
 
 async function serviceChaosExamples() {
@@ -537,6 +551,20 @@ const GRPC_CHAOS = [
   {
     service: 'shipping.v1.ShippingService',
     chaos: { errorStatusCode: 'DEADLINE_EXCEEDED', errorProbability: 1.0 },
+  },
+  {
+    service: 'streaming.v1.StreamService',
+    chaos: {
+      errorStatusCode: 'INTERNAL',
+      errorMessage: 'stream aborted mid-flight',
+      omitGrpcStatus: true,
+      customTrailers: { 'x-debug-id': 'chaos-demo-001', 'x-retry': 'false' },
+      abortAfterMessages: 5,
+      seed: 7,
+      succeedFirst: 2,
+      failRequestCount: 20,
+    },
+    ttlMillis: 450000,
   },
 ];
 
@@ -776,17 +804,17 @@ async function main() {
   log('========================================');
   log(` Expectations created : ${counts.expectations}`);
   log(` Requests sent        : ${counts.requests} (incl. ~${counts.unmatched} intentionally unmatched)`);
-  log(` Service chaos hosts  : ${counts.serviceChaos} (2 with an auto-revert TTL countdown)`);
+  log(` Service chaos hosts  : ${counts.serviceChaos} (incl. GraphQL-semantic chaos + auto-revert TTL)`);
   log(` TCP chaos hosts      : ${counts.tcpChaos} (2 with an auto-revert TTL countdown)`);
   log(` gRPC health statuses : ${counts.grpcHealth} (NOT_SERVING / SERVICE_UNKNOWN / SERVING)`);
-  log(` gRPC chaos services  : ${counts.grpcChaos} (UNAVAILABLE / RESOURCE_EXHAUSTED / DEADLINE_EXCEEDED)`);
+  log(` gRPC chaos services  : ${counts.grpcChaos} (incl. streaming/trailer faults + auto-revert TTL)`);
   log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
   log('');
   log(' Try these views in the dashboard:');
   log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills)');
   log('   Traffic            — recorded + proxied (forwarded) requests, incl. a lane per LLM provider + token/cost');
   log('   Sessions           — agent-001 / agent-002 loops + their call graphs');
-  log('   Chaos              — HTTP service chaos + gRPC fault injection + TCP-layer chaos (fault chips + live TTL countdown) + gRPC health chaos');
+  log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos');
   log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
   log('');
 }

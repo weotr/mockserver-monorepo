@@ -1102,18 +1102,33 @@ public class HttpActionHandler {
         if (response == null || chaos == null || !chaos.countWindowEligible(matchCount)) {
             return response;
         }
+        // GraphQL error envelope: when graphqlErrors is true, build a structured GraphQL
+        // error body and set status 200. This takes precedence over truncate/malformed body
+        // corruption because the envelope IS the intended body -- truncating or appending
+        // garbage to it would defeat the purpose of simulating a realistic GraphQL error.
+        // Slow-response (dribble) still composes with the GraphQL envelope since it only
+        // affects delivery timing, not body content.
+        final boolean graphql = Boolean.TRUE.equals(chaos.getGraphqlErrors());
         final Double fraction = chaos.getTruncateBodyAtFraction();
         final boolean malformed = Boolean.TRUE.equals(chaos.getMalformedBody());
-        final boolean corruptBody = fraction != null || malformed;
+        // When graphqlErrors is set, skip truncate/malformed body corruption
+        final boolean corruptBody = !graphql && (fraction != null || malformed);
         final boolean slow = chaos.getSlowResponseChunkSize() != null && chaos.getSlowResponseChunkDelay() != null;
-        if (!corruptBody && !slow) {
+        if (!corruptBody && !slow && !graphql) {
             return response;
         }
         if (response.getStreamingBody() != null) {
             return response;
         }
         HttpResponse out = response.clone();
-        if (corruptBody) {
+        if (graphql) {
+            String envelopeJson = buildGraphqlErrorEnvelope(chaos, response);
+            out.withStatusCode(200);
+            out.withBody(envelopeJson);
+            out.replaceHeader("content-type", "application/json");
+            out.removeHeader("content-length");
+            org.mockserver.metrics.Metrics.incrementHttpChaosInjected("graphql");
+        } else if (corruptBody) {
             // getBodyAsRawBytes() returns an empty array (never null) when there is no body
             byte[] corrupted = response.getBodyAsRawBytes();
             if (fraction != null) {
@@ -1147,6 +1162,58 @@ public class HttpActionHandler {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("slow");
         }
         return out;
+    }
+
+    /**
+     * Builds the JSON body for a GraphQL error envelope. Uses Jackson ObjectMapper
+     * so the message and code strings are properly escaped.
+     *
+     * @param chaos    the chaos profile with graphql fields
+     * @param response the original response (used to attempt data preservation when graphqlNullifyData=false)
+     * @return the JSON string for the GraphQL error envelope
+     */
+    private String buildGraphqlErrorEnvelope(final HttpChaosProfile chaos, final HttpResponse response) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode root = mapper.createObjectNode();
+
+            // data: null (default) or the original body JSON when graphqlNullifyData=false
+            boolean nullifyData = !Boolean.FALSE.equals(chaos.getGraphqlNullifyData());
+            if (nullifyData) {
+                root.putNull("data");
+            } else {
+                // attempt to preserve original body as JSON data value
+                byte[] bodyBytes = response.getBodyAsRawBytes();
+                if (bodyBytes != null && bodyBytes.length > 0) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode originalData = mapper.readTree(bodyBytes);
+                        root.set("data", originalData);
+                    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                        // original body is not valid JSON — fall back to data:null
+                        root.putNull("data");
+                    }
+                } else {
+                    root.putNull("data");
+                }
+            }
+
+            // errors array with a single error object
+            com.fasterxml.jackson.databind.node.ArrayNode errorsArray = root.putArray("errors");
+            com.fasterxml.jackson.databind.node.ObjectNode errorObj = errorsArray.addObject();
+            String message = chaos.getGraphqlErrorMessage();
+            errorObj.put("message", message != null ? message : "simulated GraphQL error");
+
+            // extensions.code only when graphqlErrorCode is set
+            if (chaos.getGraphqlErrorCode() != null) {
+                com.fasterxml.jackson.databind.node.ObjectNode extensions = errorObj.putObject("extensions");
+                extensions.put("code", chaos.getGraphqlErrorCode());
+            }
+
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            // fallback: hand-build a minimal envelope (should never happen with Jackson)
+            return "{\"data\":null,\"errors\":[{\"message\":\"simulated GraphQL error\"}]}";
+        }
     }
 
     /**

@@ -19,6 +19,10 @@ export interface GrpcChaosProfileDTO {
   quotaName?: string;
   quotaLimit?: number;
   quotaWindowMillis?: number;
+  omitGrpcStatus?: boolean;
+  corruptGrpcStatus?: boolean;
+  customTrailers?: Record<string, string>;
+  abortAfterMessages?: number;
 }
 
 export interface GrpcChaosResponse {
@@ -131,6 +135,25 @@ export function summarizeGrpcChaosProfile(profile: GrpcChaosProfileDTO): string[
     const succeed = profile.succeedFirst != null ? `succeed first ${profile.succeedFirst}` : null;
     const fail = profile.failRequestCount != null ? `fail ${profile.failRequestCount}` : null;
     parts.push([succeed, fail].filter(Boolean).join(', '));
+  }
+  if (profile.errorMessage != null) {
+    parts.push(`msg: ${profile.errorMessage}`);
+  }
+  if (profile.seed != null) {
+    parts.push(`seed ${profile.seed}`);
+  }
+  if (profile.omitGrpcStatus) {
+    parts.push('omit grpc-status');
+  }
+  if (profile.corruptGrpcStatus) {
+    parts.push('corrupt grpc-status');
+  }
+  const trailerCount = profile.customTrailers != null ? Object.keys(profile.customTrailers).length : 0;
+  if (trailerCount > 0) {
+    parts.push(`${trailerCount} custom trailer${trailerCount === 1 ? '' : 's'}`);
+  }
+  if (profile.abortAfterMessages != null) {
+    parts.push(`abort after ${profile.abortAfterMessages} msg${profile.abortAfterMessages === 1 ? '' : 's'}`);
   }
   return parts;
 }

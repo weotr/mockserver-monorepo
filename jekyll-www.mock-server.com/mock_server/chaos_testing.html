@@ -24,6 +24,10 @@ schema_faq:
     answer: "Yes. Deploy MockServer as a sidecar proxy, egress proxy, or reverse proxy in your Kubernetes cluster and attach chaos profiles to inject faults into the traffic flowing through it. MockServer operates at the HTTP layer (L7) and requires explicit routing (e.g. HTTP_PROXY environment variable or Service rewrite)."
   - question: "How do I make a mock fail the first few requests then recover?"
     answer: "Use the succeedFirst and failRequestCount fields on the chaos profile. Set succeedFirst to 0 (or omit it) and failRequestCount to the number of requests that should fail. For example, failRequestCount of 2 with errorStatus 503 and errorProbability 1.0 makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies."
+  - question: "How do I simulate a GraphQL partial error?"
+    answer: "Set graphqlErrors to true and graphqlNullifyData to false on your chaos profile. MockServer will parse the original response body as JSON and embed it as the data value in the error envelope, producing {\"data\":{...},\"errors\":[{\"message\":\"...\"}]}. Use graphqlErrorMessage and graphqlErrorCode to customise the error entry. This works on both expectation-level chaos and service-scoped chaos (PUT /mockserver/serviceChaos)."
+  - question: "How do I simulate a broken gRPC server that omits the status trailer?"
+    answer: "Set omitGrpcStatus to true on a gRPC chaos profile registered via PUT /mockserver/grpcChaos. MockServer will send the HTTP 200 response without a grpc-status trailer, which most gRPC clients treat as a protocol error or stream reset. Use this to test that your client does not silently accept an incomplete RPC as a success."
 ---
 
 <p>MockServer's chaos testing feature lets you inject realistic faults into HTTP responses — both <strong>mocked responses</strong> and <strong>forwarded/proxied upstream responses</strong> — so you can verify that your application handles errors, latency, and outages gracefully.</p>
@@ -168,6 +172,30 @@ schema_faq:
             <td>integer</td>
             <td>Gradual degradation: ramp <code class="inline code">errorProbability</code> and <code class="inline code">dropConnectionProbability</code> linearly from 0 up to their configured values over this many milliseconds from the expectation's first match, modelling a dependency that deteriorates over time. Measured with the controllable clock.</td>
             <td>&ge; 1 (default: omitted = no ramp)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrors</code></td>
+            <td>boolean</td>
+            <td>Rewrite the response as a GraphQL error envelope: HTTP 200 with a JSON body of the form <code class="inline code">{"data":null,"errors":[{"message":"...","extensions":{"code":"..."}}]}</code>, <code class="inline code">Content-Type: application/json</code>, and <code class="inline code">Content-Length</code> stripped. Takes precedence over <code class="inline code">truncateBodyAtFraction</code> and <code class="inline code">malformedBody</code>. Metered as <code class="inline code">fault_type=graphql</code>.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrorMessage</code></td>
+            <td>string</td>
+            <td>The message placed in <code class="inline code">errors[0].message</code>. Only used when <code class="inline code">graphqlErrors</code> is true. Defaults to <code class="inline code">"simulated GraphQL error"</code> when omitted.</td>
+            <td>any string (default: "simulated GraphQL error")</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrorCode</code></td>
+            <td>string</td>
+            <td>Optional value placed in <code class="inline code">errors[0].extensions.code</code> (for example <code class="inline code">"INTERNAL_SERVER_ERROR"</code> or <code class="inline code">"UNAUTHENTICATED"</code>). The <code class="inline code">extensions</code> object is omitted entirely when this field is not set.</td>
+            <td>any string (default: omitted = no extensions)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlNullifyData</code></td>
+            <td>boolean</td>
+            <td>Controls the <code class="inline code">data</code> field in the GraphQL error envelope. When <code class="inline code">true</code> (the default), <code class="inline code">data</code> is <code class="inline code">null</code> — a full error. When <code class="inline code">false</code>, MockServer tries to parse the original response body as JSON and embed it as the <code class="inline code">data</code> value, simulating a partial success (data plus errors). Falls back to <code class="inline code">data: null</code> if the original body is not valid JSON.</td>
+            <td>true / false (default: omitted = true, i.e. data:null)</td>
         </tr>
     </tbody>
 </table>
@@ -327,6 +355,52 @@ schema_faq:
     <li><strong>Test JSON-parsing resilience:</strong> set <code class="inline code">malformedBody: true</code> and verify your client surfaces a clear parse error rather than crashing.</li>
     <li><strong>Test partial-response handling:</strong> set <code class="inline code">truncateBodyAtFraction: 0.5</code> and verify your client detects the short / incomplete payload.</li>
     <li><strong>Test a flaky upstream in proxy mode:</strong> attach body corruption to a forward action to see how your application copes with a dependency returning damaged payloads.</li>
+</ul>
+
+<a id="graphql_error_injection" class="anchor" href="#graphql_error_injection">&nbsp;</a>
+
+<h2>GraphQL Error Injection</h2>
+
+<p>GraphQL APIs always return HTTP 200, even for errors — error details are carried in a JSON <code class="inline code">errors</code> array in the response body. Standard HTTP error injection (which changes the status code to 500 or 503) does not reproduce this pattern. The <code class="inline code">graphqlErrors</code> flag rewrites the response into a spec-compliant GraphQL error envelope so your GraphQL client's error-handling logic is exercised correctly.</p>
+
+<p><strong>How it works:</strong> when <code class="inline code">graphqlErrors: true</code> is set, MockServer replaces the response body with a JSON envelope of the form:</p>
+
+<pre class="code"><code class="code">{"data":null,"errors":[{"message":"simulated GraphQL error","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}</code></pre>
+
+<p>The response is sent as HTTP 200 with <code class="inline code">Content-Type: application/json</code>. Any stale <code class="inline code">Content-Length</code> header is removed. Set <code class="inline code">graphqlNullifyData: false</code> to embed the original response body JSON as the <code class="inline code">data</code> value instead — this simulates a partial success where the server returns some data alongside errors (a common pattern in GraphQL APIs that use partial responses).</p>
+
+<p><strong>Priority:</strong> <code class="inline code">graphqlErrors</code> takes precedence over <code class="inline code">truncateBodyAtFraction</code> and <code class="inline code">malformedBody</code> — when GraphQL injection is active, body corruption is skipped because the envelope is the intended body. The slow-response dribble (<code class="inline code">slowResponseChunkSize</code> + <code class="inline code">slowResponseChunkDelay</code>) still applies to trickle the envelope. Like body corruption, GraphQL injection is deterministic (no probability draw) and respects the count window (<code class="inline code">succeedFirst</code> / <code class="inline code">failRequestCount</code>). Error and connection-drop injection (which change the HTTP status) still take priority over everything — GraphQL injection only fires on the real, non-error response path.</p>
+
+<p><strong>Works with service-scoped chaos too:</strong> <code class="inline code">graphqlErrors</code> can be set on a service-scoped profile (<code class="inline code">PUT /mockserver/serviceChaos</code>), making it easy to inject GraphQL errors into all matching forwards to a GraphQL upstream without touching individual expectations.</p>
+
+<pre class="code"><code class="code">// Simulate a full GraphQL error on all calls to a GraphQL service
+PUT /mockserver/serviceChaos
+{
+  "host": "graphql.api.svc",
+  "chaos": {
+    "graphqlErrors": true,
+    "graphqlErrorMessage": "upstream database unavailable",
+    "graphqlErrorCode": "INTERNAL_SERVER_ERROR"
+  }
+}
+
+// Simulate a partial success (data present alongside errors)
+PUT /mockserver/serviceChaos
+{
+  "host": "graphql.api.svc",
+  "chaos": {
+    "graphqlErrors": true,
+    "graphqlNullifyData": false,
+    "graphqlErrorMessage": "partial result: one field failed",
+    "graphqlErrorCode": "DOWNSTREAM_ERROR"
+  }
+}</code></pre>
+
+<p><strong>Common use cases:</strong></p>
+<ul>
+    <li><strong>Test GraphQL error handling:</strong> verify that your client reads <code class="inline code">errors[0].message</code> and surfaces it to the user instead of silently treating the HTTP 200 as a success.</li>
+    <li><strong>Test per-error-code branching:</strong> set <code class="inline code">graphqlErrorCode</code> to a code your client acts on (e.g. <code class="inline code">"UNAUTHENTICATED"</code>) and verify the client triggers a re-authentication flow.</li>
+    <li><strong>Test partial-success handling:</strong> set <code class="inline code">graphqlNullifyData: false</code> and verify your client renders the partial data while also surfacing the error.</li>
 </ul>
 
 <a id="slow_response" class="anchor" href="#slow_response">&nbsp;</a>
@@ -512,19 +586,19 @@ PATCH /mockserver/serviceChaos
         <tr>
             <td><code class="inline code">mock_server_http_chaos_injected_total</code></td>
             <td>Counter</td>
-            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code></td>
+            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">graphql</code></td>
             <td>Cumulative count of HTTP chaos faults injected, split by fault type</td>
         </tr>
         <tr>
             <td><code class="inline code">mock_server_active_service_chaos</code></td>
             <td>Gauge</td>
-            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">quota</code></td>
+            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">quota</code> | <code class="inline code">graphql</code></td>
             <td>Number of currently-active service-scoped chaos profiles configured with each fault type (a profile with several faults counts under each); drops to 0 as profiles are cleared or their TTLs lapse</td>
         </tr>
     </tbody>
 </table>
 
-<p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>), a per-fault-type chart of cumulative injections, and a per-fault-type chart of the active service-scoped chaos gauge (visible only when a chaos metric has non-zero data).</p>
+<p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>, <code class="inline code">graphql</code>), a per-fault-type chart of cumulative injections, and a per-fault-type chart of the active service-scoped chaos gauge (visible only when a chaos metric has non-zero data).</p>
 
 <p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape.</p>
 
@@ -557,7 +631,7 @@ mock_server_active_service_chaos{fault_type="drop"}</code></pre>
 
 <p><strong>Why use this:</strong> gRPC clients have their own retry, deadline, and circuit-breaker logic that is separate from HTTP clients. Injecting <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, or <code class="inline code">RESOURCE_EXHAUSTED</code> statuses at the RPC layer tests that gRPC-native error handling, backoff, and deadline propagation work correctly — without having to modify the real service.</p>
 
-<p><strong>Note:</strong> streaming message-level faults (drop or truncate individual stream messages mid-stream) are planned for a future release. The v1 profile covers unary-applicable faults: status injection, latency, request quota, and count windows.</p>
+<p>The gRPC chaos profile covers: status injection, latency, request quota, count windows, trailer manipulation (<code class="inline code">omitGrpcStatus</code>, <code class="inline code">corruptGrpcStatus</code>, <code class="inline code">customTrailers</code>), and client-streaming abort (<code class="inline code">abortAfterMessages</code>). Drop or truncation of individual stream messages mid-stream is planned for a future release.</p>
 
 <h3>gRPC Chaos Profile Fields</h3>
 
@@ -633,6 +707,30 @@ mock_server_active_service_chaos{fault_type="drop"}</code></pre>
             <td>Fixed-window length in milliseconds. The first call starts the window; it resets after this duration elapses. Calls beyond <code class="inline code">quotaLimit</code> within the window return <code class="inline code">RESOURCE_EXHAUSTED</code>.</td>
             <td>&ge; 1 (default: omitted = no quota)</td>
         </tr>
+        <tr>
+            <td><code class="inline code">omitGrpcStatus</code></td>
+            <td>boolean</td>
+            <td>When <code class="inline code">true</code>, the fault response is sent with <strong>no</strong> <code class="inline code">grpc-status</code> trailer at all. This simulates an incomplete or broken RPC stream — the server starts a response but never terminates it correctly, causing gRPC clients to raise a stream-reset or missing-trailer error. Takes precedence over <code class="inline code">corruptGrpcStatus</code>.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">corruptGrpcStatus</code></td>
+            <td>boolean</td>
+            <td>When <code class="inline code">true</code> (and <code class="inline code">omitGrpcStatus</code> is false), the fault response sets <code class="inline code">grpc-status</code> to the non-numeric value <code class="inline code">malformed</code>, which violates the gRPC spec (grpc-status must be a decimal integer). Tests how clients cope with an unparseable status trailer &mdash; a genuine protocol violation rather than merely an unrecognised numeric code.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">customTrailers</code></td>
+            <td>object</td>
+            <td>A JSON object of arbitrary trailer key/value pairs injected on the fault response. These are written in addition to (or instead of, when <code class="inline code">omitGrpcStatus</code> is set) the normal status trailers. Useful for injecting vendor-specific error metadata that your client reads (e.g. <code class="inline code">x-ratelimit-remaining: 0</code>).</td>
+            <td>any string-to-string map (default: omitted = no custom trailers)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">abortAfterMessages</code></td>
+            <td>integer</td>
+            <td>For client-streaming RPCs: when the number of decoded gRPC messages in the request body reaches this threshold, MockServer immediately responds with <code class="inline code">ABORTED</code> (or the profile's <code class="inline code">errorMessage</code> if set). The message count is determined by decoding the 5-byte gRPC length-prefixed frames in the request body. Use this to test how a streaming client handles mid-stream server abort — for example, a server that rejects an oversized batch.</td>
+            <td>&ge; 1 (default: omitted = no abort)</td>
+        </tr>
     </tbody>
 </table>
 
@@ -687,7 +785,30 @@ GET /mockserver/grpcChaos
 
 // merge-patch — update only the specified fields, preserve the rest and the TTL
 PATCH /mockserver/grpcChaos
-{ "service": "com.example.payments.PaymentService", "chaos": { "errorProbability": 0.9 } }</code></pre>
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorProbability": 0.9 } }
+
+// simulate a server that omits the grpc-status trailer (broken stream)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.orders.OrderService", "chaos": { "omitGrpcStatus": true } }
+
+// simulate a server that sends a non-numeric grpc-status (genuine protocol violation)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.orders.OrderService", "chaos": { "corruptGrpcStatus": true } }
+
+// inject custom trailers alongside the error (e.g. rate-limit metadata)
+PUT /mockserver/grpcChaos
+{
+  "service": "com.example.orders.OrderService",
+  "chaos": {
+    "errorStatusCode": "RESOURCE_EXHAUSTED",
+    "errorProbability": 1.0,
+    "customTrailers": { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1748700000" }
+  }
+}
+
+// abort a client-streaming RPC after 5 messages
+PUT /mockserver/grpcChaos
+{ "service": "com.example.upload.UploadService", "chaos": { "abortAfterMessages": 5 } }</code></pre>
 
 <p>The <code class="inline code">GET</code> response reports active profiles under a <code class="inline code">services</code> map (service name &rarr; profile) and, when any registrations carry a TTL, a <code class="inline code">ttlRemainingMillis</code> map alongside it.</p>
 
@@ -904,4 +1025,14 @@ PATCH /mockserver/tcpChaos
 <button id="button_faq_fail_then_recover" class="accordion">How do I make a mock fail the first few requests then recover?</button>
 <div class="panel">
     <p>Use the <code class="inline code">succeedFirst</code> and <code class="inline code">failRequestCount</code> fields on the chaos profile. Set <code class="inline code">succeedFirst</code> to <code class="inline code">0</code> (or omit it) and <code class="inline code">failRequestCount</code> to the number of requests that should fail. For example, <code class="inline code">failRequestCount: 2</code> with <code class="inline code">errorStatus: 503</code> and <code class="inline code">errorProbability: 1.0</code> makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies. See the <a href="#button_chaos_fail_then_recover">fail-then-recover example</a> and the <a href="#stateful_count_based_faults">Stateful / Count-Based Faults</a> section above.</p>
+</div>
+
+<button id="button_faq_graphql_partial_error" class="accordion">How do I simulate a GraphQL partial error (data present alongside errors)?</button>
+<div class="panel">
+    <p>Set <code class="inline code">graphqlErrors: true</code> and <code class="inline code">graphqlNullifyData: false</code> on your chaos profile. MockServer will try to parse the original response body as JSON and embed it as the <code class="inline code">data</code> value in the GraphQL error envelope, resulting in a response like <code class="inline code">{"data":{...},"errors":[{"message":"..."}]}</code>. If the original body is not valid JSON, <code class="inline code">data</code> falls back to <code class="inline code">null</code>. Use <code class="inline code">graphqlErrorMessage</code> and <code class="inline code">graphqlErrorCode</code> to customise the error entry. This works on both expectation-level chaos and service-scoped chaos (<code class="inline code">PUT /mockserver/serviceChaos</code>). See the <a href="#graphql_error_injection">GraphQL Error Injection</a> section above.</p>
+</div>
+
+<button id="button_faq_grpc_omit_status" class="accordion">How do I simulate a broken gRPC server that omits the status trailer?</button>
+<div class="panel">
+    <p>Set <code class="inline code">omitGrpcStatus: true</code> on a gRPC chaos profile. MockServer will send the HTTP 200 response with a <code class="inline code">content-type: application/grpc</code> header but deliberately omit the <code class="inline code">grpc-status</code> trailer. Most gRPC clients treat this as a protocol error or stream reset — which is exactly what you want to test to ensure the client does not silently accept an incomplete RPC as a success. Register the profile via <code class="inline code">PUT /mockserver/grpcChaos</code> with <code class="inline code">{"service": "...", "chaos": {"omitGrpcStatus": true}}</code>. See the <a href="#grpc_fault_injection">gRPC Fault Injection</a> section above.</p>
 </div>

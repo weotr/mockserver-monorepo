@@ -3,6 +3,8 @@ package org.mockserver.serialization.model;
 import org.mockserver.model.GrpcChaosProfile;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 
+import java.util.Map;
+
 public class GrpcChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToString implements DTO<GrpcChaosProfile> {
 
     private String errorStatusCode;
@@ -15,6 +17,10 @@ public class GrpcChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
     private String quotaName;
     private Integer quotaLimit;
     private Long quotaWindowMillis;
+    private Boolean omitGrpcStatus;
+    private Boolean corruptGrpcStatus;
+    private Map<String, String> customTrailers;
+    private Integer abortAfterMessages;
 
     public GrpcChaosProfileDTO(GrpcChaosProfile grpcChaosProfile) {
         if (grpcChaosProfile != null) {
@@ -28,6 +34,10 @@ public class GrpcChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             quotaName = grpcChaosProfile.getQuotaName();
             quotaLimit = grpcChaosProfile.getQuotaLimit();
             quotaWindowMillis = grpcChaosProfile.getQuotaWindowMillis();
+            omitGrpcStatus = grpcChaosProfile.getOmitGrpcStatus();
+            corruptGrpcStatus = grpcChaosProfile.getCorruptGrpcStatus();
+            customTrailers = grpcChaosProfile.getCustomTrailers() != null ? new java.util.LinkedHashMap<>(grpcChaosProfile.getCustomTrailers()) : null;
+            abortAfterMessages = grpcChaosProfile.getAbortAfterMessages();
         }
     }
 
@@ -46,7 +56,11 @@ public class GrpcChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             .withFailRequestCount(failRequestCount)
             .withQuotaName(quotaName)
             .withQuotaLimit(quotaLimit)
-            .withQuotaWindowMillis(quotaWindowMillis);
+            .withQuotaWindowMillis(quotaWindowMillis)
+            .withOmitGrpcStatus(omitGrpcStatus)
+            .withCorruptGrpcStatus(corruptGrpcStatus)
+            .withCustomTrailers(customTrailers)
+            .withAbortAfterMessages(abortAfterMessages);
     }
 
     public String getErrorStatusCode() {
@@ -136,6 +150,42 @@ public class GrpcChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
 
     public GrpcChaosProfileDTO setQuotaWindowMillis(Long quotaWindowMillis) {
         this.quotaWindowMillis = quotaWindowMillis;
+        return this;
+    }
+
+    public Boolean getOmitGrpcStatus() {
+        return omitGrpcStatus;
+    }
+
+    public GrpcChaosProfileDTO setOmitGrpcStatus(Boolean omitGrpcStatus) {
+        this.omitGrpcStatus = omitGrpcStatus;
+        return this;
+    }
+
+    public Boolean getCorruptGrpcStatus() {
+        return corruptGrpcStatus;
+    }
+
+    public GrpcChaosProfileDTO setCorruptGrpcStatus(Boolean corruptGrpcStatus) {
+        this.corruptGrpcStatus = corruptGrpcStatus;
+        return this;
+    }
+
+    public Map<String, String> getCustomTrailers() {
+        return customTrailers;
+    }
+
+    public GrpcChaosProfileDTO setCustomTrailers(Map<String, String> customTrailers) {
+        this.customTrailers = customTrailers;
+        return this;
+    }
+
+    public Integer getAbortAfterMessages() {
+        return abortAfterMessages;
+    }
+
+    public GrpcChaosProfileDTO setAbortAfterMessages(Integer abortAfterMessages) {
+        this.abortAfterMessages = abortAfterMessages;
         return this;
     }
 }

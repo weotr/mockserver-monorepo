@@ -3,6 +3,9 @@ package org.mockserver.model;
 import org.junit.Test;
 import org.mockserver.serialization.model.GrpcChaosProfileDTO;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
@@ -197,6 +200,224 @@ public class GrpcChaosProfileTest {
         GrpcChaosProfile a = grpcChaosProfile().withErrorProbability(0.5).withErrorStatusCode("INTERNAL");
         GrpcChaosProfile b = grpcChaosProfile().withErrorProbability(0.5).withErrorStatusCode("INTERNAL");
         GrpcChaosProfile c = grpcChaosProfile().withErrorProbability(0.5).withErrorStatusCode("UNAVAILABLE");
+
+        assertThat(a.equals(b), is(true));
+        assertThat(a.hashCode(), is(b.hashCode()));
+        assertThat(a.equals(c), is(false));
+    }
+
+    // --- new trailer/streaming fault fields ---
+
+    @Test
+    public void shouldBuildWithOmitGrpcStatus() {
+        GrpcChaosProfile profile = grpcChaosProfile().withOmitGrpcStatus(true);
+        assertThat(profile.getOmitGrpcStatus(), is(true));
+    }
+
+    @Test
+    public void shouldBuildWithCorruptGrpcStatus() {
+        GrpcChaosProfile profile = grpcChaosProfile().withCorruptGrpcStatus(true);
+        assertThat(profile.getCorruptGrpcStatus(), is(true));
+    }
+
+    @Test
+    public void shouldBuildWithCustomTrailers() {
+        Map<String, String> trailers = new LinkedHashMap<>();
+        trailers.put("grpc-retry-pushback-ms", "500");
+        trailers.put("x-error-detail", "service overloaded");
+
+        GrpcChaosProfile profile = grpcChaosProfile().withCustomTrailers(trailers);
+        assertThat(profile.getCustomTrailers().get("grpc-retry-pushback-ms"), is("500"));
+        assertThat(profile.getCustomTrailers().get("x-error-detail"), is("service overloaded"));
+    }
+
+    @Test
+    public void shouldBuildWithAbortAfterMessages() {
+        GrpcChaosProfile profile = grpcChaosProfile().withAbortAfterMessages(3);
+        assertThat(profile.getAbortAfterMessages(), is(3));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectZeroAbortAfterMessages() {
+        grpcChaosProfile().withAbortAfterMessages(0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectNegativeAbortAfterMessages() {
+        grpcChaosProfile().withAbortAfterMessages(-1);
+    }
+
+    @Test
+    public void shouldAcceptNullAbortAfterMessages() {
+        GrpcChaosProfile profile = grpcChaosProfile().withAbortAfterMessages(null);
+        assertThat(profile.getAbortAfterMessages(), is(nullValue()));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsTrueForOmitGrpcStatus() {
+        assertThat(grpcChaosProfile().withOmitGrpcStatus(true).hasAnyFault(), is(true));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsFalseForOmitGrpcStatusFalse() {
+        assertThat(grpcChaosProfile().withOmitGrpcStatus(false).hasAnyFault(), is(false));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsTrueForCorruptGrpcStatus() {
+        assertThat(grpcChaosProfile().withCorruptGrpcStatus(true).hasAnyFault(), is(true));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsFalseForCorruptGrpcStatusFalse() {
+        assertThat(grpcChaosProfile().withCorruptGrpcStatus(false).hasAnyFault(), is(false));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsTrueForCustomTrailers() {
+        assertThat(grpcChaosProfile().withCustomTrailers(Map.of("key", "value")).hasAnyFault(), is(true));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsFalseForEmptyCustomTrailers() {
+        assertThat(grpcChaosProfile().withCustomTrailers(Map.of()).hasAnyFault(), is(false));
+    }
+
+    @Test
+    public void hasAnyFaultReturnsTrueForAbortAfterMessages() {
+        assertThat(grpcChaosProfile().withAbortAfterMessages(1).hasAnyFault(), is(true));
+    }
+
+    @Test
+    public void customTrailersDefensiveCopy() {
+        Map<String, String> mutable = new LinkedHashMap<>();
+        mutable.put("key", "value");
+        GrpcChaosProfile profile = grpcChaosProfile().withCustomTrailers(mutable);
+        mutable.put("extra", "should not appear");
+        assertThat(profile.getCustomTrailers().containsKey("extra"), is(false));
+    }
+
+    @Test
+    public void dtoBuildObjectRoundTripWithNewFields() {
+        Map<String, String> trailers = new LinkedHashMap<>();
+        trailers.put("grpc-retry-pushback-ms", "1000");
+
+        GrpcChaosProfile original = grpcChaosProfile()
+            .withErrorProbability(1.0)
+            .withErrorStatusCode("INTERNAL")
+            .withOmitGrpcStatus(true)
+            .withCorruptGrpcStatus(false)
+            .withCustomTrailers(trailers)
+            .withAbortAfterMessages(5);
+
+        GrpcChaosProfileDTO dto = new GrpcChaosProfileDTO(original);
+        GrpcChaosProfile rebuilt = dto.buildObject();
+
+        assertThat(rebuilt.getOmitGrpcStatus(), is(true));
+        assertThat(rebuilt.getCorruptGrpcStatus(), is(false));
+        assertThat(rebuilt.getCustomTrailers().get("grpc-retry-pushback-ms"), is("1000"));
+        assertThat(rebuilt.getAbortAfterMessages(), is(5));
+    }
+
+    // --- C1: CRLF / header-injection rejection in customTrailers ---
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersKeyWithCR() {
+        grpcChaosProfile().withCustomTrailers(Map.of("bad\rkey", "value"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersKeyWithLF() {
+        grpcChaosProfile().withCustomTrailers(Map.of("bad\nkey", "value"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersValueWithCRLF() {
+        grpcChaosProfile().withCustomTrailers(Map.of("key", "bad\r\nvalue"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersEmptyKey() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("", "value");
+        grpcChaosProfile().withCustomTrailers(map);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersNullKey() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put(null, "value");
+        grpcChaosProfile().withCustomTrailers(map);
+    }
+
+    @Test
+    public void shouldAcceptNullCustomTrailersMap() {
+        GrpcChaosProfile profile = grpcChaosProfile().withCustomTrailers(null);
+        assertThat(profile.getCustomTrailers(), is(nullValue()));
+    }
+
+    // --- M3: defensive copy prevents external mutation ---
+
+    @Test
+    public void customTrailersExternalMutationDoesNotAffectProfile() {
+        Map<String, String> mutable = new LinkedHashMap<>();
+        mutable.put("key", "value");
+        GrpcChaosProfile profile = grpcChaosProfile().withCustomTrailers(mutable);
+        mutable.put("injected", "malicious");
+        assertThat("external mutation must not leak into profile",
+            profile.getCustomTrailers().containsKey("injected"), is(false));
+        assertThat(profile.getCustomTrailers().size(), is(1));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void dtoBuildObjectRejectsCrlfCustomTrailers() {
+        GrpcChaosProfileDTO dto = new GrpcChaosProfileDTO();
+        Map<String, String> trailers = new LinkedHashMap<>();
+        trailers.put("x-debug", "bad\r\nvalue");
+        dto.setCustomTrailers(trailers);
+        dto.buildObject(); // should throw via withCustomTrailers validation
+    }
+
+    @Test(expected = UnsupportedOperationException.class)
+    public void getCustomTrailersReturnsUnmodifiableView() {
+        GrpcChaosProfile profile = grpcChaosProfile()
+            .withCustomTrailers(Map.of("key", "value"));
+        profile.getCustomTrailers().put("injected", "should fail");
+    }
+
+    // --- MINOR 6: HTTP/2 header token validation for customTrailers keys ---
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersKeyWithUppercase() {
+        grpcChaosProfile().withCustomTrailers(Map.of("X-Bad", "value"));
+    }
+
+    @Test
+    public void shouldAcceptValidLowercaseCustomTrailersKey() {
+        GrpcChaosProfile profile = grpcChaosProfile()
+            .withCustomTrailers(Map.of("x-retry", "500"));
+        assertThat(profile.getCustomTrailers().get("x-retry"), is("500"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void shouldRejectCustomTrailersKeyWithSpace() {
+        grpcChaosProfile().withCustomTrailers(Map.of("bad key", "value"));
+    }
+
+    @Test
+    public void shouldAcceptCustomTrailersKeyWithAllowedSpecialChars() {
+        // all of !#$%&'*+-.^_`|~ are valid
+        GrpcChaosProfile profile = grpcChaosProfile()
+            .withCustomTrailers(Map.of("x-header!#$%&'*+-.^_`|~ok", "value"));
+        assertThat(profile.getCustomTrailers().containsKey("x-header!#$%&'*+-.^_`|~ok"), is(true));
+    }
+
+    @Test
+    public void equalsAndHashCodeWithNewFields() {
+        Map<String, String> trailers = Map.of("key", "val");
+        GrpcChaosProfile a = grpcChaosProfile().withOmitGrpcStatus(true).withCustomTrailers(trailers).withAbortAfterMessages(2);
+        GrpcChaosProfile b = grpcChaosProfile().withOmitGrpcStatus(true).withCustomTrailers(trailers).withAbortAfterMessages(2);
+        GrpcChaosProfile c = grpcChaosProfile().withOmitGrpcStatus(false).withCustomTrailers(trailers).withAbortAfterMessages(2);
 
         assertThat(a.equals(b), is(true));
         assertThat(a.hashCode(), is(b.hashCode()));

@@ -33,6 +33,10 @@ export interface HttpChaosProfileDTO {
   quotaWindowMillis?: number;
   quotaErrorStatus?: number;
   degradationRampMillis?: number;
+  graphqlErrors?: boolean;
+  graphqlErrorMessage?: string;
+  graphqlErrorCode?: string;
+  graphqlNullifyData?: boolean;
 }
 
 export interface ServiceChaosResponse {
@@ -190,6 +194,16 @@ export function summarizeChaosProfile(profile: HttpChaosProfileDTO): string[] {
   }
   if (profile.outageAfterMillis != null || profile.outageDurationMillis != null) {
     parts.push('outage window');
+  }
+  if (profile.seed != null) {
+    parts.push(`seed ${profile.seed}`);
+  }
+  if (profile.graphqlErrors) {
+    const code = profile.graphqlErrorCode ? ` (${profile.graphqlErrorCode})` : '';
+    parts.push(`GraphQL error${code}`);
+  }
+  if (profile.graphqlErrors && profile.graphqlNullifyData) {
+    parts.push('nullify data');
   }
   return parts;
 }

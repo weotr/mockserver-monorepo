@@ -195,6 +195,74 @@ public class ServiceChaosRegistryTest {
         assertThat("complete quota counted", complete.get("quota"), is(1));
     }
 
+    // --- PATCH / merge tests ---
+
+    @Test
+    public void patchPreservesGraphqlFieldsWhenPatchChangesUnrelatedField() {
+        ServiceChaosRegistry registry = new ServiceChaosRegistry(() -> 0L);
+        // base profile with all four graphql fields set
+        HttpChaosProfile base = httpChaosProfile()
+            .withGraphqlErrors(true)
+            .withGraphqlErrorMessage("downstream failure")
+            .withGraphqlErrorCode("INTERNAL_SERVER_ERROR")
+            .withGraphqlNullifyData(false)
+            .withErrorStatus(503);
+        registry.put("gql.svc", base);
+
+        // patch only changes errorStatus — graphql fields must survive
+        HttpChaosProfile partial = httpChaosProfile().withErrorStatus(500);
+        HttpChaosProfile merged = registry.patch("gql.svc", partial);
+
+        assertThat("graphqlErrors survives unrelated patch", merged.getGraphqlErrors(), is(true));
+        assertThat("graphqlErrorMessage survives", merged.getGraphqlErrorMessage(), is("downstream failure"));
+        assertThat("graphqlErrorCode survives", merged.getGraphqlErrorCode(), is("INTERNAL_SERVER_ERROR"));
+        assertThat("graphqlNullifyData survives", merged.getGraphqlNullifyData(), is(false));
+        assertThat("errorStatus was updated by patch", merged.getErrorStatus(), is(500));
+    }
+
+    @Test
+    public void patchCanSetAndOverrideGraphqlFields() {
+        ServiceChaosRegistry registry = new ServiceChaosRegistry(() -> 0L);
+        // base has graphqlErrors=true and a message
+        registry.put("gql.svc", httpChaosProfile()
+            .withGraphqlErrors(true)
+            .withGraphqlErrorMessage("original message"));
+
+        // patch overrides message and sets code
+        HttpChaosProfile partial = httpChaosProfile()
+            .withGraphqlErrorMessage("patched message")
+            .withGraphqlErrorCode("BAD_USER_INPUT")
+            .withGraphqlNullifyData(true);
+        HttpChaosProfile merged = registry.patch("gql.svc", partial);
+
+        assertThat("graphqlErrors not overridden (null in patch)", merged.getGraphqlErrors(), is(true));
+        assertThat("graphqlErrorMessage overridden by patch", merged.getGraphqlErrorMessage(), is("patched message"));
+        assertThat("graphqlErrorCode set by patch", merged.getGraphqlErrorCode(), is("BAD_USER_INPUT"));
+        assertThat("graphqlNullifyData set by patch", merged.getGraphqlNullifyData(), is(true));
+    }
+
+    @Test
+    public void activeCountByFaultTypeReportsGraphqlWhenEnabled() {
+        ServiceChaosRegistry registry = new ServiceChaosRegistry(() -> 0L);
+        registry.put("gql1.svc", httpChaosProfile().withGraphqlErrors(true));
+        registry.put("gql2.svc", httpChaosProfile().withGraphqlErrors(true).withErrorStatus(503));
+        registry.put("http.svc", httpChaosProfile().withErrorStatus(500)); // no graphql
+
+        java.util.Map<String, Integer> counts = registry.activeCountByFaultType();
+        assertThat("two hosts with graphqlErrors=true", counts.get("graphql"), is(2));
+        assertThat("graphql is a recognised fault type", counts.containsKey("graphql"), is(true));
+    }
+
+    @Test
+    public void activeCountByFaultTypeDoesNotCountGraphqlWhenFalseOrNull() {
+        ServiceChaosRegistry registry = new ServiceChaosRegistry(() -> 0L);
+        registry.put("a.svc", httpChaosProfile().withGraphqlErrors(false));
+        registry.put("b.svc", httpChaosProfile()); // graphqlErrors is null
+
+        java.util.Map<String, Integer> counts = registry.activeCountByFaultType();
+        assertThat("graphqlErrors=false is not counted", counts.get("graphql"), is(0));
+    }
+
     @Test
     public void getDoesNotEvictARefreshedEntry() {
         // a re-registration after expiry must survive the lazy-eviction of the old entry

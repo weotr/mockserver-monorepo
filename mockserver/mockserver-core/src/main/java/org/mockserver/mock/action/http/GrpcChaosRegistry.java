@@ -145,7 +145,11 @@ public class GrpcChaosRegistry {
             .withFailRequestCount(patch.getFailRequestCount() != null ? patch.getFailRequestCount() : base.getFailRequestCount())
             .withQuotaName(patch.getQuotaName() != null ? patch.getQuotaName() : base.getQuotaName())
             .withQuotaLimit(patch.getQuotaLimit() != null ? patch.getQuotaLimit() : base.getQuotaLimit())
-            .withQuotaWindowMillis(patch.getQuotaWindowMillis() != null ? patch.getQuotaWindowMillis() : base.getQuotaWindowMillis());
+            .withQuotaWindowMillis(patch.getQuotaWindowMillis() != null ? patch.getQuotaWindowMillis() : base.getQuotaWindowMillis())
+            .withOmitGrpcStatus(patch.getOmitGrpcStatus() != null ? patch.getOmitGrpcStatus() : base.getOmitGrpcStatus())
+            .withCorruptGrpcStatus(patch.getCorruptGrpcStatus() != null ? patch.getCorruptGrpcStatus() : base.getCorruptGrpcStatus())
+            .withCustomTrailers(patch.getCustomTrailers() != null ? patch.getCustomTrailers() : base.getCustomTrailers())
+            .withAbortAfterMessages(patch.getAbortAfterMessages() != null ? patch.getAbortAfterMessages() : base.getAbortAfterMessages());
     }
 
     /** Removes the gRPC chaos profile for the given service (no-op if absent). */
@@ -188,7 +192,7 @@ public class GrpcChaosRegistry {
      * The gRPC chaos fault types reported by {@link #activeCountByFaultType()}.
      */
     public static final List<String> FAULT_TYPES =
-        List.of("error", "latency", "quota");
+        List.of("error", "latency", "quota", "omitGrpcStatus", "corruptGrpcStatus", "customTrailers", "abortAfterMessages");
 
     /**
      * For each fault type, the number of currently-active (non-expired)
@@ -213,6 +217,18 @@ public class GrpcChaosRegistry {
             }
             if (profile.getQuotaName() != null && profile.getQuotaLimit() != null && profile.getQuotaWindowMillis() != null) {
                 counts.merge("quota", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getOmitGrpcStatus())) {
+                counts.merge("omitGrpcStatus", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getCorruptGrpcStatus())) {
+                counts.merge("corruptGrpcStatus", 1, Integer::sum);
+            }
+            if (profile.getCustomTrailers() != null && !profile.getCustomTrailers().isEmpty()) {
+                counts.merge("customTrailers", 1, Integer::sum);
+            }
+            if (profile.getAbortAfterMessages() != null) {
+                counts.merge("abortAfterMessages", 1, Integer::sum);
             }
         }
         return counts;

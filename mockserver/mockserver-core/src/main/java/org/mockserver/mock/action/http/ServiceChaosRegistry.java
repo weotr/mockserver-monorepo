@@ -171,7 +171,11 @@ public class ServiceChaosRegistry {
             .withQuotaLimit(patch.getQuotaLimit() != null ? patch.getQuotaLimit() : base.getQuotaLimit())
             .withQuotaWindowMillis(patch.getQuotaWindowMillis() != null ? patch.getQuotaWindowMillis() : base.getQuotaWindowMillis())
             .withQuotaErrorStatus(patch.getQuotaErrorStatus() != null ? patch.getQuotaErrorStatus() : base.getQuotaErrorStatus())
-            .withDegradationRampMillis(patch.getDegradationRampMillis() != null ? patch.getDegradationRampMillis() : base.getDegradationRampMillis());
+            .withDegradationRampMillis(patch.getDegradationRampMillis() != null ? patch.getDegradationRampMillis() : base.getDegradationRampMillis())
+            .withGraphqlErrors(patch.getGraphqlErrors() != null ? patch.getGraphqlErrors() : base.getGraphqlErrors())
+            .withGraphqlErrorMessage(patch.getGraphqlErrorMessage() != null ? patch.getGraphqlErrorMessage() : base.getGraphqlErrorMessage())
+            .withGraphqlErrorCode(patch.getGraphqlErrorCode() != null ? patch.getGraphqlErrorCode() : base.getGraphqlErrorCode())
+            .withGraphqlNullifyData(patch.getGraphqlNullifyData() != null ? patch.getGraphqlNullifyData() : base.getGraphqlNullifyData());
     }
 
     /** Removes the chaos profile for the given host (no-op if absent). */
@@ -217,7 +221,7 @@ public class ServiceChaosRegistry {
      * {@code mock_server_http_chaos_injected} counter.
      */
     public static final java.util.List<String> FAULT_TYPES =
-        java.util.List.of("drop", "error", "latency", "truncate", "malformed", "slow", "quota");
+        java.util.List.of("drop", "error", "latency", "truncate", "malformed", "slow", "quota", "graphql");
 
     /**
      * For each fault type, the number of currently-active (non-expired)
@@ -267,6 +271,9 @@ public class ServiceChaosRegistry {
             }
             if (profile.getQuotaName() != null && profile.getQuotaLimit() != null && profile.getQuotaWindowMillis() != null) {
                 counts.merge("quota", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getGraphqlErrors())) {
+                counts.merge("graphql", 1, Integer::sum);
             }
         }
         return counts;

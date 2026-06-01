@@ -82,22 +82,56 @@ public class GrpcToHttpRequestHandler extends SimpleChannelInboundHandler<HttpRe
             GrpcChaosProfile chaosProfile = grpcChaosRegistry.get(chaosServiceName);
             if (chaosProfile != null && chaosProfile.hasAnyFault()) {
                 int matchCount = grpcChaosRegistry.incrementMatchCount(chaosServiceName);
+
+                // abortAfterMessages: decode the body to count client-streaming messages
+                // and inject ABORTED when the count meets the threshold
+                Integer abortThreshold = chaosProfile.getAbortAfterMessages();
+                if (abortThreshold != null && chaosProfile.countWindowEligible(matchCount)) {
+                    byte[] bodyBytes = request.getBodyAsRawBytes();
+                    int messageCount = 0;
+                    if (bodyBytes != null && bodyBytes.length > 0) {
+                        try {
+                            messageCount = GrpcFrameCodec.decode(bodyBytes).size();
+                        } catch (Exception ignored) {
+                            // body not decodable as gRPC frames; treat as 0 messages
+                        }
+                    }
+                    if (messageCount >= abortThreshold) {
+                        org.mockserver.model.HttpResponse abortResponse = buildFaultResponse(
+                            chaosProfile,
+                            GrpcStatusMapper.GrpcStatusCode.ABORTED,
+                            chaosProfile.getErrorMessage() != null ? chaosProfile.getErrorMessage() : "aborted after " + messageCount + " messages"
+                        );
+                        scheduleFaultResponse(ctx, chaosProfile, abortResponse);
+                        return;
+                    }
+                    // under threshold: fall through to evaluate other faults (if any)
+                }
+
                 GrpcChaosDecision.GrpcFault fault = GrpcChaosDecision.evaluate(chaosProfile, matchCount, quotaRegistry);
                 if (fault != null) {
-                    GrpcStatusMapper.GrpcStatusCode code = fault.getStatusCode();
-                    String message = fault.getMessage() != null ? fault.getMessage() : code.name();
-                    org.mockserver.model.HttpResponse errorResponse = org.mockserver.model.HttpResponse.response()
-                        .withStatusCode(200)
-                        .withHeader("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE)
-                        .withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, String.valueOf(code.getCode()))
-                        .withHeader(GrpcStatusMapper.GRPC_MESSAGE_HEADER, message);
-                    Long latencyMs = chaosProfile.getLatencyMs();
-                    if (latencyMs != null && latencyMs > 0) {
-                        ctx.channel().eventLoop().schedule(() -> ctx.writeAndFlush(errorResponse), latencyMs, TimeUnit.MILLISECONDS);
-                    } else {
-                        ctx.writeAndFlush(errorResponse);
-                    }
+                    org.mockserver.model.HttpResponse errorResponse = buildFaultResponse(
+                        chaosProfile, fault.getStatusCode(),
+                        fault.getMessage() != null ? fault.getMessage() : fault.getStatusCode().name()
+                    );
+                    scheduleFaultResponse(ctx, chaosProfile, errorResponse);
                     return;
+                }
+
+                // omitGrpcStatus / corruptGrpcStatus as standalone faults
+                // (when no error probability/quota is configured but these are set)
+                if (chaosProfile.countWindowEligible(matchCount)) {
+                    if (Boolean.TRUE.equals(chaosProfile.getOmitGrpcStatus())
+                        || Boolean.TRUE.equals(chaosProfile.getCorruptGrpcStatus())
+                        || (chaosProfile.getCustomTrailers() != null && !chaosProfile.getCustomTrailers().isEmpty())) {
+                        org.mockserver.model.HttpResponse faultResponse = buildFaultResponse(
+                            chaosProfile,
+                            GrpcStatusMapper.GrpcStatusCode.INTERNAL,
+                            chaosProfile.getErrorMessage() != null ? chaosProfile.getErrorMessage() : "chaos fault"
+                        );
+                        scheduleFaultResponse(ctx, chaosProfile, faultResponse);
+                        return;
+                    }
                 }
             }
         }
@@ -189,6 +223,63 @@ public class GrpcToHttpRequestHandler extends SimpleChannelInboundHandler<HttpRe
         }
 
         return request;
+    }
+
+    /**
+     * Builds a gRPC fault response applying omitGrpcStatus, corruptGrpcStatus, and customTrailers
+     * modifiers from the chaos profile.
+     */
+    private static org.mockserver.model.HttpResponse buildFaultResponse(
+        GrpcChaosProfile profile,
+        GrpcStatusMapper.GrpcStatusCode statusCode,
+        String message
+    ) {
+        org.mockserver.model.HttpResponse response = org.mockserver.model.HttpResponse.response()
+            .withStatusCode(200)
+            .withHeader("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE);
+
+        if (Boolean.TRUE.equals(profile.getOmitGrpcStatus())) {
+            // intentionally omit grpc-status header (simulates broken/incomplete RPC)
+        } else if (Boolean.TRUE.equals(profile.getCorruptGrpcStatus())) {
+            // send a non-numeric grpc-status value — a genuine protocol violation
+            // (gRPC spec requires grpc-status to be a decimal integer)
+            response.withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, "malformed");
+            response.withHeader(GrpcStatusMapper.GRPC_MESSAGE_HEADER, message);
+        } else {
+            response.withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, String.valueOf(statusCode.getCode()));
+            response.withHeader(GrpcStatusMapper.GRPC_MESSAGE_HEADER, message);
+        }
+
+        // inject custom trailer headers (belt-and-braces: skip entries with CR/LF
+        // to prevent header/response splitting even if validation was bypassed)
+        java.util.Map<String, String> customTrailers = profile.getCustomTrailers();
+        if (customTrailers != null) {
+            for (java.util.Map.Entry<String, String> entry : customTrailers.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
+                if (key == null || key.isEmpty()
+                    || key.indexOf('\r') >= 0 || key.indexOf('\n') >= 0
+                    || (value != null && (value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0))) {
+                    continue; // skip malformed entries defensively
+                }
+                response.withHeader(key, value);
+            }
+        }
+
+        return response;
+    }
+
+    /**
+     * Sends the fault response, optionally delaying by the profile's latencyMs.
+     */
+    private static void scheduleFaultResponse(ChannelHandlerContext ctx, GrpcChaosProfile profile,
+                                              org.mockserver.model.HttpResponse response) {
+        Long latencyMs = profile.getLatencyMs();
+        if (latencyMs != null && latencyMs > 0) {
+            ctx.channel().eventLoop().schedule(() -> ctx.writeAndFlush(response), latencyMs, TimeUnit.MILLISECONDS);
+        } else {
+            ctx.writeAndFlush(response);
+        }
     }
 
     static String[] parseGrpcPath(String path) {

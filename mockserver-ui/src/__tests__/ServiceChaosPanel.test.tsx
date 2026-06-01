@@ -12,11 +12,15 @@ interface PutCall {
 /**
  * Stateful fetch stub: GET returns the current registry snapshot (mutable via
  * the returned `state`), PUT records the call into `puts`.
+ *
+ * Also serves empty-but-valid shapes for the gRPC-health, TCP-chaos, and
+ * gRPC-chaos endpoints so their on-mount fetches succeed without polluting
+ * the HTTP service-chaos assertions.
  */
 function stubServiceChaos(initial: {
   services: Record<string, unknown>;
   ttlRemainingMillis?: Record<string, number>;
-}) {
+}, grpcHealthData: Record<string, string> = {}, grpcChaosData: { services: Record<string, unknown> } = { services: {} }) {
   const state = { ...initial };
   const puts: PutCall[] = [];
   vi.stubGlobal(
@@ -26,17 +30,15 @@ function stubServiceChaos(initial: {
         puts.push({ body: JSON.parse(String(init.body)) as Record<string, unknown> });
         return { ok: true, status: 200, statusText: 'ok', json: async () => ({ status: 'ok' }) };
       }
-      // The panel also fetches the gRPC-health and TCP-chaos sections on mount; return
-      // their own (empty) shapes so they don't get served the serviceChaos snapshot.
       const u = String(url);
       if (u.includes('/grpc/health')) {
-        return { ok: true, status: 200, statusText: 'ok', json: async () => ({}) };
+        return { ok: true, status: 200, statusText: 'ok', json: async () => grpcHealthData };
       }
       if (u.includes('/tcpChaos')) {
         return { ok: true, status: 200, statusText: 'ok', json: async () => ({ hosts: {} }) };
       }
       if (u.includes('/grpcChaos')) {
-        return { ok: true, status: 200, statusText: 'ok', json: async () => ({ services: {} }) };
+        return { ok: true, status: 200, statusText: 'ok', json: async () => grpcChaosData };
       }
       return { ok: true, status: 200, statusText: 'ok', json: async () => state };
     }),
@@ -76,7 +78,9 @@ describe('ServiceChaosPanel', () => {
     stubServiceChaos({ services: {} });
     render(<ServiceChaosPanel connectionParams={params} />);
     await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
-    expect(screen.getByText('0 active')).toBeInTheDocument();
+    // Both HTTP and gRPC panels show "0 active" — assert at least one exists
+    const activeChips = screen.getAllByText('0 active');
+    expect(activeChips.length).toBeGreaterThanOrEqual(1);
   });
 
   it('registers a host from the form', async () => {
@@ -166,5 +170,105 @@ describe('ServiceChaosPanel', () => {
     expect(within(rowA!).getByText('error 503')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove chaos for a.svc' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove chaos for b.svc' })).toBeInTheDocument();
+  });
+
+  // --- Merged gRPC Chaos panel tests ---
+
+  it('renders a merged gRPC Chaos panel with combined active count', async () => {
+    stubServiceChaos(
+      { services: {} },
+      { 'payments.v1.PaymentService': 'NOT_SERVING', 'catalog.v1.CatalogService': 'SERVING' },
+      { services: { 'orders.v1.OrderService': { errorStatusCode: 'UNAVAILABLE' } } },
+    );
+    render(<ServiceChaosPanel connectionParams={params} />);
+    // The merged panel should show "3 active" (2 health + 1 fault)
+    await waitFor(() => expect(screen.getByText('3 active')).toBeInTheDocument());
+    // The panel header should say "gRPC Chaos"
+    expect(screen.getByText('gRPC Chaos')).toBeInTheDocument();
+  });
+
+  it('renders Health Status and Fault Injection sub-sections inside gRPC Chaos panel', async () => {
+    stubServiceChaos({ services: {} });
+    const user = userEvent.setup();
+    render(<ServiceChaosPanel connectionParams={params} />);
+    // Expand the gRPC Chaos panel
+    await waitFor(() => expect(screen.getByText('gRPC Chaos')).toBeInTheDocument());
+    await user.click(screen.getByText('gRPC Chaos'));
+    // Sub-sections should be visible
+    expect(await screen.findByText('Health Status')).toBeInTheDocument();
+    expect(screen.getByText('Fault Injection')).toBeInTheDocument();
+  });
+
+  it('shows GraphQL error chip for HTTP chaos with graphqlErrors', async () => {
+    stubServiceChaos({
+      services: { 'graphql.svc': { errorStatus: 200, graphqlErrors: true, graphqlErrorCode: 'RATE_LIMITED' } },
+    });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('graphql.svc')).toBeInTheDocument());
+    expect(screen.getByText('GraphQL error (RATE_LIMITED)')).toBeInTheDocument();
+  });
+
+  it('registers HTTP chaos with GraphQL errors enabled', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText('Host'), 'graphql.svc');
+    await user.type(screen.getByLabelText('Error status'), '200');
+    // Enable GraphQL errors
+    await user.click(screen.getByLabelText('GraphQL errors'));
+    await user.type(screen.getByLabelText('Error message'), 'Rate limit exceeded');
+    await user.type(screen.getByLabelText('Error code'), 'RATE_LIMITED');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'graphql.svc',
+      chaos: {
+        errorStatus: 200,
+        graphqlErrors: true,
+        graphqlErrorMessage: 'Rate limit exceeded',
+        graphqlErrorCode: 'RATE_LIMITED',
+        graphqlNullifyData: true,
+      },
+    });
+  });
+
+  it('shows omit grpc-status chip for gRPC chaos with omitGrpcStatus', async () => {
+    stubServiceChaos(
+      { services: {} },
+      {},
+      { services: { 'streaming.v1.StreamService': { errorStatusCode: 'INTERNAL', omitGrpcStatus: true } } },
+    );
+    const user = userEvent.setup();
+    render(<ServiceChaosPanel connectionParams={params} />);
+    // Expand gRPC Chaos panel, then Fault Injection sub-section
+    await waitFor(() => expect(screen.getByText('gRPC Chaos')).toBeInTheDocument());
+    await user.click(screen.getByText('gRPC Chaos'));
+    await waitFor(() => expect(screen.getByText('Fault Injection')).toBeInTheDocument());
+    await user.click(screen.getByText('Fault Injection'));
+    await waitFor(() => expect(screen.getByText('streaming.v1.StreamService')).toBeInTheDocument());
+    expect(screen.getByText('omit grpc-status')).toBeInTheDocument();
+  });
+
+  it('shows abort-after-messages chip for gRPC chaos with abortAfterMessages', async () => {
+    stubServiceChaos(
+      { services: {} },
+      {},
+      { services: { 'bidi.v1.BidiStream': { errorStatusCode: 'UNAVAILABLE', abortAfterMessages: 5 } } },
+    );
+    const user = userEvent.setup();
+    render(<ServiceChaosPanel connectionParams={params} />);
+    // Expand gRPC Chaos panel, then Fault Injection sub-section
+    await waitFor(() => expect(screen.getByText('gRPC Chaos')).toBeInTheDocument());
+    await user.click(screen.getByText('gRPC Chaos'));
+    await waitFor(() => expect(screen.getByText('Fault Injection')).toBeInTheDocument());
+    await user.click(screen.getByText('Fault Injection'));
+    await waitFor(() => expect(screen.getByText('bidi.v1.BidiStream')).toBeInTheDocument());
+    expect(screen.getByText('abort after 5 msgs')).toBeInTheDocument();
+    // "UNAVAILABLE" appears in both the status code dropdown default and the chip
+    const unavailableElements = screen.getAllByText('UNAVAILABLE');
+    expect(unavailableElements.length).toBeGreaterThanOrEqual(1);
   });
 });

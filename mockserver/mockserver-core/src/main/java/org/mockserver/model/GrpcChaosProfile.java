@@ -2,6 +2,8 @@ package org.mockserver.model;
 
 import org.mockserver.grpc.GrpcStatusMapper;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -54,6 +56,10 @@ public class GrpcChaosProfile extends ObjectWithJsonToString {
     private String quotaName;          // stateful quota: shared counter key
     private Integer quotaLimit;        // stateful quota: max requests allowed per window (>= 1)
     private Long quotaWindowMillis;    // stateful quota: window length in milliseconds (>= 1)
+    private Boolean omitGrpcStatus;    // fault: omit grpc-status trailer entirely (broken/incomplete RPC)
+    private Boolean corruptGrpcStatus; // fault: send non-numeric grpc-status value ("malformed") — a genuine protocol violation since grpc-status must be an integer
+    private Map<String, String> customTrailers; // fault: inject arbitrary trailer key/value pairs
+    private Integer abortAfterMessages; // fault: abort with ABORTED status when client-streaming message count >= threshold (>= 1)
 
     public static GrpcChaosProfile grpcChaosProfile() {
         return new GrpcChaosProfile();
@@ -185,6 +191,109 @@ public class GrpcChaosProfile extends ObjectWithJsonToString {
         return quotaWindowMillis;
     }
 
+    public GrpcChaosProfile withOmitGrpcStatus(Boolean omitGrpcStatus) {
+        this.omitGrpcStatus = omitGrpcStatus;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Boolean getOmitGrpcStatus() {
+        return omitGrpcStatus;
+    }
+
+    public GrpcChaosProfile withCorruptGrpcStatus(Boolean corruptGrpcStatus) {
+        this.corruptGrpcStatus = corruptGrpcStatus;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Boolean getCorruptGrpcStatus() {
+        return corruptGrpcStatus;
+    }
+
+    /**
+     * Sets arbitrary trailer key/value pairs to inject on fault responses.
+     * Accepts {@code null} (meaning "no custom trailers"). Rejects any entry
+     * whose key or value contains {@code \r} or {@code \n} (header/response
+     * splitting risk), and rejects null or empty keys.
+     *
+     * @throws IllegalArgumentException if any key is null/empty or any key/value contains CR/LF
+     */
+    public GrpcChaosProfile withCustomTrailers(Map<String, String> customTrailers) {
+        if (customTrailers != null) {
+            for (Map.Entry<String, String> entry : customTrailers.entrySet()) {
+                String key = entry.getKey();
+                if (key == null || key.isEmpty()) {
+                    throw new IllegalArgumentException("customTrailers key must not be null or empty");
+                }
+                if (containsCrLf(key)) {
+                    throw new IllegalArgumentException("customTrailers key must not contain CR or LF characters, got '" + key + "'");
+                }
+                if (!isValidHttp2HeaderToken(key)) {
+                    throw new IllegalArgumentException("customTrailers key must be a valid lowercase HTTP/2 header token ([a-z0-9!#$%&'*+\\-.^_`|~]), got '" + key + "'");
+                }
+                String value = entry.getValue();
+                if (value != null && containsCrLf(value)) {
+                    throw new IllegalArgumentException("customTrailers value must not contain CR or LF characters, got value for key '" + key + "'");
+                }
+            }
+        }
+        this.customTrailers = customTrailers != null ? new LinkedHashMap<>(customTrailers) : null;
+        this.hashCode = 0;
+        return this;
+    }
+
+    private static boolean containsCrLf(String s) {
+        return s.indexOf('\r') >= 0 || s.indexOf('\n') >= 0;
+    }
+
+    /**
+     * Returns {@code true} when every character in {@code token} is a valid lowercase
+     * HTTP/2 header-name character: {@code [a-z0-9!#$%&'*+\-.^_`|~]}.
+     * HTTP/2 requires header names to be lowercase; an uppercase or illegal-char key
+     * would fail obscurely at Netty write time.
+     */
+    private static boolean isValidHttp2HeaderToken(String token) {
+        for (int i = 0; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                continue;
+            }
+            if ("!#$%&'*+-.^_`|~".indexOf(c) >= 0) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    public Map<String, String> getCustomTrailers() {
+        return customTrailers == null ? null : java.util.Collections.unmodifiableMap(customTrailers);
+    }
+
+    /**
+     * Sets the client-streaming message count threshold for abort injection.
+     * Only meaningful for client-streaming (multi-frame) requests: when the
+     * decoded gRPC frame count in the request body is &gt;= this threshold,
+     * the handler responds with {@code ABORTED}. For unary (single-frame)
+     * requests the message count is always 1, so setting this to 1 aborts
+     * every request while values &gt; 1 only trigger on multi-frame bodies.
+     *
+     * @throws IllegalArgumentException if abortAfterMessages is non-null and &lt; 1
+     */
+    public GrpcChaosProfile withAbortAfterMessages(Integer abortAfterMessages) {
+        if (abortAfterMessages != null && abortAfterMessages < 1) {
+            throw new IllegalArgumentException("abortAfterMessages must be >= 1, got " + abortAfterMessages);
+        }
+        this.abortAfterMessages = abortAfterMessages;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Integer getAbortAfterMessages() {
+        return abortAfterMessages;
+    }
+
     /**
      * Returns {@code true} when the given 1-based match count falls within the
      * chaos-eligible window defined by {@code succeedFirst} and
@@ -211,13 +320,17 @@ public class GrpcChaosProfile extends ObjectWithJsonToString {
     /**
      * Returns {@code true} when this profile has at least one fault-producing
      * field configured: an error probability, an error status code, a latency,
-     * or quota fields.
+     * quota fields, trailer faults (omit/corrupt/custom), or stream abort.
      */
     public boolean hasAnyFault() {
         return (errorProbability != null && errorProbability > 0.0)
             || errorStatusCode != null
             || (latencyMs != null && latencyMs > 0)
-            || (quotaName != null && quotaLimit != null && quotaWindowMillis != null);
+            || (quotaName != null && quotaLimit != null && quotaWindowMillis != null)
+            || Boolean.TRUE.equals(omitGrpcStatus)
+            || Boolean.TRUE.equals(corruptGrpcStatus)
+            || (customTrailers != null && !customTrailers.isEmpty())
+            || abortAfterMessages != null;
     }
 
     @Override
@@ -241,13 +354,17 @@ public class GrpcChaosProfile extends ObjectWithJsonToString {
             && Objects.equals(failRequestCount, that.failRequestCount)
             && Objects.equals(quotaName, that.quotaName)
             && Objects.equals(quotaLimit, that.quotaLimit)
-            && Objects.equals(quotaWindowMillis, that.quotaWindowMillis);
+            && Objects.equals(quotaWindowMillis, that.quotaWindowMillis)
+            && Objects.equals(omitGrpcStatus, that.omitGrpcStatus)
+            && Objects.equals(corruptGrpcStatus, that.corruptGrpcStatus)
+            && Objects.equals(customTrailers, that.customTrailers)
+            && Objects.equals(abortAfterMessages, that.abortAfterMessages);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(errorStatusCode, errorMessage, errorProbability, seed, latencyMs, succeedFirst, failRequestCount, quotaName, quotaLimit, quotaWindowMillis);
+            hashCode = Objects.hash(errorStatusCode, errorMessage, errorProbability, seed, latencyMs, succeedFirst, failRequestCount, quotaName, quotaLimit, quotaWindowMillis, omitGrpcStatus, corruptGrpcStatus, customTrailers, abortAfterMessages);
         }
         return hashCode;
     }
