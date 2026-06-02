@@ -998,11 +998,14 @@ function actionToJava(action: StandardActionPayload): string {
       const msgLines = ws.messages.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       for (const msg of msgLines) lines.push(`        .withMessage(webSocketMessage("${escapeJava(msg)}"))`);
       for (const m of ws.matchers) {
-        let mChain = `webSocketMessageMatcher().withFrameType(WebSocketFrameType.${m.frameType})`;
-        if (m.textMatcher.trim()) mChain += `.withTextMatcher(string("${escapeJava(m.textMatcher.trim())}"))`;
+        // Emit the nested webSocketMessageMatcher() builder across indented lines.
+        lines.push('        .withMatcher(');
+        lines.push(`            webSocketMessageMatcher()`);
+        lines.push(`                .withFrameType(WebSocketFrameType.${m.frameType})`);
+        if (m.textMatcher.trim()) lines.push(`                .withTextMatcher(string("${escapeJava(m.textMatcher.trim())}"))`);
         const respLines = m.responses.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-        for (const r of respLines) mChain += `.withResponse(webSocketMessage("${escapeJava(r)}"))`;
-        lines.push(`        .withMatcher(${mChain})`);
+        for (const r of respLines) lines.push(`                .withResponse(webSocketMessage("${escapeJava(r)}"))`);
+        lines.push('        )');
       }
       if (ws.closeConnection) lines.push('        .withCloseConnection(true)');
       lines.push(')');
@@ -1044,13 +1047,16 @@ function actionToJava(action: StandardActionPayload): string {
       const lines = ['.respondWithDns(', '    dnsResponse()'];
       if (dns.responseCode) lines.push(`        .withResponseCode(DnsResponseCode.${dns.responseCode})`);
       for (const rec of parseDnsRecords(dns.answerRecords)) {
-        let recChain = 'dnsRecord()';
-        if (rec.name) recChain += `.withName("${escapeJava(rec.name)}")`;
-        if (rec.type) recChain += `.withType(DnsRecordType.${rec.type})`;
-        if (rec.dnsClass) recChain += `.withDnsClass(DnsRecordClass.${rec.dnsClass})`;
-        if (rec.ttl != null) recChain += `.withTtl(${rec.ttl})`;
-        if (rec.value) recChain += `.withValue("${escapeJava(rec.value)}")`;
-        lines.push(`        .withAnswerRecord(${recChain})`);
+        // Emit the nested dnsRecord() builder across indented lines rather than one long
+        // call, so the snippet stays readable.
+        lines.push('        .withAnswerRecord(');
+        lines.push('            dnsRecord()');
+        if (rec.name) lines.push(`                .withName("${escapeJava(rec.name)}")`);
+        if (rec.type) lines.push(`                .withType(DnsRecordType.${rec.type})`);
+        if (rec.dnsClass) lines.push(`                .withDnsClass(DnsRecordClass.${rec.dnsClass})`);
+        if (rec.ttl != null) lines.push(`                .withTtl(${rec.ttl})`);
+        if (rec.value) lines.push(`                .withValue("${escapeJava(rec.value)}")`);
+        lines.push('        )');
       }
       lines.push(')');
       return lines.join('\n');

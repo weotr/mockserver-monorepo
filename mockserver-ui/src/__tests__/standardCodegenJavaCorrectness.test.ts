@@ -109,7 +109,8 @@ describe('Java/JSON parity additions', () => {
   it('DNS response emits answer records parsed from the JSON field', () => {
     const records = JSON.stringify([{ name: 'api.example.com', type: 'A', ttl: 60, value: '1.2.3.4' }]);
     const java = standardToJava(dnsMatcher(), { type: 'dns_response', dnsResponse: { responseCode: 'NOERROR', answerRecords: records } });
-    expect(java).toContain('.withAnswerRecord(dnsRecord()');
+    // the nested dnsRecord() builder is emitted across indented lines, not one long call
+    expect(java).toMatch(/\.withAnswerRecord\(\s*\n\s*dnsRecord\(\)/);
     expect(java).toContain('.withName("api.example.com")');
     expect(java).toContain('.withType(DnsRecordType.A)');
     expect(java).toContain('.withTtl(60)');

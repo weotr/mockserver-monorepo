@@ -214,7 +214,10 @@ export function conversationToJava(draft: ConversationDraft): string {
         const list = n.dropVolatileFields.map((f) => `"${escapeJava(f)}"`).join(', ');
         normParts.push(`.withDropVolatileFields(java.util.Arrays.asList(${list}))`);
       }
-      lines.push(`        .withNormalization(${normParts.join('')})`);
+      lines.push('        .withNormalization(');
+      lines.push(`            ${normParts[0]}`);
+      for (const part of normParts.slice(1)) lines.push(`                ${part}`);
+      lines.push('        )');
     }
 
     // Response
@@ -236,7 +239,10 @@ export function conversationToJava(draft: ConversationDraft): string {
       completionParts.push('.streaming()');
     }
 
-    lines.push(`        .respondingWith(${completionParts.join('\n            ')})`);
+    lines.push('        .respondingWith(');
+    lines.push(`            ${completionParts[0]}`);
+    for (const part of completionParts.slice(1)) lines.push(`                ${part}`);
+    lines.push('        )');
 
     if (chaosToObject(turn.chaos)) {
       const c = turn.chaos!;
@@ -248,7 +254,10 @@ export function conversationToJava(draft: ConversationDraft): string {
       if (c.truncateAtFraction != null) chaosParts.push(`.withTruncateAtFraction(${javaDouble(c.truncateAtFraction)})`);
       if (c.malformedSse != null) chaosParts.push(`.withMalformedSse(${c.malformedSse})`);
       if (c.seed != null) chaosParts.push(`.withSeed(${c.seed}L)`);
-      lines.push(`        .withChaos(${chaosParts.join('')})`);
+      lines.push('        .withChaos(');
+      lines.push(`            ${chaosParts[0]}`);
+      for (const part of chaosParts.slice(1)) lines.push(`                ${part}`);
+      lines.push('        )');
     }
 
     if (i < draft.turns.length - 1) {

@@ -73,6 +73,21 @@ describe('conversation Java renders Double chaos args as decimal literals', () =
   });
 });
 
+describe('conversation Java formats nested builders across indented lines', () => {
+  it('breaks withChaos / withNormalization onto multiple lines rather than one long call', () => {
+    const d = convDraft();
+    d.turns[0]!.predicates.normalization = { collapseWhitespace: true, lowercase: true };
+    d.turns[0]!.chaos = { errorStatus: 503, seed: 7 };
+    const java = conversationToJava(d);
+    // factory call sits on its own line after the opening paren, not inline
+    expect(java).toMatch(/\.withChaos\(\s*\n\s*org\.mockserver\.model\.LlmChaosProfile\.llmChaosProfile\(\)/);
+    expect(java).toMatch(/\.withNormalization\(\s*\n\s*org\.mockserver\.model\.NormalizationOptions\.normalizationOptions\(\)/);
+    expect(java).toMatch(/\.respondingWith\(\s*\n\s*completion\(\)/);
+    // no generated line should be an overlong single-call blob
+    expect(java.split('\n').every((l) => l.length <= 120)).toBe(true);
+  });
+});
+
 describe('conversation JSON places scenario fields at the expectation top level', () => {
   it('does not nest scenarioName/scenarioState/newScenarioState in httpLlmResponse', () => {
     const parsed = JSON.parse(conversationToJson(convDraft({
