@@ -120,6 +120,20 @@ describe('Java/JSON parity additions', () => {
   });
 });
 
+describe('expectation timeToLive', () => {
+  const ttlAction: StandardActionPayload = { type: 'static', static: { statusCode: 200, body: '', contentType: '' } };
+
+  it('emits a SECONDS timeToLive when ttlSeconds > 0', () => {
+    const json = buildExpectationJson(httpMatcher({ ttlSeconds: 90 }), ttlAction);
+    expect(json['timeToLive']).toEqual({ timeUnit: 'SECONDS', timeToLive: 90, unlimited: false });
+  });
+
+  it('omits timeToLive when ttlSeconds is 0 or absent', () => {
+    expect(buildExpectationJson(httpMatcher({ ttlSeconds: 0 }), ttlAction)).not.toHaveProperty('timeToLive');
+    expect(buildExpectationJson(httpMatcher(), ttlAction)).not.toHaveProperty('timeToLive');
+  });
+});
+
 describe('static response preserves arbitrary response headers', () => {
   const action: StandardActionPayload = {
     type: 'static',

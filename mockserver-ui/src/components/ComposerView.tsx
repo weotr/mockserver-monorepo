@@ -265,6 +265,7 @@ interface MatcherState {
   secure: boolean;
   priority: number;
   times: number;         // 0 = unlimited
+  ttlSeconds: number;    // 0 = unlimited (auto-expire after N seconds)
   /** DNS matcher — set when the expectation kind is 'dns'. */
   dns?: StandardDnsMatcher;
 }
@@ -285,6 +286,7 @@ function emptyMatcher(): MatcherState {
     secure: false,
     priority: 0,
     times: 0,
+    ttlSeconds: 0,
   };
 }
 
@@ -539,6 +541,14 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           value={matcher.times}
           onChange={(e) => setMatcher({ ...matcher, times: Math.max(0, Number(e.target.value) || 0) })}
         />
+        <TextField
+          label="Time to live (s, 0 = forever)"
+          size="small"
+          type="number"
+          sx={{ width: 200 }}
+          value={matcher.ttlSeconds}
+          onChange={(e) => setMatcher({ ...matcher, ttlSeconds: Math.max(0, Number(e.target.value) || 0) })}
+        />
       </Box>
     </Box>
   );
@@ -627,6 +637,14 @@ function DnsMatcherPanel({
           sx={{ width: 170 }}
           value={matcher.times}
           onChange={(e) => setMatcher({ ...matcher, times: Math.max(0, Number(e.target.value) || 0) })}
+        />
+        <TextField
+          label="Time to live (s, 0 = forever)"
+          size="small"
+          type="number"
+          sx={{ width: 200 }}
+          value={matcher.ttlSeconds}
+          onChange={(e) => setMatcher({ ...matcher, ttlSeconds: Math.max(0, Number(e.target.value) || 0) })}
         />
       </Box>
     </Box>
@@ -749,6 +767,18 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
       const tr = t as Record<string, unknown>;
       if (tr['unlimited'] === true) return 0;
       return typeof tr['remainingTimes'] === 'number' ? (tr['remainingTimes'] as number) : 0;
+    })(),
+    // timeToLive prefills as seconds (0 = unlimited), converting from the stored timeUnit.
+    ttlSeconds: (() => {
+      const t = v['timeToLive'];
+      if (typeof t !== 'object' || t === null) return 0;
+      const tr = t as Record<string, unknown>;
+      if (tr['unlimited'] === true) return 0;
+      const val = tr['timeToLive'];
+      if (typeof val !== 'number') return 0;
+      const factor: Record<string, number> = { DAYS: 86400, HOURS: 3600, MINUTES: 60, SECONDS: 1, MILLISECONDS: 0.001 };
+      const unit = typeof tr['timeUnit'] === 'string' ? (tr['timeUnit'] as string) : 'SECONDS';
+      return Math.round(val * (factor[unit] ?? 1));
     })(),
   };
 }

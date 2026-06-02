@@ -43,6 +43,8 @@ export interface StandardMatcher {
   secure: boolean;
   priority: number;
   times: number;
+  /** Time-to-live in seconds before the expectation auto-expires; 0/undefined = unlimited. */
+  ttlSeconds?: number;
   /** DNS-specific matcher fields — populated only when the expectation kind is 'dns'. */
   dns?: StandardDnsMatcher;
 }
@@ -648,6 +650,9 @@ export function buildExpectationJson(
   if (matcher.priority !== 0) out['priority'] = matcher.priority;
   if (matcher.times > 0) {
     out['times'] = { remainingTimes: matcher.times, unlimited: false };
+  }
+  if (matcher.ttlSeconds != null && matcher.ttlSeconds > 0) {
+    out['timeToLive'] = { timeUnit: 'SECONDS', timeToLive: matcher.ttlSeconds, unlimited: false };
   }
 
   return out;
