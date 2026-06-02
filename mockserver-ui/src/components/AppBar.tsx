@@ -26,6 +26,7 @@ import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SpeedIcon from '@mui/icons-material/Speed';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import Select from '@mui/material/Select';
 import type { SelectChangeEvent } from '@mui/material/Select';
 import Snackbar from '@mui/material/Snackbar';
@@ -210,6 +211,10 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           <ToggleButton value="drift" aria-label="Drift detection view">
             <CompareArrowsIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
             Drift
+          </ToggleButton>
+          <ToggleButton value="verification" aria-label="Verification view">
+            <PlaylistAddCheckIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
+            Verify
           </ToggleButton>
           <ToggleButton value="metrics" aria-label="Metrics view">
             <SpeedIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
