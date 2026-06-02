@@ -4,13 +4,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockserver.async.asyncapi.AsyncApiChannel;
 import org.mockserver.async.asyncapi.AsyncApiSpec;
 import org.mockserver.async.publish.MessagePublisher;
+import org.mockserver.async.publish.PublishOptions;
 
 import java.util.List;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 
@@ -41,8 +48,8 @@ public class AsyncApiMockOrchestratorTest {
         AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
         orchestrator.publishAll();
 
-        verify(publisher).publish(eq("users"), eq("{\"userId\":\"abc\"}"));
-        verify(publisher).publish(eq("orders"), eq("{\"orderId\":42}"));
+        verify(publisher).publish(eq("users"), eq("{\"userId\":\"abc\"}"), any(PublishOptions.class));
+        verify(publisher).publish(eq("orders"), eq("{\"orderId\":42}"), any(PublishOptions.class));
         verifyNoMoreInteractions(publisher);
     }
 
@@ -58,7 +65,7 @@ public class AsyncApiMockOrchestratorTest {
         AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
         orchestrator.publishAll();
 
-        verify(publisher).publish(eq("events"), eq("{\"name\":\"string\"}"));
+        verify(publisher).publish(eq("events"), eq("{\"name\":\"string\"}"), any(PublishOptions.class));
     }
 
     @Test
@@ -69,7 +76,7 @@ public class AsyncApiMockOrchestratorTest {
         AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
         orchestrator.publishAll();
 
-        verify(publisher).publish(eq("empty"), eq("{}"));
+        verify(publisher).publish(eq("empty"), eq("{}"), any(PublishOptions.class));
     }
 
     @Test
@@ -96,6 +103,60 @@ public class AsyncApiMockOrchestratorTest {
         orchestrator.stop();
 
         // Should have been called at least twice
-        verify(publisher, atLeast(2)).publish(eq("tick"), eq("{\"v\":1}"));
+        verify(publisher, atLeast(2)).publish(eq("tick"), eq("{\"v\":1}"), any(PublishOptions.class));
+    }
+
+    // ---- PublishOptions threading tests ----
+
+    @Test
+    public void shouldThreadMqttBindingsToPublisher() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"temp\": 22}");
+        AsyncApiChannel channel = new AsyncApiChannel("sensors/temp", List.of(example), null,
+            2, true, null);
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
+        orchestrator.publishAll();
+
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("sensors/temp"), eq("{\"temp\":22}"), optionsCaptor.capture());
+
+        PublishOptions captured = optionsCaptor.getValue();
+        assertThat(captured.getQos(), is(2));
+        assertThat(captured.getRetain(), is(true));
+        assertThat(captured.getKey(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldThreadKafkaKeyToPublisher() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"orderId\": 42}");
+        AsyncApiChannel channel = new AsyncApiChannel("orders", List.of(example), null,
+            null, null, "order-key");
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
+        orchestrator.publishAll();
+
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("orders"), eq("{\"orderId\":42}"), optionsCaptor.capture());
+
+        PublishOptions captured = optionsCaptor.getValue();
+        assertThat(captured.getKey(), is("order-key"));
+        assertThat(captured.getQos(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldPassNoneOptionsWhenChannelHasNoBindings() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"v\": 1}");
+        AsyncApiChannel channel = new AsyncApiChannel("plain", List.of(example), null);
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher);
+        orchestrator.publishAll();
+
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("plain"), eq("{\"v\":1}"), optionsCaptor.capture());
+
+        assertThat(optionsCaptor.getValue().isEmpty(), is(true));
     }
 }

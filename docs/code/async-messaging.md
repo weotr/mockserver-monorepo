@@ -45,10 +45,11 @@ The control-plane uses an **SPI/registry pattern** (Option A from the design spe
 | `AsyncApiControlPlaneImpl` | `o.m.async.controlplane` | Full implementation: load, status, reset, verify, broker lifecycle |
 | `AsyncApiParser` | `o.m.async.asyncapi` | Parses AsyncAPI 2.x/3.x JSON or YAML into an `AsyncApiSpec` model |
 | `AsyncApiSpec` | `o.m.async.asyncapi` | Immutable model: version, title, list of `AsyncApiChannel` |
-| `AsyncApiChannel` | `o.m.async.asyncapi` | A channel name, payload examples, and optional JSON Schema |
+| `AsyncApiChannel` | `o.m.async.asyncapi` | A channel name, payload examples, optional JSON Schema, and parsed bindings (MQTT qos/retain, Kafka key) |
 | `MessageExampleGenerator` | `o.m.async` | Schema-aware example generation (enum, default, format, min/max, minLength, const) |
 | `AsyncApiSchemaValidator` | `o.m.async.validation` | Validates payloads against channel JSON Schemas using core's `JsonSchemaValidator` |
-| `MessagePublisher` | `o.m.async.publish` | Interface: `publish(channel, payload)`, `publish(channel, key, payload, headers)`, `close()` |
+| `PublishOptions` | `o.m.async.publish` | Immutable carrier for per-message publish-time options: Kafka key, MQTT qos, MQTT retain |
+| `MessagePublisher` | `o.m.async.publish` | Interface: `publish(channel, payload)`, `publish(channel, key, payload, headers)`, `publish(channel, payload, options)`, `close()` |
 | `KafkaMessagePublisher` | `o.m.async.publish` | Wraps `KafkaProducer`; supports keys and headers |
 | `MqttMessagePublisher` | `o.m.async.publish` | Wraps Paho `MqttClient`; supports configurable QoS (0/1/2) and binary payloads |
 | `MessageSubscriber` | `o.m.async.subscribe` | Interface: `subscribe(channel)`, `unsubscribe(channel)`, `getRecordedMessages()`, `close()` |
@@ -218,6 +219,37 @@ Recorded messages are stored in a **bounded** `BoundedMessageStore` per channel 
 - **MQTT**: `MqttMessagePublisher` supports configurable QoS (0, 1, or 2) and binary payloads via `publishBytes()`
 - **Kafka Consumer**: `KafkaMessageSubscriber` records message keys and headers from consumed records
 
+## AsyncAPI Channel Bindings
+
+The parser extracts publish-time bindings from the AsyncAPI spec and threads them through to the publishers via an immutable `PublishOptions` carrier. The following bindings are supported:
+
+### Supported Bindings
+
+| Binding | AsyncAPI Location | Applies To | Effect |
+|---------|-------------------|------------|--------|
+| MQTT QoS | `publish.bindings.mqtt.qos` (v2), `channels.<n>.bindings.mqtt.qos` (v3 best-effort) | `MqttMessagePublisher` | Overrides the instance-level QoS for the message |
+| MQTT retain | `publish.bindings.mqtt.retain` (v2), `channels.<n>.bindings.mqtt.retain` (v3 best-effort) | `MqttMessagePublisher` | Sets `MqttMessage.setRetained()` |
+| Kafka message key | `publish.message.bindings.kafka.key` (v2), `messages.<n>.bindings.kafka.key` (v3) | `KafkaMessagePublisher` | Sets the `ProducerRecord` key |
+
+### Kafka Key Extraction
+
+The Kafka key binding (`bindings.kafka.key`) can be:
+
+- A **scalar literal** (string or number) -- used directly
+- A **schema with `const`** -- the const value is used
+- A **schema with `example`** -- the example value is used
+- A **schema with `examples[]`** -- the first example is used
+- A **bare schema** (no literal derivable) -- key is null (not applied)
+
+### PublishOptions Threading
+
+The `AsyncApiMockOrchestrator` looks up each channel's `AsyncApiChannel` by name, calls `toPublishOptions()` to build a `PublishOptions`, and passes it to `publisher.publish(channel, payload, options)`. Publishers that do not override the `publish(channel, payload, options)` method fall back to the default implementation which ignores the options, preserving backward compatibility.
+
+### Limitations
+
+- **v3 MQTT operation bindings**: In AsyncAPI 3.x, MQTT QoS and retain are properly located in the top-level `operations` section's bindings, not on channels. The parser checks for channel-level `bindings.mqtt` as a best-effort fallback but does **not** navigate v3 operation-to-channel references. Full v3 operation-binding resolution is deferred.
+- **Kafka topic-config bindings**: Kafka channel bindings for topic configuration (partitions, replicas, cleanup policy) are intentionally **not** applied at publish time -- they describe topic creation parameters, not message-level settings.
+
 ## Broker Security
 
 The `brokerConfig` supports optional security configuration for connecting to enterprise brokers that require SASL authentication and/or TLS. When security is absent or empty, the adapters use plaintext connections (backward compatible).
@@ -314,14 +346,15 @@ The `mockserver-async` module is wired into the running server:
 
 | Test Class | What it covers |
 |------------|----------------|
-| `AsyncApiParserTest` | AsyncAPI 2.x/3.x parsing (JSON, YAML, refs, edge cases) |
+| `AsyncApiParserTest` | AsyncAPI 2.x/3.x parsing (JSON, YAML, refs, edge cases, binding extraction) |
 | `MessageExampleGeneratorTest` | Basic example generation (explicit, synthesized, fallback) |
 | `MessageExampleGeneratorSchemaAwareTest` | Schema-aware synthesis (enum, default, format, min/max, const, minLength, minItems) |
-| `AsyncApiMockOrchestratorTest` | Orchestrator publish/schedule lifecycle (mocked publisher) |
+| `PublishOptionsTest` | PublishOptions construction, validation, isEmpty, qos range checking |
+| `AsyncApiMockOrchestratorTest` | Orchestrator publish/schedule lifecycle, PublishOptions threading (mocked publisher) |
 | `KafkaMessagePublisherTest` | Basic Kafka publishing (mocked producer) |
-| `KafkaMessagePublisherKeyHeadersTest` | Kafka keys and headers (mocked producer) |
+| `KafkaMessagePublisherKeyHeadersTest` | Kafka keys, headers, and PublishOptions (key from bindings) (mocked producer) |
 | `MqttMessagePublisherTest` | Basic MQTT publishing (mocked client) |
-| `MqttMessagePublisherQosTest` | MQTT QoS and binary payloads (mocked client) |
+| `MqttMessagePublisherQosTest` | MQTT QoS, binary payloads, and PublishOptions (retain, qos override) (mocked client) |
 | `BoundedMessageStoreTest` | Bounded FIFO store: capacity, eviction, snapshot isolation, edge cases |
 | `KafkaMessageSubscriberTest` | Kafka subscribing, message recording, bounded eviction, queued-ops pattern (mocked consumer) |
 | `MqttMessageSubscriberTest` | MQTT subscribing, message recording, bounded eviction (mocked client) |
@@ -370,7 +403,7 @@ client.verifyAsyncMessage("{\"channel\":\"orders\",\"count\":{\"atLeast\":1}}");
 The following items are **not yet implemented**:
 
 - **Dashboard UI**: no UI panel for async messaging state (deferred to a future UI enhancement)
-- **Advanced AsyncAPI bindings**: channel-specific binding configurations (e.g., Kafka partition assignment, MQTT retain flag) are not parsed or applied
+- **Advanced AsyncAPI bindings (remaining)**: Kafka topic-config bindings (partitions, replicas) and v3 operation-level MQTT binding navigation are not yet implemented. MQTT qos/retain and Kafka message key bindings are supported (see [AsyncAPI Channel Bindings](#asyncapi-channel-bindings))
 - **Correlation IDs**: AsyncAPI correlation ID definitions are not tracked
 - **Multi-message channels**: only the first message definition per channel is used
 - **Live-broker integration tests**: all tests use mocked producers/consumers; Testcontainers-based live-broker tests are a documented follow-up (testcontainers is not currently a test dependency)

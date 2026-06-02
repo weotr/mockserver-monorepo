@@ -78,8 +78,9 @@ public class AsyncApiParser {
             String channelName = entry.getKey();
             JsonNode channelDef = entry.getValue();
 
-            // Try publish, then subscribe
-            JsonNode messageNode = findV2Message(channelDef);
+            // Try publish, then subscribe — capture the operation node for bindings
+            JsonNode operationNode = findV2Operation(channelDef);
+            JsonNode messageNode = (operationNode != null) ? operationNode.get("message") : null;
             if (messageNode == null) {
                 result.add(new AsyncApiChannel(channelName, List.of(), null));
                 continue;
@@ -109,27 +110,33 @@ public class AsyncApiParser {
                 }
             }
 
-            result.add(new AsyncApiChannel(channelName, examples, payloadSchema));
+            // Parse MQTT operation bindings (qos, retain)
+            Integer mqttQos = parseMqttQos(operationNode);
+            Boolean mqttRetain = parseMqttRetain(operationNode);
+
+            // Parse Kafka message key binding
+            String kafkaKey = parseKafkaKeyFromMessage(messageNode);
+
+            result.add(new AsyncApiChannel(channelName, examples, payloadSchema,
+                mqttQos, mqttRetain, kafkaKey));
         }
 
         return result;
     }
 
-    private JsonNode findV2Message(JsonNode channelDef) {
-        // Prefer publish, fallback to subscribe
+    /**
+     * Find the v2 operation node (publish preferred, then subscribe).
+     * Returns the operation node itself (not the message), so callers can
+     * read operation-level bindings.
+     */
+    private JsonNode findV2Operation(JsonNode channelDef) {
         JsonNode publish = channelDef.get("publish");
-        if (publish != null) {
-            JsonNode msg = publish.get("message");
-            if (msg != null) {
-                return msg;
-            }
+        if (publish != null && publish.get("message") != null) {
+            return publish;
         }
         JsonNode subscribe = channelDef.get("subscribe");
-        if (subscribe != null) {
-            JsonNode msg = subscribe.get("message");
-            if (msg != null) {
-                return msg;
-            }
+        if (subscribe != null && subscribe.get("message") != null) {
+            return subscribe;
         }
         return null;
     }
@@ -187,10 +194,136 @@ public class AsyncApiParser {
                 }
             }
 
-            result.add(new AsyncApiChannel(channelName, examples, payloadSchema));
+            // Parse Kafka message key binding from the message definition
+            String kafkaKey = parseKafkaKeyFromMessage(msgDef);
+
+            // Parse MQTT bindings: in v3, operation bindings live in the
+            // top-level 'operations' section (not on channels). As a
+            // best-effort, check for channel-level bindings.mqtt.
+            // Full v3 operation-binding navigation is deferred.
+            Integer mqttQos = parseMqttQos(channelDef);
+            Boolean mqttRetain = parseMqttRetain(channelDef);
+
+            result.add(new AsyncApiChannel(channelName, examples, payloadSchema,
+                mqttQos, mqttRetain, kafkaKey));
         }
 
         return result;
+    }
+
+    // ---- Binding extraction helpers ----
+
+    /**
+     * Extract MQTT QoS from {@code node.bindings.mqtt.qos} (int 0/1/2).
+     * Returns null when absent, non-integer, or out of range (never throws).
+     */
+    private Integer parseMqttQos(JsonNode node) {
+        try {
+            JsonNode bindings = node.get("bindings");
+            if (bindings == null) {
+                return null;
+            }
+            JsonNode mqtt = bindings.get("mqtt");
+            if (mqtt == null) {
+                return null;
+            }
+            JsonNode qosNode = mqtt.get("qos");
+            if (qosNode != null && qosNode.isNumber()) {
+                int qos = qosNode.asInt();
+                if (qos >= 0 && qos <= 2) {
+                    return qos;
+                }
+                LOG.warn("Ignoring MQTT QoS binding with out-of-range value: {}", qos);
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to parse MQTT QoS binding: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Extract MQTT retain flag from {@code node.bindings.mqtt.retain} (boolean).
+     * Returns null when absent or non-boolean (never throws).
+     */
+    private Boolean parseMqttRetain(JsonNode node) {
+        try {
+            JsonNode bindings = node.get("bindings");
+            if (bindings == null) {
+                return null;
+            }
+            JsonNode mqtt = bindings.get("mqtt");
+            if (mqtt == null) {
+                return null;
+            }
+            JsonNode retainNode = mqtt.get("retain");
+            if (retainNode != null && retainNode.isBoolean()) {
+                return retainNode.asBoolean();
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to parse MQTT retain binding: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Extract a literal Kafka message key from {@code messageNode.bindings.kafka.key}.
+     * <p>
+     * The binding's {@code key} may be:
+     * <ul>
+     *   <li>a scalar literal (string/number) — used directly</li>
+     *   <li>a schema with {@code const} — the const value</li>
+     *   <li>a schema with {@code example} — the example value</li>
+     *   <li>a schema with {@code examples[0]} — the first example</li>
+     *   <li>a bare schema with no literal — returns null (not derivable)</li>
+     * </ul>
+     * Returns null when absent or not derivable (never throws).
+     */
+    private String parseKafkaKeyFromMessage(JsonNode messageNode) {
+        try {
+            JsonNode bindings = messageNode.get("bindings");
+            if (bindings == null) {
+                return null;
+            }
+            JsonNode kafka = bindings.get("kafka");
+            if (kafka == null) {
+                return null;
+            }
+            JsonNode keyNode = kafka.get("key");
+            if (keyNode == null) {
+                return null;
+            }
+
+            // Direct scalar value
+            if (keyNode.isTextual()) {
+                return keyNode.asText();
+            }
+            if (keyNode.isNumber()) {
+                return keyNode.asText();
+            }
+
+            // Schema-like object: try const, example, examples[0]
+            if (keyNode.isObject()) {
+                JsonNode constNode = keyNode.get("const");
+                if (constNode != null && constNode.isValueNode()) {
+                    return constNode.asText();
+                }
+                JsonNode exampleNode = keyNode.get("example");
+                if (exampleNode != null && exampleNode.isValueNode()) {
+                    return exampleNode.asText();
+                }
+                JsonNode examplesNode = keyNode.get("examples");
+                if (examplesNode != null && examplesNode.isArray() && examplesNode.size() > 0) {
+                    JsonNode first = examplesNode.get(0);
+                    if (first != null && first.isValueNode()) {
+                        return first.asText();
+                    }
+                }
+                // Bare schema with no derivable literal — return null
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to parse Kafka key binding: {}", e.getMessage());
+        }
+        return null;
     }
 
     /**

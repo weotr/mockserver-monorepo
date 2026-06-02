@@ -85,7 +85,22 @@ public class MqttMessagePublisher implements MessagePublisher {
 
     @Override
     public void publish(String channel, String payload) {
-        publishBytes(channel, payload.getBytes(StandardCharsets.UTF_8));
+        publishBytes(channel, payload.getBytes(StandardCharsets.UTF_8), null);
+    }
+
+    /**
+     * Publish a message with per-message options from AsyncAPI bindings.
+     * Applies {@link PublishOptions#getQos()} and {@link PublishOptions#getRetain()}
+     * when non-null; falls back to the instance-level QoS and no-retain defaults.
+     * The Kafka {@code key} field is ignored for MQTT.
+     *
+     * @param channel the MQTT topic name
+     * @param payload the message payload (typically JSON)
+     * @param options per-message publish options (may be null)
+     */
+    @Override
+    public void publish(String channel, String payload, PublishOptions options) {
+        publishBytes(channel, payload.getBytes(StandardCharsets.UTF_8), options);
     }
 
     /**
@@ -96,10 +111,25 @@ public class MqttMessagePublisher implements MessagePublisher {
      * @param payload the raw binary payload
      */
     public void publishBytes(String channel, byte[] payload) {
+        publishBytes(channel, payload, null);
+    }
+
+    /**
+     * Publish a binary payload with optional per-message options.
+     *
+     * @param channel the MQTT topic name
+     * @param payload the raw binary payload
+     * @param options per-message publish options (may be null)
+     */
+    void publishBytes(String channel, byte[] payload, PublishOptions options) {
         try {
             LOG.debug("Publishing to MQTT topic '{}': {} bytes", channel, payload.length);
             MqttMessage message = new MqttMessage(payload);
-            message.setQos(qos);
+            int effectiveQos = (options != null && options.getQos() != null) ? options.getQos() : this.qos;
+            message.setQos(effectiveQos);
+            if (options != null && options.getRetain() != null) {
+                message.setRetained(options.getRetain());
+            }
             client.publish(channel, message);
         } catch (MqttException e) {
             throw new RuntimeException("Failed to publish to MQTT topic: " + channel, e);

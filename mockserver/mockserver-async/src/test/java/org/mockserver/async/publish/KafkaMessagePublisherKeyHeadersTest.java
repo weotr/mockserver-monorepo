@@ -8,6 +8,8 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 
+import org.mockserver.async.publish.PublishOptions;
+
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -111,5 +113,63 @@ public class KafkaMessagePublisherKeyHeadersTest {
         assertThat(record.topic(), is("my-topic"));
         assertThat(record.key(), is(nullValue()));
         assertThat(record.value(), is("{\"simple\":true}"));
+    }
+
+    // ---- PublishOptions tests ----
+
+    @Test
+    public void shouldSendWithKeyFromPublishOptions() {
+        PublishOptions options = new PublishOptions("options-key", null, null);
+        publisher.publish("my-topic", "{\"data\":1}", options);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.topic(), is("my-topic"));
+        assertThat(record.key(), is("options-key"));
+        assertThat(record.value(), is("{\"data\":1}"));
+    }
+
+    @Test
+    public void shouldSendWithNullKeyWhenPublishOptionsHasNoKey() {
+        PublishOptions options = new PublishOptions(null, 2, true);
+        publisher.publish("my-topic", "{\"data\":1}", options);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.key(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldSendWithNullKeyWhenPublishOptionsAreNull() {
+        publisher.publish("my-topic", "{\"data\":1}", (PublishOptions) null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.key(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldSendWithNullKeyWhenPublishOptionsNone() {
+        publisher.publish("my-topic", "{\"data\":1}", PublishOptions.none());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.key(), is(nullValue()));
     }
 }

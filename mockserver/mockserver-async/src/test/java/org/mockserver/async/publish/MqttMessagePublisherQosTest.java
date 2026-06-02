@@ -7,6 +7,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockserver.async.publish.PublishOptions;
 
 import java.nio.charset.StandardCharsets;
 
@@ -76,5 +77,79 @@ public class MqttMessagePublisherQosTest {
         verify(mockClient).publish(eq("topic"), captor.capture());
         String payload = new String(captor.getValue().getPayload(), StandardCharsets.UTF_8);
         assertThat(payload, is("Hello World"));
+    }
+
+    // ---- PublishOptions tests ----
+
+    @Test
+    public void shouldApplyPublishOptionsQosAndRetain() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 1);
+        PublishOptions options = new PublishOptions(null, 2, true);
+        publisher.publish("topic", "{\"data\":1}", options);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        assertThat(captor.getValue().getQos(), is(2));
+        assertThat(captor.getValue().isRetained(), is(true));
+    }
+
+    @Test
+    public void shouldFallBackToInstanceQosWhenOptionsQosIsNull() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 0);
+        PublishOptions options = new PublishOptions(null, null, true);
+        publisher.publish("topic", "{\"data\":1}", options);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        assertThat(captor.getValue().getQos(), is(0));
+        assertThat(captor.getValue().isRetained(), is(true));
+    }
+
+    @Test
+    public void shouldNotSetRetainedWhenOptionsRetainIsNull() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 1);
+        PublishOptions options = new PublishOptions(null, null, null);
+        publisher.publish("topic", "{\"data\":1}", options);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        // MqttMessage default retained is false
+        assertThat(captor.getValue().isRetained(), is(false));
+        assertThat(captor.getValue().getQos(), is(1));
+    }
+
+    @Test
+    public void shouldUseInstanceDefaultsWhenOptionsAreNull() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 1);
+        publisher.publish("topic", "{\"data\":1}", (PublishOptions) null);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        assertThat(captor.getValue().getQos(), is(1));
+        assertThat(captor.getValue().isRetained(), is(false));
+    }
+
+    @Test
+    public void shouldUseInstanceDefaultsWhenOptionsNone() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 2);
+        publisher.publish("topic", "{\"data\":1}", PublishOptions.none());
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        assertThat(captor.getValue().getQos(), is(2));
+        assertThat(captor.getValue().isRetained(), is(false));
+    }
+
+    @Test
+    public void shouldIgnoreKafkaKeyInMqttPublishOptions() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 1);
+        // Kafka key should be silently ignored for MQTT
+        PublishOptions options = new PublishOptions("kafka-key", 0, false);
+        publisher.publish("topic", "{\"data\":1}", options);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        assertThat(captor.getValue().getQos(), is(0));
+        assertThat(captor.getValue().isRetained(), is(false));
     }
 }

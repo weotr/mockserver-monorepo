@@ -79,6 +79,21 @@ public class KafkaMessagePublisher implements MessagePublisher {
     }
 
     /**
+     * Publish a message with per-message options from AsyncAPI bindings.
+     * Only the {@link PublishOptions#getKey()} is applied (Kafka has no
+     * per-message QoS or retain). Other binding fields are ignored.
+     *
+     * @param channel the Kafka topic name
+     * @param payload the message payload (typically JSON)
+     * @param options per-message publish options (may be null)
+     */
+    @Override
+    public void publish(String channel, String payload, PublishOptions options) {
+        String key = (options != null) ? options.getKey() : null;
+        publish(channel, key, payload, null);
+    }
+
+    /**
      * Publish a message with a specific key and optional headers.
      *
      * @param channel the Kafka topic name

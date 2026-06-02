@@ -32,6 +32,19 @@ public interface MessagePublisher {
     }
 
     /**
+     * Publish the given payload with per-message options derived from AsyncAPI bindings.
+     * Default implementation delegates to {@link #publish(String, String)},
+     * ignoring the options — implementations that support them override this.
+     *
+     * @param channel the channel / topic name
+     * @param payload the message payload (typically JSON)
+     * @param options per-message publish options (may be null)
+     */
+    default void publish(String channel, String payload, PublishOptions options) {
+        publish(channel, payload);
+    }
+
+    /**
      * Release any resources held by this publisher (producer connections, etc.).
      */
     void close();
