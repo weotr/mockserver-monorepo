@@ -1125,7 +1125,8 @@ describe('getTokenSummary — new providers', () => {
       },
       httpResponse: {
         statusCode: 200,
-        body: { type: 'JSON', json: '{"model":"gpt-4.1","output":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}' },
+        // Responses API reports input_tokens / output_tokens (not prompt_/completion_tokens).
+        body: { type: 'JSON', json: '{"model":"gpt-4.1","output":[],"usage":{"input_tokens":10,"output_tokens":5}}' },
       },
     };
     const parsed = parseTraffic(value);

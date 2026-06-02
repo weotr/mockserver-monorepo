@@ -957,8 +957,9 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
 // ---------------------------------------------------------------------------
 
 export function OpenAiResponsesConversationView({ parsed }: { parsed: OpenAiResponsesParsed }) {
-  const inputTokens = parsed.usage?.prompt_tokens;
-  const outputTokens = parsed.usage?.completion_tokens;
+  // Responses API reports input_tokens / output_tokens (not prompt_/completion_tokens).
+  const inputTokens = parsed.usage?.input_tokens;
+  const outputTokens = parsed.usage?.output_tokens;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>

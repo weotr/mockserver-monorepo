@@ -78,14 +78,12 @@ function findPricing(table: Array<[string, PricingEntry]>, model: string): Prici
 function getPricing(provider: string, model: string): PricingEntry | null {
   const kind = provider.toLowerCase();
 
-  if (kind === 'anthropic') {
-    return findPricing(ANTHROPIC_PRICING, model);
-  }
-  if (kind === 'bedrock') {
-    // Bedrock Anthropic model ids look like "anthropic.claude-sonnet-4-…".
-    // NOTE: not reachable from the dashboard today — `parseTraffic` does not
-    // yet emit `kind === 'bedrock'`. Kept for future Bedrock detection.
-    const stripped = model.replace(/^anthropic\./, '');
+  if (kind === 'anthropic' || kind === 'bedrock') {
+    // parseTraffic classifies Bedrock Claude traffic as kind 'anthropic', and its model
+    // ids are prefixed (e.g. "anthropic.claude-sonnet-4-…" or, with inference profiles,
+    // "us.anthropic.claude-…"). Strip up to and including "anthropic." so the claude-*
+    // pricing keys match; a bare "claude-…" id is unaffected.
+    const stripped = model.replace(/^.*anthropic\./, '');
     return findPricing(ANTHROPIC_PRICING, stripped);
   }
   if (kind === 'openai' || kind === 'azure_openai') {

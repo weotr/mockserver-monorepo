@@ -57,6 +57,16 @@ export interface OpenAiUsage {
   total_tokens?: number;
 }
 
+/**
+ * The OpenAI Responses API reports token usage with input_tokens / output_tokens
+ * (like Anthropic), NOT the Chat Completions prompt_tokens / completion_tokens.
+ */
+export interface OpenAiResponsesUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface OpenAiChoice {
   message?: {
     role?: string;
@@ -104,7 +114,7 @@ export interface OpenAiResponsesParsed {
   input: unknown[];
   tools: unknown[] | null;
   output: unknown[];
-  usage: OpenAiUsage | null;
+  usage: OpenAiResponsesUsage | null;
   sseEvents: SseEvent[] | null;
   streamed: boolean;
   streamTruncated: boolean;
@@ -720,7 +730,7 @@ function parseOpenAiResponsesRequest(
   const res = safeParseJson(responseBody) as Record<string, unknown> | undefined;
   if (res) {
     result.output = getArray(res, 'output') ?? [];
-    result.usage = getObject(res, 'usage') as OpenAiUsage | null;
+    result.usage = getObject(res, 'usage') as OpenAiResponsesUsage | null;
     if (!result.model) {
       result.model = getString(res, 'model');
     }
@@ -1009,10 +1019,17 @@ export function getTokenSummary(parsed: ParsedTraffic): string | null {
     if (parsed.usage.output_tokens != null) parts.push(`${parsed.usage.output_tokens} out`);
     return parts.length > 0 ? parts.join(' / ') : null;
   }
-  if ((parsed.kind === 'openai' || parsed.kind === 'openai_responses') && parsed.usage) {
+  if (parsed.kind === 'openai' && parsed.usage) {
     const parts: string[] = [];
     if (parsed.usage.prompt_tokens != null) parts.push(`${parsed.usage.prompt_tokens} in`);
     if (parsed.usage.completion_tokens != null) parts.push(`${parsed.usage.completion_tokens} out`);
+    return parts.length > 0 ? parts.join(' / ') : null;
+  }
+  if (parsed.kind === 'openai_responses' && parsed.usage) {
+    // Responses API uses input_tokens / output_tokens.
+    const parts: string[] = [];
+    if (parsed.usage.input_tokens != null) parts.push(`${parsed.usage.input_tokens} in`);
+    if (parsed.usage.output_tokens != null) parts.push(`${parsed.usage.output_tokens} out`);
     return parts.length > 0 ? parts.join(' / ') : null;
   }
   if (parsed.kind === 'gemini' && parsed.usage) {
