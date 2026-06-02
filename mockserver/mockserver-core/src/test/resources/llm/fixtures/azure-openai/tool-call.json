@@ -1,0 +1,27 @@
+{
+  "id" : "<id>",
+  "object" : "chat.completion",
+  "created" : 0,
+  "model" : "gpt-4o",
+  "choices" : [ {
+    "index" : 0,
+    "message" : {
+      "role" : "assistant",
+      "content" : null,
+      "tool_calls" : [ {
+        "id" : "<id>",
+        "type" : "function",
+        "function" : {
+          "name" : "get_weather",
+          "arguments" : "{\"city\":\"London\",\"units\":\"celsius\"}"
+        }
+      } ]
+    },
+    "finish_reason" : "tool_calls"
+  } ],
+  "usage" : {
+    "prompt_tokens" : 0,
+    "completion_tokens" : 0,
+    "total_tokens" : 0
+  }
+}
