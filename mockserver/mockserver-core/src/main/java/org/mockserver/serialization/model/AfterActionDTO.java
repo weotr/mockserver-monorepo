@@ -7,6 +7,9 @@ public class AfterActionDTO extends ObjectWithJsonToString implements DTO<AfterA
     private HttpClassCallbackDTO httpClassCallback;
     private HttpObjectCallbackDTO httpObjectCallback;
     private DelayDTO delay;
+    private Boolean blocking;
+    private DelayDTO timeout;
+    private FailurePolicy failurePolicy;
 
     public AfterActionDTO() {
     }
@@ -25,6 +28,11 @@ public class AfterActionDTO extends ObjectWithJsonToString implements DTO<AfterA
             if (afterAction.getDelay() != null) {
                 this.delay = new DelayDTO(afterAction.getDelay());
             }
+            this.blocking = afterAction.getBlocking();
+            if (afterAction.getTimeout() != null) {
+                this.timeout = new DelayDTO(afterAction.getTimeout());
+            }
+            this.failurePolicy = afterAction.getFailurePolicy();
         }
     }
 
@@ -42,6 +50,15 @@ public class AfterActionDTO extends ObjectWithJsonToString implements DTO<AfterA
         }
         if (delay != null) {
             afterAction.withDelay(delay.buildObject());
+        }
+        if (blocking != null) {
+            afterAction.withBlocking(blocking);
+        }
+        if (timeout != null) {
+            afterAction.withTimeout(timeout.buildObject());
+        }
+        if (failurePolicy != null) {
+            afterAction.withFailurePolicy(failurePolicy);
         }
         return afterAction;
     }
@@ -79,6 +96,33 @@ public class AfterActionDTO extends ObjectWithJsonToString implements DTO<AfterA
 
     public AfterActionDTO setDelay(DelayDTO delay) {
         this.delay = delay;
+        return this;
+    }
+
+    public Boolean getBlocking() {
+        return blocking;
+    }
+
+    public AfterActionDTO setBlocking(Boolean blocking) {
+        this.blocking = blocking;
+        return this;
+    }
+
+    public DelayDTO getTimeout() {
+        return timeout;
+    }
+
+    public AfterActionDTO setTimeout(DelayDTO timeout) {
+        this.timeout = timeout;
+        return this;
+    }
+
+    public FailurePolicy getFailurePolicy() {
+        return failurePolicy;
+    }
+
+    public AfterActionDTO setFailurePolicy(FailurePolicy failurePolicy) {
+        this.failurePolicy = failurePolicy;
         return this;
     }
 }

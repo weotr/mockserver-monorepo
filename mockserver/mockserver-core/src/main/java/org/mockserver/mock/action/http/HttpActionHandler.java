@@ -204,7 +204,25 @@ public class HttpActionHandler {
 
         if (expectation != null && expectation.getAction() != null) {
 
-            dispatchPrimaryAction(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+            final List<AfterAction> beforeActions = expectation.getBeforeActions();
+            if (beforeActions != null && !beforeActions.isEmpty()) {
+                // run before-actions ahead of the primary action; blocking before-actions may gate
+                // (fail-fast) the response. Wrapped in scheduler.submit so any blocking wait happens
+                // off the event loop (async) or inline (synchronous), mirroring forward-action threading.
+                final Expectation matchedExpectation = expectation;
+                scheduler.submit(() -> {
+                    if (runBeforeActions(matchedExpectation, request, responseWriter)) {
+                        dispatchPrimaryAction(matchedExpectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+                    } else {
+                        // fail-fast abort: the 502 is the response, so still post-process to clear
+                        // responseInProgress, remove exhausted expectations, and fire after-actions
+                        // (idempotent via compareAndSet).
+                        expectationPostProcessor.run();
+                    }
+                }, synchronous);
+            } else {
+                dispatchPrimaryAction(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+            }
 
         } else if (CORSHeaders.isPreflightRequest(configuration, request) && (configuration.enableCORSForAPI() || configuration.enableCORSForAllResponses())) {
 
@@ -929,12 +947,21 @@ public class HttpActionHandler {
     }
 
     private void dispatchAfterAction(final AfterAction afterAction, final HttpRequest request) {
+        dispatchSideAction(afterAction, request, "after-action");
+    }
+
+    /**
+     * Fire-and-forget dispatch of a side-effect action (used by after-actions and by
+     * non-blocking before-actions). The side-effect's response, if any, is discarded; failures are
+     * logged but never propagated to the client. {@code label} only flavours the log messages.
+     */
+    private void dispatchSideAction(final AfterAction action, final HttpRequest request, final String label) {
         scheduler.submitAsync(() -> {
             try {
-                if (afterAction.getHttpRequest() != null) {
+                if (action.getHttpRequest() != null) {
                     // Resolve OpenAPI runtime expressions (no-op when none present)
                     HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(
-                        afterAction.getHttpRequest(), request
+                        action.getHttpRequest(), request
                     );
                     httpClient.sendRequest(callbackRequest)
                         .whenComplete((response, throwable) -> {
@@ -945,16 +972,16 @@ public class HttpActionHandler {
                                         .setLogLevel(Level.INFO)
                                         .setCorrelationId(request.getLogCorrelationId())
                                         .setHttpRequest(request)
-                                        .setMessageFormat("after-action webhook failed for request{} - " + throwable.getMessage())
+                                        .setMessageFormat(label + " webhook failed for request{} - " + throwable.getMessage())
                                         .setArguments(callbackRequest)
                                         .setThrowable(throwable)
                                 );
                             }
                         });
-                } else if (afterAction.getHttpClassCallback() != null) {
-                    getHttpResponseClassCallbackActionHandler().handle(afterAction.getHttpClassCallback(), request);
-                } else if (afterAction.getHttpObjectCallback() != null) {
-                    HttpObjectCallback callback = afterAction.getHttpObjectCallback();
+                } else if (action.getHttpClassCallback() != null) {
+                    getHttpResponseClassCallbackActionHandler().handle(action.getHttpClassCallback(), request);
+                } else if (action.getHttpObjectCallback() != null) {
+                    HttpObjectCallback callback = action.getHttpObjectCallback();
                     callback.withActionType(Action.Type.RESPONSE_OBJECT_CALLBACK);
                     String clientId = callback.getClientId();
                     if (LocalCallbackRegistry.responseClientExists(clientId)) {
@@ -969,12 +996,78 @@ public class HttpActionHandler {
                             .setLogLevel(Level.INFO)
                             .setCorrelationId(request.getLogCorrelationId())
                             .setHttpRequest(request)
-                            .setMessageFormat("exception dispatching after-action - " + e.getMessage())
+                            .setMessageFormat("exception dispatching " + label + " - " + e.getMessage())
                             .setThrowable(e)
                     );
                 }
             }
-        }, afterAction.getDelay());
+        }, action.getDelay());
+    }
+
+    /**
+     * Runs an expectation's before-actions ahead of its primary action.
+     *
+     * <p>Each before-action is either <em>blocking</em> (default) — the response waits for it to
+     * complete — or non-blocking (started but not waited for). Only HTTP-request (webhook)
+     * before-actions can be awaited; class/object-callback before-actions are always dispatched
+     * fire-and-forget. When a blocking webhook fails or times out its {@code failurePolicy}
+     * decides the outcome: {@link FailurePolicy#FAIL_FAST} writes a 502 and aborts (returns
+     * {@code false}); {@link FailurePolicy#BEST_EFFORT} (the default) logs and continues.</p>
+     *
+     * @return {@code true} to proceed to the primary action, {@code false} if a fail-fast
+     * before-action already wrote an error response.
+     */
+    private boolean runBeforeActions(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter) {
+        for (AfterAction beforeAction : expectation.getBeforeActions()) {
+            final boolean blocking = beforeAction.getBlocking() == null || beforeAction.getBlocking();
+            final FailurePolicy failurePolicy = beforeAction.getFailurePolicy() == null
+                ? FailurePolicy.BEST_EFFORT
+                : beforeAction.getFailurePolicy();
+
+            if (!blocking || beforeAction.getHttpRequest() == null) {
+                // non-blocking, or a callback before-action (no awaitable result in increment 1):
+                // dispatch fire-and-forget, started before the response
+                if (blocking && beforeAction.getHttpRequest() == null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("ignoring blocking=true on a callback before-action - only httpRequest (webhook) before-actions can block the response; dispatching fire-and-forget")
+                    );
+                }
+                dispatchSideAction(beforeAction, request, "before-action");
+                continue;
+            }
+
+            // blocking webhook before-action: send and wait, honouring the optional timeout
+            final HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(beforeAction.getHttpRequest(), request);
+            final long timeoutMillis = beforeAction.getTimeout() != null
+                ? beforeAction.getTimeout().getTimeUnit().toMillis(beforeAction.getTimeout().getValue())
+                : configuration.maxSocketTimeoutInMillis();
+            try {
+                httpClient.sendRequest(callbackRequest, timeoutMillis, MILLISECONDS);
+            } catch (Exception e) {
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("blocking before-action webhook failed for request{} - " + e.getMessage())
+                            .setArguments(callbackRequest)
+                            .setThrowable(e)
+                    );
+                }
+                if (failurePolicy == FailurePolicy.FAIL_FAST) {
+                    responseWriter.writeResponse(request, badGatewayResponse().withBody("before-action failed: " + e.getMessage()), false);
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous) {

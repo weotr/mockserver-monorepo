@@ -26,6 +26,7 @@ import org.slf4j.event.Level;
 import java.net.InetSocketAddress;
 import java.util.HashSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
@@ -161,6 +162,82 @@ public class HttpActionHandlerTest {
         );
         verify(scheduler).schedule(any(Runnable.class), eq(true), eq(milliseconds(0)));
         verify(scheduler).schedule(any(Runnable.class), eq(true), eq(milliseconds(0)));
+    }
+
+    @Test
+    public void shouldRunBlockingBeforeActionThenPrimaryAction() {
+        // given
+        HttpRequest webhook = request("/before-webhook");
+        expectation = new Expectation(request)
+            .withBeforeActions(AfterAction.beforeAction().withHttpRequest(webhook))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class))).thenReturn(response("webhook_ok"));
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then
+        verify(mockNettyHttpClient).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class));
+        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockResponseWriter).writeResponse(request, response, false);
+    }
+
+    @Test
+    public void shouldFailFastWhenBlockingBeforeActionFails() {
+        // given
+        HttpRequest webhook = request("/before-webhook");
+        expectation = new Expectation(request)
+            .withBeforeActions(AfterAction.beforeAction().withHttpRequest(webhook).withFailurePolicy(FailurePolicy.FAIL_FAST))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class))).thenThrow(new RuntimeException("downstream unavailable"));
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then the primary action is never dispatched and a 502 is returned
+        verify(mockHttpResponseActionHandler, never()).handle(any(HttpResponse.class));
+        verify(mockResponseWriter).writeResponse(eq(request), argThat(r -> r != null && r.getStatusCode() == 502), eq(false));
+        // and the expectation is still post-processed so matcher state is cleaned up on abort
+        verify(mockHttpStateHandler).postProcess(expectation);
+    }
+
+    @Test
+    public void shouldContinueToPrimaryActionWhenBestEffortBeforeActionFails() {
+        // given (failurePolicy defaults to BEST_EFFORT)
+        HttpRequest webhook = request("/before-webhook");
+        expectation = new Expectation(request)
+            .withBeforeActions(AfterAction.beforeAction().withHttpRequest(webhook))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class))).thenThrow(new RuntimeException("downstream unavailable"));
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then the failure is swallowed and the primary response is still returned
+        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockResponseWriter).writeResponse(request, response, false);
+    }
+
+    @Test
+    public void shouldDispatchNonBlockingBeforeActionAndProceed() {
+        // given
+        HttpRequest webhook = request("/before-webhook");
+        expectation = new Expectation(request)
+            .withBeforeActions(AfterAction.beforeAction().withHttpRequest(webhook).withBlocking(false))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class))).thenReturn(responseFuture);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then a non-blocking before-action does not gate the response (no blocking timeout call)
+        verify(mockNettyHttpClient, never()).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class));
+        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockResponseWriter).writeResponse(request, response, false);
     }
 
     @Test

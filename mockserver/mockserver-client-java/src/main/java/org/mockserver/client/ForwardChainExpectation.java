@@ -132,6 +132,21 @@ public class ForwardChainExpectation {
         return this;
     }
 
+    public ForwardChainExpectation withBeforeActions(AfterAction... beforeActions) {
+        expectation.withBeforeActions(beforeActions);
+        return this;
+    }
+
+    /**
+     * Set a single before-action to execute before the primary action. Blocking before-actions
+     * (the default) can gate the response via their failure policy and timeout.
+     *
+     * @param beforeAction the before-action to set
+     */
+    public ForwardChainExpectation withBeforeAction(AfterAction beforeAction) {
+        return withBeforeActions(beforeAction);
+    }
+
     public ForwardChainExpectation withAfterActions(AfterAction... afterActions) {
         expectation.withAfterActions(afterActions);
         return this;

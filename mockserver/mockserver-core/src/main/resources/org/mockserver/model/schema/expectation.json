@@ -74,6 +74,12 @@
     "dnsResponse": {
       "$ref": "#/definitions/dnsResponse"
     },
+    "beforeActions": {
+      "oneOf": [
+        { "$ref": "#/definitions/afterAction" },
+        { "type": "array", "items": { "$ref": "#/definitions/afterAction" }, "minItems": 1 }
+      ]
+    },
     "afterActions": {
       "oneOf": [
         { "$ref": "#/definitions/afterAction" },

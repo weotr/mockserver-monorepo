@@ -43,6 +43,8 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     private DnsResponseDTO dnsResponse;
     private HttpErrorDTO httpError;
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<AfterActionDTO> beforeActions;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<AfterActionDTO> afterActions;
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<HttpResponseDTO> httpResponses;
@@ -145,6 +147,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             HttpError httpError = expectation.getHttpError();
             if (httpError != null) {
                 this.httpError = new HttpErrorDTO(httpError);
+            }
+            List<AfterAction> beforeActions = expectation.getBeforeActions();
+            if (beforeActions != null && !beforeActions.isEmpty()) {
+                this.beforeActions = beforeActions.stream().map(AfterActionDTO::new).collect(Collectors.toList());
             }
             List<AfterAction> afterActions = expectation.getAfterActions();
             if (afterActions != null && !afterActions.isEmpty()) {
@@ -261,6 +267,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         if (this.httpError != null) {
             httpError = this.httpError.buildObject();
         }
+        List<AfterAction> beforeActionList = null;
+        if (this.beforeActions != null && !this.beforeActions.isEmpty()) {
+            beforeActionList = this.beforeActions.stream().map(AfterActionDTO::buildObject).collect(Collectors.toList());
+        }
         List<AfterAction> afterActionList = null;
         if (this.afterActions != null && !this.afterActions.isEmpty()) {
             afterActionList = this.afterActions.stream().map(AfterActionDTO::buildObject).collect(Collectors.toList());
@@ -305,6 +315,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             .thenRespondWithBinary(binaryResponse)
             .thenRespondWithDns(dnsResponse)
             .thenError(httpError)
+            .withBeforeActions(beforeActionList)
             .withAfterActions(afterActionList)
             .thenRespond(this.httpResponses != null ? this.httpResponses.stream().map(HttpResponseDTO::buildObject).collect(Collectors.toList()) : null)
             .withResponseMode(this.responseMode)
@@ -539,6 +550,16 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
 
     public ExpectationDTO setTimeToLive(TimeToLiveDTO timeToLive) {
         this.timeToLive = timeToLive;
+        return this;
+    }
+
+    public List<AfterActionDTO> getBeforeActions() {
+        return beforeActions;
+    }
+
+    @JsonSetter("beforeActions")
+    public ExpectationDTO setBeforeActions(List<AfterActionDTO> beforeActions) {
+        this.beforeActions = beforeActions;
         return this;
     }
 

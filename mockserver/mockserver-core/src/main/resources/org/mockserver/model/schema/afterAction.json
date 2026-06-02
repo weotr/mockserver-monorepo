@@ -14,6 +14,15 @@
     },
     "delay": {
       "$ref": "#/definitions/delay"
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "$ref": "#/definitions/delay"
+    },
+    "failurePolicy": {
+      "enum": [ "FAIL_FAST", "BEST_EFFORT" ]
     }
   },
   "oneOf": [
