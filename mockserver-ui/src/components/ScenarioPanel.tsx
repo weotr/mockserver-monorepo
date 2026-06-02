@@ -243,7 +243,7 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
           value={transitionAfterMs}
           onChange={(e) => setTransitionAfterMs(e.target.value)}
           sx={{
-            width: 80,
+            width: 120,
             '& .MuiInputBase-root': { height: 24, fontSize: '0.7rem' },
           }}
         />
