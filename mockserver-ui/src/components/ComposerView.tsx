@@ -2327,6 +2327,17 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     [actionType],
   );
 
+  // When an existing expectation is selected for editing, expose its id so the MCP
+  // Tools panel can highlight the tool derived from it, making the mock -> tool
+  // relationship explicit. The list key is the expectation id, but prefer the value's
+  // own id when present in case the two ever diverge.
+  const selectedExpectationId = useMemo(() => {
+    if (!loadFromKey) return undefined;
+    const item = activeExpectations.find((e) => e.key === loadFromKey);
+    const id = item?.value?.['id'];
+    return typeof id === 'string' && id.length > 0 ? id : loadFromKey;
+  }, [loadFromKey, activeExpectations]);
+
   // Single register helper — builds a StandardActionPayload from current
   // state and PUTs via registerExpectation, which itself uses
   // buildExpectationJson so the JSON sent matches the Java/JSON/curl preview
@@ -2639,7 +2650,10 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 radio is active, immediately above the request matcher. */}
             {kind === 'mcp' && (
               <Paper variant="outlined" sx={{ p: 0 }}>
-                <McpToolsPanel connectionParams={connectionParams} />
+                <McpToolsPanel
+                  connectionParams={connectionParams}
+                  selectedExpectationId={selectedExpectationId}
+                />
               </Paper>
             )}
             {/* Step 1: matcher — DNS uses a dedicated panel with dnsName /

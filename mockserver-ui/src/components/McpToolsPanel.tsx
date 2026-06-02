@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
@@ -23,6 +23,12 @@ interface McpTool {
 
 interface McpToolsPanelProps {
   connectionParams: ConnectionParams;
+  /**
+   * Expectation id currently selected for editing in the composer. The tool derived from
+   * this expectation is highlighted and scrolled into view to make the mock -> tool
+   * relationship explicit.
+   */
+  selectedExpectationId?: string;
 }
 
 /**
@@ -30,11 +36,12 @@ interface McpToolsPanelProps {
  * expectations via the `list_mock_tools` MCP tool, so an agent's view of the
  * mocked endpoints is browsable from the dashboard.
  */
-export default function McpToolsPanel({ connectionParams }: McpToolsPanelProps) {
+export default function McpToolsPanel({ connectionParams, selectedExpectationId }: McpToolsPanelProps) {
   const [tools, setTools] = useState<McpTool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const selectedRowRef = useRef<HTMLTableRowElement | null>(null);
 
   // Refresh by bumping a tick (event-handler setState is fine); the effect re-runs and re-fetches.
   const refresh = useCallback(() => {
@@ -70,6 +77,13 @@ export default function McpToolsPanel({ connectionParams }: McpToolsPanelProps) 
       cancelled = true;
     };
   }, [connectionParams, refreshTick]);
+
+  // Bring the highlighted tool into view when the selected expectation changes.
+  useEffect(() => {
+    if (selectedExpectationId && selectedRowRef.current) {
+      selectedRowRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedExpectationId, tools]);
 
   return (
     <Box sx={{ p: 2 }}>
@@ -110,17 +124,27 @@ export default function McpToolsPanel({ connectionParams }: McpToolsPanelProps) 
               </TableRow>
             </TableHead>
             <TableBody>
-              {tools.map((tool, index) => (
-                <TableRow key={tool.name ?? index}>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                    {tool.name ?? '—'}
-                  </TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                    {tool._mockserver?.method ?? ''} {tool._mockserver?.path ?? ''}
-                  </TableCell>
-                  <TableCell>{tool.description ?? ''}</TableCell>
-                </TableRow>
-              ))}
+              {tools.map((tool, index) => {
+                const isSelected =
+                  selectedExpectationId !== undefined &&
+                  tool._mockserver?.expectationId === selectedExpectationId;
+                return (
+                  <TableRow
+                    key={tool.name ?? index}
+                    ref={isSelected ? selectedRowRef : undefined}
+                    selected={isSelected}
+                    sx={isSelected ? { '& td': { fontWeight: 600 }, borderLeft: 3, borderLeftColor: 'primary.main' } : undefined}
+                  >
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                      {tool.name ?? '—'}
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                      {tool._mockserver?.method ?? ''} {tool._mockserver?.path ?? ''}
+                    </TableCell>
+                    <TableCell>{tool.description ?? ''}</TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </Paper>
