@@ -124,7 +124,8 @@ Manual activation"]
 | Plugin | Version | Phase | Purpose |
 |--------|---------|-------|---------|
 | `maven-compiler-plugin` | 3.15.0 | compile | Java 17 compilation with `-Xlint:all` |
-| `templating-maven-plugin` | 3.1.0 | generate-sources | Generates version class from templates |
+| `git-commit-id-maven-plugin` | 9.0.1 | initialize | Resolves the abbreviated git commit hash into `${git.commit.id.abbrev}` for the version class (mockserver-core only); degrades to an empty hash when no git metadata is present |
+| `templating-maven-plugin` | 3.1.0 | generate-sources | Generates version class from templates (version, group/artifact id, git hash) |
 | `maven-jar-plugin` | 3.5.0 | package | JAR packaging with MANIFEST.MF metadata |
 | `maven-clean-plugin` | 3.5.0 | clean | Removes `.log`, keystore, and temp files |
 | `maven-surefire-plugin` | 3.5.5 | test | Unit tests (`*Test.java`, excludes `*IntegrationTest.java`) |

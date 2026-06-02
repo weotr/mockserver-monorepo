@@ -74,6 +74,7 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 | `major_minor_version` | Major.minor version (e.g. `5.15`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
+| `git_hash` | Abbreviated git commit hash the build was produced from, or `unknown` when no git metadata is available |
 
 ### JVM Runtime Metrics
 

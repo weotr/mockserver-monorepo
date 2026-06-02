@@ -9,6 +9,7 @@ public final class Version {
     private static final String VERSION = "${project.version}";
     private static final String GROUPID = "${project.groupId}";
     private static final String ARTIFACTID = "${project.artifactId}";
+    private static final String GITHASH = "${git.commit.id.abbrev}";
     private static String majorMinorVersion = null;
 
     private static String getValue(String value, String defaultValue) {
@@ -44,6 +45,16 @@ public final class Version {
 
     public static String getArtifactId() {
         return getValue(ARTIFACTID, "");
+    }
+
+    /**
+     * The abbreviated git commit hash the artifact was built from, populated at build time by the
+     * git-commit-id-maven-plugin. Returns an empty string for builds with no git metadata available
+     * (e.g. a source tarball without a {@code .git} directory), or the {@code MOCKSERVER_GITHASH}
+     * system property if set as an override.
+     */
+    public static String getGitHash() {
+        return getValue(GITHASH, System.getProperty("MOCKSERVER_GITHASH", ""));
     }
 
 }

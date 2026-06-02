@@ -175,7 +175,7 @@ Before a request reaches `HttpRequestHandler`, the Netty pipeline may intercept 
 
 | Route | Method | Handler |
 |-------|--------|---------|
-| `/mockserver/status` | PUT | Returns port binding JSON |
+| `/mockserver/status` | PUT | Returns port binding JSON (bound ports, version, group/artifact id, and `gitHash` when built from a git checkout) |
 | Liveness path | GET | Returns port binding JSON |
 | `/mockserver/bind` | PUT | Dynamically bind additional ports |
 | `/mockserver/stop` | PUT | Graceful shutdown |

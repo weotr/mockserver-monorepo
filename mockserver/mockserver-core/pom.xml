@@ -364,6 +364,43 @@
     <build>
         <plugins>
             <!--
+                Capture the abbreviated git commit hash at build time and expose it as the
+                ${git.commit.id.abbrev} Maven property, which the templating-maven-plugin (inherited
+                from the parent pom) substitutes into the generated Version class so it can be surfaced
+                on the /mockserver/status endpoint and the Prometheus build_info metric. Runs in the
+                initialize phase, before generate-sources where the Version class is filtered.
+                failOnNoGitDirectory / failOnUnableToExtractRepoInfo are false so builds without git
+                metadata (e.g. a source tarball) degrade to an empty hash instead of failing.
+            -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.1</version>
+                <executions>
+                    <execution>
+                        <id>resolve-git-commit-hash</id>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                    <abbrevLength>8</abbrevLength>
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git\.commit\.id\.abbrev$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                    <!--
+                        NOTE: inside a linked git worktree the resolved hash is that of the shared
+                        repository HEAD, not the worktree's own HEAD. Single-working-tree clones
+                        (Buildkite CI and the release pipeline, which is what ships) resolve correctly.
+                    -->
+                </configuration>
+            </plugin>
+            <!--
                 Two-phase unit-test execution (see docs/operations/performance-tuning.md):
                   1. default-test     - parallel=classes (threadCount 4) for the bulk of the suite.
                   2. sequential-tests - parallel=none, ONLY the classes listed below, which mutate

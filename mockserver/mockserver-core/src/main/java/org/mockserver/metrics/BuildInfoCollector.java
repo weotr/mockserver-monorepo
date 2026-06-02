@@ -21,6 +21,7 @@ public class BuildInfoCollector implements MultiCollector {
         String majorMinorVersion = Version.getMajorMinorVersion();
         String groupId = Version.getGroupId();
         String artifactId = Version.getArtifactId();
+        String gitHash = Version.getGitHash();
 
         GaugeSnapshot gaugeSnapshot = GaugeSnapshot.builder()
             .name(METRIC_NAME)
@@ -30,6 +31,7 @@ public class BuildInfoCollector implements MultiCollector {
                     .value(1)
                     .labels(Labels.of(
                         "artifact_id", artifactId != null ? artifactId : "unknown",
+                        "git_hash", gitHash != null && !gitHash.isEmpty() ? gitHash : "unknown",
                         "group_id", groupId != null ? groupId : "unknown",
                         "major_minor_version", majorMinorVersion != null ? majorMinorVersion : "unknown",
                         "version", version != null ? version : "unknown"

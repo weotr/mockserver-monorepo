@@ -3,12 +3,14 @@ package org.mockserver.serialization;
 import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.PortBinding;
+import org.mockserver.version.Version;
 
 import java.util.Arrays;
 
 import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.PortBinding.portBinding;
 
@@ -75,12 +77,17 @@ public class PortBindingSerializerIntegrationTest {
         );
 
         // then
-        assertThat(jsonPortBinding, containsString("{" + NEW_LINE +
-            "  \"artifactId\" : \"mockserver-core\"," + NEW_LINE +
-            "  \"groupId\" : \"org.mock-server\"," + NEW_LINE +
-            "  \"ports\" : [ 0, 1090, 0 ]," + NEW_LINE));
+        assertThat(jsonPortBinding, containsString("\"ports\" : [ 0, 1090, 0 ]"));
+        assertThat(jsonPortBinding, containsString("\"artifactId\" : \"mockserver-core\""));
+        assertThat(jsonPortBinding, containsString("\"groupId\" : \"org.mock-server\""));
         assertThat(jsonPortBinding, containsString("\"version\" : "));
-        assertThat(jsonPortBinding, containsString("\"artifactId\" : "));
-        assertThat(jsonPortBinding, containsString("\"groupId\" : "));
+        // gitHash is populated at build time and is build-environment dependent: present for git
+        // checkouts (the abbreviated commit hash), omitted when no git metadata is available.
+        String gitHash = Version.getGitHash();
+        if (gitHash != null && !gitHash.isEmpty()) {
+            assertThat(jsonPortBinding, containsString("\"gitHash\" : \"" + gitHash + "\""));
+        } else {
+            assertThat(jsonPortBinding, not(containsString("\"gitHash\"")));
+        }
     }
 }
