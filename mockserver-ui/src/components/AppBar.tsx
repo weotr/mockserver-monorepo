@@ -14,7 +14,9 @@ import Box from '@mui/material/Box';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import SettingsIcon from '@mui/icons-material/Settings';
 import ClockDialog from './ClockDialog';
+import ConfigurationDialog from './ConfigurationDialog';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -107,6 +109,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [mode, setModeState] = useState<MockServerMode | null>(null);
   const [toolsAnchorEl, setToolsAnchorEl] = useState<null | HTMLElement>(null);
   const [clockOpen, setClockOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [wsdlOpen, setWsdlOpen] = useState(false);
   const [openApiOpen, setOpenApiOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
@@ -231,6 +234,11 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         <Tooltip title="Server clock (freeze / advance time)">
           <IconButton size="small" color="inherit" onClick={() => setClockOpen(true)} aria-label="Server clock">
             <AccessTimeIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Server configuration">
+          <IconButton size="small" color="inherit" onClick={() => setConfigOpen(true)} aria-label="Server configuration">
+            <SettingsIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}>
@@ -377,6 +385,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         </Snackbar>
       </Toolbar>
       <ClockDialog open={clockOpen} onClose={() => setClockOpen(false)} connectionParams={connectionParams} />
+      <ConfigurationDialog open={configOpen} onClose={() => setConfigOpen(false)} connectionParams={connectionParams} />
     </MuiAppBar>
   );
 }
