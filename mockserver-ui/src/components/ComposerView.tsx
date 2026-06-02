@@ -741,10 +741,15 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
     graphqlOptions,
     secure: req['secure'] === true,
     priority: typeof v['priority'] === 'number' ? (v['priority'] as number) : 0,
-    times:
-      typeof v['times'] === 'object' && v['times'] !== null && typeof (v['times'] as Record<string, unknown>)['remainingTimes'] === 'number'
-        ? ((v['times'] as Record<string, unknown>)['remainingTimes'] as number)
-        : 0,
+    // 0 = unlimited. An explicitly unlimited expectation prefills 0 rather than its
+    // (irrelevant) remainingTimes count.
+    times: (() => {
+      const t = v['times'];
+      if (typeof t !== 'object' || t === null) return 0;
+      const tr = t as Record<string, unknown>;
+      if (tr['unlimited'] === true) return 0;
+      return typeof tr['remainingTimes'] === 'number' ? (tr['remainingTimes'] as number) : 0;
+    })(),
   };
 }
 
@@ -826,6 +831,8 @@ function actionFromExpectation(item: JsonListItem): ActionPrefill | null {
         body: unwrapBody(r['body']),
         contentType: Array.isArray(contentType) ? String((contentType as unknown[])[0] ?? 'application/json')
           : typeof contentType === 'string' ? contentType : 'application/json',
+        // Preserve any non-content-type response headers so editing in place does not drop them.
+        headers: headersToText(r['headers'], 'content-type'),
       },
     };
   }
@@ -941,7 +948,9 @@ function actionFromExpectation(item: JsonListItem): ActionPrefill | null {
       frameType: (['TEXT', 'BINARY', 'PING', 'PONG', 'ANY'].includes(m['frameType'] as string)
         ? m['frameType'] as WebSocketFrameType
         : 'ANY'),
-      textMatcher: typeof m['textMatcher'] === 'string' ? (m['textMatcher'] as string) : '',
+      // The WebSocketMessageMatcherDTO serialises textMatcher as a plain string (value only),
+      // but denottable also tolerates a NottableString object form defensively.
+      textMatcher: denottable(m['textMatcher']),
       responses: Array.isArray(m['responses'])
         ? (m['responses'] as Record<string, unknown>[]).map((r) => typeof r['text'] === 'string' ? r['text'] as string : '').join('\n')
         : '',
@@ -1056,6 +1065,8 @@ interface StaticState {
   statusCode: number;
   body: string;
   contentType: string;
+  /** Additional response headers as "Name: value" lines, beyond Content-Type. */
+  headers: string;
 }
 
 function StaticHttpPanel({
@@ -1084,6 +1095,16 @@ function StaticHttpPanel({
           sx={{ flex: 1 }}
         />
       </Box>
+      <TextField
+        label="Response headers (one per line, Name: value)"
+        multiline
+        minRows={2}
+        maxRows={8}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'Cache-Control: no-cache\nLocation: /elsewhere'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
       <TextField
         label="Response body"
         multiline
@@ -2440,6 +2461,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     statusCode: 200,
     body: '',
     contentType: 'application/json',
+    headers: '',
   });
   const [forwardState, setForwardState] = useState<ForwardState>({
     scheme: 'HTTPS',

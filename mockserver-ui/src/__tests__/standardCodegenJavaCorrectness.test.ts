@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   standardToJava,
+  buildExpectationJson,
   type StandardMatcher,
   type StandardActionPayload,
 } from '../lib/standardCodegen';
@@ -116,5 +117,52 @@ describe('Java/JSON parity additions', () => {
     expect(java).toContain('.withTtl(60)');
     expect(java).toContain('.withValue("1.2.3.4")');
     expect(java).toContain('import static org.mockserver.model.DnsRecord.dnsRecord;');
+  });
+});
+
+describe('static response preserves arbitrary response headers', () => {
+  const action: StandardActionPayload = {
+    type: 'static',
+    static: { statusCode: 302, body: '', contentType: '', headers: 'Location: /new\nCache-Control: no-cache' },
+  };
+
+  it('emits the extra headers (plus content-type) in the JSON payload', () => {
+    const json = buildExpectationJson(httpMatcher(), action);
+    const resp = json['httpResponse'] as Record<string, unknown>;
+    expect(resp['headers']).toEqual({
+      'Location': ['/new'],
+      'Cache-Control': ['no-cache'],
+    });
+  });
+
+  it('emits .withHeader(...) for each extra header in the Java snippet', () => {
+    const java = standardToJava(httpMatcher(), action);
+    expect(java).toContain('.withHeader("Location", "/new")');
+    expect(java).toContain('.withHeader("Cache-Control", "no-cache")');
+  });
+
+  it('does not double-emit content-type if the user also types it in the headers textarea', () => {
+    const a: StandardActionPayload = {
+      type: 'static',
+      static: { statusCode: 200, body: '', contentType: 'application/json', headers: 'Content-Type: text/html\nX-A: 1' },
+    };
+    const json = buildExpectationJson(httpMatcher(), a);
+    const resp = json['httpResponse'] as Record<string, unknown>;
+    // the dedicated contentType field wins; the textarea content-type is dropped
+    expect(resp['headers']).toEqual({ 'X-A': ['1'], 'content-type': ['application/json'] });
+    const java = standardToJava(httpMatcher(), a);
+    expect(java.match(/Content-Type/gi)?.length).toBe(1);
+  });
+
+  it('merges extra headers with an explicit content-type', () => {
+    const json = buildExpectationJson(httpMatcher(), {
+      type: 'static',
+      static: { statusCode: 200, body: 'x', contentType: 'application/json', headers: 'X-Trace: abc' },
+    });
+    const resp = json['httpResponse'] as Record<string, unknown>;
+    expect(resp['headers']).toEqual({
+      'X-Trace': ['abc'],
+      'content-type': ['application/json'],
+    });
   });
 });

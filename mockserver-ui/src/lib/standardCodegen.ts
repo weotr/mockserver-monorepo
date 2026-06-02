@@ -65,6 +65,8 @@ export interface StandardStaticState {
   statusCode: number;
   body: string;
   contentType: string;
+  /** Additional response headers as "Name: value" lines, beyond Content-Type. */
+  headers?: string;
 }
 
 export interface StandardForwardState {
@@ -431,8 +433,21 @@ export function buildExpectationJson(
       if (action.static) {
         const payload: Record<string, unknown> = { statusCode: action.static.statusCode };
         if (action.static.body) payload['body'] = action.static.body;
+        const staticHeaders: Record<string, string[]> = {};
+        const extraHeaders = parseKeyValueLines(action.static.headers ?? '', ':');
+        if (extraHeaders) {
+          // The dedicated contentType field owns content-type; drop any the user also typed
+          // into the headers textarea so it is not emitted twice (case-insensitive).
+          for (const [k, vs] of Object.entries(extraHeaders)) {
+            if (k.toLowerCase() === 'content-type') continue;
+            staticHeaders[k] = vs;
+          }
+        }
         if (action.static.contentType) {
-          payload['headers'] = { 'content-type': [action.static.contentType] };
+          staticHeaders['content-type'] = [action.static.contentType];
+        }
+        if (Object.keys(staticHeaders).length > 0) {
+          payload['headers'] = staticHeaders;
         }
         out['httpResponse'] = payload;
       }
@@ -901,6 +916,14 @@ function actionToJava(action: StandardActionPayload): string {
       lines.push('    response()');
       lines.push(`        .withStatusCode(${s.statusCode})`);
       if (s.contentType) lines.push(`        .withHeader("Content-Type", "${escapeJava(s.contentType)}")`);
+      const staticHeaders = parseKeyValueLines(s.headers ?? '', ':');
+      if (staticHeaders) {
+        for (const [k, vs] of Object.entries(staticHeaders)) {
+          if (k.toLowerCase() === 'content-type') continue; // owned by the contentType field above
+          const values = vs.map((v) => `"${escapeJava(v)}"`).join(', ');
+          lines.push(`        .withHeader("${escapeJava(k)}", ${values})`);
+        }
+      }
       if (s.body) lines.push(`        .withBody("${escapeJava(s.body)}")`);
       lines.push(')');
       return lines.join('\n');
