@@ -1270,3 +1270,66 @@ describe('getTimingBreakdown', () => {
     expect(getTimingBreakdown(null)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gemini & OpenAI Responses streaming (SSE) — previously parsed to empty
+// ---------------------------------------------------------------------------
+
+describe('parseTraffic — Gemini streaming SSE', () => {
+  const sseBody = [
+    'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"}}]}',
+    '',
+    'data: {"candidates":[{"content":{"parts":[{"text":" world"}],"role":"model"}}]}',
+    '',
+    'data: {"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2,"totalTokenCount":9}}',
+    '',
+  ].join('\n');
+
+  it('reassembles streamed Gemini candidates and usage', () => {
+    const value = {
+      httpRequest: { method: 'POST', path: '/v1beta/models/gemini-2.0-flash:streamGenerateContent', body: { type: 'JSON', json: '{"contents":[]}' } },
+      httpResponse: { statusCode: 200, headers: [{ name: 'content-type', values: ['text/event-stream'] }], body: { type: 'STRING', string: sseBody } },
+    };
+    const parsed = parseTraffic(value);
+    expect(parsed.kind).toBe('gemini');
+    if (parsed.kind !== 'gemini') return;
+    expect(parsed.sseEvents!.length).toBeGreaterThan(0);
+    expect(parsed.candidates).toHaveLength(1);
+    expect(getTokenSummary(parsed)).toBe('7 in / 2 out');
+  });
+});
+
+describe('parseTraffic — OpenAI Responses streaming SSE', () => {
+  const sseBody = [
+    'event: response.created',
+    'data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-4.1"}}',
+    '',
+    'event: response.output_text.delta',
+    'data: {"type":"response.output_text.delta","delta":"Hello"}',
+    '',
+    'event: response.output_text.delta',
+    'data: {"type":"response.output_text.delta","delta":" world"}',
+    '',
+    'event: response.output_item.done',
+    'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_1","name":"search","arguments":"{}"}}',
+    '',
+    'event: response.completed',
+    'data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-4.1","usage":{"input_tokens":11,"output_tokens":4,"total_tokens":15}}}',
+    '',
+  ].join('\n');
+
+  it('reassembles streamed Responses output and usage', () => {
+    const value = {
+      httpRequest: { method: 'POST', path: '/v1/responses', body: { type: 'JSON', json: '{"model":"gpt-4.1","input":[]}' } },
+      httpResponse: { statusCode: 200, headers: [{ name: 'content-type', values: ['text/event-stream'] }], body: { type: 'STRING', string: sseBody } },
+    };
+    const parsed = parseTraffic(value);
+    expect(parsed.kind).toBe('openai_responses');
+    if (parsed.kind !== 'openai_responses') return;
+    expect(getTokenSummary(parsed)).toBe('11 in / 4 out');
+    // output reconstructed: a message item (text) + the function_call item
+    const types = parsed.output.map((o) => (o as Record<string, unknown>)['type']);
+    expect(types).toContain('message');
+    expect(types).toContain('function_call');
+  });
+});
