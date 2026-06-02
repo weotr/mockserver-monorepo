@@ -20,7 +20,7 @@ describe('TrafficInspector — ScriptedTurnsPanel wiring', () => {
       proxiedRequests: [],
       activeExpectations: [],
       trafficSearch: '',
-      selectedTrafficIndex: null,
+      selectedTrafficKey: null,
     });
   });
 
@@ -177,7 +177,7 @@ describe('TrafficInspector — per-request timing display', () => {
       recordedRequests: [],
       activeExpectations: [],
       trafficSearch: '',
-      selectedTrafficIndex: null,
+      selectedTrafficKey: null,
     });
   });
 

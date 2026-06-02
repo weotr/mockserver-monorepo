@@ -51,7 +51,7 @@ interface DashboardState {
   generateStubConfidence: number;
   generateStubError: string | null;
 
-  selectedTrafficIndex: number | null;
+  selectedTrafficKey: string | null;
 
   actionTypeFilter: string[];
   llmProviderFilter: string[];
@@ -76,7 +76,7 @@ interface DashboardState {
   setReceivedSearch: (term: string) => void;
   setProxiedSearch: (term: string) => void;
   setTrafficSearch: (term: string) => void;
-  setSelectedTrafficIndex: (index: number | null) => void;
+  setSelectedTrafficKey: (key: string | null) => void;
   setError: (error: string | null) => void;
   openDebugMismatch: (result: DebugMismatchResult) => void;
   closeDebugMismatch: () => void;
@@ -133,7 +133,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   generateStubConfidence: 0,
   generateStubError: null,
 
-  selectedTrafficIndex: null,
+  selectedTrafficKey: null,
 
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -162,6 +162,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       activeExpectations: [],
       recordedRequests: [],
       proxiedRequests: [],
+      selectedTrafficKey: null,
       error: null,
 
       debugMismatchOpen: false,
@@ -178,7 +179,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
 
   setView: (view) => {
     const resolved = VIEW_MIGRATION[view as string] ?? view;
-    set({ view: resolved, selectedTrafficIndex: null });
+    set({ view: resolved, selectedTrafficKey: null });
   },
   setRequestFilter: (filter) => set({ requestFilter: filter }),
   setFilterEnabled: (enabled) => set({ filterEnabled: enabled }),
@@ -202,7 +203,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   setReceivedSearch: (term) => set({ receivedSearch: term }),
   setProxiedSearch: (term) => set({ proxiedSearch: term }),
   setTrafficSearch: (term) => set({ trafficSearch: term }),
-  setSelectedTrafficIndex: (index) => set({ selectedTrafficIndex: index }),
+  setSelectedTrafficKey: (key) => set({ selectedTrafficKey: key }),
   setError: (error) => set({ error }),
   openDebugMismatch: (result) =>
     set({ debugMismatchOpen: true, debugMismatchResult: result, debugMismatchLoading: false, debugMismatchError: null }),

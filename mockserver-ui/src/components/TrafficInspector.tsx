@@ -849,8 +849,8 @@ export default function TrafficInspector() {
   const activeExpectations = useDashboardStore((s) => s.activeExpectations);
   const trafficSearch = useDashboardStore((s) => s.trafficSearch);
   const setTrafficSearch = useDashboardStore((s) => s.setTrafficSearch);
-  const selectedIndex = useDashboardStore((s) => s.selectedTrafficIndex);
-  const setSelectedIndex = useDashboardStore((s) => s.setSelectedTrafficIndex);
+  const selectedKey = useDashboardStore((s) => s.selectedTrafficKey);
+  const setSelectedKey = useDashboardStore((s) => s.setSelectedTrafficKey);
   const connectionParams = useConnectionParams();
   const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
 
@@ -879,16 +879,19 @@ export default function TrafficInspector() {
     [summaries, trafficSearch],
   );
 
+  // Select by stable item key, not array position: the store fully replaces the traffic lists
+  // on every WebSocket refresh and `filtered` is re-derived on each search keystroke, so a
+  // positional index would point at a different (or missing) request after any update.
   const selectedEntry = useMemo(() => {
-    if (selectedIndex === null) return null;
-    return filtered.find((_, i) => i === selectedIndex) ?? null;
-  }, [filtered, selectedIndex]);
+    if (selectedKey === null) return null;
+    return filtered.find(({ item }) => item.key === selectedKey) ?? null;
+  }, [filtered, selectedKey]);
 
   const handleRowClick = useCallback(
-    (index: number) => {
-      setSelectedIndex(selectedIndex === index ? null : index);
+    (key: string) => {
+      setSelectedKey(selectedKey === key ? null : key);
     },
-    [selectedIndex, setSelectedIndex],
+    [selectedKey, setSelectedKey],
   );
 
   return (
@@ -971,8 +974,8 @@ export default function TrafficInspector() {
                 key={item.key}
                 summary={summary}
                 index={filtered.length - index}
-                selected={selectedIndex === index}
-                onClick={() => handleRowClick(index)}
+                selected={selectedKey === item.key}
+                onClick={() => handleRowClick(item.key)}
               />
             ))
           )}
