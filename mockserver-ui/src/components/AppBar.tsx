@@ -54,6 +54,8 @@ import {
 import WsdlImportDialog from './WsdlImportDialog';
 import OpenApiImportDialog from './OpenApiImportDialog';
 import PactExportDialog from './PactExportDialog';
+import OidcDialog from './OidcDialog';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
 
 function statusColor(status: ConnectionStatus): 'success' | 'warning' | 'error' | 'default' {
   switch (status) {
@@ -113,6 +115,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [clockOpen, setClockOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [explainOpen, setExplainOpen] = useState(false);
+  const [oidcOpen, setOidcOpen] = useState(false);
   const [wsdlOpen, setWsdlOpen] = useState(false);
   const [openApiOpen, setOpenApiOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
@@ -366,6 +369,15 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Export Pact…</ListItemText>
           </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setOidcOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><VpnKeyIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Mock OIDC provider…</ListItemText>
+          </MenuItem>
         </Menu>
         <OpenApiImportDialog
           open={openApiOpen}
@@ -395,6 +407,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
       <ClockDialog open={clockOpen} onClose={() => setClockOpen(false)} connectionParams={connectionParams} />
       <ConfigurationDialog open={configOpen} onClose={() => setConfigOpen(false)} connectionParams={connectionParams} />
       <ExplainUnmatchedDialog open={explainOpen} onClose={() => setExplainOpen(false)} connectionParams={connectionParams} />
+      <OidcDialog open={oidcOpen} onClose={() => setOidcOpen(false)} connectionParams={connectionParams} />
     </MuiAppBar>
   );
 }
