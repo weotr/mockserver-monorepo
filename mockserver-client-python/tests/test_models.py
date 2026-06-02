@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mockserver.models import (
+    AfterAction,
     BinaryResponse,
     Body,
     ConnectionOptions,
@@ -1652,6 +1653,42 @@ class TestExpectation:
         restored = Expectation.from_dict(original.to_dict())
         assert restored.http_error.drop_connection is True
         assert restored.http_error.response_bytes == "YWJj"
+
+    def test_round_trip_before_and_after_actions(self):
+        original = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_response=HttpResponse(status_code=200, body="ok"),
+            before_actions=[
+                AfterAction(
+                    http_request=HttpRequest(path="/hook"),
+                    blocking=True,
+                    timeout=Delay(time_unit="SECONDS", value=2),
+                    failure_policy="FAIL_FAST",
+                )
+            ],
+            after_actions=[AfterAction(http_request=HttpRequest(path="/after"))],
+        )
+        d = original.to_dict()
+        assert d["beforeActions"][0]["blocking"] is True
+        assert d["beforeActions"][0]["failurePolicy"] == "FAIL_FAST"
+        restored = Expectation.from_dict(d)
+        before = restored.before_actions[0]
+        assert before.http_request.path == "/hook"
+        assert before.blocking is True
+        assert before.timeout.value == 2
+        assert before.failure_policy == "FAIL_FAST"
+        assert restored.after_actions[0].http_request.path == "/after"
+
+    def test_before_action_controls_omitted_when_unset(self):
+        e = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_response=HttpResponse(status_code=200),
+            before_actions=[AfterAction(http_request=HttpRequest(path="/hook"))],
+        )
+        before = e.to_dict()["beforeActions"][0]
+        assert "blocking" not in before
+        assert "timeout" not in before
+        assert "failurePolicy" not in before
 
     def test_with_chaos(self):
         chaos = HttpChaosProfile(

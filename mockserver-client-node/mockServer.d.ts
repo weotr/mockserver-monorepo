@@ -40,6 +40,7 @@ export type Expectation = {
   times?: Times;
   timeToLive?: TimeToLive;
   chaos?: HttpChaosProfile;
+  beforeActions?: AfterAction | AfterAction[];
   afterActions?: AfterAction | AfterAction[];
   httpResponses?: HttpResponse[];
   responseMode?: "SEQUENTIAL" | "RANDOM";
@@ -361,6 +362,12 @@ export interface AfterAction {
   httpClassCallback?: HttpClassCallback;
   httpObjectCallback?: HttpObjectCallback;
   delay?: Delay;
+  /** before-actions only: when true (the default) the response waits for this action */
+  blocking?: boolean;
+  /** before-actions only: max wait for a blocking action */
+  timeout?: Delay;
+  /** before-actions only: outcome when a blocking action fails or times out */
+  failurePolicy?: "FAIL_FAST" | "BEST_EFFORT";
 }
 
 /**

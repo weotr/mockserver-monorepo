@@ -1464,13 +1464,19 @@ module MockServer
   end
 
   class AfterAction
-    attr_accessor :http_request, :http_class_callback, :http_object_callback, :delay
+    # blocking, timeout and failure_policy are only meaningful for before-actions
+    attr_accessor :http_request, :http_class_callback, :http_object_callback, :delay,
+                  :blocking, :timeout, :failure_policy
 
-    def initialize(http_request: nil, http_class_callback: nil, http_object_callback: nil, delay: nil)
+    def initialize(http_request: nil, http_class_callback: nil, http_object_callback: nil, delay: nil,
+                   blocking: nil, timeout: nil, failure_policy: nil)
       @http_request = http_request
       @http_class_callback = http_class_callback
       @http_object_callback = http_object_callback
       @delay = delay
+      @blocking = blocking
+      @timeout = timeout
+      @failure_policy = failure_policy
     end
 
     def to_h
@@ -1478,7 +1484,10 @@ module MockServer
         'httpRequest'        => @http_request&.to_h,
         'httpClassCallback'  => @http_class_callback&.to_h,
         'httpObjectCallback' => @http_object_callback&.to_h,
-        'delay'              => @delay&.to_h
+        'delay'              => @delay&.to_h,
+        'blocking'           => @blocking,
+        'timeout'            => @timeout&.to_h,
+        'failurePolicy'      => @failure_policy
       })
     end
 
@@ -1489,7 +1498,10 @@ module MockServer
         http_request:        HttpRequest.from_hash(data['httpRequest']),
         http_class_callback: HttpClassCallback.from_hash(data['httpClassCallback']),
         http_object_callback: HttpObjectCallback.from_hash(data['httpObjectCallback']),
-        delay:               Delay.from_hash(data['delay'])
+        delay:               Delay.from_hash(data['delay']),
+        blocking:            data['blocking'],
+        timeout:             Delay.from_hash(data['timeout']),
+        failure_policy:      data['failurePolicy']
       )
     end
   end
@@ -1503,7 +1515,7 @@ module MockServer
                   :http_error, :times, :time_to_live, :chaos,
                   :http_sse_response, :http_websocket_response,
                   :grpc_stream_response, :binary_response, :dns_response,
-                  :after_actions,
+                  :before_actions, :after_actions,
                   :http_responses, :response_mode,
                   :scenario_name, :scenario_state, :new_scenario_state
 
@@ -1515,7 +1527,7 @@ module MockServer
                    http_error: nil, times: nil, time_to_live: nil, chaos: nil,
                    http_sse_response: nil, http_websocket_response: nil,
                    grpc_stream_response: nil, binary_response: nil, dns_response: nil,
-                   after_actions: nil,
+                   before_actions: nil, after_actions: nil,
                    http_responses: nil, response_mode: nil,
                    scenario_name: nil, scenario_state: nil, new_scenario_state: nil)
       @id = id
@@ -1540,6 +1552,7 @@ module MockServer
       @grpc_stream_response = grpc_stream_response
       @binary_response = binary_response
       @dns_response = dns_response
+      @before_actions = before_actions
       @after_actions = after_actions
       @http_responses = http_responses
       @response_mode = response_mode
@@ -1549,6 +1562,13 @@ module MockServer
     end
 
     def to_h
+      before_actions_h = nil
+      if @before_actions.is_a?(Array)
+        before_actions_h = @before_actions.map(&:to_h) unless @before_actions.empty?
+      elsif @before_actions
+        before_actions_h = @before_actions.to_h
+      end
+
       after_actions_h = nil
       if @after_actions.is_a?(Array)
         after_actions_h = @after_actions.map(&:to_h) unless @after_actions.empty?
@@ -1576,6 +1596,7 @@ module MockServer
         'grpcStreamResponse'           => @grpc_stream_response&.to_h,
         'binaryResponse'               => @binary_response&.to_h,
         'dnsResponse'                  => @dns_response&.to_h,
+        'beforeActions'                => before_actions_h,
         'afterActions'                 => after_actions_h,
         'httpResponses'                => @http_responses&.map(&:to_h),
         'responseMode'                 => @response_mode,
@@ -1591,11 +1612,18 @@ module MockServer
     def self.from_hash(data)
       return nil if data.nil?
 
+      before_actions_data = data['beforeActions']
+      before_actions = if before_actions_data.is_a?(Array)
+                         before_actions_data.map { |a| AfterAction.from_hash(a) }
+                       elsif before_actions_data
+                         [AfterAction.from_hash(before_actions_data)]
+                       end
+
       after_actions_data = data['afterActions']
       after_actions = if after_actions_data.is_a?(Array)
                         after_actions_data.map { |a| AfterAction.from_hash(a) }
                       elsif after_actions_data
-                        AfterAction.from_hash(after_actions_data)
+                        [AfterAction.from_hash(after_actions_data)]
                       end
 
       new(
@@ -1618,6 +1646,7 @@ module MockServer
         grpc_stream_response:            GrpcStreamResponse.from_hash(data['grpcStreamResponse']),
         binary_response:                 BinaryResponse.from_hash(data['binaryResponse']),
         dns_response:                    DnsResponse.from_hash(data['dnsResponse']),
+        before_actions:                  before_actions,
         after_actions:                   after_actions,
         http_responses:                  data['httpResponses']&.map { |r| HttpResponse.from_hash(r) },
         response_mode:                   data['responseMode'],

@@ -72,6 +72,7 @@ _FIELD_MAP = {
     "maximum_number_of_request_to_return_in_verification_failure": "maximumNumberOfRequestToReturnInVerificationFailure",
     "http_sse_response": "httpSseResponse",
     "http_websocket_response": "httpWebSocketResponse",
+    "before_actions": "beforeActions",
     "after_actions": "afterActions",
     "base_path": "basePath",
     "id_field": "idField",
@@ -1366,6 +1367,10 @@ class AfterAction:
     http_class_callback: HttpClassCallback | None = None
     http_object_callback: HttpObjectCallback | None = None
     delay: Delay | None = None
+    # before-actions only (ignored for after-actions)
+    blocking: bool | None = None
+    timeout: Delay | None = None
+    failure_policy: str | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
@@ -1373,6 +1378,9 @@ class AfterAction:
             "httpClassCallback": self.http_class_callback.to_dict() if self.http_class_callback else None,
             "httpObjectCallback": self.http_object_callback.to_dict() if self.http_object_callback else None,
             "delay": self.delay.to_dict() if self.delay else None,
+            "blocking": self.blocking,
+            "timeout": self.timeout.to_dict() if self.timeout else None,
+            "failurePolicy": self.failure_policy,
         })
 
     @classmethod
@@ -1384,6 +1392,9 @@ class AfterAction:
             http_class_callback=HttpClassCallback.from_dict(data.get("httpClassCallback")),
             http_object_callback=HttpObjectCallback.from_dict(data.get("httpObjectCallback")),
             delay=Delay.from_dict(data.get("delay")),
+            blocking=data.get("blocking"),
+            timeout=Delay.from_dict(data.get("timeout")),
+            failure_policy=data.get("failurePolicy"),
         )
 
 
@@ -1411,6 +1422,7 @@ class Expectation:
     times: Times | None = None
     time_to_live: TimeToLive | None = None
     chaos: HttpChaosProfile | None = None
+    before_actions: list[AfterAction] | None = None
     after_actions: list[AfterAction] | None = None
     http_responses: list[HttpResponse] | None = None
     response_mode: str | None = None
@@ -1442,6 +1454,7 @@ class Expectation:
             "times": self.times.to_dict() if self.times else None,
             "timeToLive": self.time_to_live.to_dict() if self.time_to_live else None,
             "chaos": self.chaos.to_dict() if self.chaos else None,
+            "beforeActions": [a.to_dict() for a in self.before_actions] if self.before_actions else None,
             "afterActions": [a.to_dict() for a in self.after_actions] if self.after_actions else None,
             "httpResponses": [r.to_dict() for r in self.http_responses] if self.http_responses else None,
             "responseMode": self.response_mode,
@@ -1454,6 +1467,9 @@ class Expectation:
     def from_dict(cls, data: dict) -> Expectation:
         if data is None:
             return None
+        before_actions_data = data.get("beforeActions")
+        if isinstance(before_actions_data, dict):
+            before_actions_data = [before_actions_data]
         after_actions_data = data.get("afterActions")
         if isinstance(after_actions_data, dict):
             after_actions_data = [after_actions_data]
@@ -1480,6 +1496,7 @@ class Expectation:
             times=Times.from_dict(data.get("times")),
             time_to_live=TimeToLive.from_dict(data.get("timeToLive")),
             chaos=HttpChaosProfile.from_dict(data.get("chaos")),
+            before_actions=[AfterAction.from_dict(a) for a in before_actions_data] if before_actions_data else None,
             after_actions=[AfterAction.from_dict(a) for a in after_actions_data] if after_actions_data else None,
             http_responses=[HttpResponse.from_dict(r) for r in data["httpResponses"]] if data.get("httpResponses") else None,
             response_mode=data.get("responseMode"),
