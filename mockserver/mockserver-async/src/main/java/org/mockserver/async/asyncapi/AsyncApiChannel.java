@@ -21,6 +21,7 @@ public class AsyncApiChannel {
     private final Boolean mqttRetain;
     private final String kafkaKey;
     private final List<AsyncApiMessage> explicitMessages;
+    private final String correlationIdLocation;
 
     /**
      * Backward-compatible constructor — no bindings.
@@ -41,7 +42,7 @@ public class AsyncApiChannel {
      */
     public AsyncApiChannel(String name, List<JsonNode> payloadExamples, JsonNode payloadSchema,
                            Integer mqttQos, Boolean mqttRetain, String kafkaKey) {
-        this(name, payloadExamples, payloadSchema, mqttQos, mqttRetain, kafkaKey, null);
+        this(name, payloadExamples, payloadSchema, mqttQos, mqttRetain, kafkaKey, null, null);
     }
 
     /**
@@ -58,6 +59,25 @@ public class AsyncApiChannel {
     public AsyncApiChannel(String name, List<JsonNode> payloadExamples, JsonNode payloadSchema,
                            Integer mqttQos, Boolean mqttRetain, String kafkaKey,
                            List<AsyncApiMessage> explicitMessages) {
+        this(name, payloadExamples, payloadSchema, mqttQos, mqttRetain, kafkaKey, explicitMessages, null);
+    }
+
+    /**
+     * Full constructor with optional binding fields, explicit multi-message list,
+     * and correlation ID location for single-message channels.
+     *
+     * @param name                    the channel / topic name
+     * @param payloadExamples         explicit payload examples from the spec (first message's examples for back-compat)
+     * @param payloadSchema           the JSON Schema for the payload (first message's schema for back-compat)
+     * @param mqttQos                 MQTT QoS level from operation bindings (may be null)
+     * @param mqttRetain              MQTT retain flag from operation bindings (may be null)
+     * @param kafkaKey                Kafka message key from first message's bindings (may be null)
+     * @param explicitMessages        the list of all messages in this channel (null or empty for single-message channels)
+     * @param correlationIdLocation   correlation ID runtime expression for single-message channels (may be null)
+     */
+    public AsyncApiChannel(String name, List<JsonNode> payloadExamples, JsonNode payloadSchema,
+                           Integer mqttQos, Boolean mqttRetain, String kafkaKey,
+                           List<AsyncApiMessage> explicitMessages, String correlationIdLocation) {
         this.name = name;
         this.payloadExamples = payloadExamples != null
             ? Collections.unmodifiableList(new ArrayList<>(payloadExamples))
@@ -69,6 +89,7 @@ public class AsyncApiChannel {
         this.explicitMessages = (explicitMessages != null && !explicitMessages.isEmpty())
             ? Collections.unmodifiableList(new ArrayList<>(explicitMessages))
             : null;
+        this.correlationIdLocation = correlationIdLocation;
     }
 
     public String getName() {
@@ -125,7 +146,7 @@ public class AsyncApiChannel {
         if (explicitMessages != null) {
             return explicitMessages;
         }
-        return List.of(new AsyncApiMessage(null, payloadSchema, payloadExamples, kafkaKey));
+        return List.of(new AsyncApiMessage(null, payloadSchema, payloadExamples, kafkaKey, correlationIdLocation));
     }
 
     /**

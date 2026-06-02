@@ -80,8 +80,9 @@ public class KafkaMessagePublisher implements MessagePublisher {
 
     /**
      * Publish a message with per-message options from AsyncAPI bindings.
-     * Only the {@link PublishOptions#getKey()} is applied (Kafka has no
-     * per-message QoS or retain). Other binding fields are ignored.
+     * The {@link PublishOptions#getKey()} sets the Kafka record key and
+     * {@link PublishOptions#getHeaders()} are added as Kafka record headers.
+     * MQTT-specific fields (QoS, retain) are ignored.
      *
      * @param channel the Kafka topic name
      * @param payload the message payload (typically JSON)
@@ -90,7 +91,9 @@ public class KafkaMessagePublisher implements MessagePublisher {
     @Override
     public void publish(String channel, String payload, PublishOptions options) {
         String key = (options != null) ? options.getKey() : null;
-        publish(channel, key, payload, null);
+        Map<String, String> headers = (options != null && !options.getHeaders().isEmpty())
+            ? options.getHeaders() : null;
+        publish(channel, key, payload, headers);
     }
 
     /**

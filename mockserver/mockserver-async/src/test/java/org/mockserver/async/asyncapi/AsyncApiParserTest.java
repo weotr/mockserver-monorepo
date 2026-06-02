@@ -865,6 +865,225 @@ public class AsyncApiParserTest {
         assertThat(channel.getPayloadExamples().get(0).get("v").asInt(), is(1));
     }
 
+    // ---- Correlation ID parsing ----
+
+    @Test
+    public void shouldParseV2CorrelationIdHeaderLocation() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"CorrId\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"correlationId\": {\n" +
+            "            \"location\": \"$message.header#/correlationId\",\n" +
+            "            \"description\": \"Default Correlation ID\"\n" +
+            "          },\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        AsyncApiChannel channel = parsed.getChannels().get(0);
+        assertThat(channel.getMessages(), hasSize(1));
+        assertThat(channel.getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.header#/correlationId"));
+    }
+
+    @Test
+    public void shouldParseV2CorrelationIdPayloadLocation() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"CorrId\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"correlationId\": {\n" +
+            "            \"location\": \"$message.payload#/metadata/id\"\n" +
+            "          },\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        assertThat(parsed.getChannels().get(0).getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.payload#/metadata/id"));
+    }
+
+    @Test
+    public void shouldParseV2CorrelationIdFromRefToComponents() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"CorrIdRef\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"correlationId\": { \"$ref\": \"#/components/correlationIds/defaultCorrId\" },\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"components\": {\n" +
+            "    \"correlationIds\": {\n" +
+            "      \"defaultCorrId\": {\n" +
+            "        \"location\": \"$message.header#/x-corr-id\",\n" +
+            "        \"description\": \"Resolved from components\"\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        assertThat(parsed.getChannels().get(0).getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.header#/x-corr-id"));
+    }
+
+    @Test
+    public void shouldReturnNullCorrelationIdWhenAbsent() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"NoCorrId\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        assertThat(parsed.getChannels().get(0).getMessages().get(0).getCorrelationIdLocation(),
+            is(nullValue()));
+    }
+
+    @Test
+    public void shouldReturnNullCorrelationIdWhenMalformed() throws IOException {
+        // correlationId is a string instead of an object — should not throw
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"Malformed\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"correlationId\": \"not-an-object\",\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        assertThat(parsed.getChannels().get(0).getMessages().get(0).getCorrelationIdLocation(),
+            is(nullValue()));
+    }
+
+    @Test
+    public void shouldParseV2OneOfCorrelationIdPerVariant() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"2.6.0\",\n" +
+            "  \"info\": { \"title\": \"OneOf CorrId\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"events\": {\n" +
+            "      \"publish\": {\n" +
+            "        \"message\": {\n" +
+            "          \"oneOf\": [\n" +
+            "            {\n" +
+            "              \"name\": \"MsgA\",\n" +
+            "              \"correlationId\": { \"location\": \"$message.header#/corrA\" },\n" +
+            "              \"payload\": { \"type\": \"object\", \"example\": { \"a\": 1 } }\n" +
+            "            },\n" +
+            "            {\n" +
+            "              \"name\": \"MsgB\",\n" +
+            "              \"correlationId\": { \"location\": \"$message.payload#/corrId\" },\n" +
+            "              \"payload\": { \"type\": \"object\", \"example\": { \"b\": 2 } }\n" +
+            "            }\n" +
+            "          ]\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        AsyncApiChannel channel = parsed.getChannels().get(0);
+        assertThat(channel.getMessages(), hasSize(2));
+        assertThat(channel.getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.header#/corrA"));
+        assertThat(channel.getMessages().get(1).getCorrelationIdLocation(),
+            is("$message.payload#/corrId"));
+    }
+
+    @Test
+    public void shouldParseV3CorrelationId() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"3.0.0\",\n" +
+            "  \"info\": { \"title\": \"V3 CorrId\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"messages\": {\n" +
+            "        \"orderMsg\": {\n" +
+            "          \"correlationId\": {\n" +
+            "            \"location\": \"$message.header#/x-correlation-id\"\n" +
+            "          },\n" +
+            "          \"payload\": { \"type\": \"object\" },\n" +
+            "          \"examples\": [{ \"payload\": { \"orderId\": 1 } }]\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        AsyncApiChannel channel = parsed.getChannels().get(0);
+        assertThat(channel.getMessages(), hasSize(1));
+        assertThat(channel.getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.header#/x-correlation-id"));
+    }
+
+    @Test
+    public void shouldParseV3CorrelationIdWithRefToComponents() throws IOException {
+        String spec = "{\n" +
+            "  \"asyncapi\": \"3.0.0\",\n" +
+            "  \"info\": { \"title\": \"V3 CorrId Ref\", \"version\": \"1.0.0\" },\n" +
+            "  \"channels\": {\n" +
+            "    \"orders\": {\n" +
+            "      \"messages\": {\n" +
+            "        \"orderMsg\": {\n" +
+            "          \"correlationId\": { \"$ref\": \"#/components/correlationIds/defaultId\" },\n" +
+            "          \"payload\": { \"type\": \"object\" }\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"components\": {\n" +
+            "    \"correlationIds\": {\n" +
+            "      \"defaultId\": {\n" +
+            "        \"location\": \"$message.payload#/correlationId\"\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        AsyncApiSpec parsed = parser.parse(spec);
+        assertThat(parsed.getChannels().get(0).getMessages().get(0).getCorrelationIdLocation(),
+            is("$message.payload#/correlationId"));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void shouldRejectNullDocument() throws IOException {
         parser.parse(null);

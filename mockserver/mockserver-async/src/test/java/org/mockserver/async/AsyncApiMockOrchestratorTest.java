@@ -15,8 +15,7 @@ import org.mockserver.async.publish.PublishOptions;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -237,5 +236,188 @@ public class AsyncApiMockOrchestratorTest {
         verify(publisher, times(1)).publish(eq("single"), eq("{\"v\":1}"), optionsCaptor.capture());
         assertThat(optionsCaptor.getValue().getKey(), is("single-key"));
         verifyNoMoreInteractions(publisher);
+    }
+
+    // ---- Correlation ID injection tests ----
+
+    @Test
+    public void shouldInjectCorrelationIdIntoHeaders() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"orderId\": 42}");
+        AsyncApiMessage msg = new AsyncApiMessage("orderMsg", null, List.of(example),
+            null, "$message.header#/correlationId");
+        AsyncApiChannel channel = new AsyncApiChannel("orders", List.of(example), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "fixed-corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("orders"), payloadCaptor.capture(), optionsCaptor.capture());
+
+        // Payload should be unchanged
+        assertThat(payloadCaptor.getValue(), is("{\"orderId\":42}"));
+
+        // Headers should contain the correlation ID
+        PublishOptions captured = optionsCaptor.getValue();
+        assertThat(captured.getHeaders().get("correlationId"), is("fixed-corr-id"));
+    }
+
+    @Test
+    public void shouldInjectCorrelationIdIntoPayloadSingleLevel() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"orderId\": 42}");
+        AsyncApiMessage msg = new AsyncApiMessage("orderMsg", null, List.of(example),
+            null, "$message.payload#/correlationId");
+        AsyncApiChannel channel = new AsyncApiChannel("orders", List.of(example), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "fixed-corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(publisher).publish(eq("orders"), payloadCaptor.capture(), any(PublishOptions.class));
+
+        // Payload should have the correlation ID injected
+        JsonNode published = MAPPER.readTree(payloadCaptor.getValue());
+        assertThat(published.get("correlationId").asText(), is("fixed-corr-id"));
+        // Original field should still be present
+        assertThat(published.get("orderId").asInt(), is(42));
+    }
+
+    @Test
+    public void shouldInjectCorrelationIdIntoPayloadNestedPointer() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"data\": \"hello\"}");
+        AsyncApiMessage msg = new AsyncApiMessage("msg", null, List.of(example),
+            null, "$message.payload#/metadata/id");
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(example), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "nested-corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(publisher).publish(eq("topic"), payloadCaptor.capture(), any(PublishOptions.class));
+
+        JsonNode published = MAPPER.readTree(payloadCaptor.getValue());
+        assertThat(published.get("metadata").get("id").asText(), is("nested-corr-id"));
+        assertThat(published.get("data").asText(), is("hello"));
+    }
+
+    @Test
+    public void shouldLeavePayloadUnchangedWhenNotJson() throws Exception {
+        // Non-JSON payload: the generator returns this as-is
+        AsyncApiMessage msg = new AsyncApiMessage("msg", null, List.of(),
+            null, "$message.payload#/correlationId");
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        // The generator will produce "{}" (fallback) which IS valid JSON,
+        // so let's use a custom generator that returns non-JSON
+        MessageExampleGenerator customGen = new MessageExampleGenerator() {
+            @Override
+            public String generateExample(AsyncApiMessage message) {
+                return "not-valid-json";
+            }
+        };
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, customGen, () -> "corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(publisher).publish(eq("topic"), payloadCaptor.capture(), any(PublishOptions.class));
+
+        // Payload should be unchanged (injection skipped)
+        assertThat(payloadCaptor.getValue(), is("not-valid-json"));
+    }
+
+    @Test
+    public void shouldSkipCorrelationIdForUnrecognisedLocationPrefix() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"v\": 1}");
+        AsyncApiMessage msg = new AsyncApiMessage("msg", null, List.of(example),
+            null, "$message.unknown#/field");
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(example), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("topic"), payloadCaptor.capture(), optionsCaptor.capture());
+
+        // Payload unchanged, no headers
+        assertThat(payloadCaptor.getValue(), is("{\"v\":1}"));
+        assertThat(optionsCaptor.getValue().getHeaders(), is(anEmptyMap()));
+    }
+
+    @Test
+    public void shouldNotInjectCorrelationIdWhenLocationIsNull() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"v\": 1}");
+        // No correlationIdLocation — default behavior
+        AsyncApiMessage msg = new AsyncApiMessage("msg", null, List.of(example), null, null);
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(example), null,
+            null, null, null, List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("topic"), payloadCaptor.capture(), optionsCaptor.capture());
+
+        // Payload unchanged, no headers, options empty
+        assertThat(payloadCaptor.getValue(), is("{\"v\":1}"));
+        assertThat(optionsCaptor.getValue().isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldCombineCorrelationIdHeaderWithKafkaKey() throws Exception {
+        JsonNode example = MAPPER.readTree("{\"v\": 1}");
+        AsyncApiMessage msg = new AsyncApiMessage("msg", null, List.of(example),
+            "my-key", "$message.header#/x-corr-id");
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(example), null,
+            null, null, "my-key", List.of(msg));
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "combined-corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("topic"), any(String.class), optionsCaptor.capture());
+
+        PublishOptions captured = optionsCaptor.getValue();
+        assertThat(captured.getKey(), is("my-key"));
+        assertThat(captured.getHeaders().get("x-corr-id"), is("combined-corr-id"));
+    }
+
+    @Test
+    public void shouldInjectCorrelationIdViaChannelSynthesizedMessage() throws Exception {
+        // Single-message channel with correlationIdLocation on the channel
+        JsonNode example = MAPPER.readTree("{\"v\": 1}");
+        AsyncApiChannel channel = new AsyncApiChannel("topic", List.of(example), null,
+            null, null, null, null, "$message.header#/corrId");
+        AsyncApiSpec spec = new AsyncApiSpec("2.6.0", "Test", List.of(channel));
+
+        AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(
+            spec, publisher, new MessageExampleGenerator(), () -> "synth-corr-id");
+        orchestrator.publishAll();
+
+        ArgumentCaptor<PublishOptions> optionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(publisher).publish(eq("topic"), any(String.class), optionsCaptor.capture());
+
+        assertThat(optionsCaptor.getValue().getHeaders().get("corrId"), is("synth-corr-id"));
     }
 }

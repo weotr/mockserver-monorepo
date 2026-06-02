@@ -172,4 +172,61 @@ public class KafkaMessagePublisherKeyHeadersTest {
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is(nullValue()));
     }
+
+    // ---- PublishOptions with headers tests ----
+
+    @Test
+    public void shouldSendHeadersFromPublishOptions() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("correlationId", "corr-123");
+        PublishOptions options = new PublishOptions("key1", null, null, headers);
+        publisher.publish("my-topic", "{\"data\":1}", options);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.key(), is("key1"));
+        Header corrHeader = record.headers().lastHeader("correlationId");
+        assertThat(corrHeader, is(notNullValue()));
+        assertThat(new String(corrHeader.value(), StandardCharsets.UTF_8), is("corr-123"));
+    }
+
+    @Test
+    public void shouldNotAddHeadersFromPublishOptionsWhenEmpty() {
+        PublishOptions options = new PublishOptions("key1", null, null, Map.of());
+        publisher.publish("my-topic", "{\"data\":1}", options);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.headers().toArray().length, is(0));
+    }
+
+    @Test
+    public void shouldCombineKeyAndHeadersFromPublishOptions() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("x-corr-id", "abc");
+        headers.put("x-trace-id", "xyz");
+        PublishOptions options = new PublishOptions("my-key", null, null, headers);
+        publisher.publish("my-topic", "{\"data\":1}", options);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+            ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(mockProducer).send(captor.capture());
+
+        ProducerRecord<String, String> record = captor.getValue();
+        assertThat(record.key(), is("my-key"));
+        assertThat(record.headers().toArray().length, is(2));
+        assertThat(new String(record.headers().lastHeader("x-corr-id").value(), StandardCharsets.UTF_8),
+            is("abc"));
+        assertThat(new String(record.headers().lastHeader("x-trace-id").value(), StandardCharsets.UTF_8),
+            is("xyz"));
+    }
 }

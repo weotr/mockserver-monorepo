@@ -93,6 +93,11 @@ public class MqttMessagePublisher implements MessagePublisher {
      * Applies {@link PublishOptions#getQos()} and {@link PublishOptions#getRetain()}
      * when non-null; falls back to the instance-level QoS and no-retain defaults.
      * The Kafka {@code key} field is ignored for MQTT.
+     * <p>
+     * MQTT does not support message-level headers; when {@link PublishOptions#getHeaders()}
+     * is non-empty, a DEBUG log is emitted noting that header-location correlation IDs
+     * are not delivered over MQTT. Payload-location correlation IDs are unaffected
+     * (they are injected into the payload before publishing).
      *
      * @param channel the MQTT topic name
      * @param payload the message payload (typically JSON)
@@ -100,6 +105,11 @@ public class MqttMessagePublisher implements MessagePublisher {
      */
     @Override
     public void publish(String channel, String payload, PublishOptions options) {
+        if (options != null && !options.getHeaders().isEmpty()) {
+            LOG.debug("MQTT does not support message headers; {} header(s) on topic '{}' will not be delivered" +
+                " (payload-location correlation IDs are still injected into the payload)",
+                options.getHeaders().size(), channel);
+        }
         publishBytes(channel, payload.getBytes(StandardCharsets.UTF_8), options);
     }
 

@@ -97,6 +97,7 @@ public class AsyncApiParser {
                 List<JsonNode> firstExamples = null;
                 JsonNode firstPayloadSchema = null;
                 String firstKafkaKey = null;
+                String firstCorrelationIdLoc = null;
                 boolean isFirst = true;
 
                 for (JsonNode variant : oneOf) {
@@ -126,15 +127,18 @@ public class AsyncApiParser {
                     }
 
                     String variantKafkaKey = parseKafkaKeyFromMessage(variant);
+                    String variantCorrelationId = parseCorrelationIdLocation(root, variant);
 
                     // Use the message name if available (e.g. from messageId or name field)
                     String msgName = textOrNull(variant, "name");
-                    allMessages.add(new AsyncApiMessage(msgName, variantSchema, variantExamples, variantKafkaKey));
+                    allMessages.add(new AsyncApiMessage(msgName, variantSchema, variantExamples,
+                        variantKafkaKey, variantCorrelationId));
 
                     if (isFirst) {
                         firstExamples = variantExamples;
                         firstPayloadSchema = variantSchema;
                         firstKafkaKey = variantKafkaKey;
+                        firstCorrelationIdLoc = variantCorrelationId;
                         isFirst = false;
                     }
                 }
@@ -144,7 +148,7 @@ public class AsyncApiParser {
                     result.add(new AsyncApiChannel(channelName,
                         firstExamples != null ? firstExamples : List.of(),
                         firstPayloadSchema,
-                        mqttQos, mqttRetain, firstKafkaKey, explicitMessages));
+                        mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc));
                 } else {
                     // All oneOf entries were malformed — fall through to empty channel
                     result.add(new AsyncApiChannel(channelName, List.of(), null,
@@ -188,8 +192,11 @@ public class AsyncApiParser {
                 // Parse Kafka message key binding
                 String kafkaKey = parseKafkaKeyFromMessage(singleMsg);
 
+                // Parse correlation ID location
+                String correlationIdLoc = parseCorrelationIdLocation(root, singleMsg);
+
                 result.add(new AsyncApiChannel(channelName, examples, payloadSchema,
-                    mqttQos, mqttRetain, kafkaKey));
+                    mqttQos, mqttRetain, kafkaKey, null, correlationIdLoc));
             }
         }
 
@@ -252,6 +259,7 @@ public class AsyncApiParser {
             List<JsonNode> firstExamples = null;
             JsonNode firstPayloadSchema = null;
             String firstKafkaKey = null;
+            String firstCorrelationIdLoc = null;
             boolean isFirst = true;
 
             while (msgFields.hasNext()) {
@@ -284,13 +292,18 @@ public class AsyncApiParser {
                 // Parse Kafka message key binding from the message definition
                 String kafkaKey = parseKafkaKeyFromMessage(msgDef);
 
-                allMessages.add(new AsyncApiMessage(msgName, payloadSchema, examples, kafkaKey));
+                // Parse correlation ID location
+                String correlationIdLoc = parseCorrelationIdLocation(root, msgDef);
+
+                allMessages.add(new AsyncApiMessage(msgName, payloadSchema, examples,
+                    kafkaKey, correlationIdLoc));
 
                 // Preserve first message's fields for backward compatibility
                 if (isFirst) {
                     firstExamples = examples;
                     firstPayloadSchema = payloadSchema;
                     firstKafkaKey = kafkaKey;
+                    firstCorrelationIdLoc = correlationIdLoc;
                     isFirst = false;
                 }
             }
@@ -299,7 +312,7 @@ public class AsyncApiParser {
             List<AsyncApiMessage> explicitMessages = allMessages.size() > 1 ? allMessages : null;
 
             result.add(new AsyncApiChannel(channelName, firstExamples, firstPayloadSchema,
-                mqttQos, mqttRetain, firstKafkaKey, explicitMessages));
+                mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc));
         }
 
         return result;
@@ -421,8 +434,41 @@ public class AsyncApiParser {
     }
 
     /**
-     * Basic single-level $ref resolution within the document.
-     * Only resolves {@code #/components/messages/<name>} style references.
+     * Extract the correlation ID location runtime expression from a message node.
+     * <p>
+     * The {@code correlationId} field may be:
+     * <ul>
+     *   <li>An inline object with {@code location} (and optional {@code description})</li>
+     *   <li>A {@code $ref} to {@code #/components/correlationIds/<name>}</li>
+     * </ul>
+     * Returns null when absent, malformed, or not resolvable (never throws).
+     */
+    private String parseCorrelationIdLocation(JsonNode root, JsonNode messageNode) {
+        try {
+            JsonNode correlationIdNode = messageNode.get("correlationId");
+            if (correlationIdNode == null) {
+                return null;
+            }
+
+            // Resolve $ref if present (e.g. $ref: #/components/correlationIds/myId)
+            correlationIdNode = resolveRef(root, correlationIdNode);
+
+            if (correlationIdNode != null && correlationIdNode.isObject()) {
+                JsonNode locationNode = correlationIdNode.get("location");
+                if (locationNode != null && locationNode.isTextual()) {
+                    return locationNode.asText();
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to parse correlationId from message: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Basic $ref resolution within the document — resolves any local {@code #/}-prefixed
+     * JSON-Pointer reference (e.g. {@code #/components/messages/<name>} or
+     * {@code #/components/correlationIds/<name>}) by walking the path segments.
      */
     private JsonNode resolveRef(JsonNode root, JsonNode node) {
         if (node == null) {

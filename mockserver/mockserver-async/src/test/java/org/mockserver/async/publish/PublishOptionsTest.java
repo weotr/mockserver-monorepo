@@ -2,6 +2,10 @@ package org.mockserver.async.publish;
 
 import org.junit.Test;
 
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 
@@ -35,6 +39,7 @@ public class PublishOptionsTest {
         assertThat(none.getKey(), is(nullValue()));
         assertThat(none.getQos(), is(nullValue()));
         assertThat(none.getRetain(), is(nullValue()));
+        assertThat(none.getHeaders(), is(anEmptyMap()));
     }
 
     @Test
@@ -90,5 +95,71 @@ public class PublishOptionsTest {
         assertThat(str, containsString("key=k1"));
         assertThat(str, containsString("qos=2"));
         assertThat(str, containsString("retain=true"));
+    }
+
+    // ---- Headers tests ----
+
+    @Test
+    public void shouldCreateWithHeaders() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("correlationId", "abc-123");
+        headers.put("trace-id", "xyz");
+        PublishOptions opts = new PublishOptions(null, null, null, headers);
+        assertThat(opts.getHeaders(), is(headers));
+        assertThat(opts.isEmpty(), is(false));
+    }
+
+    @Test
+    public void shouldReturnEmptyHeadersWhenNull() {
+        PublishOptions opts = new PublishOptions(null, null, null, null);
+        assertThat(opts.getHeaders(), is(anEmptyMap()));
+        assertThat(opts.isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldReturnEmptyHeadersWhenEmptyMap() {
+        PublishOptions opts = new PublishOptions(null, null, null, Map.of());
+        assertThat(opts.getHeaders(), is(anEmptyMap()));
+        assertThat(opts.isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldNotBeEmptyWithOnlyHeaders() {
+        Map<String, String> headers = Map.of("h1", "v1");
+        PublishOptions opts = new PublishOptions(null, null, null, headers);
+        assertThat(opts.isEmpty(), is(false));
+    }
+
+    @Test
+    public void headersShouldBeDefensivelyCopied() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("key", "value");
+        PublishOptions opts = new PublishOptions(null, null, null, headers);
+        // Mutate the original map
+        headers.put("extra", "should-not-appear");
+        assertThat(opts.getHeaders().size(), is(1));
+        assertThat(opts.getHeaders().get("key"), is("value"));
+    }
+
+    @Test(expected = UnsupportedOperationException.class)
+    public void headersShouldBeUnmodifiable() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("key", "value");
+        PublishOptions opts = new PublishOptions(null, null, null, headers);
+        opts.getHeaders().put("new", "should-fail");
+    }
+
+    @Test
+    public void backwardCompatConstructorShouldHaveEmptyHeaders() {
+        PublishOptions opts = new PublishOptions("k", 1, true);
+        assertThat(opts.getHeaders(), is(anEmptyMap()));
+    }
+
+    @Test
+    public void toStringShouldContainHeaders() {
+        Map<String, String> headers = Map.of("h1", "v1");
+        PublishOptions opts = new PublishOptions(null, null, null, headers);
+        assertThat(opts.toString(), containsString("headers="));
+        assertThat(opts.toString(), containsString("h1=v1"));
     }
 }

@@ -46,10 +46,10 @@ The control-plane uses an **SPI/registry pattern** (Option A from the design spe
 | `AsyncApiParser` | `o.m.async.asyncapi` | Parses AsyncAPI 2.x/3.x JSON or YAML into an `AsyncApiSpec` model |
 | `AsyncApiSpec` | `o.m.async.asyncapi` | Immutable model: version, title, list of `AsyncApiChannel` |
 | `AsyncApiChannel` | `o.m.async.asyncapi` | A channel name, payload examples, optional JSON Schema, parsed bindings (MQTT qos/retain, Kafka key), and optional multi-message list |
-| `AsyncApiMessage` | `o.m.async.asyncapi` | A single message definition: name, payload schema, payload examples, Kafka key binding |
+| `AsyncApiMessage` | `o.m.async.asyncapi` | A single message definition: name, payload schema, payload examples, Kafka key binding, correlation ID location |
 | `MessageExampleGenerator` | `o.m.async` | Schema-aware example generation (enum, default, format, min/max, minLength, const); per-channel and per-message |
 | `AsyncApiSchemaValidator` | `o.m.async.validation` | Validates payloads against channel JSON Schemas using core's `JsonSchemaValidator` |
-| `PublishOptions` | `o.m.async.publish` | Immutable carrier for per-message publish-time options: Kafka key, MQTT qos, MQTT retain |
+| `PublishOptions` | `o.m.async.publish` | Immutable carrier for per-message publish-time options: Kafka key, MQTT qos, MQTT retain, message headers (e.g. correlation ID) |
 | `MessagePublisher` | `o.m.async.publish` | Interface: `publish(channel, payload)`, `publish(channel, key, payload, headers)`, `publish(channel, payload, options)`, `close()` |
 | `KafkaMessagePublisher` | `o.m.async.publish` | Wraps `KafkaProducer`; supports keys and headers |
 | `MqttMessagePublisher` | `o.m.async.publish` | Wraps Paho `MqttClient`; supports configurable QoS (0/1/2) and binary payloads |
@@ -263,6 +263,36 @@ The Kafka key binding (`bindings.kafka.key`) can be:
 
 The `AsyncApiMockOrchestrator` iterates each channel's messages via `channel.getMessages()`, generates an example for each message, and builds per-message `PublishOptions` combining the message's Kafka key with the channel-level MQTT qos/retain. Each message results in a separate `publisher.publish(channel, payload, options)` call. For single-message channels, this is equivalent to the previous one-publish-per-channel behavior. Publishers that do not override the `publish(channel, payload, options)` method fall back to the default implementation which ignores the options, preserving backward compatibility.
 
+## Correlation IDs
+
+AsyncAPI messages may define a `correlationId` with a `location` runtime expression that specifies where a correlation identifier should be placed in the published message. The orchestrator generates a unique correlation ID (UUID by default) at publish time and injects it at the specified location.
+
+### Supported Location Expressions
+
+| Expression Pattern | Example | Effect |
+|-------------------|---------|--------|
+| `$message.header#/<headerName>` | `$message.header#/correlationId` | Adds a header `{headerName: id}` to `PublishOptions.headers`; Kafka publishers emit it as a `RecordHeader` |
+| `$message.payload#/<jsonPointer>` | `$message.payload#/metadata/id` | Injects the correlation ID into the JSON payload at the given JSON Pointer path (creates intermediate objects if needed) |
+
+Unrecognised location prefixes are skipped with a DEBUG log (never throw).
+
+### Parsing
+
+The parser reads `message.correlationId` from each message definition (v2 single, v2 oneOf variant, v3 per-message). If it is a `$ref` (e.g. `$ref: "#/components/correlationIds/defaultId"`), it is resolved using the same `resolveRef` mechanism used for message references. The `location` string is stored as `AsyncApiMessage.correlationIdLocation`.
+
+### Injection at Publish Time
+
+In `AsyncApiMockOrchestrator.publishAll()`, for each message with a non-null `correlationIdLocation`:
+
+1. A unique correlation ID is generated via an injectable `Supplier<String>` (defaults to `UUID.randomUUID().toString()`; tests can pin it to a fixed value for deterministic assertions).
+2. **Header location** (`$message.header#/...`): the header name is extracted from the location suffix, and a `{headerName: correlationId}` entry is added to the `PublishOptions.headers` map. `KafkaMessagePublisher` passes these as Kafka `RecordHeader` values.
+3. **Payload location** (`$message.payload#/...`): the JSON Pointer is extracted, the generated example payload is parsed as JSON (Jackson `ObjectMapper`), the value is set at the pointer path (creating intermediate `ObjectNode` containers as needed), and the payload is re-serialized. If the payload is not valid JSON, injection is skipped with a DEBUG log.
+4. One correlation ID is generated per message-publish. The injection happens **before** `publisher.publish()` is called.
+
+### MQTT Header Limitation
+
+MQTT does not support message-level headers. When `PublishOptions.headers` is non-empty and the publisher is `MqttMessagePublisher`, a DEBUG log is emitted noting that header-location correlation IDs are not delivered over MQTT. **Payload-location** correlation IDs work with MQTT because they are injected into the payload JSON before publishing.
+
 ### Limitations
 
 - **v3 MQTT operation bindings**: In AsyncAPI 3.x, MQTT QoS and retain are properly located in the top-level `operations` section's bindings, not on channels. The parser checks for channel-level `bindings.mqtt` as a best-effort fallback but does **not** navigate v3 operation-to-channel references. Full v3 operation-binding resolution is deferred.
@@ -422,5 +452,5 @@ The following items are **not yet implemented**:
 
 - **Dashboard UI**: no UI panel for async messaging state (deferred to a future UI enhancement)
 - **Advanced AsyncAPI bindings (remaining)**: Kafka topic-config bindings (partitions, replicas) and v3 operation-level MQTT binding navigation are not yet implemented. MQTT qos/retain and Kafka message key bindings are supported (see [AsyncAPI Channel Bindings](#asyncapi-channel-bindings))
-- **Correlation IDs**: AsyncAPI correlation ID definitions are not tracked
+- **Cross-protocol correlation linking (F15)**: correlating messages across protocols (e.g. HTTP request to Kafka response) is out of scope; each message's correlation ID is self-contained
 - **Live-broker integration tests**: all tests use mocked producers/consumers; Testcontainers-based live-broker tests are a documented follow-up (testcontainers is not currently a test dependency)

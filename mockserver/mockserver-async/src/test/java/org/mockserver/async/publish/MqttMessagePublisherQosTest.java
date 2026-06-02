@@ -152,4 +152,19 @@ public class MqttMessagePublisherQosTest {
         assertThat(captor.getValue().getQos(), is(0));
         assertThat(captor.getValue().isRetained(), is(false));
     }
+
+    @Test
+    public void shouldNotThrowWhenPublishOptionsHasHeaders() throws MqttException {
+        MqttMessagePublisher publisher = new MqttMessagePublisher(mockClient, 1);
+        // MQTT does not support headers — should not throw, just log and publish payload as-is
+        java.util.Map<String, String> headers = java.util.Map.of("correlationId", "corr-123");
+        PublishOptions options = new PublishOptions(null, null, null, headers);
+        publisher.publish("topic", "{\"data\":1}", options);
+
+        ArgumentCaptor<MqttMessage> captor = ArgumentCaptor.forClass(MqttMessage.class);
+        verify(mockClient).publish(eq("topic"), captor.capture());
+        String payload = new String(captor.getValue().getPayload(), StandardCharsets.UTF_8);
+        assertThat(payload, is("{\"data\":1}"));
+        assertThat(captor.getValue().getQos(), is(1));
+    }
 }
