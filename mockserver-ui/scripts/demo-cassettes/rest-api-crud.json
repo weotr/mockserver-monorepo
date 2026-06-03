@@ -1,0 +1,30 @@
+[
+  {
+    "httpRequest": { "method": "GET", "path": "/cassette/api/products" },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": { "content-type": ["application/json"] },
+      "body": {
+        "json": [
+          { "id": 1, "name": "Widget", "price": 9.99 },
+          { "id": 2, "name": "Gadget", "price": 19.99 }
+        ]
+      }
+    }
+  },
+  {
+    "httpRequest": { "method": "POST", "path": "/cassette/api/products" },
+    "httpResponse": {
+      "statusCode": 201,
+      "headers": { "location": ["/cassette/api/products/3"] },
+      "body": { "json": { "id": 3, "status": "created" } }
+    }
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/cassette/api/products/1" },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": { "json": { "id": 1, "name": "Widget", "price": 9.99, "inStock": true } }
+    }
+  }
+]

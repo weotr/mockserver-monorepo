@@ -30,6 +30,16 @@
  *                            (Mocks page · DNS kind).
  *   - WASM module            an example Rust WASM match module uploaded to the
  *                            store + a WASM-body-matched expectation (Library page).
+ *   - Side-effect exps       expectations with before-actions (blocking + non-blocking
+ *                            audit calls) and after-actions (fire-and-forget webhooks),
+ *                            loadable into the Composer's side-effects panel.
+ *   - Scenarios              seeded scenario state machines (incl. a timed auto-transition
+ *                            + a cross-protocol trigger expectation) listed in the
+ *                            Sessions · Scenarios panel.
+ *   - gRPC descriptors       a compiled protobuf FileDescriptorSet (greeting.dsc) uploaded
+ *                            so the Library · gRPC Descriptors tab lists the service/methods.
+ *   - Cassettes              example cassette fixtures (scripts/demo-cassettes/) registered in the
+ *                            server-side cassette registry so they list in Library · Cassettes.
  *
  * It talks to MockServer over its plain REST API (no extra dependencies — uses
  * the built-in global fetch in Node 18+). Safe to re-run: it resets first.
@@ -78,7 +88,7 @@ const SELF_HOST = TARGET.hostname;
 const SELF_PORT = Number(TARGET.port || (TARGET.protocol === 'https:' ? 443 : 80));
 const SELF_SCHEME = TARGET.protocol === 'https:' ? 'HTTPS' : 'HTTP';
 
-const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0 };
+const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0 };
 function log(msg) { if (!quiet) console.log(msg); }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +941,205 @@ async function agentLoops() {
 }
 
 // ---------------------------------------------------------------------------
+// 5. Side-effect expectations (before / after actions)
+// ---------------------------------------------------------------------------
+
+// An expectation can fire extra HTTP side-effects around its primary response:
+//   - beforeActions run BEFORE the response is written. A blocking before-action
+//     (blocking:true) makes the primary response wait for it, with a timeout and a
+//     failurePolicy (FAIL_FAST aborts the response on failure; BEST_EFFORT continues).
+//   - afterActions are always fire-and-forget AFTER the response is written.
+// Each action's httpRequest is dispatched by MockServer's HTTP client, so it carries a
+// socketAddress telling MockServer where to send it — here we point them back at this
+// same MockServer (self) and add tiny stubs for the audit / webhook targets so the
+// side-effects resolve cleanly offline. These load into the Composer's side-effects panel.
+async function sideEffectExpectations() {
+  log('\n→ Side-effect expectations (before / after actions)');
+
+  // Targets for the side-effect calls (so they resolve to 200 rather than 404).
+  await expectation('audit sink   POST /audit/log', {
+    httpRequest: { method: 'POST', path: '/audit/log' },
+    httpResponse: { statusCode: 200, body: { json: { logged: true } } },
+  });
+  await expectation('webhook sink POST /webhooks/order-created', {
+    httpRequest: { method: 'POST', path: '/webhooks/order-created' },
+    httpResponse: { statusCode: 202, body: { json: { accepted: true } } },
+  });
+
+  const selfSocket = { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME };
+
+  // Primary expectation with a blocking before-action (audit) and a fire-and-forget
+  // after-action (webhook). The response waits up to 2s for the audit call; if it fails
+  // the response is still sent (BEST_EFFORT).
+  await expectation('POST /api/orders (before: audit · after: webhook)', {
+    httpRequest: { method: 'POST', path: '/api/orders' },
+    httpResponse: {
+      statusCode: 201,
+      headers: { location: ['/api/orders/5001'] },
+      body: { json: { id: 5001, status: 'confirmed' } },
+    },
+    beforeActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/audit/log',
+          body: { json: { event: 'order.create.attempt', source: 'demo' } },
+          socketAddress: selfSocket,
+        },
+        blocking: true,
+        timeout: { timeUnit: 'MILLISECONDS', value: 2000 },
+        failurePolicy: 'BEST_EFFORT',
+      },
+    ],
+    afterActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/webhooks/order-created',
+          body: { json: { event: 'order.created', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+      },
+    ],
+  });
+
+  // A second expectation showing a non-blocking before-action plus a delayed after-action.
+  await expectation('DELETE /api/orders/5001 (before: non-blocking audit · after: delayed webhook)', {
+    httpRequest: { method: 'DELETE', path: '/api/orders/5001' },
+    httpResponse: { statusCode: 204 },
+    beforeActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/audit/log',
+          body: { json: { event: 'order.delete', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+        blocking: false,
+      },
+    ],
+    afterActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/webhooks/order-created',
+          body: { json: { event: 'order.deleted', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+        delay: { timeUnit: 'MILLISECONDS', value: 250 },
+      },
+    ],
+  });
+
+  counts.sideEffects += 2;
+}
+
+// ---------------------------------------------------------------------------
+// 6. Scenario state machines (Sessions · Scenarios panel)
+// ---------------------------------------------------------------------------
+
+// Seed a handful of named scenario state machines via PUT /mockserver/scenario/{name}
+// so the Scenarios panel's "Existing scenarios" list (GET /mockserver/scenario) is
+// populated. One sets a timed auto-transition so the countdown chip is visible, plus a
+// companion checkout stub whose scenario state can be advanced from the Scenarios panel.
+const SCENARIO_STATES = [
+  { name: 'checkout-flow', state: 'cart' },
+  { name: 'payment-gateway', state: 'healthy' },
+  { name: 'feature-rollout', state: 'disabled' },
+  { name: 'order-fulfilment', state: 'received' },
+];
+
+async function scenarioStateExamples() {
+  log('\n→ Scenario state machines (Sessions · Scenarios panel)');
+
+  for (const s of SCENARIO_STATES) {
+    const res = await api('PUT', `/mockserver/scenario/${encodeURIComponent(s.name)}`, { state: s.state });
+    if (!res.ok) throw new Error(`Failed to set scenario "${s.name}": HTTP ${res.status}`);
+    counts.scenarios++;
+    log(`   ~ scenario       ${s.name}  → ${s.state}`);
+  }
+
+  // A scenario with a scheduled auto-transition so the live countdown is visible.
+  const timed = await api('PUT', '/mockserver/scenario/nightly-batch', {
+    state: 'running',
+    transitionAfterMs: 600000,
+    nextState: 'idle',
+  });
+  if (!timed.ok) throw new Error(`Failed to set timed scenario "nightly-batch": HTTP ${timed.status}`);
+  counts.scenarios++;
+  log('   ~ scenario       nightly-batch  → running  (auto → idle in 600000ms)');
+
+  // A companion stub for the checkout flow. The scenario state is driven manually from
+  // the Scenarios panel (Set State / Trigger) — advance checkout-flow to "paid" there to
+  // see the list update.
+  await expectation('POST /api/checkout/pay (checkout-flow stub)', {
+    httpRequest: { method: 'POST', path: '/api/checkout/pay' },
+    httpResponse: { statusCode: 200, body: { json: { status: 'paid' } } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Cassettes (Library · Cassettes tab)
+// ---------------------------------------------------------------------------
+
+// Register the example cassette fixtures (scripts/demo-cassettes/*.json) in MockServer's
+// server-side cassette registry (PUT /mockserver/cassettes) so the Library · Cassettes tab lists
+// them — the dashboard merges the server registry with its per-browser localStorage list. Each
+// cassette's expectationCount is read from the file. The actual expectations are not loaded here;
+// use the Cassettes · Load tab (or load_expectations_from_file) to replay them.
+const DEMO_CASSETTES = ['rest-api-crud.json', 'llm-anthropic-weather.json'];
+
+async function cassetteExamples() {
+  log('\n→ Cassettes (Library · Cassettes tab)');
+  const cassetteDir = join(SCRIPT_DIR, 'demo-cassettes');
+  for (const filename of DEMO_CASSETTES) {
+    const path = join(cassetteDir, filename);
+    let expectationCount = -1;
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8'));
+      expectationCount = Array.isArray(parsed) ? parsed.length : -1;
+    } catch (e) {
+      log(`   ! skipped cassette ${filename} — could not read (${e.code || e.message})`);
+      continue;
+    }
+    const res = await api('PUT', '/mockserver/cassettes', { path, filename, expectationCount, origin: 'loaded' });
+    if (!res.ok) throw new Error(`Failed to register cassette "${filename}": HTTP ${res.status}`);
+    counts.cassettes++;
+    log(`   + cassette       ${filename}  (${expectationCount} expectations)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. gRPC descriptor set (Library · gRPC Descriptors tab)
+// ---------------------------------------------------------------------------
+
+// Upload a compiled protobuf FileDescriptorSet (the repo's greeting.dsc test fixture) so
+// the Library page's "gRPC Descriptors" tab lists the service and its methods (unary,
+// server-/client-streaming, bidi). The endpoint takes the raw descriptor-set bytes.
+async function grpcDescriptorExample() {
+  log('\n→ gRPC descriptor set (Library · gRPC Descriptors tab)');
+  // greeting.dsc lives in mockserver-core test resources, two levels up from mockserver-ui/scripts.
+  const dscPath = join(SCRIPT_DIR, '..', '..', 'mockserver', 'mockserver-core', 'src', 'test', 'resources', 'grpc', 'greeting.dsc');
+  let bytes;
+  try {
+    bytes = await readFile(dscPath);
+  } catch (e) {
+    log(`   ! skipped gRPC descriptors — could not read ${dscPath} (${e.code || e.message})`);
+    return;
+  }
+  // Raw binary upload — do NOT use the JSON api() helper.
+  const res = await fetch(`${BASE}/mockserver/grpc/descriptors`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: bytes,
+  });
+  await res.text().catch(() => undefined);
+  if (!res.ok) throw new Error(`Failed to upload gRPC descriptor set: HTTP ${res.status}`);
+  counts.grpcServices++;
+  log(`   + grpc descriptors  com.example.grpc.GreetingService  (${bytes.length} bytes, from greeting.dsc)`);
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -969,6 +1178,10 @@ async function main() {
   await grpcMockExpectations();
   await dnsMockExpectations();
   await wasmModuleExample();
+  await sideEffectExpectations();
+  await scenarioStateExamples();
+  await cassetteExamples();
+  await grpcDescriptorExample();
   await driftExamples();
   await plainHttpTraffic();
   await proxyTraffic();
@@ -985,13 +1198,28 @@ async function main() {
   log(` gRPC health statuses : ${counts.grpcHealth} (NOT_SERVING / SERVICE_UNKNOWN / SERVING)`);
   log(` gRPC chaos services  : ${counts.grpcChaos} (incl. streaming/trailer faults + auto-revert TTL)`);
   log(` WASM modules         : ${counts.wasmModules} (example Rust match module + a WASM-matched expectation)`);
+  log(` Side-effect exps     : ${counts.sideEffects} (before-actions [blocking/non-blocking] + after-actions [webhook])`);
+  log(` Scenarios            : ${counts.scenarios} (incl. one timed auto-transition; listed in the Scenarios panel)`);
+  log(` gRPC descriptor sets : ${counts.grpcServices} (greeting.dsc → com.example.grpc.GreetingService, 4 methods)`);
+  log(` Cassettes            : ${counts.cassettes} (registered server-side; listed in Library · Cassettes)`);
   log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
   log('');
+
+  // The example cassettes are registered in the server-side registry (so they appear in the
+  // Cassettes tab automatically). Their expectations are not loaded — use the Cassettes · Load tab
+  // (or load_expectations_from_file) with these paths to replay them:
+  const cassetteDir = join(SCRIPT_DIR, 'demo-cassettes');
+  log(' Example cassette files (load via Library → Cassettes → Load to replay their expectations):');
+  for (const filename of DEMO_CASSETTES) {
+    log(`   ${join(cassetteDir, filename)}`);
+  }
+  log('');
+
   log(' Try these views in the dashboard:');
-  log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills) + WASM modules');
+  log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills, before/after actions) + WASM modules + gRPC Descriptors tab');
   log('   Mocks              — HTTP, gRPC (stream/unary), DNS (A/AAAA/CNAME/NXDOMAIN) mocks listed per kind');
   log('   Traffic            — recorded + proxied (forwarded) requests, incl. a lane per LLM provider + token/cost');
-  log('   Sessions           — agent-001 / agent-002 loops + their call graphs');
+  log('   Sessions           — agent-001 / agent-002 loops + call graphs; Scenarios panel lists the seeded scenario state machines');
   log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos');
   log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
   log('');

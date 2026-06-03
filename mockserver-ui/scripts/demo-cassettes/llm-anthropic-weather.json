@@ -1,0 +1,31 @@
+[
+  {
+    "httpRequest": { "method": "POST", "path": "/cassette/v1/messages" },
+    "httpLlmResponse": {
+      "provider": "ANTHROPIC",
+      "model": "claude-sonnet-4-20250514",
+      "completion": {
+        "text": "Replayed from cassette: it is 18°C and sunny in Paris.",
+        "stopReason": "end_turn",
+        "usage": { "inputTokens": 210, "outputTokens": 24 }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/cassette/v1/messages",
+      "queryStringParameters": { "demo": ["tools"] }
+    },
+    "httpLlmResponse": {
+      "provider": "ANTHROPIC",
+      "model": "claude-sonnet-4-20250514",
+      "completion": {
+        "text": "Let me look that up.",
+        "toolCalls": [{ "id": "toolu_cassette1", "name": "get_weather", "arguments": "{\"city\":\"Paris\"}" }],
+        "stopReason": "tool_use",
+        "usage": { "inputTokens": 180, "outputTokens": 32 }
+      }
+    }
+  }
+]

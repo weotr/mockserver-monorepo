@@ -132,6 +132,11 @@ echo "→ Starting UI dev server on port $UI_PORT..."
 (cd "$UI_DIR" && MOCKSERVER_URL="http://localhost:$MOCKSERVER_PORT" npm run dev -- --port "$UI_PORT" >/dev/null 2>&1) &
 UI_PID=$!
 
+# Open the dashboard on the dev-server origin but pointed at MockServer via ?port: the UI
+# then calls http://localhost:$MOCKSERVER_PORT directly (cross-origin from the :$UI_PORT dev
+# server). MockServer's control plane returns CORS headers on every /mockserver/* response and
+# answers the OPTIONS preflight, so this cross-origin path works without the dev proxy — the
+# same way the bundled dashboard works when pointed at a different MockServer via host/port.
 UI_URL="http://localhost:$UI_PORT/mockserver/dashboard/?port=$MOCKSERVER_PORT"
 wait_for "http://localhost:$UI_PORT/mockserver/dashboard/" "UI dev server"
 echo "✓ UI dev server ready (PID $UI_PID)"
