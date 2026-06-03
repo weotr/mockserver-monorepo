@@ -13,6 +13,13 @@ Run MockServer with Docker in seconds:
 docker run -d --rm -p 1080:1080 mockserver/mockserver
 ```
 
+…or, on macOS / Linux, install it with [Homebrew](https://brew.sh/) and run the `mockserver` command:
+
+```bash
+brew install mockserver
+mockserver -serverPort 1080
+```
+
 Then create your first expectation and call it (MockServer exposes a REST control plane on the same port):
 
 ```bash
@@ -119,6 +126,16 @@ NPM Registry contains the following module:
 Docker Hub contains the following artifacts:
 
 * [MockServer Docker Container](https://hub.docker.com/r/mockserver/mockserver/) - a Docker container containing the Netty MockServer and proxy
+
+##### Homebrew [![Homebrew version](https://img.shields.io/homebrew/v/mockserver.svg)](https://formulae.brew.sh/formula/mockserver)
+
+MockServer is available in [Homebrew](https://brew.sh/) (homebrew-core), the package manager for macOS and Linux:
+
+```bash
+brew install mockserver   # then run: mockserver -serverPort 1080
+```
+
+See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html) and the [command-line usage guide](https://www.mock-server.com/mock_server/running_mock_server.html#running_from_command_line_using_homebrew).
 
 ##### Helm Chart
 
