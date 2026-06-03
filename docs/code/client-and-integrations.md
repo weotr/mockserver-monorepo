@@ -331,6 +331,7 @@ The `mockserver-testcontainers` module (`org.mock-server:mockserver-testcontaine
 | Capability | Method | Mechanism |
 |------------|--------|-----------|
 | Version-lockstep image | (default constructor) | Image tag derived from `MockServerClient`'s `Implementation-Version` (`mockserver/mockserver:mockserver-<version>`), falling back to `:latest` when run from unpackaged classes |
+| Server port | `withServerPort(int)` | Sets `SERVER_PORT` and *replaces* the exposed port (not append) so `Wait.forListeningPort()` never blocks on a port MockServer is not bound to |
 | Direct client wiring | `getClient()` | `new MockServerClient(getHost(), getServerPort())` |
 | Endpoints | `getEndpoint()` / `getSecureEndpoint()` | HTTP and HTTPS are served on the same unified port |
 | DNS | `withDnsPort(int)` | `MOCKSERVER_DNS_ENABLED` + `MOCKSERVER_DNS_PORT`, UDP port exposed |
