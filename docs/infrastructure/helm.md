@@ -323,18 +323,23 @@ To enable signing:
    or the website).
 2. **Store it** in the build account's Secrets Manager as `mockserver-release/cosign-key`, a JSON
    secret with keys `key` (the PEM contents of `cosign.key`) and `password` (the key password).
-3. **Validate with a dry-run release first** — the step downloads a pinned cosign binary into the
-   `alpine/helm` image, `cosign login ghcr.io` with the existing GHCR token, and
-   `cosign sign --key <key> ghcr.io/mock-server/charts/mockserver:<version>`. Confirm it succeeds on
-   a `--dry-run`/test before relying on it (signing is non-fatal, so a real release won't break if it
-   fails — it just publishes unsigned).
+3. **Validate with the test harness** — run `scripts/release/test-cosign-signing.sh`. It sources the
+   release library and calls the same `load_secret` + `in_docker` helpers, downloading a pinned cosign
+   binary into the `alpine/helm` image, `cosign login ghcr.io` with the existing GHCR token, and
+   `cosign sign --key <key> ghcr.io/mock-server/charts/mockserver:<version>` — the identical code path
+   to the release step. Default run is a non-mutating preflight (loads the secret, proves the
+   key+password decrypt, logs in to GHCR); `--sign` then signs the real published tags and verifies
+   them. A `--dry-run` *release* does **not** test this — the release skips signing in dry-run — so use
+   the harness. Signing is non-fatal regardless, so a real release won't break if it fails (it just
+   publishes unsigned).
 
 Once a signed version is on GHCR, Artifact Hub shows the Signed badge on its next scan. Users can
 verify with `cosign verify --key cosign.pub ghcr.io/mock-server/charts/mockserver:<version>`.
 
-> Hardening notes: the step fetches the cosign binary at release time (pinned to a version) — consider
-> SHA-pinning it or switching to a cosign-bearing toolchain image. Keyless (OIDC) signing is an
-> alternative if Buildkite OIDC is set up, avoiding a stored key.
+> Hardening notes: the step fetches a SHA256-pinned cosign binary (v2.4.3) at release time and the
+> private key is mounted as a `0600` file rather than passed via the container's environment, so it
+> never appears in the host process table. Keyless (OIDC) signing is a further alternative if
+> Buildkite OIDC is set up, avoiding a stored key altogether.
 
 ### Requesting "Official" status (Artifact Hub)
 
