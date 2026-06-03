@@ -15,7 +15,9 @@ import {
   getScenarioState,
   setScenarioState,
   triggerScenario,
+  listScenarios,
   type SetScenarioStateResponse,
+  type ScenarioStateResponse,
 } from '../lib/scenarios';
 
 // ---------------------------------------------------------------------------
@@ -30,15 +32,18 @@ interface ScenarioPanelProps {
 // Countdown hook for timed transitions
 // ---------------------------------------------------------------------------
 
-function useCountdown(targetMs: number | null): number | null {
+// `nonce` increments each time a transition is (re)scheduled so an identical delay value still
+// restarts the countdown — keying only on targetMs would silently keep the previous start time
+// when the same delay is set twice in a row.
+function useCountdown(targetMs: number | null, nonce: number): number | null {
   const [remaining, setRemaining] = useState<number | null>(null);
-  const [prevTarget, setPrevTarget] = useState<number | null>(null);
+  const [prevNonce, setPrevNonce] = useState<number>(nonce);
   const startRef = useRef<number>(0);
 
-  // Adjust state during render when targetMs changes — React's endorsed pattern
+  // Adjust state during render when the schedule changes — React's endorsed pattern
   // for resetting state on a prop change (avoids synchronous setState in an effect).
-  if (targetMs !== prevTarget) {
-    setPrevTarget(targetMs);
+  if (nonce !== prevNonce) {
+    setPrevNonce(nonce);
     setRemaining(targetMs != null && targetMs > 0 ? targetMs : null);
   }
 
@@ -55,7 +60,7 @@ function useCountdown(targetMs: number | null): number | null {
     }, 250);
 
     return () => clearInterval(id);
-  }, [targetMs]);
+  }, [targetMs, nonce]);
 
   return remaining;
 }
@@ -79,6 +84,11 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Existing-scenarios list (populated from GET /mockserver/scenario)
+  const [scenarios, setScenarios] = useState<ScenarioStateResponse[]>([]);
+  const [listTick, setListTick] = useState(0);
+  const refreshList = useCallback(() => setListTick((t) => t + 1), []);
+
   // Set state section
   const [newState, setNewState] = useState('');
   const [transitionAfterMs, setTransitionAfterMs] = useState('');
@@ -90,7 +100,35 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
   // Timed transition countdown
   const [scheduledTransitionMs, setScheduledTransitionMs] = useState<number | null>(null);
   const [scheduledNextState, setScheduledNextState] = useState<string | null>(null);
-  const countdown = useCountdown(scheduledTransitionMs);
+  const [transitionNonce, setTransitionNonce] = useState(0);
+  const countdown = useCountdown(scheduledTransitionMs, transitionNonce);
+
+  // Load the list of existing scenarios on mount and whenever refreshList() is called
+  // (e.g. after setting a state creates a new scenario). setState only after the await,
+  // guarded by `cancelled`, so we never call setState synchronously inside the effect.
+  useEffect(() => {
+    let cancelled = false;
+    async function load(): Promise<void> {
+      try {
+        const next = await listScenarios(connectionParams);
+        if (!cancelled) setScenarios(next);
+      } catch {
+        // A server without the list endpoint (older build) simply yields no list —
+        // the query/set/trigger controls below still work by typed name.
+        if (!cancelled) setScenarios([]);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionParams, listTick]);
+
+  const handleSelectScenario = useCallback((s: ScenarioStateResponse) => {
+    setScenarioName(s.scenarioName);
+    setCurrentState(s.currentState);
+    setError(null);
+  }, []);
 
   const handleRefresh = useCallback(async () => {
     if (!scenarioName.trim()) return;
@@ -125,16 +163,18 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
       if (result.transitionAfterMs != null && result.nextState) {
         setScheduledTransitionMs(result.transitionAfterMs);
         setScheduledNextState(result.nextState);
+        setTransitionNonce((n) => n + 1); // re-arm the countdown even if the delay is unchanged
       } else {
         setScheduledTransitionMs(null);
         setScheduledNextState(null);
       }
+      refreshList();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [connectionParams, scenarioName, newState, transitionAfterMs, nextState]);
+  }, [connectionParams, scenarioName, newState, transitionAfterMs, nextState, refreshList]);
 
   const handleTrigger = useCallback(async () => {
     if (!scenarioName.trim() || !triggerState.trim()) return;
@@ -145,18 +185,60 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
       setCurrentState(result.currentState);
       setScheduledTransitionMs(null);
       setScheduledNextState(null);
+      refreshList();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [connectionParams, scenarioName, triggerState]);
+  }, [connectionParams, scenarioName, triggerState, refreshList]);
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5, mb: 1 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.8rem', mb: 1 }}>
-        Scenario State Machine
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>
+          Scenario State Machine
+        </Typography>
+        <Tooltip title="Refresh the list of existing scenarios">
+          <span>
+            <Button
+              size="small"
+              onClick={refreshList}
+              startIcon={<RefreshIcon sx={{ fontSize: '0.875rem' }} />}
+              sx={{ height: 24, fontSize: '0.65rem', textTransform: 'none', minWidth: 0 }}
+            >
+              List
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+
+      {/* Existing scenarios — click a chip to populate the query/set/trigger forms below */}
+      <Box sx={{ mb: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem', display: 'block', mb: 0.5 }}>
+          Existing scenarios{scenarios.length > 0 ? ` (${scenarios.length})` : ''}
+        </Typography>
+        {scenarios.length === 0 ? (
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', fontStyle: 'italic' }}>
+            None yet — set a state below (or match an expectation that uses one) to create a scenario.
+          </Typography>
+        ) : (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+            {scenarios.map((s) => (
+              <Tooltip key={s.scenarioName} title={`${s.scenarioName} → ${s.currentState}`}>
+                <Chip
+                  label={`${s.scenarioName}: ${s.currentState}`}
+                  size="small"
+                  variant={s.scenarioName === scenarioName ? 'filled' : 'outlined'}
+                  color={s.scenarioName === scenarioName ? 'primary' : 'default'}
+                  onClick={() => handleSelectScenario(s)}
+                  sx={{ height: 20, fontSize: '0.6rem', fontFamily: 'monospace', maxWidth: 280 }}
+                />
+              </Tooltip>
+            ))}
+          </Box>
+        )}
+      </Box>
 
       {/* Scenario name + refresh */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -236,17 +318,19 @@ export default function ScenarioPanel({ connectionParams }: ScenarioPanelProps) 
             '& .MuiInputBase-root': { height: 24, fontSize: '0.7rem' },
           }}
         />
-        <TextField
-          size="small"
-          placeholder="Delay (ms)"
-          type="number"
-          value={transitionAfterMs}
-          onChange={(e) => setTransitionAfterMs(e.target.value)}
-          sx={{
-            width: 120,
-            '& .MuiInputBase-root': { height: 24, fontSize: '0.7rem' },
-          }}
-        />
+        <Tooltip title="Optional auto-transition delay in milliseconds (e.g. 60000 = 1 minute). Pair with a Next state to schedule the transition.">
+          <TextField
+            size="small"
+            placeholder="Delay (ms)"
+            type="number"
+            value={transitionAfterMs}
+            onChange={(e) => setTransitionAfterMs(e.target.value)}
+            sx={{
+              width: 120,
+              '& .MuiInputBase-root': { height: 24, fontSize: '0.7rem' },
+            }}
+          />
+        </Tooltip>
         <TextField
           size="small"
           placeholder="Next state"

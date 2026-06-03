@@ -56,8 +56,15 @@ import OpenApiImportDialog from './OpenApiImportDialog';
 import PactExportDialog from './PactExportDialog';
 import OidcDialog from './OidcDialog';
 import AsyncApiDialog from './AsyncApiDialog';
+import CrudDialog from './CrudDialog';
+import FileStoreDialog from './FileStoreDialog';
+import DiffRequestsDialog from './DiffRequestsDialog';
+import ConfirmDialog from './ConfirmDialog';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import HubIcon from '@mui/icons-material/Hub';
+import StorageIcon from '@mui/icons-material/Storage';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import Divider from '@mui/material/Divider';
 
 function statusColor(status: ConnectionStatus): 'success' | 'warning' | 'error' | 'default' {
   switch (status) {
@@ -122,7 +129,13 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [wsdlOpen, setWsdlOpen] = useState(false);
   const [openApiOpen, setOpenApiOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
+  const [crudOpen, setCrudOpen] = useState(false);
+  const [fileStoreOpen, setFileStoreOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  const setNotification = useDashboardStore((s) => s.setNotification);
+  // Confirmation for destructive actions (reset / bulk clear). Holds the pending action.
+  const [confirm, setConfirm] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -141,7 +154,10 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
     const previous = mode;
     setModeState(next);
     void setServerMode(connectionParams, next)
-      .then((r) => setModeState(r.mode))
+      .then((r) => {
+        setModeState(r.mode);
+        setNotification({ message: `Operating mode set to ${r.mode}`, severity: 'success' });
+      })
       .catch((e) => {
         setModeState(previous); // revert on failure
         setModeError(e instanceof Error ? e.message : 'Failed to change mode');
@@ -150,7 +166,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
 
   return (
     <MuiAppBar position="static" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-      <Toolbar variant="dense" sx={{ gap: 1, minHeight: 36 }}>
+      <Toolbar variant="dense" sx={{ gap: 1, minHeight: 36, flexWrap: 'wrap', rowGap: 0.5, py: 0.5 }}>
         <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
           MockServer
         </Typography>
@@ -238,7 +254,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-          ⌘K search · ⌘L clear · Esc filter
+          ⌘K search · ⌘L clear logs · Esc filter
         </Typography>
         <Tooltip title="Server clock (freeze / advance time)">
           <IconButton size="small" color="inherit" onClick={() => setClockOpen(true)} aria-label="Server clock">
@@ -256,12 +272,12 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           </IconButton>
         </Tooltip>
         <Tooltip title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}>
-          <IconButton size="small" color="inherit" onClick={toggleAutoScroll}>
+          <IconButton size="small" color="inherit" onClick={toggleAutoScroll} aria-label={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}>
             {autoScroll ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
         <Tooltip title={`Switch to ${themeMode === 'dark' ? 'light' : 'dark'} mode`}>
-          <IconButton size="small" color="inherit" onClick={toggleTheme}>
+          <IconButton size="small" color="inherit" onClick={toggleTheme} aria-label={`Switch to ${themeMode === 'dark' ? 'light' : 'dark'} mode`}>
             {themeMode === 'dark' ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
@@ -323,20 +339,32 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           </MenuItem>
           <MenuItem
             onClick={() => {
-              void onClearExpectations();
               setAnchorEl(null);
+              setConfirm({
+                title: 'Clear all expectations?',
+                message: 'This removes every registered expectation from the server. Recorded requests and logs are kept. This cannot be undone.',
+                confirmLabel: 'Clear expectations',
+                onConfirm: () => { void onClearExpectations(); },
+              });
             }}
           >
             <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Clear server expectations</ListItemText>
           </MenuItem>
+          <Divider />
           <MenuItem
             onClick={() => {
-              void onClearServer();
               setAnchorEl(null);
+              setConfirm({
+                title: 'Reset the entire server?',
+                message: 'This clears ALL expectations, recorded requests and logs, and resets server state. This cannot be undone.',
+                confirmLabel: 'Reset server',
+                onConfirm: () => { void onClearServer(); },
+              });
             }}
+            sx={{ color: 'error.main' }}
           >
-            <ListItemIcon><RestartAltIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon><RestartAltIcon fontSize="small" color="error" /></ListItemIcon>
             <ListItemText>Reset server (all)</ListItemText>
           </MenuItem>
         </Menu>
@@ -370,7 +398,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Export Pact…</ListItemText>
+            <ListItemText>Pact contract (export / verify)…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -388,7 +416,35 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><HubIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Load AsyncAPI…</ListItemText>
+            <ListItemText>AsyncAPI broker mock…</ListItemText>
+          </MenuItem>
+          <Divider />
+          <MenuItem
+            onClick={() => {
+              setCrudOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><StorageIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Register CRUD resource…</ListItemText>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setFileStoreOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><FolderOpenIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Mock file store…</ListItemText>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setDiffOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><CompareArrowsIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Diff two requests…</ListItemText>
           </MenuItem>
         </Menu>
         <OpenApiImportDialog
@@ -421,6 +477,17 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
       <ExplainUnmatchedDialog open={explainOpen} onClose={() => setExplainOpen(false)} connectionParams={connectionParams} />
       <OidcDialog open={oidcOpen} onClose={() => setOidcOpen(false)} connectionParams={connectionParams} />
       <AsyncApiDialog open={asyncApiOpen} onClose={() => setAsyncApiOpen(false)} connectionParams={connectionParams} />
+      <CrudDialog open={crudOpen} onClose={() => setCrudOpen(false)} connectionParams={connectionParams} />
+      <FileStoreDialog open={fileStoreOpen} onClose={() => setFileStoreOpen(false)} connectionParams={connectionParams} />
+      <DiffRequestsDialog open={diffOpen} onClose={() => setDiffOpen(false)} connectionParams={connectionParams} />
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        message={confirm?.message ?? ''}
+        confirmLabel={confirm?.confirmLabel ?? 'Confirm'}
+        onConfirm={() => confirm?.onConfirm()}
+        onClose={() => setConfirm(null)}
+      />
     </MuiAppBar>
   );
 }

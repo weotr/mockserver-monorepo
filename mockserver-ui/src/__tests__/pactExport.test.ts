@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { exportPact } from '../lib/pactExport';
+import { exportPact, verifyPact } from '../lib/pactExport';
 
 const params = { host: '127.0.0.1', port: '1080', secure: false };
 
@@ -50,5 +50,26 @@ describe('exportPact', () => {
   it('throws on a non-2xx response', async () => {
     stubFetch(500, 'boom');
     await expect(exportPact(params, 'c', 'p')).rejects.toThrow('boom');
+  });
+});
+
+describe('verifyPact', () => {
+  it('PUTs the contract to /pact/verify and reports verified on 202', async () => {
+    const calls = stubFetch(202, { matched: 3 });
+    const result = await verifyPact(params, '{"interactions":[]}');
+    expect(calls[0]?.url).toBe('http://127.0.0.1:1080/mockserver/pact/verify');
+    expect(calls[0]?.init?.method).toBe('PUT');
+    expect(calls[0]?.init?.body).toBe('{"interactions":[]}');
+    expect(result).toEqual({ verified: true, result: { matched: 3 } });
+  });
+
+  it('reports not-verified on 406 with the report', async () => {
+    stubFetch(406, { unmatched: 1 });
+    expect(await verifyPact(params, '{}')).toEqual({ verified: false, result: { unmatched: 1 } });
+  });
+
+  it('throws the text body on other errors', async () => {
+    stubFetch(400, 'Pact contract JSON must not be empty');
+    await expect(verifyPact(params, '')).rejects.toThrow('Pact contract JSON must not be empty');
   });
 });

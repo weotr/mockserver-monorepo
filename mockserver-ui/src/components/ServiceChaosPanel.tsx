@@ -750,7 +750,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       )}
 
       {actionError && (
-        <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setActionError(null)}>
+        <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setActionError(null)}>
           {actionError}
         </Alert>
       )}
@@ -797,7 +797,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
               <Typography variant="caption" color="text.secondary">Register chaos for a host</Typography>
               <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Host" placeholder="upstream.svc" value={form.host} onChange={setField('host')} sx={{ minWidth: 180 }} />
+                <TextField size="small" label="Host" placeholder="upstream.svc" value={form.host} onChange={setField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegister(); }} sx={{ minWidth: 180 }} />
                 <TextField size="small" label="Error status" placeholder="503" value={form.errorStatus} onChange={setField('errorStatus')} sx={{ width: 110 }} />
                 <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={form.errorProbability} onChange={setField('errorProbability')} sx={{ width: 100 }} />
                 <TextField size="small" label="Drop prob (0–1)" placeholder="0.2" value={form.dropProbability} onChange={setField('dropProbability')} sx={{ width: 100 }} />
@@ -1084,7 +1084,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                     <Typography variant="caption" color="text.secondary">Register gRPC chaos for a service</Typography>
                     {/* Row 1: core fields */}
                     <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                      <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} sx={{ minWidth: 200 }} />
+                      <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterGrpcChaos(); }} sx={{ minWidth: 200 }} />
                       <Select
                         size="small"
                         value={grpcChaosForm.errorStatusCode}
@@ -1225,7 +1225,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
               <Typography variant="caption" color="text.secondary">Register TCP chaos for a host</Typography>
               <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Host" placeholder="upstream.svc" value={tcpForm.host} onChange={setTcpField('host')} sx={{ minWidth: 160 }} />
+                <TextField size="small" label="Host" placeholder="upstream.svc" value={tcpForm.host} onChange={setTcpField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterTcp(); }} sx={{ minWidth: 160 }} />
                 <TextField size="small" label="Latency ms" placeholder="200" value={tcpForm.latencyMs} onChange={setTcpField('latencyMs')} sx={{ width: 100 }} />
                 <TextField size="small" label="Bandwidth B/s" placeholder="1024" value={tcpForm.bandwidthBytesPerSec} onChange={setTcpField('bandwidthBytesPerSec')} sx={{ width: 120 }} />
                 <TextField size="small" label="Slicer bytes" placeholder="64" value={tcpForm.slicerChunkSize} onChange={setTcpField('slicerChunkSize')} sx={{ width: 100 }} />

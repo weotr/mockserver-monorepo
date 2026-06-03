@@ -426,7 +426,7 @@ function WasmModulesTab({ connectionParams }: { connectionParams: ConnectionPara
       </Box>
 
       {actionError && (
-        <Alert severity="warning" onClose={() => setActionError(null)}>
+        <Alert severity="error" onClose={() => setActionError(null)}>
           {actionError}
         </Alert>
       )}
@@ -567,7 +567,7 @@ function GrpcDescriptorsTab({ connectionParams }: { connectionParams: Connection
         </Tooltip>
       </Box>
 
-      {actionError && <Alert severity="warning" onClose={() => setActionError(null)}>{actionError}</Alert>}
+      {actionError && <Alert severity="error" onClose={() => setActionError(null)}>{actionError}</Alert>}
       {loadError && <Alert severity="error" variant="outlined">{loadError}</Alert>}
 
       {services.length === 0 ? (

@@ -61,7 +61,7 @@ describe('AppBar', () => {
     }
   });
 
-  it('opens clear menu and calls clear server on reset', async () => {
+  it('opens clear menu and calls clear server on reset after confirmation', async () => {
     const user = userEvent.setup();
     const { props } = renderAppBar();
 
@@ -73,7 +73,13 @@ describe('AppBar', () => {
     await user.click(clearButton!);
     expect(screen.getByText('Reset server (all)')).toBeInTheDocument();
 
+    // Reset is destructive — it opens a confirmation dialog rather than firing immediately.
     await user.click(screen.getByText('Reset server (all)'));
+    expect(props.onClearServer).not.toHaveBeenCalled();
+    expect(screen.getByText('Reset the entire server?')).toBeInTheDocument();
+
+    // Confirm in the dialog.
+    await user.click(screen.getByRole('button', { name: 'Reset server' }));
     expect(props.onClearServer).toHaveBeenCalledOnce();
   });
 

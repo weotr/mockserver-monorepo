@@ -14,7 +14,7 @@ describe('ExpectationPanel', () => {
 
   it('shows empty state when no expectations', () => {
     render(<ExpectationPanel />);
-    expect(screen.getByText('No active expectations')).toBeInTheDocument();
+    expect(screen.getByText(/No active expectations/)).toBeInTheDocument();
   });
 
   it('renders expectations with descriptions', () => {

@@ -132,7 +132,7 @@ export default function RequestPanel({
     >
       {filtered.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
-          {items.length === 0 ? 'No requests' : 'No matching requests'}
+          {items.length === 0 ? 'No requests yet — recorded requests appear here as traffic reaches the server.' : 'No matching requests'}
         </Typography>
       ) : (
         filtered.map((item, index) => {

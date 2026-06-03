@@ -7,6 +7,7 @@ import RadioGroup from '@mui/material/RadioGroup';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Radio from '@mui/material/Radio';
 import Button from '@mui/material/Button';
+import Tooltip from '@mui/material/Tooltip';
 import Alert from '@mui/material/Alert';
 import MenuItem from '@mui/material/MenuItem';
 import Divider from '@mui/material/Divider';
@@ -2072,17 +2073,29 @@ function DnsResponsePanel({
           <MenuItem key={rc} value={rc}>{rc}</MenuItem>
         ))}
       </TextField>
-      <TextField
-        label="Answer records (JSON array)"
-        multiline
-        minRows={4}
-        maxRows={12}
-        value={state.answerRecords}
-        onChange={(e) => setState({ ...state, answerRecords: e.target.value })}
-        placeholder={'[\n  { "name": "example.com", "type": "A", "value": "127.0.0.1", "ttl": 300 }\n]'}
-        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
-        helperText="Each record supports: name, type (A/AAAA/CNAME/MX/SRV/TXT/PTR), value, ttl, priority, weight, port. Advanced records are best authored via the REST API."
-      />
+      {(() => {
+        const recs = state.answerRecords.trim();
+        let invalid = false;
+        if (recs.length > 0) {
+          try { invalid = !Array.isArray(JSON.parse(recs)); } catch { invalid = true; }
+        }
+        return (
+          <TextField
+            label="Answer records (JSON array)"
+            multiline
+            minRows={4}
+            maxRows={12}
+            error={invalid}
+            value={state.answerRecords}
+            onChange={(e) => setState({ ...state, answerRecords: e.target.value })}
+            placeholder={'[\n  { "name": "example.com", "type": "A", "value": "127.0.0.1", "ttl": 300 }\n]'}
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            helperText={invalid
+              ? 'Not valid JSON — must be an array of records, e.g. [ { "name": "...", "type": "A", "value": "..." } ]'
+              : 'Each record supports: name, type (A/AAAA/CNAME/MX/SRV/TXT/PTR), value, ttl, priority, weight, port. Advanced records are best authored via the REST API.'}
+          />
+        );
+      })()}
     </Box>
   );
 }
@@ -3199,17 +3212,18 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
 
               const dispatchRegister = () => void handleRegister(currentAction, effectiveMatcher);
 
-              // Per-action validation — DNS kind validates dnsName instead
-              // of matcher.path.
-              const canRegister = (() => {
+              // Per-action validation — returns why the Register button is disabled (or null when
+              // it's enabled), so the disabled state always has a visible reason (tooltip below).
+              // DNS kind validates dnsName instead of matcher.path.
+              const disabledReason: string | null = (() => {
                 if (kind === 'dns') {
-                  if (dnsMatcher.dnsName.trim().length === 0) return false;
+                  if (dnsMatcher.dnsName.trim().length === 0) return 'Enter a DNS name to match';
                 } else {
-                  if (matcher.path.trim().length === 0) return false;
+                  if (matcher.path.trim().length === 0) return 'Enter a request path to match';
                 }
                 switch (actionType) {
-                  case 'static': return true;
-                  case 'forward': return forwardState.host.trim().length > 0 && forwardState.port > 0;
+                  case 'static': return null;
+                  case 'forward': return (forwardState.host.trim().length > 0 && forwardState.port > 0) ? null : 'Enter a forward host and port';
                   case 'forward_override':
                     return (
                       forwardOverrideState.overrideMethod.trim().length > 0 ||
@@ -3219,22 +3233,35 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                       forwardOverrideState.overrideQueryString.trim().length > 0 ||
                       forwardOverrideState.overrideHeaders.trim().length > 0 ||
                       forwardOverrideState.overrideBody.trim().length > 0
-                    );
+                    ) ? null : 'Set at least one override field';
                   case 'forward_fallback':
-                    return forwardFallbackState.host.trim().length > 0 && forwardFallbackState.port > 0;
-                  case 'callback': return callbackState.callbackClass.trim().length > 0;
-                  case 'template': return templateState.template.trim().length > 0;
+                    return (forwardFallbackState.host.trim().length > 0 && forwardFallbackState.port > 0) ? null : 'Enter a fallback host and port';
+                  case 'callback': return callbackState.callbackClass.trim().length > 0 ? null : 'Enter the callback class name';
+                  case 'template': return templateState.template.trim().length > 0 ? null : 'Enter a response template';
                   case 'error':
-                    return errorState.dropConnection || errorState.responseBytesB64.trim().length > 0;
-                  case 'websocket': return true;
-                  case 'sse': return sseState.events.some((ev) => ev.data.trim().length > 0 || ev.event.trim().length > 0);
-                  case 'binary_response': return binaryResponseState.binaryData.trim().length > 0;
-                  case 'dns_response': return true;
-                  case 'forward_template': return forwardTemplateState.template.trim().length > 0;
-                  case 'forward_class_callback': return forwardClassCallbackState.callbackClass.trim().length > 0;
-                  case 'grpc_stream': return true;
+                    return (errorState.dropConnection || errorState.responseBytesB64.trim().length > 0) ? null : 'Enable drop-connection or enter response bytes';
+                  case 'websocket': return null;
+                  case 'sse': return sseState.events.some((ev) => ev.data.trim().length > 0 || ev.event.trim().length > 0) ? null : 'Add at least one SSE event';
+                  case 'binary_response': return binaryResponseState.binaryData.trim().length > 0 ? null : 'Enter base64 binary data';
+                  case 'dns_response': {
+                    // Surface invalid answer-records JSON instead of silently dropping it (the
+                    // codegen omits unparseable records, which would register an empty DNS answer).
+                    const recs = dnsResponseState.answerRecords.trim();
+                    if (recs.length > 0) {
+                      try {
+                        if (!Array.isArray(JSON.parse(recs))) return 'Answer records must be a JSON array';
+                      } catch {
+                        return 'Answer records must be valid JSON (an array of records)';
+                      }
+                    }
+                    return null;
+                  }
+                  case 'forward_template': return forwardTemplateState.template.trim().length > 0 ? null : 'Enter a forward template';
+                  case 'forward_class_callback': return forwardClassCallbackState.callbackClass.trim().length > 0 ? null : 'Enter the forward callback class name';
+                  case 'grpc_stream': return null;
                 }
               })();
+              const canRegister = disabledReason === null;
 
               const editingExisting = matcher.id.trim().length > 0;
 
@@ -3250,18 +3277,23 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                     baseUrl={baseUrl(connectionParams)}
                   />
                   <Box sx={{ mt: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={dispatchRegister}
-                      disabled={registering || !canRegister}
-                    >
-                      {registering
-                        ? 'Registering…'
-                        : editingExisting
-                          ? 'Update expectation'
-                          : 'Register expectation'}
-                    </Button>
+                    <Tooltip title={!registering && disabledReason ? disabledReason : ''}>
+                      {/* span wrapper so the tooltip works while the button is disabled */}
+                      <span>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={dispatchRegister}
+                          disabled={registering || !canRegister}
+                        >
+                          {registering
+                            ? 'Registering…'
+                            : editingExisting
+                              ? 'Update expectation'
+                              : 'Register expectation'}
+                        </Button>
+                      </span>
+                    </Tooltip>
                     {editingExisting ? (
                       <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
                         Editing — the Expectation ID will be reused so this updates in place.

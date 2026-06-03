@@ -39,3 +39,27 @@ export async function getAsyncApiStatus(params: ConnectionParams, signal?: Abort
   if (res.status === 501) return null;
   return jsonOrError(res);
 }
+
+export interface AsyncApiVerifyResult {
+  /** true when the observed messages satisfy the verification (server returned 202). */
+  verified: boolean;
+  /** the server's failure message when not verified (empty when verified). */
+  message: string;
+}
+
+/**
+ * Verify observed broker messages against a verification request. The server returns 202 (verified,
+ * empty body) or 406 (not verified, a plain-text failure message). Throws AsyncApiUnavailableError
+ * when the module is absent (501).
+ */
+export async function verifyAsyncApi(params: ConnectionParams, body: string): Promise<AsyncApiVerifyResult> {
+  const res = await fetch(`${buildBaseUrl(params)}/mockserver/asyncapi/verify`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+  if (res.status === 501) throw new AsyncApiUnavailableError();
+  if (res.status === 202) return { verified: true, message: '' };
+  if (res.status === 406) return { verified: false, message: await res.text() };
+  throw new Error((await res.text()) || `HTTP ${res.status} ${res.statusText}`);
+}

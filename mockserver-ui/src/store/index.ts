@@ -40,6 +40,9 @@ interface DashboardState {
 
   error: string | null;
 
+  /** Transient toast/snackbar for action feedback (success/info/warning/error). */
+  notification: { message: string; severity: 'success' | 'info' | 'warning' | 'error' } | null;
+
   debugMismatchOpen: boolean;
   debugMismatchLoading: boolean;
   debugMismatchResult: DebugMismatchResult | null;
@@ -78,6 +81,7 @@ interface DashboardState {
   setTrafficSearch: (term: string) => void;
   setSelectedTrafficKey: (key: string | null) => void;
   setError: (error: string | null) => void;
+  setNotification: (notification: { message: string; severity: 'success' | 'info' | 'warning' | 'error' } | null) => void;
   openDebugMismatch: (result: DebugMismatchResult) => void;
   closeDebugMismatch: () => void;
   setDebugMismatchLoading: (loading: boolean) => void;
@@ -121,6 +125,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   trafficSearch: '',
 
   error: null,
+  notification: null,
 
   debugMismatchOpen: false,
   debugMismatchLoading: false,
@@ -205,6 +210,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   setTrafficSearch: (term) => set({ trafficSearch: term }),
   setSelectedTrafficKey: (key) => set({ selectedTrafficKey: key }),
   setError: (error) => set({ error }),
+  setNotification: (notification) => set({ notification }),
   openDebugMismatch: (result) =>
     set({ debugMismatchOpen: true, debugMismatchResult: result, debugMismatchLoading: false, debugMismatchError: null }),
   closeDebugMismatch: () =>

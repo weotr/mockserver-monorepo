@@ -34,7 +34,7 @@ export default function LogPanel() {
     >
       {filtered.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
-          {logMessages.length === 0 ? 'No log messages' : 'No matching log messages'}
+          {logMessages.length === 0 ? 'No log messages yet — server activity appears here as requests are handled.' : 'No matching log messages'}
         </Typography>
       ) : (
         filtered.map((message) =>

@@ -1,6 +1,7 @@
 /**
  * Client for MockServer's scenario state-machine control-plane endpoints.
  *
+ * GET  /mockserver/scenario                → { scenarios: [{ scenarioName, currentState }] }
  * GET  /mockserver/scenario/{name}         → { scenarioName, currentState }
  * PUT  /mockserver/scenario/{name}         → set state (+ optional timed transition)
  * PUT  /mockserver/scenario/{name}/trigger → external trigger to set state
@@ -47,6 +48,17 @@ async function ensureOk(res: Response): Promise<void> {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/** List every known scenario and its current state. */
+export async function listScenarios(
+  params: ConnectionParams,
+  signal?: AbortSignal,
+): Promise<ScenarioStateResponse[]> {
+  const res = await fetch(`${buildBaseUrl(params)}/mockserver/scenario`, { signal });
+  await ensureOk(res);
+  const body = (await res.json()) as { scenarios?: ScenarioStateResponse[] };
+  return Array.isArray(body.scenarios) ? body.scenarios : [];
+}
 
 /** Fetch the current state of a scenario. */
 export async function getScenarioState(

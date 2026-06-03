@@ -3,6 +3,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Box from '@mui/material/Box';
 import Alert from '@mui/material/Alert';
+import Snackbar from '@mui/material/Snackbar';
 import { useDashboardStore } from './store';
 import { buildTheme } from './theme';
 import { useConnectionParams } from './hooks/useConnectionParams';
@@ -40,6 +41,8 @@ export default function App() {
   const generateStubSuggestions = useDashboardStore((s) => s.generateStubSuggestions);
   const generateStubConfidence = useDashboardStore((s) => s.generateStubConfidence);
   const closeGenerateStub = useDashboardStore((s) => s.closeGenerateStub);
+  const notification = useDashboardStore((s) => s.notification);
+  const setNotification = useDashboardStore((s) => s.setNotification);
 
   const params = useConnectionParams();
   const { connect, sendFilter, clearServer } = useWebSocket(params);
@@ -68,8 +71,11 @@ export default function App() {
       onSearch: () => {
         logSearchInputRef.current?.focus();
       },
+      // ⌘L clears the server LOGS only — a benign, frequent action. A full reset (which also
+      // drops every expectation and recorded request) is intentionally NOT bound to a keystroke;
+      // it lives behind a confirmation in the Clear menu.
       onClear: () => {
-        void clearServer('all');
+        void clearServer('log');
       },
       onToggleFilter: () => {
         useDashboardStore.getState().toggleFilterExpanded();
@@ -125,6 +131,23 @@ export default function App() {
           {view === 'drift' && <DriftPanel connectionParams={params} />}
           {view === 'verification' && <VerificationView connectionParams={params} />}
         </Box>
+        <Snackbar
+          open={notification !== null}
+          autoHideDuration={4000}
+          onClose={() => setNotification(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          {notification ? (
+            <Alert
+              severity={notification.severity}
+              variant="filled"
+              onClose={() => setNotification(null)}
+              sx={{ width: '100%' }}
+            >
+              {notification.message}
+            </Alert>
+          ) : undefined}
+        </Snackbar>
         <DebugMismatchDialog />
         <GenerateStubDialog
           open={generateStubOpen}

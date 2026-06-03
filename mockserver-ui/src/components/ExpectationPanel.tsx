@@ -81,7 +81,9 @@ export default function ExpectationPanel() {
     >
       {filtered.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
-          {expectations.length === 0 ? 'No active expectations' : 'No matching expectations'}
+          {expectations.length === 0
+            ? 'No active expectations — add one in the Mocks tab, or import an OpenAPI/WSDL spec from the tools menu.'
+            : 'No matching expectations'}
         </Typography>
       ) : (
         filtered.map((item, index) => (

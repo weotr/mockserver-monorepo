@@ -8,7 +8,7 @@ describe('RequestPanel', () => {
     render(
       <RequestPanel title="Received Requests" items={[]} searchValue="" onSearchChange={() => {}} />,
     );
-    expect(screen.getByText('No requests')).toBeInTheDocument();
+    expect(screen.getByText(/No requests/)).toBeInTheDocument();
   });
 
   it('renders requests with reverse index (most recent first)', () => {

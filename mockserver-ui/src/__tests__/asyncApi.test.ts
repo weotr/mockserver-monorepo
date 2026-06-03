@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { loadAsyncApi, getAsyncApiStatus, AsyncApiUnavailableError } from '../lib/asyncApi';
+import { loadAsyncApi, getAsyncApiStatus, verifyAsyncApi, AsyncApiUnavailableError } from '../lib/asyncApi';
 
 const params = { host: '127.0.0.1', port: '1080', secure: false };
 afterEach(() => { vi.restoreAllMocks(); });
@@ -32,5 +32,24 @@ describe('asyncApi client', () => {
   it('surfaces the server error message on a 400', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400, statusText: 'Bad Request', json: async () => ({ error: 'failed to load AsyncAPI spec: bad yaml' }) }));
     await expect(loadAsyncApi(params, 'bad')).rejects.toThrow('bad yaml');
+  });
+
+  it('verifyAsyncApi returns verified on 202', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 202 });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await verifyAsyncApi(params, '{"channel":"orders"}');
+    expect(result).toEqual({ verified: true, message: '' });
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://127.0.0.1:1080/mockserver/asyncapi/verify');
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('PUT');
+  });
+
+  it('verifyAsyncApi returns the failure message on 406', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 406, text: async () => 'expected at least 1 message on orders' }));
+    expect(await verifyAsyncApi(params, '{}')).toEqual({ verified: false, message: 'expected at least 1 message on orders' });
+  });
+
+  it('verifyAsyncApi throws AsyncApiUnavailableError on 501', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 501 }));
+    await expect(verifyAsyncApi(params, '{}')).rejects.toBeInstanceOf(AsyncApiUnavailableError);
   });
 });

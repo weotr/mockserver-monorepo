@@ -8,8 +8,9 @@ import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
 import Button from '@mui/material/Button';
 import Alert from '@mui/material/Alert';
+import Divider from '@mui/material/Divider';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
-import { loadAsyncApi, getAsyncApiStatus, AsyncApiUnavailableError } from '../lib/asyncApi';
+import { loadAsyncApi, getAsyncApiStatus, verifyAsyncApi, AsyncApiUnavailableError } from '../lib/asyncApi';
 
 export default function AsyncApiDialog({
   open,
@@ -27,6 +28,9 @@ export default function AsyncApiDialog({
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [verifyBody, setVerifyBody] = useState('');
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ verified: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -61,9 +65,24 @@ export default function AsyncApiDialog({
     }
   }, [connectionParams, spec]);
 
+  const verify = useCallback(async () => {
+    if (!verifyBody.trim()) { setError('Paste a verification request (JSON).'); return; }
+    setVerifyBusy(true);
+    setError(null);
+    setVerifyResult(null);
+    try {
+      setVerifyResult(await verifyAsyncApi(connectionParams, verifyBody));
+    } catch (e) {
+      if (e instanceof AsyncApiUnavailableError) { setUnavailable(true); setError(e.message); }
+      else setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifyBusy(false);
+    }
+  }, [connectionParams, verifyBody]);
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Load AsyncAPI spec</DialogTitle>
+      <DialogTitle>AsyncAPI broker mock</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Register an AsyncAPI spec to mock a message broker — paste the spec (JSON or YAML), or a
@@ -99,6 +118,29 @@ export default function AsyncApiDialog({
             </Box>
           </Box>
         )}
+
+        <Divider sx={{ my: 2 }} />
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>Verify messages</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Check observed broker messages against a verification request.
+        </Typography>
+        <TextField
+          label="Verification request (JSON)"
+          multiline minRows={5} maxRows={16} fullWidth disabled={unavailable}
+          value={verifyBody} onChange={(e) => setVerifyBody(e.target.value)}
+          placeholder={'{\n  "channel": "orders",\n  "atLeast": 1\n}'}
+          slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+        />
+        {verifyResult && (
+          <Alert severity={verifyResult.verified ? 'success' : 'warning'} sx={{ mt: 1 }}>
+            {verifyResult.verified ? 'Verified — the observed messages satisfy the request.' : (verifyResult.message || 'Not verified.')}
+          </Alert>
+        )}
+        <Box sx={{ mt: 1 }}>
+          <Button variant="outlined" size="small" disabled={verifyBusy || unavailable || !verifyBody.trim()} onClick={() => void verify()}>
+            {verifyBusy ? 'Verifying…' : 'Verify messages'}
+          </Button>
+        </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Close</Button>
