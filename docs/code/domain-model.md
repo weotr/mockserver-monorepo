@@ -427,12 +427,13 @@ Beyond expectation-driven transitions, scenarios support timed auto-transitions 
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
+| `GET` | `/mockserver/scenario` | — | Lists all known scenarios: `{"scenarios": [{"scenarioName": "...", "currentState": "..."}, ...]}` |
 | `GET` | `/mockserver/scenario/{name}` | — | Returns `{"scenarioName": "...", "currentState": "..."}` |
 | `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running"}` | Sets state immediately |
 | `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running", "transitionAfterMs": 5000, "nextState": "Finished"}` | Sets state and schedules timed transition |
 | `PUT` | `/mockserver/scenario/{name}/trigger` | `{"newState": "Step3"}` | Sets state to `newState` immediately (external trigger) |
 
-These endpoints are handled in `HttpState.handleScenarioPut()` and `HttpState.handleScenarioGet()`, authenticated via the control plane authentication handler.
+These endpoints are handled in `HttpState.handleScenarioPut()`, `HttpState.handleScenarioGet()`, and `HttpState.handleScenarioList()` (the no-name `GET /mockserver/scenario` form, used by the dashboard's Scenarios panel to list existing scenarios), authenticated via the control plane authentication handler.
 
 #### Sequential/Cycling Responses (`httpResponses`)
 

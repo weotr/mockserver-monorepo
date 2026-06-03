@@ -343,6 +343,28 @@ The AppBar renders the nine toggle buttons (Dashboard / Traffic / Sessions / Com
 
 **Dark mode**: MUI defaults are kept; no overrides applied.
 
+The toolbar uses `flexWrap` so its controls wrap onto a second row on narrow screens rather than clipping. Icon-only buttons carry both a `Tooltip` and an `aria-label`.
+
+## Tools Menu
+
+The AppBar "Import / export" (wrench) menu groups one-off control-plane tools, each opening a dialog:
+
+| Menu item | Dialog | Endpoint(s) |
+|-----------|--------|-------------|
+| Import OpenAPI / WSDL | `OpenApiImportDialog` / `WsdlImportDialog` | `PUT /mockserver/openapi` / WSDL import |
+| Pact contract (export / verify) | `PactExportDialog` | `PUT /mockserver/pact`, `PUT /mockserver/pact/verify` |
+| Mock OIDC provider | `OidcDialog` | `PUT /mockserver/oidc` |
+| AsyncAPI broker mock | `AsyncApiDialog` | `PUT/GET /mockserver/asyncapi`, `PUT /mockserver/asyncapi/verify` |
+| Register CRUD resource | `CrudDialog` | `PUT /mockserver/crud` |
+| Mock file store | `FileStoreDialog` | `PUT /mockserver/files/{store,list,retrieve,delete}` |
+| Diff two requests | `DiffRequestsDialog` | `PUT /mockserver/diff` (renders `DiffPanel`) |
+
+## Destructive-Action Safety & Feedback
+
+- **Confirmation**: "Reset server (all)" and "Clear expectations" route through a reusable `ConfirmDialog` instead of firing immediately; Reset is styled in the error colour and separated by a divider. "Clear logs" is benign and fires directly.
+- **Keyboard**: `⌘/Ctrl-L` clears **logs only** (not a full reset) — a full reset is intentionally not bound to a keystroke.
+- **Toasts**: a global `notification` in the store (`setNotification`) drives a `Snackbar` in `App.tsx`, giving success feedback for clear/reset and operating-mode changes. Failed operations use `severity="error"` consistently (not `warning`).
+
 ## Frontend Application
 
 ### Technology Stack
@@ -767,3 +789,20 @@ The script:
 | `/mockserver/dashboard*` | — | Served by Vite (returns `req.url` in bypass) |
 
 The `MOCKSERVER_URL` env var is set by `local_ui_dev.sh` to match the configured MockServer port.
+
+### Cross-Origin (CORS) Support
+
+The dashboard is designed to connect to a MockServer at an arbitrary `host`/`port` (set via its
+connection fields or the `?host=`/`?port=` query parameters), which is inherently a cross-origin
+request when the dashboard is not served from that same MockServer. To make this work without any
+configuration, **MockServer always returns CORS headers on control-plane responses** (every
+`/mockserver/*` API response, written with `apiResponse == true`) and **answers the CORS preflight**
+(`OPTIONS`) for control-plane paths — both independent of the `enableCORSForAPI` setting. This is
+applied centrally in `ResponseWriter.writeResponse(...)` and `HttpActionHandler` (preflight), so it
+covers every control-plane endpoint, not just the dashboard-specific ones.
+
+Mock/proxy responses (`apiResponse == false`) are unaffected — they only receive CORS headers when
+`enableCORSForAllResponses` is enabled — so enabling cross-origin dashboard access never changes how
+mocked APIs respond. The Vite dev proxy above is therefore optional; the demo launcher
+(`launch-with-demo-data.sh`) points the dashboard straight at the MockServer port via `?port=` and
+relies on this CORS support.
