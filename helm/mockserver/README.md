@@ -13,7 +13,7 @@ The chart is published to the **GitHub Container Registry (GHCR) as an OCI artif
 helm upgrade --install --create-namespace --namespace mockserver --version 6.1.0 mockserver oci://ghcr.io/mock-server/charts/mockserver
 ```
 
-The OCI artifact is public — no authentication is required for `helm pull` / `helm install` — and every released version (5.3.0 onward) is available at the same path. Browse all published versions on the [GHCR package page](https://github.com/orgs/mock-server/packages/container/package/charts%2Fmockserver).
+The OCI artifact is public — no authentication is required for `helm pull` / `helm install`. Browse the published versions on the [GHCR package page](https://github.com/orgs/mock-server/packages/container/package/charts%2Fmockserver) and pass the one you want with `--version` (omit `--version` to get the latest).
 
 **OR** install from the legacy `.tgz` served by `www.mock-server.com`:
 
