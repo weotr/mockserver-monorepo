@@ -21,8 +21,9 @@ import static org.mockserver.netty.HttpRequestHandler.PROXYING;
  * <p>
  * Resolution is performed by a pluggable {@link OriginalDestinationResolver} strategy
  * (typically a {@link CompositeOriginalDestinationResolver} chain). The default chain
- * contains only the conntrack resolver; additional channel-level strategies (SO_ORIGINAL_DST
- * getsockopt, TPROXY, eBPF) can be added when native support is available.
+ * contains, in order, the SO_ORIGINAL_DST getsockopt resolver, the conntrack resolver, and
+ * the DNS-intent resolver; further channel-level strategies (TPROXY, eBPF) can be added when
+ * native support is available.
  * <p>
  * Resolution strategy (in order):
  * <ol>
@@ -32,8 +33,10 @@ import static org.mockserver.netty.HttpRequestHandler.PROXYING;
  *       the REMOTE_SOCKET is set before this handler fires.</li>
  *   <li><b>Channel-level chain</b> (this handler, at {@code channelActive}):
  *       <ul>
+ *         <li>{@link SoOriginalDstResolver} — O(1) getsockopt(SO_ORIGINAL_DST) via JNA
+ *             (Linux + epoll transport only; returns null on NIO channels)</li>
  *         <li>{@link ConntrackOriginalDestinationResolver} — Linux conntrack table</li>
- *         <li>(future) SO_ORIGINAL_DST getsockopt, TPROXY, eBPF</li>
+ *         <li>(future) TPROXY, eBPF</li>
  *       </ul>
  *   </li>
  *   <li><b>Host header fallback</b> — if no strategy resolves the destination,

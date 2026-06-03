@@ -84,6 +84,20 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative-boringssl-static</artifactId>
         </dependency>
+        <!-- Epoll API classes (pure Java, no native classifier) — needed at compile
+             time for SoOriginalDstResolver to reference EpollSocketChannel/Epoll.
+             The native .so is only required at runtime on Linux. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+        </dependency>
+        <!-- JNA — used by SoOriginalDstResolver for getsockopt(SO_ORIGINAL_DST)
+             on Linux. On non-Linux platforms the JNA code path is never invoked;
+             the resolver reports unsupported and falls through to conntrack. -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
 
         <!-- HTTP/3 (QUIC) — experimental; the native QUIC library is bundled
              transitively by netty-incubator-codec-http3 for supported platforms.

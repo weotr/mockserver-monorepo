@@ -84,6 +84,7 @@
         <netty-tcnative-boringssl-static.version>2.0.77.Final</netty-tcnative-boringssl-static.version>
         <protobuf.version>4.35.0</protobuf.version>
         <chicory.version>0.0.12</chicory.version>
+        <jna.version>5.17.0</jna.version>
     </properties>
 
     <modules>
@@ -377,6 +378,13 @@
                 <groupId>io.netty</groupId>
                 <artifactId>netty-transport-classes-epoll</artifactId>
                 <version>${netty.version}</version>
+            </dependency>
+
+            <!-- JNA — used by SoOriginalDstResolver for getsockopt(SO_ORIGINAL_DST) -->
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna</artifactId>
+                <version>${jna.version}</version>
             </dependency>
 
             <!-- HTTP/3 (QUIC) — experimental; native QUIC transport required at runtime -->

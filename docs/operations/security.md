@@ -65,6 +65,15 @@ MockServer targets **Java 17** as the minimum supported runtime. Some dependenci
 
 **When raising the Java floor:** remove the corresponding ceiling here and the matching ignore entries in `.github/dependabot.yml`, then let the dependency upgrade. The Dependabot ignore does not block **manual** version bumps in `pom.xml` — keep this table in mind when hand-editing dependency versions.
 
+### Native / Platform Dependencies
+
+Dependencies that interact with the OS kernel or native libraries, added for specific platform features. These are safe on all platforms — callers detect availability at runtime and fall through when unavailable.
+
+| Dependency | Version | Module | Purpose | Java 17 compatible |
+|------------|---------|--------|---------|:---:|
+| `net.java.dev.jna:jna` | `${jna.version}` (5.17.0) | `mockserver-netty` | JNA-based `getsockopt(SO_ORIGINAL_DST)` for transparent proxy original-destination resolution (`SoOriginalDstResolver`). O(1) socket option read, tried before the O(n) conntrack table scan. | Yes (supports Java 8+) |
+| `io.netty:netty-transport-classes-epoll` | `${netty.version}` | `mockserver-netty` | Pure-Java API classes for `EpollSocketChannel` and `Epoll.isAvailable()` — needed at compile time by `SoOriginalDstResolver` to extract the file descriptor from epoll channels. No native classifier (the `.so` is only needed at runtime on Linux). | Yes (follows Netty BOM) |
+
 ### Maven Dependency Graph Submission
 
 GitHub's built-in dependency graph automatically indexes all manifest files (`pom.xml`, `package.json`, `Gemfile`, `requirements.txt`) and their transitive dependencies. This enables Dependabot vulnerability alerts for the full dependency tree -- currently tracking 2000+ packages including 347 Maven dependencies.

@@ -19,16 +19,16 @@ import java.util.List;
  * <p>
  * <b>Default chain</b> (constructed via {@link #defaultChain()}):
  * <ol>
- *   <li>{@link ConntrackOriginalDestinationResolver} — Linux conntrack table lookup</li>
+ *   <li>{@link SoOriginalDstResolver} — O(1) {@code getsockopt(SO_ORIGINAL_DST)} via JNA
+ *       (requires Linux + Netty epoll transport; returns null on NIO channels or non-Linux)</li>
+ *   <li>{@link ConntrackOriginalDestinationResolver} — O(n) Linux conntrack table lookup
+ *       (fallback when SO_ORIGINAL_DST is unavailable)</li>
  *   <li>{@link DnsIntentOriginalDestinationResolver} — recovers the intended hostname
  *       from MockServer's DNS answer cache (DNS-steering mode)</li>
  * </ol>
  * <p>
- * <b>Future strategies (not yet implemented — require native/JNI code):</b>
+ * <b>Future strategies (not yet implemented):</b>
  * <ul>
- *   <li><b>SO_ORIGINAL_DST getsockopt</b> — direct socket option read via JNI. More
- *       efficient than conntrack parsing (O(1) vs O(n)), but requires a native library
- *       or Netty's {@code EpollChannelOption} extension (not currently exposed).</li>
  *   <li><b>TPROXY (IP_TRANSPARENT)</b> — the TPROXY iptables target preserves the
  *       original destination as the socket's local address. Resolution is trivial
  *       ({@code channel.localAddress()}) but requires {@code CAP_NET_ADMIN} and
@@ -63,16 +63,23 @@ public class CompositeOriginalDestinationResolver implements TransparentProxyHan
     }
 
     /**
-     * Returns the default chain: [conntrack, dns-intent].
+     * Returns the default chain: [SO_ORIGINAL_DST, conntrack, dns-intent].
      * <p>
-     * Conntrack (or SO_ORIGINAL_DST) is tried first because a real iptables-REDIRECT
-     * original destination is the most authoritative source. The DNS-intent resolver
-     * fills the gap when conntrack returns null — it recovers the hostname that
-     * MockServer's DNS server mapped to the connection's destination IP.
+     * SO_ORIGINAL_DST (via JNA getsockopt) is tried first — it is an O(1) socket
+     * option read, far cheaper than the O(n) conntrack table scan. It requires
+     * Linux + Netty epoll transport; on NIO channels or non-Linux it returns null
+     * and the chain falls through to conntrack.
+     * <p>
+     * Conntrack is the second strategy because a real iptables-REDIRECT original
+     * destination is still the most authoritative source when SO_ORIGINAL_DST is
+     * unavailable. The DNS-intent resolver fills the gap when both return null —
+     * it recovers the hostname that MockServer's DNS server mapped to the
+     * connection's destination IP.
      */
     public static CompositeOriginalDestinationResolver defaultChain() {
         return new CompositeOriginalDestinationResolver(
             Arrays.asList(
+                new SoOriginalDstResolver(),
                 new ConntrackOriginalDestinationResolver(),
                 new DnsIntentOriginalDestinationResolver()
             )
