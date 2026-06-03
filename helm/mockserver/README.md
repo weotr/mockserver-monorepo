@@ -188,6 +188,16 @@ When persistence is enabled, the chart automatically sets `MOCKSERVER_PERSIST_EX
 
 **Note:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data.
 
+**Pod securityContext / PVC permissions:** if the pod cannot write to the mounted volume (a common cause of persistence failing on clusters with restrictive defaults), set a pod-level `fsGroup` via `podSecurityContext`, which is rendered verbatim into the Deployment's `spec.template.spec.securityContext`:
+
+```bash
+helm install mockserver mockserver/mockserver \
+  --set app.persistence.enabled=true \
+  --set podSecurityContext.fsGroup=2000
+```
+
+`podSecurityContext` accepts any pod-level `securityContext` fields (`fsGroup`, `fsGroupChangePolicy`, `runAsGroup`, `seccompProfile`, …) and defaults to `{}` (nothing emitted).
+
 See the [full persistence documentation](https://www.mock-server.com/where/kubernetes.html#helm_persistent_storage) for more examples including existing PVC usage and clustering with shared storage.
 
 ### Chaos Proxy (fault injection)

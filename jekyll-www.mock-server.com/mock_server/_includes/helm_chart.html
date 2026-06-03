@@ -270,6 +270,17 @@ For example:
     <li><span class="keyword">app.persistence.annotations</span> (default: <span class="this_value">{}</span>) &mdash; annotations for the PVC (only used when creating a new PVC)</li>
 </ul>
 
+<h3>Pod securityContext (PVC write permissions)</h3>
+
+<p>On clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level <span class="keyword">fsGroup</span> so the volume is group-owned and writable. The chart exposes a top-level <span class="keyword">podSecurityContext</span> value that is rendered verbatim into the Deployment's <span class="keyword">spec.template.spec.securityContext</span>, so any pod-level field is supported:</p>
+
+<pre class="prettyprint code"><code class="code">helm upgrade --install --namespace mockserver \
+  --set app.persistence.enabled=true \
+  --set podSecurityContext.fsGroup=2000 \
+  mockserver helm/mockserver</code></pre>
+
+<p><span class="keyword">podSecurityContext</span> defaults to <span class="this_value">{}</span> (no pod-level <span class="keyword">securityContext</span> is emitted). It accepts any pod-level fields such as <span class="keyword">fsGroup</span>, <span class="keyword">fsGroupChangePolicy</span>, <span class="keyword">runAsGroup</span>, or <span class="keyword">seccompProfile</span>.</p>
+
 <h3>Example: Chart-Managed PVC</h3>
 
 <p>Let the chart create and manage the PVC:</p>

@@ -73,6 +73,7 @@ app:
     size: 256Mi
     mountPath: /persistence
     annotations: {}
+podSecurityContext: {}   # pod-level securityContext, e.g. {fsGroup: 2000}
 image:
   repository: mockserver
   snapshot: false
@@ -161,8 +162,11 @@ When `app.persistence.enabled=true`, the chart:
 | `app.persistence.size` | string | `256Mi` | PVC size |
 | `app.persistence.mountPath` | string | `/persistence` | Container mount path |
 | `app.persistence.annotations` | map | `{}` | PVC annotations |
+| `podSecurityContext` | map | `{}` | Pod-level securityContext, rendered verbatim into `spec.template.spec.securityContext`. Accepts any pod-level field (`fsGroup`, `fsGroupChangePolicy`, `runAsGroup`, `seccompProfile`, …). Empty ⇒ nothing emitted. |
 
-**Backward compatibility:** Disabled by default. When disabled, no PVC, volumes, volumeMounts, or env vars are added — the chart behaves identically to before this feature was added.
+**Backward compatibility:** Disabled by default. When disabled, no PVC, volumes, volumeMounts, or env vars are added — the chart behaves identically to before this feature was added. `podSecurityContext` likewise defaults to `{}`, so no pod-level `securityContext` is emitted unless set.
+
+**Pod securityContext / PVC permissions:** on clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level `fsGroup` so the volume is group-owned and writable, e.g. `--set podSecurityContext.fsGroup=2000`. `podSecurityContext` is the general-purpose hook for any pod-level securityContext field (the container-level `securityContext` continues to carry `runAsUser` / `readOnlyRootFilesystem` / `allowPrivilegeEscalation`).
 
 **PVC retention:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data: `kubectl delete pvc <release-name> -n <namespace>`.
 

@@ -2,6 +2,16 @@ replicaCount: 1
 
 releasenameOverride: ""
 
+# Pod-level securityContext, rendered verbatim into the Deployment's
+# spec.template.spec.securityContext. Any pod-level field is supported. The most
+# common need is fsGroup, so the pod can read/write a mounted PersistentVolume
+# (for example when persisting expectations to a PVC — see persistence below).
+# Empty by default (no pod securityContext is emitted). Example:
+#   podSecurityContext:
+#     fsGroup: 2000
+#     fsGroupChangePolicy: OnRootMismatch
+podSecurityContext: {}
+
 app:
   logLevel: "INFO"
   serverPort: "1080"

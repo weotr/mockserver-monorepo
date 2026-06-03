@@ -33,6 +33,10 @@ spec:
 {{- end }}
     spec:
       serviceAccountName: {{ .Values.app.serviceAccountName }}
+{{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
 {{- if .Values.imagePullSecrets }}
       imagePullSecrets:
 {{ toYaml .Values.imagePullSecrets | indent 8 }}
