@@ -36,7 +36,7 @@ jobs:
 | `port` | `1080` | Host port to expose MockServer on (the container listens on 1080 internally). |
 | `container-name` | `mockserver` | Name for the started container. |
 | `log-level` | `INFO` | MockServer log level (`INFO`, `WARN`, `DEBUG`, `TRACE`). |
-| `args` | `''` | Extra arguments appended to the MockServer command. |
+| `args` | `''` | Extra arguments appended to the MockServer command. **Do not populate from untrusted input** (e.g. PR titles) — values are word-split into the docker command. |
 | `startup-timeout` | `60` | Max seconds to wait for readiness before failing. |
 
 ## Outputs
@@ -49,7 +49,8 @@ jobs:
 
 - Runs on Linux runners (Docker pre-installed). The container is started with `--rm`; the runner is
   torn down at job end, so no explicit cleanup step is required.
-- **Marketplace listing:** GitHub Marketplace requires an action's `action.yml` at the **root** of a
-  repository. To publish this on the Marketplace, mirror this directory to a dedicated
-  `mock-server/setup-mockserver` repo (the action itself is unchanged). Consumed from this monorepo
-  it works today via the full `…/.github/actions/setup-mockserver@<ref>` path shown above.
+- **Marketplace listing (not yet published):** this action is **not** currently on the GitHub
+  Marketplace. It works today only via the full monorepo path shown above
+  (`…/.github/actions/setup-mockserver@<ref>`). Marketplace requires an action's `action.yml` at the
+  **root** of a repository, so listing it would mean mirroring this directory to a dedicated
+  `mock-server/setup-mockserver` repo (a future step; the action itself would be unchanged).

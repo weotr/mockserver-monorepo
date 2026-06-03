@@ -23,7 +23,7 @@ inputs:
     required: false
     default: 'INFO'
   args:
-    description: 'Extra arguments appended to the MockServer command (after -serverPort / -logLevel).'
+    description: 'Extra arguments appended to the MockServer command (after -serverPort / -logLevel). Do NOT populate from untrusted input (e.g. PR titles / issue bodies) — values are word-split into the docker command, so arbitrary flags could be injected.'
     required: false
     default: ''
   startup-timeout:
@@ -50,6 +50,10 @@ runs:
         MS_TIMEOUT: ${{ inputs.startup-timeout }}
       run: |
         set -euo pipefail
+        if ! [[ "${MS_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::startup-timeout must be a positive integer (got: '${MS_TIMEOUT}')"
+          exit 1
+        fi
         url="http://localhost:${MS_PORT}"
         echo "Starting MockServer ${MS_VERSION} on ${url}"
         # MS_ARGS is intentionally word-split into separate arguments.
