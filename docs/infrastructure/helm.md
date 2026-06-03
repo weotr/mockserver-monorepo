@@ -336,6 +336,26 @@ verify with `cosign verify --key cosign.pub ghcr.io/mock-server/charts/mockserve
 > SHA-pinning it or switching to a cosign-bearing toolchain image. Keyless (OIDC) signing is an
 > alternative if Buildkite OIDC is set up, avoiding a stored key.
 
+### Requesting "Official" status (Artifact Hub)
+
+The Artifact Hub **Official** badge marks a package as published by the project that owns the
+software. It is a curated status granted by the Artifact Hub maintainers (not a file you add), and
+requires the repository to already be a **Verified Publisher** (it is). Request it by opening an
+issue on [`github.com/artifacthub/hub`](https://github.com/artifacthub/hub/issues) using the
+*"Request official status"* template, e.g.:
+
+> **Title:** Request official status for the MockServer Helm chart
+>
+> **Repository:** `mockserver` (kind: Helm) — `oci://ghcr.io/mock-server/charts/mockserver`
+> **Artifact Hub URL:** _<the chart's artifacthub.io URL>_
+>
+> MockServer is an open-source HTTP(S) mock server & proxy (https://www.mock-server.com, source at
+> https://github.com/mock-server/mockserver-monorepo). This repository is the official publisher of
+> MockServer — the chart is built and released from the same monorepo. It is already a Verified
+> Publisher (repository ID `a6ca1874-16c1-43c8-9924-9bf9c3a5a9ea`). Please grant Official status.
+
+Once granted, the Official badge appears alongside Verified Publisher.
+
 ### Release pipeline (automated)
 
 `scripts/release/components/helm.sh` runs on the `release` agent queue and:
