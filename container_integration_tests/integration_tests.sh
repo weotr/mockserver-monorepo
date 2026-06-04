@@ -73,8 +73,21 @@ function smoke_test_variant() {
     build_args="--build-arg source=copy"
   fi
 
+  # The graaljs Dockerfile COPYs ca-bundle.pem from the build context (for
+  # corporate proxies); ensure an empty placeholder exists when no real bundle
+  # is provided, so the COPY instruction does not fail.
+  local ca_bundle_path="${variant_dir}/ca-bundle.pem"
+  local ca_bundle_created="false"
+  if [[ "${variant}" == "graaljs" && ! -f "${ca_bundle_path}" ]]; then
+    touch "${ca_bundle_path}"
+    ca_bundle_created="true"
+  fi
+
   runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
   rm -f "${jar_path}"
+  if [[ "${ca_bundle_created}" == "true" ]]; then
+    rm -f "${ca_bundle_path}"
+  fi
 
   if [[ ${exit_code} -eq 0 ]]; then
     runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
@@ -216,6 +229,8 @@ function run_all_tests() {
         smoke_test_variant "root" || true
         smoke_test_variant "snapshot" || true
         smoke_test_variant "local" || true
+        smoke_test_variant "graaljs" || true
+        smoke_test_variant "root-snapshot" || true
       fi
       clean-up-docker-containers
     fi
