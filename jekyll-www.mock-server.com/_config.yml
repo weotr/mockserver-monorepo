@@ -23,6 +23,13 @@ ga4_measurement_id: G-20BB7EJG4E
 social_card: /images/social-card.png
 twitter_handle: ""
 
+# Slack community — paste the current Slack "shared invite link" here
+# (Slack admin → Invite people → Share invite link). The /slack page redirects
+# visitors to this URL, so external references can always point at /slack and
+# never break. When the invite expires, refresh this one value and rebuild.
+# Leave empty to show the GitHub Discussions fallback instead of redirecting.
+slack_invite_url: ""
+
 sitemap:
     exclude:
         - "/css/main.scss"

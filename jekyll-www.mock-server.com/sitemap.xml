@@ -29,6 +29,12 @@ sitemap:
     <priority>{{ page.sitemap.priority }}</priority>
     {%- elsif page.url == '/' %}
     <priority>1.0</priority>
+    {%- elsif page.section == 'Mock Server' or page.section == 'General' %}
+    <priority>0.8</priority>
+    {%- elsif page.section == 'AI Integration' or page.section == 'Chaos Testing' or page.section == 'Proxy' %}
+    <priority>0.7</priority>
+    {%- elsif page.section == 'Where' %}
+    <priority>0.6</priority>
     {%- else %}
     <priority>0.5</priority>
     {%- endif %}
