@@ -48,10 +48,14 @@ Comprehensive internal documentation is maintained in `docs/`. **Always consult 
 | [docs/code/async-messaging.md](docs/code/async-messaging.md) | Before modifying the AsyncAPI broker mocking module, AsyncApiParser, MessagePublisher adapters, or AsyncApiMockOrchestrator |
 | [docs/code/http3.md](docs/code/http3.md) | Before modifying experimental HTTP/3 (QUIC) support, Http3Server, or QUIC native dependencies |
 | [docs/code/clustered-state.md](docs/code/clustered-state.md) | Before modifying the StateBackend SPI, InMemoryStateBackend, InfinispanStateBackend, cross-node invalidation, or cluster configuration properties |
+| [docs/code/llm-mocking.md](docs/code/llm-mocking.md) | Before modifying the LLM response builder, provider codecs, streaming physics, conversation matchers, isolation, MCP tools, or LLM dashboard |
+| [docs/code/metrics.md](docs/code/metrics.md) | Before modifying Prometheus metrics, memory monitoring, or CSV metric export |
+| [docs/code/configuration-reference.md](docs/code/configuration-reference.md) | Before adding a configuration property or changing property resolution order or the equivalent property forms |
 | [docs/operations/build-system.md](docs/operations/build-system.md) | Before changing Maven config, plugins, or build scripts |
 | [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md) | Before modifying Buildkite or GitHub Actions pipelines |
 | [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) | Before investigating AWS, Terraform, or Buildkite agent issues |
 | [docs/infrastructure/docker.md](docs/infrastructure/docker.md) | Before modifying Dockerfiles, images, or Compose configs |
+| [docs/infrastructure/service-mesh.md](docs/infrastructure/service-mesh.md) | Before modifying transparent HTTP interception or Kubernetes sidecar deployment |
 | [docs/infrastructure/aws-ses-email-forwarding.md](docs/infrastructure/aws-ses-email-forwarding.md) | Before modifying SES email forwarding, DNS mail records, or the Lambda forwarder |
 | [docs/infrastructure/helm.md](docs/infrastructure/helm.md) | Before modifying Helm charts or Kubernetes deployment |
 | [docs/operations/website.md](docs/operations/website.md) | Before modifying the Jekyll documentation site |
