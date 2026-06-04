@@ -12,7 +12,7 @@ function integration_test() {
   trap 'tear-down 2>/dev/null || true' EXIT
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" || return 1
 
   # Verify the container started and responds to status endpoint (PUT method)
   STATUS_RESPONSE=$(docker-exec-client "curl -v -s -o /dev/null -w '%{http_code}' -X PUT 'http://mockserver:1080/mockserver/status'") || TEST_EXIT_CODE=1

@@ -84,6 +84,22 @@ function container-logs() {
   docker-compose logs
 }
 
+# Poll a MockServer instance (by docker-compose service name) via the client
+# container until the status endpoint responds, or fail after ~30 s.
+# Usage: wait_ready <host> [port]  (port defaults to 1080)
+function wait_ready() {
+  local host="${1}" port="${2:-1080}"
+  for _ in $(seq 1 30); do
+    if docker-exec-client "curl -sf -o /dev/null -X PUT http://${host}:${port}/mockserver/status"; then
+      return 0
+    fi
+    sleep 1
+  done
+  printMessage "FAIL: ${host}:${port} did not become ready"
+  container-logs || true
+  return 1
+}
+
 function clean-up-docker-containers() {
   runCommand "docker ps --all | grep mockserver/mockserver:integration_testing | awk '{ print \$1 }' | xargs docker stop"
   runCommand "docker ps --all | grep mockserver/mockserver:integration_testing | awk '{ print \$1 }' | xargs docker rm"

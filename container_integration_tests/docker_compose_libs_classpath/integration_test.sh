@@ -56,7 +56,7 @@ function integration_test() {
 
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" || return 1
 
   # Verify the initialiser ran by hitting the expectation it registered
   RESPONSE_BODY=$(docker-exec-client "curl -v -s -X PUT 'http://mockserver:1080/libs-test-path'")

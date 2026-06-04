@@ -25,20 +25,6 @@ function cleanup() {
   rm -f "${SCRIPT_DIR}/mockserver-war.war"
 }
 
-# Wait for the Tomcat-deployed MockServer to answer its status endpoint.
-function wait_ready_war() {
-  local host="${1}" port="${2:-8080}"
-  for _ in $(seq 1 30); do
-    if docker-exec-client "curl -sf -o /dev/null -X PUT http://${host}:${port}/mockserver/status"; then
-      return 0
-    fi
-    sleep 1
-  done
-  printFailureMessage "WAR: ${host}:${port} did not become ready"
-  container-logs || true
-  return 1
-}
-
 function integration_test() {
   trap cleanup EXIT
   prepare_war || return 1
@@ -51,7 +37,7 @@ function integration_test() {
 
   TEST_EXIT_CODE=0
 
-  wait_ready_war "mockserver" "8080" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
+  wait_ready "mockserver" "8080" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
 
   # Seed an expectation via the MockServer API
   docker-exec-client "curl -v -s -X PUT 'http://mockserver:8080/mockserver/expectation' -d \\\"{

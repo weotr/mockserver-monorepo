@@ -25,7 +25,23 @@ function integration_test() {
   prepare
   start-up
   TEST_EXIT_CODE=0
-  sleep 5
+  # The server requires mTLS, so the standard wait_ready (plain HTTP) cannot
+  # be used. Poll the status endpoint via the client container with certs.
+  local mtls_ready="false"
+  for _ in $(seq 1 30); do
+    if docker-exec-client "curl -sf -o /dev/null --cacert /certs/ca.pem --cert /certs/client-cert.pem --key /certs/client-key-pkcs8.pem -X PUT https://mockserver:1080/mockserver/status"; then
+      mtls_ready="true"
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${mtls_ready}" != "true" ]]; then
+    printFailureMessage "mTLS MockServer did not become ready within 30 s"
+    container-logs || true
+    logTestResult "1" "${TEST_CASE}"
+    tear-down
+    return 1
+  fi
 
   # Successful mTLS request — should return the seeded body.
   RESPONSE_BODY=$(docker-exec-client "curl -s --cacert /certs/ca.pem --cert /certs/client-cert.pem --key /certs/client-key-pkcs8.pem https://mockserver:1080/hello") || TEST_EXIT_CODE=1

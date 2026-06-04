@@ -22,7 +22,7 @@ function integration_test() {
 
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" || return 1
 
   # Create an expectation that will be persisted
   docker-exec-client "curl -v -s -X PUT 'http://mockserver:1080/mockserver/expectation' -d \\\"{
@@ -107,7 +107,7 @@ function integration_test() {
     files="$(compose-files "${TEST_CASE}")"
     export OVERRIDE_DIR="${SCRIPT_DIR}"
     runCommand "docker-compose ${files} -p ${TEST_CASE} up -d mockserver"
-    sleep 5
+    wait_ready "mockserver" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
 
     RESPONSE_BODY=$(docker-exec-client "curl -v -s -X PUT 'http://mockserver:1080/graceful/path'")
     if [[ "${RESPONSE_BODY}" != "graceful_response_body" ]]; then
