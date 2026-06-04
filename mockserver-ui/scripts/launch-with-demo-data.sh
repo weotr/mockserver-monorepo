@@ -112,12 +112,14 @@ trap cleanup INT TERM EXIT
 wait_for() {
   # MockServer's control plane answers /mockserver/status only to PUT, so the
   # HTTP method is a parameter (default GET for plain pages like the dashboard).
-  local url="$1" name="$2" method="${3:-GET}" timeout=60 elapsed=0
+  local url="$1" name="$2" method="${3:-GET}" timeout=120 elapsed=0 rc
   echo "  Waiting for $name..."
-  until curl -sf -X "$method" "$url" >/dev/null 2>&1; do
+  until rc=$(curl -sf --connect-timeout 2 --max-time 5 -X "$method" "$url" 2>&1); do
+    echo "    [${elapsed}s] curl failed"
     [ "$elapsed" -ge "$timeout" ] && { echo "ERROR: $name did not start within ${timeout}s"; return 1; }
     sleep 1; elapsed=$((elapsed + 1))
   done
+  echo "  ✓ $name is ready"
 }
 
 wait_for "http://localhost:$MOCKSERVER_PORT/mockserver/status" "MockServer" PUT
