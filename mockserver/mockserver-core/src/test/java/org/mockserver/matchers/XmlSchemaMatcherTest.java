@@ -52,7 +52,7 @@ public class XmlSchemaMatcherTest {
             "</notes>";
 
         // then - valid document matches
-        assertThat(matcher.matches(null, validXml), is(true));
+        assertThat("valid XML with all required child elements should match schema", matcher.matches(null, validXml), is(true));
     }
 
     @Test
@@ -75,7 +75,7 @@ public class XmlSchemaMatcherTest {
             "</notes>";
 
         // then
-        assertThat(matcher.matches(null, validXml), is(true));
+        assertThat("valid XML with multiple note elements should match schema", matcher.matches(null, validXml), is(true));
     }
 
     @Test
@@ -85,7 +85,7 @@ public class XmlSchemaMatcherTest {
         String invalidXml = "<notes><note><to>Bob</to></note></notes>";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidXml), is(false));
+        assertThat("XML missing required elements (from, heading, body) should not match", matcher.matches(new MatchDifference(false, request()), invalidXml), is(false));
     }
 
     @Test
@@ -95,7 +95,7 @@ public class XmlSchemaMatcherTest {
         String invalidXml = "<wrong><to>Bob</to></wrong>";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidXml), is(false));
+        assertThat("XML with wrong root element 'wrong' instead of 'notes' should not match", matcher.matches(new MatchDifference(false, request()), invalidXml), is(false));
     }
 
     @Test
@@ -104,7 +104,7 @@ public class XmlSchemaMatcherTest {
         XmlSchemaMatcher matcher = new XmlSchemaMatcher(mockServerLogger, XML_SCHEMA);
 
         // then - blank string does not match
-        assertThat(matcher.matches(new MatchDifference(false, request()), ""), is(false));
+        assertThat("empty string should not match XML schema", matcher.matches(new MatchDifference(false, request()), ""), is(false));
     }
 
     @Test
@@ -113,7 +113,7 @@ public class XmlSchemaMatcherTest {
         XmlSchemaMatcher matcher = new XmlSchemaMatcher(mockServerLogger, XML_SCHEMA);
 
         // then - null does not match
-        assertThat(matcher.matches(new MatchDifference(false, request()), null), is(false));
+        assertThat("null should not match XML schema", matcher.matches(new MatchDifference(false, request()), null), is(false));
     }
 
     @Test
@@ -125,10 +125,10 @@ public class XmlSchemaMatcherTest {
         matchDifference.currentField(MatchDifference.Field.BODY);
 
         // when
-        assertThat(matcher.matches(matchDifference, invalidXml), is(false));
+        assertThat("invalid XML should not match schema", matcher.matches(matchDifference, invalidXml), is(false));
 
         // then - a difference was recorded containing schema-related diagnostic
-        assertThat(matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
+        assertThat("match differences should be recorded for BODY field", matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
     }
 
     @Test
@@ -140,10 +140,10 @@ public class XmlSchemaMatcherTest {
         matchDifference.currentField(MatchDifference.Field.BODY);
 
         // when - the matcher catches the exception and returns false
-        assertThat(matcher.matches(matchDifference, nonXml), is(false));
+        assertThat("non-XML input should not match XML schema", matcher.matches(matchDifference, nonXml), is(false));
 
         // then - a difference was recorded
-        assertThat(matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
+        assertThat("match differences should be recorded for non-XML input", matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
     }
 
     @Test

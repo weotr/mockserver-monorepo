@@ -12,7 +12,7 @@ public class GraphQLMatcherTest {
 
     @Test
     public void shouldMatchSimpleGraphQLQuery() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(true));
+        assertThat("simple query should match identical query", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(true));
     }
 
     @Test
@@ -39,139 +39,139 @@ public class GraphQLMatcherTest {
 
     @Test
     public void shouldMatchQueryWithWhitespaceNormalization() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name email } }", null, null).matches(null, "{\"query\": \"{\\n  user(id: 1) {\\n    name\\n    email\\n  }\\n}\"}"), is(true));
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{\n  user(id: 1) {\n    name\n    email\n  }\n}", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name email } }\"}"), is(true));
+        assertThat("single-line expected should match multi-line actual", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name email } }", null, null).matches(null, "{\"query\": \"{\\n  user(id: 1) {\\n    name\\n    email\\n  }\\n}\"}"), is(true));
+        assertThat("multi-line expected should match single-line actual", new GraphQLMatcher(new MockServerLogger(), "{\n  user(id: 1) {\n    name\n    email\n  }\n}", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name email } }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchQueryWithOperationName() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "GetUser", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
+        assertThat("exact operation name 'GetUser' should match", new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "GetUser", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
     }
 
     @Test
     public void shouldMatchQueryWithRegexOperationName() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Get.*", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Get(User|Account)", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Delete.*", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(false));
+        assertThat("regex 'Get.*' should match 'GetUser'", new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Get.*", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
+        assertThat("regex 'Get(User|Account)' should match 'GetUser'", new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Get(User|Account)", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
+        assertThat("regex 'Delete.*' should not match 'GetUser'", new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "Delete.*", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(false));
     }
 
     @Test
     public void shouldNotMatchWhenQueryDiffers() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 2) { email } }\"}"), is(false));
+        assertThat("different query (id:2 vs id:1) should not match", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 2) { email } }\"}"), is(false));
     }
 
     @Test
     public void shouldNotMatchWhenOperationNameDiffers() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "GetUser", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"ListUsers\"}"), is(false));
+        assertThat("operation name 'ListUsers' should not match expected 'GetUser'", new GraphQLMatcher(new MockServerLogger(), "query GetUser { user(id: 1) { name } }", "GetUser", null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"ListUsers\"}"), is(false));
     }
 
     @Test
     public void shouldNotMatchInvalidJson() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{not valid json"), is(false));
+        assertThat("invalid JSON body should not match", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{not valid json"), is(false));
     }
 
     @Test
     public void shouldNotMatchNullBody() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, null), is(false));
+        assertThat("null body should not match", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, null), is(false));
     }
 
     @Test
     public void shouldNotMatchEmptyBody() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, ""), is(false));
+        assertThat("empty body should not match", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, ""), is(false));
     }
 
     @Test
     public void shouldNotMatchMissingQueryField() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"operationName\": \"GetUser\"}"), is(false));
+        assertThat("body without 'query' field should not match", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"operationName\": \"GetUser\"}"), is(false));
     }
 
     @Test
     public void shouldSupportNotMatcher() {
-        assertThat(notMatcher(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null)).matches(null, "{\"query\": \"{ user(id: 2) { email } }\"}"), is(true));
-        assertThat(notMatcher(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null)).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(false));
+        assertThat("NOT matcher should match when underlying query differs", notMatcher(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null)).matches(null, "{\"query\": \"{ user(id: 2) { email } }\"}"), is(true));
+        assertThat("NOT matcher should not match when underlying query is identical", notMatcher(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null)).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(false));
     }
 
     @Test
     public void shouldMatchWithoutOperationNameWhenNotRequired() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(true));
+        assertThat("no operationName filter should match body with operationName", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\", \"operationName\": \"GetUser\"}"), is(true));
+        assertThat("no operationName filter should match body without operationName", new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchQueryWithVariables() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, null).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"id\": 1}}"), is(true));
+        assertThat("query with variables should match", new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, null).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"id\": 1}}"), is(true));
     }
 
     @Test
     public void shouldMatchMutationQuery() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "mutation CreateUser($name: String!) { createUser(name: $name) { id name } }", null, null).matches(null, "{\"query\": \"mutation CreateUser($name: String!) { createUser(name: $name) { id name } }\"}"), is(true));
+        assertThat("mutation query should match", new GraphQLMatcher(new MockServerLogger(), "mutation CreateUser($name: String!) { createUser(name: $name) { id name } }", null, null).matches(null, "{\"query\": \"mutation CreateUser($name: String!) { createUser(name: $name) { id name } }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchSubscriptionQuery() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "subscription OnUserCreated { userCreated { id name } }", null, null).matches(null, "{\"query\": \"subscription OnUserCreated { userCreated { id name } }\"}"), is(true));
+        assertThat("subscription query should match", new GraphQLMatcher(new MockServerLogger(), "subscription OnUserCreated { userCreated { id name } }", null, null).matches(null, "{\"query\": \"subscription OnUserCreated { userCreated { id name } }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchQueryWithFragments() {
         String queryWithFragment = "query GetUser { user(id: 1) { ...UserFields } } fragment UserFields on User { name email }";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), queryWithFragment, null, null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { ...UserFields } } fragment UserFields on User { name email }\"}"), is(true));
+        assertThat("query with fragments should match", new GraphQLMatcher(new MockServerLogger(), queryWithFragment, null, null).matches(null, "{\"query\": \"query GetUser { user(id: 1) { ...UserFields } } fragment UserFields on User { name email }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchCompactPunctuationFormatting() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user { id } }", null, null).matches(null, "{\"query\": \"{user{id}}\"}"), is(true));
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{user{id}}", null, null).matches(null, "{\"query\": \"{ user { id } }\"}"), is(true));
+        assertThat("spaced query should match compact query", new GraphQLMatcher(new MockServerLogger(), "{ user { id } }", null, null).matches(null, "{\"query\": \"{user{id}}\"}"), is(true));
+        assertThat("compact query should match spaced query", new GraphQLMatcher(new MockServerLogger(), "{user{id}}", null, null).matches(null, "{\"query\": \"{ user { id } }\"}"), is(true));
     }
 
     @Test
     public void shouldPreserveStringLiteralWhitespace() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ search(text: \"a b\") { id } }", null, null).matches(null, "{\"query\": \"{ search(text: \\\"a   b\\\") { id } }\"}"), is(false));
+        assertThat("different whitespace inside string literal should not match", new GraphQLMatcher(new MockServerLogger(), "{ search(text: \"a b\") { id } }", null, null).matches(null, "{\"query\": \"{ search(text: \\\"a   b\\\") { id } }\"}"), is(false));
     }
 
     @Test
     public void shouldHandleCommentsInQuery() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user { name } }", null, null).matches(null, "{\"query\": \"# fetch user\\n{ user { name } }\"}"), is(true));
+        assertThat("query with leading comment should match", new GraphQLMatcher(new MockServerLogger(), "{ user { name } }", null, null).matches(null, "{\"query\": \"# fetch user\\n{ user { name } }\"}"), is(true));
     }
 
     @Test
     public void shouldHandleCommasAsInsignificant() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user { name email } }", null, null).matches(null, "{\"query\": \"{ user { name, email } }\"}"), is(true));
+        assertThat("commas between fields should be insignificant", new GraphQLMatcher(new MockServerLogger(), "{ user { name email } }", null, null).matches(null, "{\"query\": \"{ user { name, email } }\"}"), is(true));
     }
 
     @Test
     public void shouldMatchBlockStringLiterals() {
         String expected = "{ schema { description } }";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), expected, null, null).matches(null, "{\"query\": \"{schema{description}}\"}"), is(true));
+        assertThat("block string query should match compact form", new GraphQLMatcher(new MockServerLogger(), expected, null, null).matches(null, "{\"query\": \"{schema{description}}\"}"), is(true));
     }
 
     @Test
     public void shouldHandleEscapedCharactersInStrings() {
         String query = "{ search(text: \"hello\\\"world\") { id } }";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), query, null, null).matches(null, "{\"query\": \"{ search(text: \\\"hello\\\\\\\"world\\\") { id } }\"}"), is(true));
+        assertThat("escaped quotes in string arguments should match", new GraphQLMatcher(new MockServerLogger(), query, null, null).matches(null, "{\"query\": \"{ search(text: \\\"hello\\\\\\\"world\\\") { id } }\"}"), is(true));
     }
 
     @Test
     public void shouldValidateVariablesWithSchema() {
         String schema = "{\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}, \"required\": [\"id\"]}";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"id\": 1}}"), is(true));
+        assertThat("valid variables should pass schema validation", new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"id\": 1}}"), is(true));
     }
 
     @Test
     public void shouldRejectInvalidVariablesWithSchema() {
         String schema = "{\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}, \"required\": [\"id\"]}";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"name\": \"test\"}}"), is(false));
+        assertThat("variables missing required 'id' should fail schema validation", new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\", \"variables\": {\"name\": \"test\"}}"), is(false));
     }
 
     @Test
     public void shouldRejectMissingVariablesWhenSchemaRequired() {
         String schema = "{\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}, \"required\": [\"id\"]}";
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\"}"), is(false));
+        assertThat("missing variables object should fail when schema requires fields", new GraphQLMatcher(new MockServerLogger(), "query GetUser($id: ID!) { user(id: $id) { name } }", null, schema).matches(null, "{\"query\": \"query GetUser($id: ID!) { user(id: $id) { name } }\"}"), is(false));
     }
 
     @Test
     public void shouldAcceptNullVariablesWhenNoSchema() {
-        assertThat(new GraphQLMatcher(new MockServerLogger(), "{ user { name } }", null, null).matches(null, "{\"query\": \"{ user { name } }\", \"variables\": null}"), is(true));
+        assertThat("null variables should be accepted when no schema set", new GraphQLMatcher(new MockServerLogger(), "{ user { name } }", null, null).matches(null, "{\"query\": \"{ user { name } }\", \"variables\": null}"), is(true));
     }
 
     @Test

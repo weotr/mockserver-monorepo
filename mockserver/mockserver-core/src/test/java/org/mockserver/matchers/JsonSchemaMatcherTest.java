@@ -61,7 +61,7 @@ public class JsonSchemaMatcherTest {
         String validJson = "{\"enumField\": \"one\", \"arrayField\": [\"item\"]}";
 
         // then - valid document matches
-        assertThat(matcher.matches(null, validJson), is(true));
+        assertThat("valid JSON with required fields should match schema", matcher.matches(null, validJson), is(true));
     }
 
     @Test
@@ -77,7 +77,7 @@ public class JsonSchemaMatcherTest {
             "}";
 
         // then
-        assertThat(matcher.matches(null, validJson), is(true));
+        assertThat("valid JSON with all fields should match schema", matcher.matches(null, validJson), is(true));
     }
 
     @Test
@@ -86,7 +86,7 @@ public class JsonSchemaMatcherTest {
         JsonSchemaMatcher matcher = new JsonSchemaMatcher(mockServerLogger, JSON_SCHEMA);
 
         // then
-        assertThat(matcher.matches(null, JSON_SCHEMA), is(true));
+        assertThat("JSON that equals the schema itself should match", matcher.matches(null, JSON_SCHEMA), is(true));
     }
 
     @Test
@@ -96,7 +96,7 @@ public class JsonSchemaMatcherTest {
         String invalidJson = "{\"booleanField\": true}";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
+        assertThat("JSON missing required fields 'enumField'+'arrayField' should not match", matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
     }
 
     @Test
@@ -106,7 +106,7 @@ public class JsonSchemaMatcherTest {
         String invalidJson = "{\"enumField\": \"three\", \"arrayField\": [\"item\"]}";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
+        assertThat("enumField value 'three' not in [one,two] should not match", matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
     }
 
     @Test
@@ -116,7 +116,7 @@ public class JsonSchemaMatcherTest {
         String invalidJson = "{\"enumField\": \"one\", \"arrayField\": [\"item\"], \"extraField\": \"value\"}";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
+        assertThat("JSON with additional property 'extraField' should not match", matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
     }
 
     @Test
@@ -126,7 +126,7 @@ public class JsonSchemaMatcherTest {
         String invalidJson = "{\"enumField\": \"one\", \"arrayField\": []}";
 
         // when
-        assertThat(matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
+        assertThat("empty arrayField (minItems:1) should not match", matcher.matches(new MatchDifference(false, request()), invalidJson), is(false));
     }
 
     @Test
@@ -135,7 +135,7 @@ public class JsonSchemaMatcherTest {
         JsonSchemaMatcher matcher = new JsonSchemaMatcher(mockServerLogger, JSON_SCHEMA);
 
         // then - blank string does not match
-        assertThat(matcher.matches(new MatchDifference(false, request()), ""), is(false));
+        assertThat("blank string should not match JSON schema", matcher.matches(new MatchDifference(false, request()), ""), is(false));
     }
 
     @Test
@@ -144,7 +144,7 @@ public class JsonSchemaMatcherTest {
         JsonSchemaMatcher matcher = new JsonSchemaMatcher(mockServerLogger, JSON_SCHEMA);
 
         // then - null does not match
-        assertThat(matcher.matches(new MatchDifference(false, request()), null), is(false));
+        assertThat("null should not match JSON schema", matcher.matches(new MatchDifference(false, request()), null), is(false));
     }
 
     @Test
@@ -156,10 +156,10 @@ public class JsonSchemaMatcherTest {
         matchDifference.currentField(MatchDifference.Field.BODY);
 
         // when
-        assertThat(matcher.matches(matchDifference, invalidJson), is(false));
+        assertThat("invalid JSON should not match schema", matcher.matches(matchDifference, invalidJson), is(false));
 
         // then - a difference was recorded containing schema-related diagnostic
-        assertThat(matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
+        assertThat("match differences should be recorded for BODY field", matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
     }
 
     @Test
@@ -171,10 +171,10 @@ public class JsonSchemaMatcherTest {
         matchDifference.currentField(MatchDifference.Field.BODY);
 
         // when - the matcher catches the exception and returns false
-        assertThat(matcher.matches(matchDifference, malformedJson), is(false));
+        assertThat("malformed JSON should not match schema", matcher.matches(matchDifference, malformedJson), is(false));
 
         // then - a difference was recorded
-        assertThat(matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
+        assertThat("match differences should be recorded for malformed JSON", matchDifference.getDifferences(MatchDifference.Field.BODY).isEmpty(), is(false));
     }
 
     @Test

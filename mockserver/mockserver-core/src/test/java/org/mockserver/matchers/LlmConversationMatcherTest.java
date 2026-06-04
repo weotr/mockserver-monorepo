@@ -26,7 +26,7 @@ public class LlmConversationMatcherTest {
 
         HttpRequest request = request().withBody("{\"messages\": [{\"role\": \"user\", \"content\": \"hello\"}]}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("should match when no predicates set", matcher.matches(request), is(true));
     }
 
     // --- turnIndex predicate ---
@@ -45,7 +45,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("turnIndex=1 should match conversation with 1 assistant message", matcher.matches(request), is(true));
     }
 
     @Test
@@ -62,7 +62,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("turnIndex=2 should not match conversation with only 1 assistant message", matcher.matches(request), is(false));
     }
 
     @Test
@@ -78,7 +78,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("turnIndex=0 should match conversation with no assistant messages", matcher.matches(request), is(true));
     }
 
     // --- latestMessageContains predicate ---
@@ -95,7 +95,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("latestMessageContains('weather') should match message containing 'weather'", matcher.matches(request), is(true));
     }
 
     @Test
@@ -110,7 +110,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("latestMessageContains('weather') should not match 'Hello world'", matcher.matches(request), is(false));
     }
 
     // --- latestMessageMatches predicate ---
@@ -153,7 +153,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("latestMessageMatches(\\d+C) should match '18C'", matcher.matches(request), is(true));
     }
 
     @Test
@@ -168,7 +168,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("latestMessageMatches(^exact$) should not match 'not exact at all'", matcher.matches(request), is(false));
     }
 
     // --- latestMessageRole predicate ---
@@ -185,7 +185,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("latestMessageRole(USER) should match user message", matcher.matches(request), is(true));
     }
 
     @Test
@@ -200,7 +200,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("latestMessageRole(ASSISTANT) should not match user message", matcher.matches(request), is(false));
     }
 
     // --- containsToolResultFor predicate ---
@@ -223,7 +223,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("containsToolResultFor('get_weather') should match when tool_result present for get_weather", matcher.matches(request), is(true));
     }
 
     @Test
@@ -242,7 +242,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("containsToolResultFor should not match when no tool_result present", matcher.matches(request), is(false));
     }
 
     @Test
@@ -264,7 +264,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("containsToolResultFor('search') should not match when tool call was 'get_weather'", matcher.matches(request), is(false));
     }
 
     @Test
@@ -288,7 +288,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("containsToolResultFor('search') should not match when result correlates to get_weather", matcher.matches(request), is(false));
     }
 
     @Test
@@ -312,7 +312,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("containsToolResultFor('search') should match when toolu_1 correlates to search", matcher.matches(request), is(true));
     }
 
     @Test
@@ -336,7 +336,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("containsToolResultFor('search') should not match when only get_weather has a result", matcher.matches(request), is(false));
     }
 
     // --- containsToolResultFor with OpenAI ---
@@ -357,7 +357,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("OpenAI containsToolResultFor('search') should match correlated tool result", matcher.matches(request), is(true));
     }
 
     @Test
@@ -378,7 +378,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("OpenAI containsToolResultFor('search') should not match when tool call was get_weather", matcher.matches(request), is(false));
     }
 
     // --- AND composition ---
@@ -396,7 +396,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("AND composition of turnIndex=0 and latestMessageContains('weather') should match", matcher.matches(request), is(true));
     }
 
     @Test
@@ -413,7 +413,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("AND composition should fail when turnIndex predicate fails", matcher.matches(request), is(false));
     }
 
     // --- Fail-closed: body too large ---
@@ -436,7 +436,7 @@ public class LlmConversationMatcherTest {
             }
             HttpRequest request = request().withBody("{\"messages\": [{\"role\": \"user\", \"content\": \"" + largeContent.toString() + "\"}]}");
 
-            assertThat(matcher.matches(request), is(false));
+            assertThat("fail-closed: oversized body (>16384 bytes) should not match", matcher.matches(request), is(false));
         } finally {
             org.mockserver.configuration.ConfigurationProperties.maxLlmConversationBodySize(originalMax);
         }
@@ -452,7 +452,7 @@ public class LlmConversationMatcherTest {
 
         HttpRequest request = request().withBody("this is not json");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("fail-closed: malformed (non-JSON) body should not match", matcher.matches(request), is(false));
     }
 
     // --- Fail-closed: no codec registered ---
@@ -465,7 +465,7 @@ public class LlmConversationMatcherTest {
 
         HttpRequest request = request().withBody("{\"messages\": [{\"role\": \"user\", \"content\": \"hello\"}]}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("fail-closed: GEMINI provider with no codec should not match", matcher.matches(request), is(false));
     }
 
     // --- Fail-closed: no provider set ---
@@ -477,7 +477,7 @@ public class LlmConversationMatcherTest {
 
         HttpRequest request = request().withBody("{\"messages\": [{\"role\": \"user\", \"content\": \"hello\"}]}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("fail-closed: no provider set should not match", matcher.matches(request), is(false));
     }
 
     // --- Fail-closed: empty parse result ---
@@ -491,7 +491,7 @@ public class LlmConversationMatcherTest {
         // Wrong-shape body (no messages array)
         HttpRequest request = request().withBody("{\"model\": \"claude-sonnet-4-20250514\"}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("fail-closed: body without messages array should not match", matcher.matches(request), is(false));
     }
 
     // --- Provider inheritance verification ---
@@ -508,7 +508,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("OpenAI provider should match latestMessageContains('hello')", matcher.matches(request), is(true));
     }
 
     // --- Never throws ---
@@ -519,7 +519,7 @@ public class LlmConversationMatcherTest {
             .withProvider(Provider.ANTHROPIC)
             .withLatestMessageContains("hello");
 
-        assertThat(matcher.matches(null), is(false));
+        assertThat("null request should not match (fail-closed)", matcher.matches(null), is(false));
     }
 
     // --- Gemini containsToolResultFor ---
@@ -536,7 +536,7 @@ public class LlmConversationMatcherTest {
             + "{\"role\":\"user\",\"parts\":[{\"functionResponse\":{\"name\":\"get_weather\",\"response\":\"18C and sunny\"}}]}"
             + "]}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("Gemini containsToolResultFor('get_weather') should match functionResponse", matcher.matches(request), is(true));
     }
 
     @Test
@@ -556,7 +556,7 @@ public class LlmConversationMatcherTest {
             new org.mockserver.model.JsonBody(json)
         );
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("Gemini containsToolResultFor with JsonBody should match functionResponse", matcher.matches(request), is(true));
     }
 
     // --- Ollama containsToolResultFor ---
@@ -575,7 +575,7 @@ public class LlmConversationMatcherTest {
             + "{\"role\":\"tool\",\"content\":\"18C and sunny\"}"
             + "]}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("Ollama containsToolResultFor('get_weather') should match single tool result", matcher.matches(request), is(true));
     }
 
     @Test
@@ -598,7 +598,7 @@ public class LlmConversationMatcherTest {
             + "{\"role\":\"tool\",\"content\":\"42\"}"
             + "]}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("Ollama fail-closed: ambiguous multi-tool result should not match", matcher.matches(request), is(false));
     }
 
     // --- Gap 2: Regex compile error at setter time ---
@@ -621,7 +621,7 @@ public class LlmConversationMatcherTest {
             fail("Expected IllegalArgumentException for invalid regex");
         } catch (IllegalArgumentException e) {
             assertThat(e.getMessage(), containsString("[invalid"));
-            assertThat(e.getCause() instanceof PatternSyntaxException, is(true));
+            assertThat("cause should be PatternSyntaxException", e.getCause() instanceof PatternSyntaxException, is(true));
         }
     }
 
@@ -638,7 +638,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("valid regex string '\\d+C' should match at runtime", matcher.matches(request), is(true));
     }
 
     @Test
@@ -668,8 +668,8 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(stringMatcher.matches(request), is(true));
-        assertThat(patternMatcher.matches(request), is(true));
+        assertThat("string-based regex matcher should match 'weather in paris'", stringMatcher.matches(request), is(true));
+        assertThat("Pattern-based regex matcher should match 'weather in paris'", patternMatcher.matches(request), is(true));
     }
 
     // --- normalised prompt matching ---
@@ -687,7 +687,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("normalised contains should match case-insensitively with collapsed whitespace", matcher.matches(request), is(true));
     }
 
     @Test
@@ -703,7 +703,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(false));
+        assertThat("without normalisation, extra whitespace should cause mismatch", matcher.matches(request), is(false));
     }
 
     @Test
@@ -719,7 +719,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("regex should match after lowercase+whitespace normalisation", matcher.matches(request), is(true));
     }
 
     @Test
@@ -736,7 +736,7 @@ public class LlmConversationMatcherTest {
             "  ]\n" +
             "}");
 
-        assertThat(matcher.matches(request), is(true));
+        assertThat("volatile-field normalisation should strip req_id and timestamp before matching", matcher.matches(request), is(true));
     }
 
     // --- semantic matching (opt-in) ---
@@ -756,7 +756,7 @@ public class LlmConversationMatcherTest {
         LlmConversationMatcher matcher = new LlmConversationMatcher()
             .withProvider(Provider.ANTHROPIC)
             .withSemanticMatchAgainst("the user is asking about the weather");
-        assertThat(matcher.matches(weatherRequest()), is(true));
+        assertThat("semantic predicate should be ignored when no judge installed (deterministic fallback)", matcher.matches(weatherRequest()), is(true));
     }
 
     @Test
@@ -765,7 +765,7 @@ public class LlmConversationMatcherTest {
         LlmConversationMatcher matcher = new LlmConversationMatcher()
             .withProvider(Provider.ANTHROPIC)
             .withSemanticMatchAgainst("about weather");
-        assertThat(matcher.matches(weatherRequest()), is(true));
+        assertThat("semantic judge returning 'yes' should match", matcher.matches(weatherRequest()), is(true));
     }
 
     @Test
@@ -774,7 +774,7 @@ public class LlmConversationMatcherTest {
         LlmConversationMatcher matcher = new LlmConversationMatcher()
             .withProvider(Provider.ANTHROPIC)
             .withSemanticMatchAgainst("about cooking");
-        assertThat(matcher.matches(weatherRequest()), is(false));
+        assertThat("semantic judge returning 'no' should not match", matcher.matches(weatherRequest()), is(false));
     }
 
     private static void installJudge(String verdict) {
