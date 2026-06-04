@@ -5,7 +5,11 @@ import org.junit.Test;
 import org.mockserver.model.CrossProtocolScenario;
 import org.mockserver.model.CrossProtocolTrigger;
 
+import org.mockserver.state.InMemoryStateBackend;
+import org.mockserver.state.StateBackend;
+
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNull.nullValue;
 
@@ -198,5 +202,104 @@ public class CrossProtocolEventBusTest {
     public void shouldIgnoreNullScenarioOnUnregister() {
         // when - should not throw
         bus.unregister(null);
+    }
+
+    // --- Regression test: backend-key delimiter collision (CRITICAL fix) ---
+
+    @Test
+    public void backendKeyShouldNotCollideWhenPipeSitsInDifferentComponents() {
+        // Two registrations that would collide under the old "|"-delimited key
+        // but MUST produce distinct keys under the length-prefixed encoding:
+        //   scenarioName="a", matchPattern="b|c"  vs  scenarioName="a|b", matchPattern="c"
+        CrossProtocolScenario scenarioA = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.HTTP_REQUEST)
+            .withScenarioName("a")
+            .withTargetState("s")
+            .withMatchPattern("b|c");
+        CrossProtocolScenario scenarioB = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.HTTP_REQUEST)
+            .withScenarioName("a|b")
+            .withTargetState("s")
+            .withMatchPattern("c");
+
+        String keyA = CrossProtocolEventBus.backendKey(scenarioA);
+        String keyB = CrossProtocolEventBus.backendKey(scenarioB);
+
+        // Keys MUST be distinct -- the old encoding produced the same key for both
+        assertThat("keys for distinct registrations must not collide", keyA, is(not(keyB)));
+    }
+
+    @Test
+    public void backendKeyShouldNotCollideWhenColonSitsInDifferentComponents() {
+        // Another collision pair: colon in scenarioName vs targetState
+        CrossProtocolScenario scenarioA = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.DNS_QUERY)
+            .withScenarioName("x:y")
+            .withTargetState("z")
+            .withMatchPattern("p");
+        CrossProtocolScenario scenarioB = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.DNS_QUERY)
+            .withScenarioName("x")
+            .withTargetState("y:z")
+            .withMatchPattern("p");
+
+        assertThat("keys for distinct registrations must not collide",
+            CrossProtocolEventBus.backendKey(scenarioA),
+            is(not(CrossProtocolEventBus.backendKey(scenarioB))));
+    }
+
+    @Test
+    public void bothRegistrationsShouldSurviveWriteThroughReconcileRoundTrip() {
+        // Full round-trip: register two colliding-under-old-scheme registrations,
+        // write-through to a backend, reconcile from backend, verify both survive,
+        // then unregister one and verify the other remains.
+        StateBackend backend = new InMemoryStateBackend(100) {
+            @Override
+            public boolean isClustered() {
+                return true; // force setStateBackend to wire the store
+            }
+        };
+
+        CrossProtocolEventBus roundTripBus = new CrossProtocolEventBus();
+        ScenarioManager sm = new ScenarioManager();
+        roundTripBus.setScenarioManager(sm);
+        roundTripBus.setStateBackend(backend);
+
+        // Two registrations that collided under the old "|"-delimited key
+        CrossProtocolScenario scenarioA = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.HTTP_REQUEST)
+            .withScenarioName("a")
+            .withTargetState("stateA")
+            .withMatchPattern("b|c");
+        CrossProtocolScenario scenarioB = CrossProtocolScenario.crossProtocolScenario()
+            .withTrigger(CrossProtocolTrigger.HTTP_REQUEST)
+            .withScenarioName("a|b")
+            .withTargetState("stateB")
+            .withMatchPattern("c");
+
+        // Register both -- each should write-through to the backend
+        roundTripBus.register(scenarioA);
+        roundTripBus.register(scenarioB);
+
+        // Reconcile from backend -- both should survive (neither was overwritten)
+        roundTripBus.reconcileFromBackend();
+
+        // Fire and verify both transitions occur
+        roundTripBus.fire(CrossProtocolTrigger.HTTP_REQUEST, "b|c");
+        assertThat("scenarioA should transition via matchPattern 'b|c'",
+            sm.getState("a"), is("stateA"));
+
+        roundTripBus.fire(CrossProtocolTrigger.HTTP_REQUEST, "contains c here");
+        assertThat("scenarioB should transition via matchPattern 'c'",
+            sm.getState("a|b"), is("stateB"));
+
+        // Unregister scenarioA and reconcile -- scenarioB must survive
+        sm.setState("a|b", ScenarioManager.STARTED);
+        roundTripBus.unregister(scenarioA);
+        roundTripBus.reconcileFromBackend();
+
+        roundTripBus.fire(CrossProtocolTrigger.HTTP_REQUEST, "contains c here");
+        assertThat("scenarioB should survive after unregistering scenarioA",
+            sm.getState("a|b"), is("stateB"));
     }
 }

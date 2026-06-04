@@ -220,6 +220,24 @@ public class HttpState {
                 this.expectationFileWatcher = new ExpectationFileWatcher(configuration, mockServerLogger, requestMatchers, expectationInitializerLoader);
             }
         }
+        // G11 follow-up: wire the cross-protocol event bus to the clustered
+        // backend for fleet-wide registration replication. When the backend is
+        // not clustered (default), setStateBackend is a no-op and the bus stays
+        // node-local. Mirrors the chaos registry wiring pattern above.
+        CrossProtocolEventBus.getInstance().setStateBackend(stateBackend);
+        if (stateBackend.isClustered()) {
+            stateBackend.addInvalidationListener(new InvalidationListener() {
+                @Override
+                public void onChanged(String key) {
+                    CrossProtocolEventBus.getInstance().reconcileFromBackend();
+                }
+
+                @Override
+                public void onCleared() {
+                    CrossProtocolEventBus.getInstance().reconcileFromBackend();
+                }
+            });
+        }
         CrossProtocolEventBus.getInstance().setScenarioManager(requestMatchers.getScenarioManager());
         this.memoryMonitoring = new MemoryMonitoring(configuration, this.mockServerLog, this.requestMatchers);
         if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {

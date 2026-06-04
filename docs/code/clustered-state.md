@@ -248,6 +248,60 @@ When the state backend is not clustered (default `InMemoryStateBackend` or `Infi
 1. Calls `setStateBackend(stateBackend)` on each singleton registry (ServiceChaos, TcpChaos, GrpcChaos). This is a no-op when the backend is not clustered.
 2. When the backend is clustered, registers a SEPARATE `InvalidationListener` (distinct from the expectations reconcile listener) that calls `reconcileFromBackend()` on all three chaos registries when any remote write is detected.
 
+## Distributed CrossProtocolEventBus (G11 Follow-Up)
+
+When the state backend is clustered, the `CrossProtocolEventBus` replicates its trigger-to-scenario registrations across the fleet. A cross-protocol scenario registered on node A (e.g. "when a DNS query for api.example.com is seen, advance scenario DnsScenario to DnsObserved") becomes effective on all nodes -- any node that observes the matching protocol event will fire the scenario state transition.
+
+### How it works
+
+The event bus stores its active registrations in the `StateBackend`'s `crudEntities("cross-protocol-bus")` KV store. Each registration is keyed by a composite of trigger type, scenario name, target state, and match pattern.
+
+| Field | Backend key component |
+|-------|----------------------|
+| Trigger | `CrossProtocolTrigger` enum name (e.g. `DNS_QUERY`) |
+| Scenario name | The scenario being driven |
+| Target state | The state to transition to on match |
+| Match pattern | Optional pattern for trigger filtering |
+
+Each value is an `ObjectNode` containing the trigger, scenario name, target state, and match pattern as simple string fields.
+
+```mermaid
+sequenceDiagram
+    participant API as Register (node A)
+    participant BA as CrossProtocolEventBus (A)
+    participant KVA as Backend KV (A)
+    participant INF as Infinispan REPL_SYNC
+    participant KVB as Backend KV (B)
+    participant BB as CrossProtocolEventBus (B)
+    participant SM as ScenarioManager (B)
+
+    API->>BA: register(scenario)
+    BA->>BA: listeners.add(scenario)
+    BA->>KVA: store.put(key, objectNode)
+    KVA->>INF: replication
+    INF->>KVB: remote write
+    KVB->>BB: InvalidationListener.onChanged
+    BB->>BB: reconcileFromBackend()
+    BB->>BB: rebuild listeners from backend
+    Note over BB,SM: Later, when event fires on node B
+    BB->>SM: setState(scenarioName, targetState)
+```
+
+### Node-local fire path
+
+The `fire()` method reads ONLY from the node-local `ConcurrentHashMap` -- there is no backend round-trip on the event-dispatch path during request handling. The backend is consulted only on write-through (register/unregister/reset) and reconciliation (invalidation callbacks).
+
+### Default / single-node behaviour
+
+When the state backend is not clustered (default `InMemoryStateBackend` or `InfinispanStateBackend` in LOCAL mode), the `setStateBackend()` call is a no-op. The bus behaves exactly as it did before -- purely node-local, no backend interaction, zero overhead on the fire path.
+
+### Wiring in HttpState
+
+`HttpState` wires the cross-protocol bus backend in its constructor, following the same pattern as the chaos registries:
+
+1. Calls `CrossProtocolEventBus.getInstance().setStateBackend(stateBackend)`. This is a no-op when the backend is not clustered.
+2. When the backend is clustered, registers a SEPARATE `InvalidationListener` (distinct from the expectations and chaos reconcile listeners) that calls `reconcileFromBackend()` on the event bus when any remote write is detected.
+
 ## Limitations and Known Follow-Ups
 
 | Limitation | Detail |
@@ -256,7 +310,6 @@ When the state backend is not clustered (default `InMemoryStateBackend` or `Infi
 | CRUD entity namespace isolation | Each namespace is a separate Infinispan cache defined on demand. The number of distinct CRUD namespaces in use should be small (hundreds, not millions). |
 | No cloud blob backends | `BlobStore` has `InMemoryBlobStore` and `FilesystemBlobStore` implementations; S3/GCS/Azure Blob adapters are SPI-only stubs. |
 | JGroups stack configuration | The built-in loopback stack is suitable for embedded tests only. Production clusters require a UDP or TCP JGroups stack configured via `clusterTransportConfig`. |
-| CrossProtocolEventBus (F15) | The cross-protocol scenario event bus remains node-local. Its *registrations* (which scenarios fire on which triggers) are not replicated. The *effects* of firing (scenario state transitions via `ScenarioManager.setState`) ARE replicated through `scenarioStates()` in the backend, so the downstream state is eventually consistent. Replicating the registrations themselves requires coupling the event bus to the expectation reconcile lifecycle, which is a separate, larger piece of work. |
 | Chaos TTL clock skew | TTL-based auto-expiry uses the node-local controllable clock (`TimeService`). In a clustered deployment, clock advances (via `PUT /mockserver/clock`) are node-local, so a TTL-bearing profile may expire at different wall-clock times on different nodes if their clocks are advanced independently. For production use, rely on the REST API `remove` endpoint rather than TTL for deterministic cross-node cleanup. |
 | Chaos match counters | Per-service gRPC match counters (`incrementMatchCount`) and per-host quota counters remain node-local. A quota limit of 100 on a two-node cluster allows up to 200 total requests. |
 
@@ -276,7 +329,9 @@ When the state backend is not clustered (default `InMemoryStateBackend` or `Infi
 | `org.mockserver.mock.action.http.ServiceChaosRegistry` | `mockserver-core` | Fleet-aware HTTP chaos registry (G11) |
 | `org.mockserver.mock.action.http.TcpChaosRegistry` | `mockserver-core` | Fleet-aware TCP chaos registry (G11) |
 | `org.mockserver.mock.action.http.GrpcChaosRegistry` | `mockserver-core` | Fleet-aware gRPC chaos registry (G11) |
+| `org.mockserver.mock.CrossProtocolEventBus` | `mockserver-core` | Fleet-aware cross-protocol event bus (G11 follow-up) |
 | `org.mockserver.state.infinispan.InfinispanStateBackend` | `mockserver-state-infinispan` | Infinispan LOCAL/CLUSTERED implementation |
 | `org.mockserver.state.infinispan.InfinispanStateBackendRegistrar` | `mockserver-state-infinispan` | Self-registration hook called by `StateBackendFactory` |
 | `org.mockserver.state.infinispan.InfinispanCacheListener` | `mockserver-state-infinispan` | Bridges Infinispan cluster events to `InvalidationListener` |
 | `org.mockserver.state.infinispan.ClusteredTwoNodeChaosTest` | `mockserver-state-infinispan` | G11 2-node-in-JVM integration test for cross-node chaos replication |
+| `org.mockserver.state.infinispan.ClusteredTwoNodeCrossProtocolBusTest` | `mockserver-state-infinispan` | G11 follow-up 2-node-in-JVM integration test for cross-node event bus replication |
