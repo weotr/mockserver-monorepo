@@ -3,6 +3,8 @@ package org.mockserver.netty.mcp;
 import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.CoreMatchers.nullValue;
@@ -68,50 +70,51 @@ public class McpSessionManagerTest {
     }
 
     @Test
-    public void shouldEvictOldestSessionWhenMaxReached() throws InterruptedException {
-        McpSessionManager manager = new McpSessionManager(new MockServerLogger());
+    public void shouldEvictOldestSessionWhenMaxReached() {
+        AtomicLong clock = new AtomicLong(1_000_000L);
+        McpSessionManager manager = new McpSessionManager(new MockServerLogger(), clock::get);
 
-        // Create 100 sessions (the max)
-        String firstSessionId = null;
-        for (int i = 0; i < 100; i++) {
-            McpSession session = manager.createSession();
-            if (i == 0) {
-                firstSessionId = session.getSessionId();
-            }
-            // Small delay to ensure different timestamps for LRU eviction
-            if (i == 0) {
-                Thread.sleep(10);
-            }
+        // Create the first session at t=1_000_000
+        McpSession firstSession = manager.createSession();
+        String firstSessionId = firstSession.getSessionId();
+
+        // Advance time so remaining sessions have a later timestamp
+        clock.addAndGet(1000);
+
+        // Create 99 more sessions (total 100 = the max)
+        for (int i = 1; i < 100; i++) {
+            manager.createSession();
         }
         assertThat(manager.size(), is(100));
 
-        // Create one more — should evict the oldest (first)
+        // Create one more -- should evict the oldest (first)
         manager.createSession();
         assertThat(manager.size(), is(100));
         assertThat(manager.isValidSession(firstSessionId), is(false));
     }
 
     @Test
-    public void shouldTouchSessionOnGet() throws InterruptedException {
-        McpSessionManager manager = new McpSessionManager(new MockServerLogger());
+    public void shouldTouchSessionOnGet() {
+        AtomicLong clock = new AtomicLong(1_000_000L);
+        McpSessionManager manager = new McpSessionManager(new MockServerLogger(), clock::get);
         McpSession session = manager.createSession();
         long initialTime = session.getLastAccessedAt();
 
-        Thread.sleep(10);
+        // Advance time and retrieve the session (which triggers touch)
+        clock.addAndGet(5000);
         McpSession retrieved = manager.getSession(session.getSessionId());
 
         assertThat(retrieved.getLastAccessedAt() > initialTime, is(true));
     }
 
     @Test
-    public void shouldExpireSessionAfterTtl() throws Exception {
-        McpSessionManager manager = new McpSessionManager(new MockServerLogger());
+    public void shouldExpireSessionAfterTtl() {
+        AtomicLong clock = new AtomicLong(1_000_000L);
+        McpSessionManager manager = new McpSessionManager(new MockServerLogger(), clock::get);
         McpSession session = manager.createSession();
 
-        // Use reflection to set lastAccessedAt to a time beyond the TTL (60 minutes ago + 1 second)
-        java.lang.reflect.Field lastAccessedAtField = McpSession.class.getDeclaredField("lastAccessedAt");
-        lastAccessedAtField.setAccessible(true);
-        lastAccessedAtField.set(session, System.currentTimeMillis() - (60 * 60 * 1000L + 1000));
+        // Advance time beyond the TTL (60 minutes + 1 second)
+        clock.addAndGet(60 * 60 * 1000L + 1000);
 
         // getSession should return null for expired session
         McpSession retrieved = manager.getSession(session.getSessionId());
@@ -171,26 +174,30 @@ public class McpSessionManagerTest {
     }
 
     @Test
-    public void shouldEvictLeastRecentlyUsedSession() throws InterruptedException {
-        McpSessionManager manager = new McpSessionManager(new MockServerLogger());
+    public void shouldEvictLeastRecentlyUsedSession() {
+        AtomicLong clock = new AtomicLong(1_000_000L);
+        McpSessionManager manager = new McpSessionManager(new MockServerLogger(), clock::get);
 
-        // Create first two sessions with a gap between them
+        // Create first session at t=1_000_000
         McpSession firstSession = manager.createSession();
-        Thread.sleep(15);
-        McpSession secondSession = manager.createSession();
-        Thread.sleep(15);
 
-        // Create 98 more sessions (total 100)
+        // Create second session at t=1_001_000
+        clock.addAndGet(1000);
+        McpSession secondSession = manager.createSession();
+
+        // Create 98 more sessions at t=1_002_000 (total 100)
+        clock.addAndGet(1000);
         for (int i = 2; i < 100; i++) {
             manager.createSession();
         }
         assertThat(manager.size(), is(100));
 
-        // Touch the first session so it's no longer the LRU
-        Thread.sleep(15);
+        // Touch the first session at t=1_003_000 so it is no longer the LRU
+        clock.addAndGet(1000);
         manager.getSession(firstSession.getSessionId());
 
-        // Create one more — should evict the second session (least recently used), not the first
+        // Create one more at t=1_004_000 -- should evict the second session (least recently used), not the first
+        clock.addAndGet(1000);
         manager.createSession();
         assertThat(manager.size(), is(100));
         assertThat("first session should survive because it was touched", manager.isValidSession(firstSession.getSessionId()), is(true));
