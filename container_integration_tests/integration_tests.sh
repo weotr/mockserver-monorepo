@@ -145,6 +145,43 @@ function test_healthcheck() {
   return ${exit_code}
 }
 
+# Assert that the default (distroless) image runs as a non-root user.
+# The Dockerfile declares USER nonroot but this has never been asserted by a test.
+function test_nonroot_user() {
+  local tag="mockserver/mockserver:integration_testing"
+  local container="nonroot-test"
+  export TEST_CASE="docker_nonroot_user"
+  printMessage "Test: non-root runtime user"
+
+  local exit_code=0
+  # The distroless image has no shell or 'id' binary, so we inspect the
+  # image's configured user via docker inspect.
+  local configured_user
+  configured_user=$(docker inspect --format='{{.Config.User}}' "${tag}" 2>/dev/null || echo "")
+  if [[ -z "${configured_user}" || "${configured_user}" == "root" || "${configured_user}" == "0" ]]; then
+    printFailureMessage "Non-root user: image configured user is '${configured_user}' (expected non-root)"
+    exit_code=1
+  fi
+
+  # Also verify at runtime: start the container and check the process UID.
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
+  # Wait briefly for the process to start
+  sleep 2
+  # docker top (default ps format) outputs UID as the first column. On
+  # distroless, the nonroot user maps to UID 65532. Reject UID 0 (root).
+  local runtime_uid
+  runtime_uid=$(docker top "${container}" 2>/dev/null | tail -1 | awk '{print $1}')
+  if [[ "${runtime_uid}" == "0" || "${runtime_uid}" == "root" ]]; then
+    printFailureMessage "Non-root user: runtime process UID is '${runtime_uid}' (expected non-root)"
+    exit_code=1
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  logTestResult "${exit_code}" "${TEST_CASE}"
+  return ${exit_code}
+}
+
 function run_all_tests() {
   export PASS_LOG_FILE=$(mktemp)
   export FAIL_LOG_FILE=$(mktemp)
@@ -172,8 +209,9 @@ function run_all_tests() {
       # Same gate as docker_compose_* tests: they share the same JAR + docker
       # daemon, and the helm-only CI step (helm-integration-test.sh) sets
       # SKIP_DOCKER_TESTS=true to skip both.
-      # HEALTHCHECK assertion on the default image.
+      # HEALTHCHECK and non-root user assertions on the default image.
       test_healthcheck || true
+      test_nonroot_user || true
       if [[ "${SKIP_VARIANT_TESTS:-}" != "true" ]]; then
         smoke_test_variant "root" || true
         smoke_test_variant "snapshot" || true
