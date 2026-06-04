@@ -6,7 +6,6 @@ import org.mockserver.model.*;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -16,6 +15,7 @@ import static org.mockserver.model.HttpRequestModifier.requestModifier;
 import static org.mockserver.model.HttpResponseModifier.responseModifier;
 import static org.mockserver.model.HttpTemplate.template;
 import static org.mockserver.model.Parameter.param;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -24,31 +24,7 @@ public class HttpOverrideForwardedRequestToJavaSerializerTest {
 
     @Test
     public void shouldSerializeFullObjectWithForwardAsJava() {
-        assertEquals(NEW_LINE +
-                "        forwardOverriddenRequest()" + NEW_LINE +
-                "                .withRequestOverride(" + NEW_LINE +
-                "                        request()" + NEW_LINE +
-                "                                .withMethod(\"GET\")" + NEW_LINE +
-                "                                .withPath(\"somePathOne\")" + NEW_LINE +
-                "                                .withProtocol(Protocol.HTTP_2)" + NEW_LINE +
-                "                                .withBody(new StringBody(\"responseBodyOne\"))" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withResponseOverride(" + NEW_LINE +
-                "                        response()" + NEW_LINE +
-                "                                .withStatusCode(304)" + NEW_LINE +
-                "                                .withReasonPhrase(\"someReason\")" + NEW_LINE +
-                "                                .withHeaders(" + NEW_LINE +
-                "                                        new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
-                "                                        new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
-                "                                )" + NEW_LINE +
-                "                                .withCookies(" + NEW_LINE +
-                "                                        new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
-                "                                        new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
-                "                                )" + NEW_LINE +
-                "                                .withBody(\"responseBody\")" + NEW_LINE +
-                "                                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))",
+        assertThat(
             new HttpOverrideForwardedRequestToJavaSerializer().serialize(1,
                 new HttpOverrideForwardedRequest()
                     .withRequestOverride(new HttpRequest()
@@ -73,12 +49,100 @@ public class HttpOverrideForwardedRequestToJavaSerializerTest {
                     )
                     .withDelay(TimeUnit.MILLISECONDS, 100)
             )
-        );
+        , is(NEW_LINE +
+                "        forwardOverriddenRequest()" + NEW_LINE +
+                "                .withRequestOverride(" + NEW_LINE +
+                "                        request()" + NEW_LINE +
+                "                                .withMethod(\"GET\")" + NEW_LINE +
+                "                                .withPath(\"somePathOne\")" + NEW_LINE +
+                "                                .withProtocol(Protocol.HTTP_2)" + NEW_LINE +
+                "                                .withBody(new StringBody(\"responseBodyOne\"))" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withResponseOverride(" + NEW_LINE +
+                "                        response()" + NEW_LINE +
+                "                                .withStatusCode(304)" + NEW_LINE +
+                "                                .withReasonPhrase(\"someReason\")" + NEW_LINE +
+                "                                .withHeaders(" + NEW_LINE +
+                "                                        new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
+                "                                        new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
+                "                                )" + NEW_LINE +
+                "                                .withCookies(" + NEW_LINE +
+                "                                        new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
+                "                                        new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
+                "                                )" + NEW_LINE +
+                "                                .withBody(\"responseBody\")" + NEW_LINE +
+                "                                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))"));
     }
 
     @Test
     public void shouldSerializeObjectWithForwardAndEmptyListsAsJava() {
-        assertEquals(NEW_LINE +
+        assertThat(
+            new HttpOverrideForwardedRequestToJavaSerializer().serialize(1,
+                new HttpOverrideForwardedRequest()
+                    .withRequestOverride(new HttpRequest()
+                        .withMethod("GET")
+                        .withPath("somePathOne")
+                        .withBody(new StringBody("responseBodyOne"))
+                    )
+                    .withRequestModifier(
+                        requestModifier()
+                            .withPath("adsdasd", null)
+                            .withHeaders(null, null, ImmutableList.of())
+                            .withCookies(
+                                ImmutableList.of(
+                                    cookie("replaceNameOne", "replaceValueOne"),
+                                    cookie("replaceNameTwo", "replaceValueTwo")
+                                ),
+                                null,
+                                null
+                            )
+                            .withQueryStringParameters(
+                                null,
+                                ImmutableList.of(
+                                    param("replaceNameOne", "replaceValueOne"),
+                                    param("replaceNameTwo", "replaceValueTwo")
+                                ),
+                                null
+                            )
+                    )
+                    .withResponseOverride(new HttpResponse()
+                        .withStatusCode(304)
+                        .withReasonPhrase("someReason")
+                        .withHeaders(
+                            new Header("responseHeaderNameOne", "responseHeaderValueOneOne", "responseHeaderValueOneTwo"),
+                            new Header("responseHeaderNameTwo", "responseHeaderValueTwo")
+                        )
+                        .withCookies(
+                            new Cookie("responseCookieNameOne", "responseCookieValueOne"),
+                            new Cookie("responseCookieNameTwo", "responseCookieValueTwo")
+                        )
+                        .withBody("responseBody")
+                        .withDelay(TimeUnit.MILLISECONDS, 100)
+                    )
+                    .withResponseModifier(
+                        responseModifier()
+                            .withHeaders(
+                                null,
+                                ImmutableList.of(
+                                    header("addNameOne", "addValueOne"),
+                                    header("addNameTwo", "addValueTwo")
+                                ),
+                                ImmutableList.of()
+                            )
+                            .withCookies(
+                                ImmutableList.of(
+                                    cookie("replaceNameOne", "replaceValueOne"),
+                                    cookie("replaceNameTwo", "replaceValueTwo")
+                                ),
+                                null,
+                                null
+                            )
+                    )
+                    .withDelay(TimeUnit.MILLISECONDS, 100)
+            )
+        , is(NEW_LINE +
                 "        forwardOverriddenRequest()" + NEW_LINE +
                 "                .withRequestOverride(" + NEW_LINE +
                 "                        request()" + NEW_LINE +
@@ -145,71 +209,7 @@ public class HttpOverrideForwardedRequestToJavaSerializerTest {
                 "                                        null" + NEW_LINE +
                 "                                )" + NEW_LINE +
                 "                )" + NEW_LINE +
-                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))",
-            new HttpOverrideForwardedRequestToJavaSerializer().serialize(1,
-                new HttpOverrideForwardedRequest()
-                    .withRequestOverride(new HttpRequest()
-                        .withMethod("GET")
-                        .withPath("somePathOne")
-                        .withBody(new StringBody("responseBodyOne"))
-                    )
-                    .withRequestModifier(
-                        requestModifier()
-                            .withPath("adsdasd", null)
-                            .withHeaders(null, null, ImmutableList.of())
-                            .withCookies(
-                                ImmutableList.of(
-                                    cookie("replaceNameOne", "replaceValueOne"),
-                                    cookie("replaceNameTwo", "replaceValueTwo")
-                                ),
-                                null,
-                                null
-                            )
-                            .withQueryStringParameters(
-                                null,
-                                ImmutableList.of(
-                                    param("replaceNameOne", "replaceValueOne"),
-                                    param("replaceNameTwo", "replaceValueTwo")
-                                ),
-                                null
-                            )
-                    )
-                    .withResponseOverride(new HttpResponse()
-                        .withStatusCode(304)
-                        .withReasonPhrase("someReason")
-                        .withHeaders(
-                            new Header("responseHeaderNameOne", "responseHeaderValueOneOne", "responseHeaderValueOneTwo"),
-                            new Header("responseHeaderNameTwo", "responseHeaderValueTwo")
-                        )
-                        .withCookies(
-                            new Cookie("responseCookieNameOne", "responseCookieValueOne"),
-                            new Cookie("responseCookieNameTwo", "responseCookieValueTwo")
-                        )
-                        .withBody("responseBody")
-                        .withDelay(TimeUnit.MILLISECONDS, 100)
-                    )
-                    .withResponseModifier(
-                        responseModifier()
-                            .withHeaders(
-                                null,
-                                ImmutableList.of(
-                                    header("addNameOne", "addValueOne"),
-                                    header("addNameTwo", "addValueTwo")
-                                ),
-                                ImmutableList.of()
-                            )
-                            .withCookies(
-                                ImmutableList.of(
-                                    cookie("replaceNameOne", "replaceValueOne"),
-                                    cookie("replaceNameTwo", "replaceValueTwo")
-                                ),
-                                null,
-                                null
-                            )
-                    )
-                    .withDelay(TimeUnit.MILLISECONDS, 100)
-            )
-        );
+                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))"));
     }
 
     @Test

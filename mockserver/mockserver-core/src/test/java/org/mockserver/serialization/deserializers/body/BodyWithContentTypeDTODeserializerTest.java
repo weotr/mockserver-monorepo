@@ -11,10 +11,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.JsonBody.json;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 public class BodyWithContentTypeDTODeserializerTest {
 
@@ -27,7 +28,7 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO().setBody(new JsonBodyDTO(json("{\n" +
                     "  \"type\" : \"info\",\n" +
@@ -42,7 +43,7 @@ public class BodyWithContentTypeDTODeserializerTest {
                     "  } ],\n" +
                     "  \"timestamp\" : \"2020-02-19T08:09:32.802\"\n" +
                     "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -60,11 +61,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -83,11 +84,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -106,11 +107,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("1")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -129,11 +130,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody(new byte[0])))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -152,10 +153,10 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO().setBody(BodyWithContentTypeDTO.createWithContentTypeDTO(exact("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -174,11 +175,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(json("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -197,11 +198,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -220,11 +221,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -243,11 +244,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -263,11 +264,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -286,11 +287,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", MediaType.PLAIN_TEXT_UTF_8)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -309,11 +310,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", MediaType.PLAIN_TEXT_UTF_8.withCharset(StandardCharsets.ISO_8859_1))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -331,11 +332,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -355,11 +356,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -379,11 +380,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO((StringBody) new StringBody("some_value").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -402,11 +403,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -424,11 +425,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -447,11 +448,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -470,11 +471,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO((JsonBody) new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -493,11 +494,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -521,7 +522,7 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
@@ -530,7 +531,7 @@ public class BodyWithContentTypeDTODeserializerTest {
                         "    \"lastName\" : \"Doe\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -552,14 +553,14 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("[ {" + NEW_LINE +
                         "  \"firstName\" : \"John\"," + NEW_LINE +
                         "  \"lastName\" : \"Doe\"" + NEW_LINE +
                         "} ]")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -580,13 +581,13 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
                         "  \"emptyArray\" : \"[]\"" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -602,11 +603,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("[ ]")))
-            ), expectationDTO);
+            )));
 
     }
 
@@ -623,11 +624,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{ }")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -647,11 +648,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{\"context\":[{\"source\":\"DECISION_REQUEST\"},{\"source\":\"DECISION_REQUEST\"},{\"source\":\"DECISION_REQUEST\"}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -678,7 +679,7 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
@@ -690,7 +691,7 @@ public class BodyWithContentTypeDTODeserializerTest {
                         "    \"source\" : \"DECISION_REQUEST\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -717,7 +718,7 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("[ {" + NEW_LINE +
@@ -729,7 +730,7 @@ public class BodyWithContentTypeDTODeserializerTest {
                         "    \"source\" : \"DECISION_REQUEST\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "} ]")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -749,11 +750,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}", null, MediaType.JSON_UTF_8, MatchType.ONLY_MATCHING_FIELDS)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -773,11 +774,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}", null, MediaType.JSON_UTF_8.withCharset(StandardCharsets.ISO_8859_1), MatchType.ONLY_MATCHING_FIELDS)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -795,11 +796,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -818,11 +819,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -841,11 +842,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO((XmlBody) new XmlBody("<some><xml></xml></some>").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -864,11 +865,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>", MediaType.XML_UTF_8)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -887,11 +888,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>", MediaType.APPLICATION_XML_UTF_8.withCharset(StandardCharsets.US_ASCII))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -910,11 +911,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -932,11 +933,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -955,11 +956,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8)), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -978,11 +979,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO((BinaryBody) new BinaryBody("some_value".getBytes(UTF_8)).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1006,7 +1007,7 @@ public class BodyWithContentTypeDTODeserializerTest {
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8), MediaType.ANY_VIDEO_TYPE)))
             );
-        assertEquals(expected, expectationDTO);
+        assertThat( expectationDTO, is(expected));
     }
 
     @Test
@@ -1025,11 +1026,11 @@ public class BodyWithContentTypeDTODeserializerTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpResponse(
                 new HttpResponseDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8))))
-            ), expectationDTO);
+            )));
     }
 
 }

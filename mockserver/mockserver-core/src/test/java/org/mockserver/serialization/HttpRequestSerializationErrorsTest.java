@@ -13,8 +13,6 @@ import org.mockserver.serialization.model.HttpRequestDTO;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertArrayEquals;
@@ -23,6 +21,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -35,7 +34,6 @@ public class HttpRequestSerializationErrorsTest {
     private ObjectWriter objectWriter;
     @InjectMocks
     private HttpRequestSerializer httpRequestSerializer;
-
 
     @Before
     public void setupTestFixture() {
@@ -72,8 +70,8 @@ public class HttpRequestSerializationErrorsTest {
     @SuppressWarnings("RedundantArrayCreation")
     public void shouldHandleNullAndEmptyWhileSerializingArray() {
         // when
-        assertEquals("[]", httpRequestSerializer.serialize(new HttpRequest[]{}));
-        assertEquals("[]", httpRequestSerializer.serialize((HttpRequest[]) null));
+        assertThat( httpRequestSerializer.serialize(new HttpRequest[]{}), is("[]"));
+        assertThat( httpRequestSerializer.serialize((HttpRequest[]) null), is("[]"));
     }
 
     @Test

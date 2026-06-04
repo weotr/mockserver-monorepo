@@ -13,7 +13,6 @@ import org.mockserver.verify.VerificationSequence;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,6 +21,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -34,7 +34,6 @@ public class VerificationSequenceSerializationErrorsTest {
     private ObjectWriter objectWriter;
     @InjectMocks
     private VerificationSequenceSerializer verificationSequenceSerializer;
-
 
     @Before
     public void setupTestFixture() {

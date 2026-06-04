@@ -14,7 +14,6 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -172,7 +171,8 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
                 .setMethod(string("someMethod"))
                 .setPath(string("somePath"))
                 .setPathParameters(new Parameters().withEntries(
@@ -195,8 +195,7 @@ public class RequestDefinitionDTODeserializerTest {
                     .withHost("someHost")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTPS)
-                ),
-            requestDefinitionDTO);
+                )));
     }
 
     @Test
@@ -210,9 +209,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(exact("somebody"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(exact("somebody")))));
     }
 
     @Test
@@ -229,9 +228,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(exact("somebody"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(exact("somebody")))));
     }
 
     @Test
@@ -248,9 +247,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(regex("some[a-z]{3}"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(regex("some[a-z]{3}")))));
     }
 
     @Test
@@ -267,9 +266,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(json("{ \"key\": \"value\" }"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(json("{ \"key\": \"value\" }")))));
     }
 
     @Test
@@ -286,9 +285,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(jsonSchema("{ \"key\": \"value\" }"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(jsonSchema("{ \"key\": \"value\" }")))));
     }
 
     @Test
@@ -305,9 +304,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(jsonPath("$..book[?(@.price <= $['expensive'])]"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(jsonPath("$..book[?(@.price <= $['expensive'])]")))));
     }
 
     @Test
@@ -324,9 +323,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(xml("<some><xml></xml></some>"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(xml("<some><xml></xml></some>")))));
     }
 
     @Test
@@ -360,14 +359,13 @@ public class RequestDefinitionDTODeserializerTest {
             "  }" + NEW_LINE +
             "}";
 
-
         // when
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(xmlSchema(xmlSchema))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(xmlSchema(xmlSchema)))));
     }
 
     @Test
@@ -384,9 +382,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyDTO.createDTO(xpath("/element[key = 'some_key' and value = 'some_value']"))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyDTO.createDTO(xpath("/element[key = 'some_key' and value = 'some_value']")))));
     }
 
     @Test
@@ -409,12 +407,12 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
                 .setBody(BodyDTO.createDTO(params(
                     new Parameter("nameOne", "valueOne"),
                     new Parameter("nameTwo", "valueTwo_One", "valueTwo_Two")
-                ))),
-            requestDefinitionDTO);
+                )))));
     }
 
     @Test
@@ -431,9 +429,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setBody(BodyWithContentTypeDTO.createWithContentTypeDTO(binary(IOUtils.toByteArray(openStreamToFileFromClassPathOrPath("org/mockserver/serialization/forkme_right_red.png"))))),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setBody(BodyWithContentTypeDTO.createWithContentTypeDTO(binary(IOUtils.toByteArray(openStreamToFileFromClassPathOrPath("org/mockserver/serialization/forkme_right_red.png")))))));
     }
 
     @Test
@@ -447,9 +445,9 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
-                .setPath(string("somePath")),
-            requestDefinitionDTO);
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
+                .setPath(string("somePath"))));
     }
 
     @Test
@@ -469,13 +467,13 @@ public class RequestDefinitionDTODeserializerTest {
         HttpRequestDTO requestDefinitionDTO = (HttpRequestDTO) ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         assertNotNull(requestDefinitionDTO.getClientCertificateChain());
-        assertEquals(1, requestDefinitionDTO.getClientCertificateChain().size());
-        assertEquals("CN=Test CA", requestDefinitionDTO.getClientCertificateChain().get(0).getIssuerDistinguishedName());
-        assertEquals("CN=Test Client", requestDefinitionDTO.getClientCertificateChain().get(0).getSubjectDistinguishedName());
-        assertEquals("12345", requestDefinitionDTO.getClientCertificateChain().get(0).getSerialNumber());
-        assertEquals("SHA256WithRSA", requestDefinitionDTO.getClientCertificateChain().get(0).getSignatureAlgorithmName());
-        assertEquals("127.0.0.1:1080", requestDefinitionDTO.getLocalAddress());
-        assertEquals("192.168.1.1:54321", requestDefinitionDTO.getRemoteAddress());
+        assertThat( requestDefinitionDTO.getClientCertificateChain().size(), is(1));
+        assertThat( requestDefinitionDTO.getClientCertificateChain().get(0).getIssuerDistinguishedName(), is("CN=Test CA"));
+        assertThat( requestDefinitionDTO.getClientCertificateChain().get(0).getSubjectDistinguishedName(), is("CN=Test Client"));
+        assertThat( requestDefinitionDTO.getClientCertificateChain().get(0).getSerialNumber(), is("12345"));
+        assertThat( requestDefinitionDTO.getClientCertificateChain().get(0).getSignatureAlgorithmName(), is("SHA256WithRSA"));
+        assertThat( requestDefinitionDTO.getLocalAddress(), is("127.0.0.1:1080"));
+        assertThat( requestDefinitionDTO.getRemoteAddress(), is("192.168.1.1:54321"));
     }
 
     @Test
@@ -507,12 +505,12 @@ public class RequestDefinitionDTODeserializerTest {
         RequestDefinitionDTO requestDefinitionDTO = ObjectMapperFactory.createObjectMapper().readValue(requestBytes, RequestDefinitionDTO.class);
 
         // then
-        assertEquals(new HttpRequestDTO()
+        assertThat(
+            requestDefinitionDTO, is(new HttpRequestDTO()
                 .setPath(string("somePath"))
                 .setQueryStringParameters(new Parameters().withEntries(
                     param("queryParameterName", "queryParameterValue")
-                )),
-            requestDefinitionDTO);
+                ))));
     }
 
 }

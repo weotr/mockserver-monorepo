@@ -22,12 +22,13 @@ import org.mockserver.verify.VerificationTimes;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.verify.Verification.verification;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 public class VerificationSerializerTest {
 
@@ -74,7 +75,7 @@ public class VerificationSerializerTest {
         Verification verification = verificationSerializer.deserialize("requestBytes");
 
         // then
-        assertEquals(fullVerification, verification);
+        assertThat( verification, is(fullVerification));
     }
 
     @Test

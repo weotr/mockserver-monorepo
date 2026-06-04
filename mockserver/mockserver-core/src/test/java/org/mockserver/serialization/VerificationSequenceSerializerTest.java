@@ -18,10 +18,11 @@ import org.mockserver.verify.VerificationSequence;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.model.HttpRequest.request;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 public class VerificationSequenceSerializerTest {
 
@@ -68,7 +69,7 @@ public class VerificationSequenceSerializerTest {
         VerificationSequence verification = verificationSequenceSerializer.deserialize("requestBytes");
 
         // then
-        assertEquals(fullVerificationSequence, verification);
+        assertThat( verification, is(fullVerificationSequence));
     }
 
     @Test

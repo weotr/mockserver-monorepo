@@ -16,9 +16,10 @@ import org.mockserver.validator.jsonschema.JsonSchemaOpenAPIExpectationValidator
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -67,7 +68,7 @@ public class OpenAPIExpectationSerializerTest {
         OpenAPIExpectation httpRequest = httpRequestSerializer.deserialize("requestBytes");
 
         // then
-        assertEquals(fullOpenAPIExpectation, httpRequest);
+        assertThat( httpRequest, is(fullOpenAPIExpectation));
     }
 
     @Test

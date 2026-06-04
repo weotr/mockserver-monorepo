@@ -15,12 +15,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.JsonBody.json;
 import static org.mockserver.model.NottableString.not;
 import static org.mockserver.model.RegexBody.regex;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 public class StrictBodyDTODeserializerTest {
 
@@ -40,10 +41,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -61,10 +62,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO().setBody(new RegexBodyDTO(regex("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -82,11 +83,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -105,11 +106,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -128,11 +129,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("1")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -151,11 +152,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody(new byte[0])))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -174,11 +175,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody()))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -197,10 +198,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO().setBody(BodyDTO.createDTO(exact("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -219,11 +220,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(json("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -242,11 +243,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -265,11 +266,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -288,11 +289,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -311,10 +312,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -333,10 +334,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -352,10 +353,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -380,14 +381,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne", "parameterOneValueTwo"),
                         new Parameter("parameterTwoName", "parameterTwoValue")
                     )))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -413,14 +414,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne", "parameterOneValueTwo"),
                         new Parameter("parameterTwoName", "parameterTwoValue")
                     ), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -446,14 +447,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO((ParameterBody) new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne", "parameterOneValueTwo"),
                         new Parameter("parameterTwoName", "parameterTwoValue")
                     ).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -478,7 +479,7 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(
@@ -487,7 +488,7 @@ public class StrictBodyDTODeserializerTest {
                             new Parameter("parameterTwoName", "parameterTwoValue")
                         )
                     ))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -522,7 +523,7 @@ public class StrictBodyDTODeserializerTest {
                         )
                     ))
             );
-        assertEquals(expected, expectationDTO);
+        assertThat( expectationDTO, is(expected));
     }
 
     @Test
@@ -538,10 +539,10 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -560,11 +561,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", MediaType.PLAIN_TEXT_UTF_8)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -583,11 +584,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", MediaType.PLAIN_TEXT_UTF_8.withCharset(StandardCharsets.ISO_8859_1))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -605,11 +606,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -629,11 +630,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -653,11 +654,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO((StringBody) new StringBody("some_value").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -676,11 +677,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -699,11 +700,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, true, null)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -722,11 +723,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, false, null)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -746,11 +747,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, true, MediaType.PLAIN_TEXT_UTF_8)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -769,11 +770,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", MediaType.PLAIN_TEXT_UTF_8.withCharset(StandardCharsets.ISO_8859_1))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -792,11 +793,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, true, null)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -817,11 +818,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, true, null), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -842,11 +843,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO((StringBody) new StringBody("some_value", null, true, null).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -866,11 +867,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new StringBodyDTO(new StringBody("some_value", null, true, null)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -888,11 +889,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new RegexBodyDTO(new RegexBody("some[a-zA-Z]*")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -911,11 +912,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new RegexBodyDTO(new RegexBody("some[a-zA-Z]*"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -934,11 +935,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new RegexBodyDTO((RegexBody) new RegexBody("some[a-zA-Z]*").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -957,11 +958,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new RegexBodyDTO(new RegexBody("some[a-zA-Z]*")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -979,11 +980,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1002,11 +1003,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1025,11 +1026,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO((JsonBody) new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1049,11 +1050,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{\"value\": 1}", null, JsonBody.DEFAULT_JSON_CONTENT_TYPE, MatchType.ONLY_MATCHING_FIELDS, true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1072,11 +1073,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1100,7 +1101,7 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
@@ -1109,7 +1110,7 @@ public class StrictBodyDTODeserializerTest {
                         "    \"lastName\" : \"Doe\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1131,14 +1132,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("[ {" + NEW_LINE +
                         "  \"firstName\" : \"John\"," + NEW_LINE +
                         "  \"lastName\" : \"Doe\"" + NEW_LINE +
                         "} ]")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1159,13 +1160,13 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
                         "  \"emptyArray\" : \"[]\"" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1185,11 +1186,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{\"context\":[{\"source\":\"DECISION_REQUEST\"},{\"source\":\"DECISION_REQUEST\"},{\"source\":\"DECISION_REQUEST\"}]}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1216,7 +1217,7 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{" + NEW_LINE +
@@ -1228,7 +1229,7 @@ public class StrictBodyDTODeserializerTest {
                         "    \"source\" : \"DECISION_REQUEST\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "}")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1255,7 +1256,7 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("[ {" + NEW_LINE +
@@ -1267,7 +1268,7 @@ public class StrictBodyDTODeserializerTest {
                         "    \"source\" : \"DECISION_REQUEST\"" + NEW_LINE +
                         "  } ]" + NEW_LINE +
                         "} ]")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1288,11 +1289,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}", null, MediaType.JSON_UTF_8, MatchType.STRICT)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1312,11 +1313,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonBodyDTO(new JsonBody("{'employees':[{'firstName':'John', 'lastName':'Doe'}]}", null, MediaType.JSON_UTF_8.withCharset(StandardCharsets.ISO_8859_1), MatchType.ONLY_MATCHING_FIELDS)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1348,11 +1349,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonSchemaBodyDTO(new JsonSchemaBody(jsonSchema), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1384,11 +1385,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonSchemaBodyDTO((JsonSchemaBody) new JsonSchemaBody(jsonSchema).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1419,11 +1420,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonSchemaBodyDTO(new JsonSchemaBody(jsonSchema)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1455,11 +1456,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonSchemaBodyDTO(new JsonSchemaBody(jsonSchema)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1477,11 +1478,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonPathBodyDTO(new JsonPathBody("\\some\\path")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1500,11 +1501,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonPathBodyDTO(new JsonPathBody("\\some\\path"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1523,11 +1524,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonPathBodyDTO((JsonPathBody) new JsonPathBody("\\some\\path").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1546,11 +1547,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new JsonPathBodyDTO(new JsonPathBody("\\some\\path")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1582,11 +1583,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlSchemaBodyDTO(new XmlSchemaBody(xmlSchema), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1618,11 +1619,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlSchemaBodyDTO((XmlSchemaBody) new XmlSchemaBody(xmlSchema).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1653,11 +1654,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlSchemaBodyDTO(new XmlSchemaBody(xmlSchema)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1694,7 +1695,7 @@ public class StrictBodyDTODeserializerTest {
                 new HttpRequestDTO()
                     .setBody(new XmlSchemaBodyDTO(new XmlSchemaBody(xmlSchema)))
             );
-        assertEquals(expected, expectationDTO);
+        assertThat( expectationDTO, is(expected));
     }
 
     @Test
@@ -1712,11 +1713,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XPathBodyDTO(new XPathBody("\\some\\xpath")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1735,11 +1736,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XPathBodyDTO(new XPathBody("\\some\\xpath", ImmutableMap.of("foo", "http://foo"))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1758,11 +1759,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XPathBodyDTO(new XPathBody("\\some\\xpath"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1781,11 +1782,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XPathBodyDTO((XPathBody) new XPathBody("\\some\\xpath").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1804,11 +1805,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XPathBodyDTO(new XPathBody("\\some\\xpath")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1826,11 +1827,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1849,11 +1850,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>"), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1872,11 +1873,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO((XmlBody) new XmlBody("<some><xml></xml></some>").withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1895,11 +1896,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>", MediaType.XML_UTF_8)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1918,11 +1919,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>", MediaType.APPLICATION_XML_UTF_8.withCharset(StandardCharsets.US_ASCII))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1941,11 +1942,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new XmlBodyDTO(new XmlBody("<some><xml></xml></some>")))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1963,11 +1964,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -1986,11 +1987,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8)), true))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2009,11 +2010,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO((BinaryBody) new BinaryBody("some_value".getBytes(UTF_8)).withOptional(true)))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2037,7 +2038,7 @@ public class StrictBodyDTODeserializerTest {
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8), MediaType.ANY_VIDEO_TYPE)))
             );
-        assertEquals(expected, expectationDTO);
+        assertThat( expectationDTO, is(expected));
     }
 
     @Test
@@ -2056,11 +2057,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new BinaryBodyDTO(new BinaryBody("some_value".getBytes(UTF_8))))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2085,14 +2086,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne", "parameterOneValueTwo"),
                         new Parameter("parameterTwoName", "parameterTwoValue")
                     )))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2114,13 +2115,13 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne")
                     )))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2145,14 +2146,14 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody(
                         new Parameter("parameterOneName", "parameterOneValueOne", "parameterOneValueTwo"),
                         new Parameter("parameterTwoName", "parameterTwoValue")
                     )))
-            ), expectationDTO);
+            )));
     }
 
     @Test
@@ -2173,11 +2174,11 @@ public class StrictBodyDTODeserializerTest {
         ExpectationDTO expectationDTO = objectMapper.readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setBody(new ParameterBodyDTO(new ParameterBody()))
-            ), expectationDTO);
+            )));
     }
 
 }

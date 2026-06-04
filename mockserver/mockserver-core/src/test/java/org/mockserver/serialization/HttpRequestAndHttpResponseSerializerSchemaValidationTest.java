@@ -7,11 +7,12 @@ import org.mockserver.model.*;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.Cookie.cookie;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -100,7 +101,7 @@ public class HttpRequestAndHttpResponseSerializerSchemaValidationTest {
         HttpRequestAndHttpResponse httpRequestAndHttpResponse = new HttpRequestAndHttpResponseSerializer(new MockServerLogger()).deserialize(completeSerialisedHttpRequestAndHttpResponse);
 
         // then
-        assertEquals(completeHttpRequestAndHttpResponse, httpRequestAndHttpResponse);
+        assertThat( httpRequestAndHttpResponse, is(completeHttpRequestAndHttpResponse));
     }
 
     @Test
@@ -111,7 +112,7 @@ public class HttpRequestAndHttpResponseSerializerSchemaValidationTest {
             completeHttpRequestAndHttpResponse);
 
         // then
-        assertEquals("[ " + completeSerialisedHttpRequestAndHttpResponse + ", " + completeSerialisedHttpRequestAndHttpResponse + " ]", jsonHttpRequestAndHttpResponse);
+        assertThat( jsonHttpRequestAndHttpResponse, is("[ " + completeSerialisedHttpRequestAndHttpResponse + ", " + completeSerialisedHttpRequestAndHttpResponse + " ]"));
     }
 
     @Test
@@ -125,7 +126,7 @@ public class HttpRequestAndHttpResponseSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("[ " + completeSerialisedHttpRequestAndHttpResponse + ", " + completeSerialisedHttpRequestAndHttpResponse + " ]", jsonHttpRequestAndHttpResponse);
+        assertThat( jsonHttpRequestAndHttpResponse, is("[ " + completeSerialisedHttpRequestAndHttpResponse + ", " + completeSerialisedHttpRequestAndHttpResponse + " ]"));
     }
 
     @Test
@@ -136,7 +137,7 @@ public class HttpRequestAndHttpResponseSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals(completeSerialisedHttpRequestAndHttpResponse, jsonHttpRequestAndHttpResponse);
+        assertThat( jsonHttpRequestAndHttpResponse, is(completeSerialisedHttpRequestAndHttpResponse));
     }
 
 }

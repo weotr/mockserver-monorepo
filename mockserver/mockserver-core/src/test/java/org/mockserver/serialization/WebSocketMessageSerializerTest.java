@@ -11,7 +11,6 @@ import org.mockserver.serialization.model.*;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.Cookie.cookie;
 import static org.mockserver.model.Delay.minutes;
@@ -20,6 +19,8 @@ import static org.mockserver.model.Header.header;
 import static org.mockserver.model.NottableString.string;
 import static org.mockserver.model.Parameter.param;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -53,7 +54,7 @@ public class WebSocketMessageSerializerTest {
         Object httpResponse = new WebSocketMessageSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new HttpResponseDTO()
+        assertThat( httpResponse, is(new HttpResponseDTO()
             .setStatusCode(123)
             .setBody(BodyWithContentTypeDTO.createWithContentTypeDTO(exact("somebody")))
             .setHeaders(new Headers().withEntries(
@@ -63,7 +64,7 @@ public class WebSocketMessageSerializerTest {
                 cookie("someCookieName", "someCookieValue")
             ))
             .setDelay(new DelayDTO(seconds(5)))
-            .buildObject(), httpResponse);
+            .buildObject()));
     }
 
     @Test
@@ -84,7 +85,7 @@ public class WebSocketMessageSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonHttpResponse, is("{" + NEW_LINE +
             "  \"type\" : \"org.mockserver.model.HttpResponse\"," + NEW_LINE +
             "  \"value\" : \"{" + StringEscapeUtils.escapeJava(NEW_LINE) +
             "  \\\"statusCode\\\" : 123," + StringEscapeUtils.escapeJava(NEW_LINE) +
@@ -100,7 +101,7 @@ public class WebSocketMessageSerializerTest {
             "    \\\"value\\\" : 1" + StringEscapeUtils.escapeJava(NEW_LINE) +
             "  }" + StringEscapeUtils.escapeJava(NEW_LINE) +
             "}\"" + NEW_LINE +
-            "}", jsonHttpResponse);
+            "}"));
     }
 
     @Test
@@ -135,7 +136,7 @@ public class WebSocketMessageSerializerTest {
         Object httpRequest = new WebSocketMessageSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new HttpRequestDTO()
+        assertThat( httpRequest, is(new HttpRequestDTO()
             .setMethod(string("someMethod"))
             .setPath(string("somePath"))
             .setQueryStringParameters(new Parameters().withEntries(
@@ -155,7 +156,7 @@ public class WebSocketMessageSerializerTest {
                 .withPort(1234)
                 .withScheme(SocketAddress.Scheme.HTTPS)
             )
-            .buildObject(), httpRequest);
+            .buildObject()));
     }
 
     @Test
@@ -186,7 +187,7 @@ public class WebSocketMessageSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonHttpRequest, is("{" + NEW_LINE +
             "  \"type\" : \"org.mockserver.model.HttpRequest\"," + NEW_LINE +
             "  \"value\" : \"{" + StringEscapeUtils.escapeJava(NEW_LINE) +
             "  \\\"method\\\" : \\\"someMethod\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
@@ -209,7 +210,7 @@ public class WebSocketMessageSerializerTest {
             "  }," + StringEscapeUtils.escapeJava(NEW_LINE) +
             "  \\\"body\\\" : \\\"somebody\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
             "}\"" + NEW_LINE +
-            "}", jsonHttpRequest);
+            "}"));
     }
 
 }

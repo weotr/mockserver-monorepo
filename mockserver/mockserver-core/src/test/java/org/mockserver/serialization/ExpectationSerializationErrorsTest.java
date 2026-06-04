@@ -12,10 +12,11 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.validator.jsonschema.JsonSchemaExpectationValidator;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.spy;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -46,8 +47,8 @@ public class ExpectationSerializationErrorsTest {
     @SuppressWarnings("RedundantArrayCreation")
     public void shouldHandleNullAndEmptyWhileSerializingArray() {
         // when
-        assertEquals("[]", expectationSerializer.serialize(new Expectation[]{}));
-        assertEquals("[]", expectationSerializer.serialize((Expectation[]) null));
+        assertThat( expectationSerializer.serialize(new Expectation[]{}), is("[]"));
+        assertThat( expectationSerializer.serialize((Expectation[]) null), is("[]"));
     }
 
     @Test
