@@ -13,7 +13,6 @@ steps:
   - label: ":node: :docker: client-node functional tests"
     command: ".buildkite/scripts/steps/node-client-test.sh"
     timeout_in_minutes: 15
-    soft_fail: true
 
   - label: ":node: node launcher lint"
     command: ".buildkite/scripts/steps/node-launcher-lint.sh"
