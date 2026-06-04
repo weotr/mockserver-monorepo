@@ -1,6 +1,5 @@
 package org.mockserver.netty.integration.mock;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.HttpForward.forward;
 import static org.mockserver.model.HttpRequest.request;
@@ -18,6 +17,8 @@ import org.mockserver.netty.MockServer;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
 import org.mockserver.proxyconfiguration.ProxyConfiguration.Type;
 import org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBase;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 public class NoProxyHostMockingIntegrationTest extends AbstractMockingIntegrationTestBase {
 
@@ -68,15 +69,7 @@ public class NoProxyHostMockingIntegrationTest extends AbstractMockingIntegratio
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -85,7 +78,12 @@ public class NoProxyHostMockingIntegrationTest extends AbstractMockingIntegratio
                         header("x-test", "test_headers_and_body")
                     )
                     .withBody("an_example_body_http"),
-                getHeadersToRemove())
-        );
+                getHeadersToRemove()), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
     }
 }

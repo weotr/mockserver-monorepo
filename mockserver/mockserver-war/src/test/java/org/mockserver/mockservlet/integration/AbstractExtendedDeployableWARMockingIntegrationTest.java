@@ -14,7 +14,6 @@ import org.mockserver.serialization.PortBindingSerializer;
 import org.mockserver.testing.integration.mock.AbstractExtendedSameJVMMockingIntegrationTest;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockserver.matchers.Times.once;
 import static org.mockserver.model.ConnectionOptions.connectionOptions;
@@ -29,6 +28,8 @@ import static org.mockserver.model.HttpStatusCode.OK_200;
 import static org.mockserver.model.JsonBody.json;
 import static org.mockserver.model.Parameter.param;
 import static org.mockserver.model.PortBinding.portBinding;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -59,12 +60,7 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
-                .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withPath(calculatePath("ab%40c.de"))
@@ -75,15 +71,12 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     .withHeaders(header("headerNameRequest", "headerValueRequest"))
                     .withCookies(cookie("cookieNameRequest", "cookieValueRequest")),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
                 .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+                .withBody("some_body_response")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withSecure(true)
@@ -95,8 +88,10 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     .withHeaders(header("headerNameRequest", "headerValueRequest"))
                     .withCookies(cookie("cookieNameRequest", "cookieValueRequest")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
+                .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -229,15 +224,7 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withHeaders(
-                    header("x-callback", "test_callback_header")
-                )
-                .withBody("a_callback_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("callback"))
                     .withMethod("POST")
@@ -246,21 +233,18 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(ACCEPTED_202.code())
                 .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                 .withHeaders(
                     header("x-callback", "test_callback_header")
                 )
-                .withBody("a_callback_response"),
-            makeRequest(
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue()));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("callback"))
@@ -270,10 +254,15 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue(), "an_example_body_https");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue(), calculatePath("callback"));
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withHeaders(
+                    header("x-callback", "test_callback_header")
+                )
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_https", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue()));
     }
 
     @Test
@@ -300,15 +289,7 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-callback", "test_callback_header")
-                )
-                .withBody("a_callback_forward"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("callback"))
                     .withMethod("POST")
@@ -317,21 +298,18 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationForwardCallback.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationForwardCallback.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-callback", "test_callback_header")
                 )
-                .withBody("a_callback_forward"),
-            makeRequest(
+                .withBody("a_callback_forward")));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationForwardCallback.httpRequests.get(0).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationForwardCallback.httpRequests.get(0).getPath().getValue()));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("callback"))
@@ -341,10 +319,15 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationForwardCallback.httpRequests.get(1).getBody().getValue(), "an_example_body_https");
-        assertEquals(TestClasspathTestExpectationForwardCallback.httpRequests.get(1).getPath().getValue(), calculatePath("callback"));
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-callback", "test_callback_header")
+                )
+                .withBody("a_callback_forward")));
+        assertThat("an_example_body_https", is(TestClasspathTestExpectationForwardCallback.httpRequests.get(1).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationForwardCallback.httpRequests.get(1).getPath().getValue()));
     }
 
     @Test
@@ -376,15 +359,7 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-callback", "test_callback_header_response")
-                )
-                .withBody("a_callback_forward_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("callback"))
                     .withMethod("POST")
@@ -393,22 +368,19 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpResponses.get(0).getBody().getValue(), "a_callback_forward_request");
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-callback", "test_callback_header_response")
                 )
-                .withBody("a_callback_forward_response"),
-            makeRequest(
+                .withBody("a_callback_forward_response")));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getPath().getValue()));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getBody().getValue()));
+        assertThat("a_callback_forward_request", is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpResponses.get(0).getBody().getValue()));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("callback"))
@@ -418,11 +390,16 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpResponses.get(0).getBody().getValue(), "a_callback_forward_request");
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-callback", "test_callback_header_response")
+                )
+                .withBody("a_callback_forward_response")));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getPath().getValue()));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpRequests.get(0).getBody().getValue()));
+        assertThat("a_callback_forward_request", is(TestClasspathTestExpectationForwardCallbackWithResponseOverride.httpResponses.get(0).getBody().getValue()));
     }
 
     @Test
@@ -432,38 +409,32 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
 
         // then
         // - in http
-        assertEquals(
-            response()
+        assertThat(makeRequest(
+                request()
+                    .withPath(calculatePath("mockserver/status"))
+                    .withMethod("PUT"),
+                getHeadersToRemove()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
                 .withBody(json(portBindingSerializer.serialize(
                     portBinding(getServerPort())
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("mockserver/status"))
-                    .withMethod("PUT"),
-                getHeadersToRemove()
-            )
-        );
+                ), MediaType.JSON_UTF_8))));
         // - in https
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
-                .withBody(json(portBindingSerializer.serialize(
-                    portBinding(getServerSecurePort())
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("mockserver/status"))
                     .withMethod("PUT"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
+                .withBody(json(portBindingSerializer.serialize(
+                    portBinding(getServerSecurePort())
+                ), MediaType.JSON_UTF_8))));
     }
 
 
@@ -476,38 +447,32 @@ public abstract class AbstractExtendedDeployableWARMockingIntegrationTest extend
             PortBindingSerializer portBindingSerializer = new PortBindingSerializer(new MockServerLogger());
             // then
             // - in http
-            assertEquals(
-                response()
+            assertThat(makeRequest(
+                    request()
+                        .withPath(calculatePath("livenessProbe"))
+                        .withMethod("GET"),
+                    getHeadersToRemove()
+                ), is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
                     .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
                     .withBody(json(portBindingSerializer.serialize(
                         portBinding(getServerPort())
-                    ), MediaType.JSON_UTF_8)),
-                makeRequest(
-                    request()
-                        .withPath(calculatePath("livenessProbe"))
-                        .withMethod("GET"),
-                    getHeadersToRemove()
-                )
-            );
+                    ), MediaType.JSON_UTF_8))));
             // - in https
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
-                    .withBody(json(portBindingSerializer.serialize(
-                        portBinding(getServerSecurePort())
-                    ), MediaType.JSON_UTF_8)),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withSecure(true)
                         .withPath(calculatePath("livenessProbe"))
                         .withMethod("GET"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
+                    .withBody(json(portBindingSerializer.serialize(
+                        portBinding(getServerSecurePort())
+                    ), MediaType.JSON_UTF_8))));
         } finally {
             ConfigurationProperties.livenessHttpGetPath(originalStatusPath);
         }

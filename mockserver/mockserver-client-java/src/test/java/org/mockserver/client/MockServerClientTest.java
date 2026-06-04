@@ -30,7 +30,6 @@ import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.CREATED;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.*;
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.collection.IsArrayWithSize.arrayWithSize;
@@ -46,6 +45,7 @@ import static org.mockserver.model.MediaType.APPLICATION_JSON_UTF_8;
 import static org.mockserver.verify.Verification.verification;
 import static org.mockserver.verify.VerificationTimes.atLeast;
 import static org.mockserver.verify.VerificationTimes.once;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -110,7 +110,7 @@ public class MockServerClientTest {
         // then
         verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
         List<String> authorizationHeader = httpRequestArgumentCaptor.getValue().getHeader(authorizationKey);
-        assertTrue(authorizationHeader.contains(authorizationHeaderValue));
+        assertThat(authorizationHeader.contains(authorizationHeaderValue), is(true));
     }
 
     @Test
@@ -257,9 +257,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpResponse, expectation.getHttpResponse());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpResponse(), sameInstance(httpResponse));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -279,9 +279,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(template, expectation.getHttpResponseTemplate());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpResponseTemplate(), sameInstance(template));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -301,9 +301,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpClassCallback, expectation.getHttpResponseClassCallback());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpResponseClassCallback(), sameInstance(httpClassCallback));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -325,9 +325,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpForward, expectation.getHttpForward());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpForward(), sameInstance(httpForward));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -347,9 +347,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(template, expectation.getHttpForwardTemplate());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpForwardTemplate(), sameInstance(template));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -369,9 +369,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpClassCallback, expectation.getHttpForwardClassCallback());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpForwardClassCallback(), sameInstance(httpClassCallback));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -388,12 +388,12 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
+        assertThat(expectation.isActive(), is(true));
         assertThat(expectation.getHttpForwardTemplate(), nullValue());
         assertThat(expectation.getHttpOverrideForwardedRequest(), is(new HttpOverrideForwardedRequest()
                                                                          .withRequestOverride(request().withBody("some_overridden_body"))
         ));
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -414,9 +414,9 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpError, expectation.getHttpError());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpError(), sameInstance(httpError));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
     }
 
     @Test
@@ -961,7 +961,7 @@ public class MockServerClientTest {
         when(httpRequestResponseSerializer.deserializeArray("body")).thenReturn(httpRequests);
 
         // when
-        assertSame(httpRequests, mockServerClient.retrieveRecordedRequestsAndResponses(someRequestMatcher));
+        assertThat(mockServerClient.retrieveRecordedRequestsAndResponses(someRequestMatcher), sameInstance(httpRequests));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -988,7 +988,7 @@ public class MockServerClientTest {
         when(httpRequestResponseSerializer.deserializeArray("body")).thenReturn(httpRequests);
 
         // when
-        assertSame(httpRequests, mockServerClient.retrieveRecordedRequestsAndResponses(null));
+        assertThat(mockServerClient.retrieveRecordedRequestsAndResponses(null), sameInstance(httpRequests));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -1023,7 +1023,7 @@ public class MockServerClientTest {
         when(mockExpectationSerializer.deserializeArray("body", true)).thenReturn(expectations);
 
         // when
-        assertSame(expectations, mockServerClient.retrieveActiveExpectations(someRequestMatcher));
+        assertThat(mockServerClient.retrieveActiveExpectations(someRequestMatcher), sameInstance(expectations));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -1050,7 +1050,7 @@ public class MockServerClientTest {
         when(mockExpectationSerializer.deserializeArray("body", true)).thenReturn(expectations);
 
         // when
-        assertSame(expectations, mockServerClient.retrieveActiveExpectations(null));
+        assertThat(mockServerClient.retrieveActiveExpectations(null), sameInstance(expectations));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -1085,7 +1085,7 @@ public class MockServerClientTest {
         when(mockExpectationSerializer.deserializeArray("body", true)).thenReturn(expectations);
 
         // when
-        assertSame(expectations, mockServerClient.retrieveRecordedExpectations(someRequestMatcher));
+        assertThat(mockServerClient.retrieveRecordedExpectations(someRequestMatcher), sameInstance(expectations));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -1112,7 +1112,7 @@ public class MockServerClientTest {
         when(mockExpectationSerializer.deserializeArray("body", true)).thenReturn(expectations);
 
         // when
-        assertSame(expectations, mockServerClient.retrieveRecordedExpectations(null));
+        assertThat(mockServerClient.retrieveRecordedExpectations(null), sameInstance(expectations));
 
         // then
         verify(mockHttpClient).sendRequest(
@@ -1345,13 +1345,13 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpResponse, expectation.getHttpResponse());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpResponse(), sameInstance(httpResponse));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
 
         ArgumentCaptor<HttpRequest> configRequestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
         verify(mockHttpClient).sendRequest(configRequestCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        assertFalse(configRequestCaptor.getValue().isSecure());
+        assertThat(configRequestCaptor.getValue().isSecure(), is(false));
     }
 
     @Test
@@ -1375,13 +1375,13 @@ public class MockServerClientTest {
 
         // then
         Expectation expectation = forwardChainExpectation.getExpectation();
-        assertTrue(expectation.isActive());
-        assertSame(httpResponse, expectation.getHttpResponse());
-        assertEquals(Times.unlimited(), expectation.getTimes());
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.getHttpResponse(), sameInstance(httpResponse));
+        assertThat(expectation.getTimes(), is(Times.unlimited()));
 
         ArgumentCaptor<HttpRequest> configRequestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
         verify(mockHttpClient).sendRequest(configRequestCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        assertTrue(configRequestCaptor.getValue().isSecure());
+        assertThat(configRequestCaptor.getValue().isSecure(), is(true));
     }
 
     // -------------------------------------------------------------------

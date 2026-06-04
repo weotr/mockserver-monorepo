@@ -15,13 +15,14 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collections;
 
-import static junit.framework.TestCase.assertTrue;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpClassCallback.callback;
 import static org.mockserver.model.HttpForward.forward;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpTemplate.template;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -78,14 +79,13 @@ public class CompileGeneratedJavaCodeTest {
                     )
         );
 
-        assertTrue(compileJavaCode(commonImports +
+        assertThat(compileJavaCode(commonImports +
             "import static org.mockserver.model.HttpResponse.response;" + NEW_LINE + NEW_LINE +
             "class TestClass {" + NEW_LINE +
             "   static {" +
             "      " + expectationAsJavaCode + NEW_LINE +
             "   }" + NEW_LINE +
-            "}")
-        );
+            "}"), is(true));
     }
 
     @Test
@@ -120,14 +120,13 @@ public class CompileGeneratedJavaCodeTest {
                 )
         );
 
-        assertTrue(compileJavaCode(commonImports +
+        assertThat(compileJavaCode(commonImports +
             "import static org.mockserver.model.HttpTemplate.template;" + NEW_LINE + NEW_LINE +
             "class TestClass {" + NEW_LINE +
             "   static {" +
             "      " + expectationAsJavaCode + NEW_LINE +
             "   }" + NEW_LINE +
-            "}")
-        );
+            "}"), is(true));
     }
 
     @Test
@@ -164,14 +163,13 @@ public class CompileGeneratedJavaCodeTest {
                 )
         );
 
-        assertTrue(compileJavaCode(commonImports +
+        assertThat(compileJavaCode(commonImports +
             "import static org.mockserver.model.HttpForward.forward;" + NEW_LINE + NEW_LINE +
             "class TestClass {" + NEW_LINE +
             "   static {" +
             "      " + expectationAsJavaCode + NEW_LINE +
             "   }" + NEW_LINE +
-            "}")
-        );
+            "}"), is(true));
     }
 
     @Test
@@ -206,14 +204,13 @@ public class CompileGeneratedJavaCodeTest {
                 )
         );
 
-        assertTrue(compileJavaCode(commonImports +
+        assertThat(compileJavaCode(commonImports +
             "import static org.mockserver.model.HttpClassCallback.callback;" + NEW_LINE + NEW_LINE +
             "class TestClass {" + NEW_LINE +
             "   static {" +
             "      " + expectationAsJavaCode + NEW_LINE +
             "   }" + NEW_LINE +
-            "}")
-        );
+            "}"), is(true));
     }
 
     @Test
@@ -248,7 +245,7 @@ public class CompileGeneratedJavaCodeTest {
                 )
         );
 
-        assertTrue(compileJavaCode("" +
+        assertThat(compileJavaCode("" +
             "import org.mockserver.client.MockServerClient;" + NEW_LINE +
             "import org.mockserver.matchers.Times;" + NEW_LINE +
             "import org.mockserver.matchers.TimeToLive;" + NEW_LINE +
@@ -259,8 +256,7 @@ public class CompileGeneratedJavaCodeTest {
             "   static {" +
             "      " + expectationAsJavaCode + NEW_LINE +
             "   }" + NEW_LINE +
-            "}")
-        );
+            "}"), is(true));
     }
 
     private boolean compileJavaCode(final String javaCode) throws URISyntaxException {

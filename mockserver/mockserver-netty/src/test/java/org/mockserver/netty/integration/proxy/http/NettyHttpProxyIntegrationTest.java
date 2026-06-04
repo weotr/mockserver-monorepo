@@ -24,7 +24,6 @@ import java.net.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.PROXY_AUTHENTICATE;
-import static junit.framework.TestCase.assertEquals;
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
@@ -34,6 +33,7 @@ import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.stop.Stop.stopQuietly;
 import static org.mockserver.testing.closurecallback.ViaWebSocket.viaWebSocket;
 import static org.mockserver.verify.VerificationTimes.exactly;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -140,8 +140,8 @@ public class NettyHttpProxyIntegrationTest extends AbstractProxyIntegrationTest 
             HttpResponse response = httpClient.execute(request);
 
             // then
-            assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
-            assertEquals(hexString.toUpperCase(), Hex.encodeHexString(EntityUtils.toByteArray(response.getEntity())).toUpperCase());
+            assertThat(response.getStatusLine().getStatusCode(), is(HttpStatusCode.OK_200.code()));
+            assertThat(Hex.encodeHexString(EntityUtils.toByteArray(response.getEntity())).toUpperCase(), is(hexString.toUpperCase()));
 
             // and
             getMockServerClient().verify(
@@ -188,8 +188,8 @@ public class NettyHttpProxyIntegrationTest extends AbstractProxyIntegrationTest 
         HttpResponse response = httpClient.execute(request);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
-        assertEquals(hexString.toUpperCase(), Hex.encodeHexString(EntityUtils.toByteArray(response.getEntity())).toUpperCase());
+        assertThat(response.getStatusLine().getStatusCode(), is(HttpStatusCode.OK_200.code()));
+        assertThat(Hex.encodeHexString(EntityUtils.toByteArray(response.getEntity())).toUpperCase(), is(hexString.toUpperCase()));
 
         // and
         getMockServerClient().verify(

@@ -35,8 +35,6 @@ import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.AnyOf.anyOf;
@@ -64,6 +62,7 @@ import static org.mockserver.model.PortBinding.portBinding;
 import static org.mockserver.test.Retries.tryWaitForSuccess;
 import static org.mockserver.testing.closurecallback.ViaWebSocket.viaWebSocket;
 import static org.mockserver.testing.tls.SSLSocketFactory.sslSocketFactory;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -87,12 +86,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
-                .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withPath(calculatePath("ab%40c.de"))
@@ -103,15 +97,12 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     .withHeaders(header("headerNameRequest", "headerValueRequest"))
                     .withCookies(cookie("cookieNameRequest", "cookieValueRequest")),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
                 .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+                .withBody("some_body_response")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withSecure(true)
@@ -123,8 +114,10 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     .withHeaders(header("headerNameRequest", "headerValueRequest"))
                     .withCookies(cookie("cookieNameRequest", "cookieValueRequest")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(HttpStatusCode.ACCEPTED_202.code())
+                .withReasonPhrase(HttpStatusCode.ACCEPTED_202.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -151,98 +144,71 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbb|variableOneValcc" +
                                                 "&variableTwo=variableTwoValue|variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValab" +
                                                 "&variableTwo=variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbb|variableOneValcc")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaax|variableOneValbb|variableOneValcc")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbbx|variableOneValcc")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbb|variableOneValccx")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbb|variableOneValcc" +
                                                 "&variableTwo=variableTwoOtherValue|variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaa|variableOneValbb|variableOneValcc" +
                                                 "&variableTwo=variableTwoValue|variableTwoOtherValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "?variableOne=variableOneValaax|variableOneValbb|variableOneValcc" +
                                                 "&variableTwo=variableTwoValue|variableTwoOtherValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(notFoundResponse()));
     }
 
     @Test
@@ -269,60 +235,45 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "/;variableOne=variableOneValaa;variableOne=variableOneValbb;variableOne=variableOneValcc" +
                                                 "/;variableTwo=variableTwoValue,variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "/;variableOne=variableOneValab" +
                                                 "/;variableTwo=variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "/;variableOne=variableOneValaa;variableOne=variableOneValbb;variableOne=variableOneValcc" +
                                                 "/;variableTwo=variableTwoOtherValue,variableTwoValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "/;variableOne=variableOneValaa;variableOne=variableOneValbb;variableOne=variableOneValcc" +
                                                 "/;variableTwo=variableTwoValue,variableTwoOtherValue")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            notFoundResponse(),
-            makeRequest(
+            ), is(notFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path" +
                                                 "/;variableOne=variableOneValaax;variableOne=variableOneValbb;variableOne=variableOneValcc" +
                                                 "/;variableTwo=variableTwoValue,variableTwoOtherValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(notFoundResponse()));
     }
 
     @Test
@@ -352,16 +303,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("/one/blue/two/green")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())));
 
         // and
         mockServerClient
@@ -451,15 +399,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
             // then
             // - in http
-            assertEquals(
-                response()
-                    .withStatusCode(ACCEPTED_202.code())
-                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                    .withHeaders(
-                        header("x-object-callback", "test_object_callback_header")
-                    )
-                    .withBody("an_object_callback_response"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("object_callback"))
                         .withMethod("POST")
@@ -468,19 +408,16 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
-
-            // - in https
-            assertEquals(
-                response()
+                ), is(response()
                     .withStatusCode(ACCEPTED_202.code())
                     .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                     .withHeaders(
                         header("x-object-callback", "test_object_callback_header")
                     )
-                    .withBody("an_object_callback_response"),
-                makeRequest(
+                    .withBody("an_object_callback_response")));
+
+            // - in https
+            assertThat(makeRequest(
                     request()
                         .withSecure(true)
                         .withPath(calculatePath("object_callback"))
@@ -490,8 +427,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(ACCEPTED_202.code())
+                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                    .withHeaders(
+                        header("x-object-callback", "test_object_callback_header")
+                    )
+                    .withBody("an_object_callback_response")));
         });
     }
 
@@ -537,15 +479,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withHeaders(
-                    header("x-object-callback", "test_object_callback_header")
-                )
-                .withBody("an_object_callback_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("object_callback"))
                     .withMethod("POST")
@@ -554,19 +488,16 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(ACCEPTED_202.code())
                 .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                 .withHeaders(
                     header("x-object-callback", "test_object_callback_header")
                 )
-                .withBody("an_object_callback_response"),
-            makeRequest(
+                .withBody("an_object_callback_response")));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("object_callback"))
@@ -576,8 +507,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withHeaders(
+                    header("x-object-callback", "test_object_callback_header")
+                )
+                .withBody("an_object_callback_response")));
     }
 
     @Test
@@ -683,15 +619,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
             // then
             for (int i = 0; i < 25; i++) {
-                assertEquals(
-                    response()
-                        .withStatusCode(ACCEPTED_202.code())
-                        .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                        .withHeaders(
-                            header("x-object-callback", "test_object_callback_header_" + objectCallbackCounter)
-                        )
-                        .withBody("an_object_callback_response_" + objectCallbackCounter),
-                    makeRequest(
+                assertThat(makeRequest(
                         request()
                             .withPath(calculatePath("object_callback_" + objectCallbackCounter))
                             .withMethod("POST")
@@ -700,8 +628,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                             )
                             .withBody("an_example_body_http"),
                         getHeadersToRemove()
-                    )
-                );
+                    ), is(response()
+                        .withStatusCode(ACCEPTED_202.code())
+                        .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                        .withHeaders(
+                            header("x-object-callback", "test_object_callback_header_" + objectCallbackCounter)
+                        )
+                        .withBody("an_object_callback_response_" + objectCallbackCounter)));
                 objectCallbackCounter++;
             }
         });
@@ -735,15 +668,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         for (int i = 0; i < 25; i++) {
-            assertEquals(
-                response()
-                    .withStatusCode(ACCEPTED_202.code())
-                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                    .withHeaders(
-                        header("x-object-callback", "test_object_callback_header_" + objectCallbackCounter)
-                    )
-                    .withBody("an_object_callback_response_" + objectCallbackCounter),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("object_callback_" + objectCallbackCounter))
                         .withMethod("POST")
@@ -752,8 +677,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(ACCEPTED_202.code())
+                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                    .withHeaders(
+                        header("x-object-callback", "test_object_callback_header_" + objectCallbackCounter)
+                    )
+                    .withBody("an_object_callback_response_" + objectCallbackCounter)));
             objectCallbackCounter++;
         }
     }
@@ -776,17 +706,14 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                 );
 
             // then - return response
-            assertEquals(
-                response()
-                    .withStatusCode(ACCEPTED_202.code())
-                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                    .withBody("an_object_callback_response"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("object_callback")),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(ACCEPTED_202.code())
+                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                    .withBody("an_object_callback_response")));
 
             // then - verify request
             mockServerClient
@@ -822,17 +749,14 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             );
 
         // then - return response
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withBody("an_object_callback_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("object_callback")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withBody("an_object_callback_response")));
 
         // then - verify request
         mockServerClient
@@ -871,19 +795,16 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                 );
 
             // then
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withBody(veryLargeString),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("object_callback"))
                         .withMethod("POST")
                         .withBody(veryLargeString),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withBody(veryLargeString)));
         });
     }
 
@@ -907,19 +828,16 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(veryLargeString),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("object_callback"))
                     .withMethod("POST")
                     .withBody(veryLargeString),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody(veryLargeString)));
     }
 
     @Test
@@ -950,15 +868,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
             // then
             // - in http
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withHeaders(
-                        header("x-test", "test_headers_and_body")
-                    )
-                    .withBody("some_overridden_body"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("echo"))
                         .withMethod("POST")
@@ -967,18 +877,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
-            // - in https
-            assertEquals(
-                response()
+                ), is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
                     .withHeaders(
-                        header("x-test", "test_headers_and_body_https")
+                        header("x-test", "test_headers_and_body")
                     )
-                    .withBody("some_overridden_body"),
-                makeRequest(
+                    .withBody("some_overridden_body")));
+            // - in https
+            assertThat(makeRequest(
                     request()
                         .withSecure(true)
                         .withPath(calculatePath("echo"))
@@ -988,8 +895,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_https"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withHeaders(
+                        header("x-test", "test_headers_and_body_https")
+                    )
+                    .withBody("some_overridden_body")));
         });
     }
 
@@ -1020,15 +932,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -1037,18 +941,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
-                    header("x-test", "test_headers_and_body_https")
+                    header("x-test", "test_headers_and_body")
                 )
-                .withBody("some_overridden_body"),
-            makeRequest(
+                .withBody("some_overridden_body")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -1058,8 +959,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body_https")
+                )
+                .withBody("some_overridden_body")));
     }
 
     @Test
@@ -1099,18 +1005,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body {" + NEW_LINE +
-                              "  \"variableTwo\" : [ \"variableTwoValue\" ]," + NEW_LINE +
-                              "  \"variableOne\" : [ \"variableOneValue\" ]" + NEW_LINE +
-                              "}"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some/path/variableOneValue/variableTwoValue"))
                     .withMethod("POST")
@@ -1119,8 +1014,16 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("some_overridden_body {" + NEW_LINE +
+                              "  \"variableTwo\" : [ \"variableTwoValue\" ]," + NEW_LINE +
+                              "  \"variableOne\" : [ \"variableOneValue\" ]" + NEW_LINE +
+                              "}")));
     }
 
     @Test
@@ -1157,16 +1060,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
             // then
             // - in http
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withHeaders(
-                        header("x-response-test", "x-response-test"),
-                        header("x-test", "test_headers_and_body_overridden")
-                    )
-                    .withBody("some_overidden_response_body"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("echo"))
                         .withMethod("POST")
@@ -1175,21 +1069,18 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
-            assertThat(insecureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
-
-            // - in https
-            assertEquals(
-                response()
+                ), is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
                     .withHeaders(
                         header("x-response-test", "x-response-test"),
-                        header("x-test", "test_headers_and_body_https_overridden")
+                        header("x-test", "test_headers_and_body_overridden")
                     )
-                    .withBody("some_overidden_response_body"),
-                makeRequest(
+                    .withBody("some_overidden_response_body")));
+            assertThat(insecureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
+
+            // - in https
+            assertThat(makeRequest(
                     request()
                         .withSecure(true)
                         .withPath(calculatePath("echo"))
@@ -1199,8 +1090,14 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_https"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withHeaders(
+                        header("x-response-test", "x-response-test"),
+                        header("x-test", "test_headers_and_body_https_overridden")
+                    )
+                    .withBody("some_overidden_response_body")));
             assertThat(secureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
         });
     }
@@ -1238,16 +1135,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-response-test", "x-response-test"),
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overidden_response_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -1256,21 +1144,18 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertThat(insecureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-response-test", "x-response-test"),
-                    header("x-test", "test_headers_and_body_https")
+                    header("x-test", "test_headers_and_body")
                 )
-                .withBody("some_overidden_response_body"),
-            makeRequest(
+                .withBody("some_overidden_response_body")));
+        assertThat(insecureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -1280,8 +1165,14 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-response-test", "x-response-test"),
+                    header("x-test", "test_headers_and_body_https")
+                )
+                .withBody("some_overidden_response_body")));
         assertThat(secureEchoServer.getLastRequest().getBodyAsString(), equalTo("some_overridden_body"));
     }
 
@@ -1318,15 +1209,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
             // then
             // - in http
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withHeaders(
-                        header("x-test", "test_headers_and_body")
-                    )
-                    .withBody("some_overridden_body"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("echo"))
                         .withMethod("POST")
@@ -1335,18 +1218,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_http"),
                     getHeadersToRemove()
-                )
-            );
-            // - in https
-            assertEquals(
-                response()
+                ), is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
                     .withHeaders(
-                        header("x-test", "test_headers_and_body_https")
+                        header("x-test", "test_headers_and_body")
                     )
-                    .withBody("some_overridden_body"),
-                makeRequest(
+                    .withBody("some_overridden_body")));
+            // - in https
+            assertThat(makeRequest(
                     request()
                         .withSecure(true)
                         .withPath(calculatePath("echo"))
@@ -1356,8 +1236,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                         )
                         .withBody("an_example_body_https"),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withHeaders(
+                        header("x-test", "test_headers_and_body_https")
+                    )
+                    .withBody("some_overridden_body")));
         });
     }
 
@@ -1393,15 +1278,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -1410,18 +1287,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
-                    header("x-test", "test_headers_and_body_https")
+                    header("x-test", "test_headers_and_body")
                 )
-                .withBody("some_overridden_body"),
-            makeRequest(
+                .withBody("some_overridden_body")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -1431,8 +1305,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body_https")
+                )
+                .withBody("some_overridden_body")));
     }
 
     @Test
@@ -1441,34 +1320,23 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
         int firstNewPort = PortFactory.findFreePort();
         int secondNewPort = PortFactory.findFreePort();
         PortBindingSerializer portBindingSerializer = new PortBindingSerializer(new MockServerLogger());
-        assertEquals(
-            response()
+        assertThat(makeRequest(
+                request()
+                    .withPath(calculatePath("mockserver/status"))
+                    .withMethod("PUT"),
+                getHeadersToRemove()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
                 .withBody(json(portBindingSerializer.serialize(
                     portBinding(getServerPort())
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("mockserver/status"))
-                    .withMethod("PUT"),
-                getHeadersToRemove()
-            )
-        );
+                ), MediaType.JSON_UTF_8))));
         MILLISECONDS.sleep(100);
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
-                .withBody(json(portBindingSerializer.serialize(
-                    portBinding(firstNewPort)
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("mockserver/bind"))
                     .withMethod("PUT")
@@ -1476,33 +1344,27 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                                   "  \"ports\" : [ " + firstNewPort + " ]" + NEW_LINE +
                                   "}"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
+                .withBody(json(portBindingSerializer.serialize(
+                    portBinding(firstNewPort)
+                ), MediaType.JSON_UTF_8))));
+        assertThat(makeRequest(
+                request()
+                    .withPath(calculatePath("mockserver/status"))
+                    .withMethod("PUT"),
+                getHeadersToRemove()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
                 .withBody(json(portBindingSerializer.serialize(
                     portBinding(this.getServerPort(), firstNewPort)
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("mockserver/status"))
-                    .withMethod("PUT"),
-                getHeadersToRemove()
-            )
-        );
+                ), MediaType.JSON_UTF_8))));
         // - in https
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
-                .withBody(json(portBindingSerializer.serialize(
-                    portBinding(secondNewPort)
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("mockserver/bind"))
@@ -1511,17 +1373,14 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                                   "  \"ports\" : [ " + secondNewPort + " ]" + NEW_LINE +
                                   "}"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
                 .withBody(json(portBindingSerializer.serialize(
-                    portBinding(getServerSecurePort(), firstNewPort, secondNewPort)
-                ), MediaType.JSON_UTF_8)),
-            makeRequest(
+                    portBinding(secondNewPort)
+                ), MediaType.JSON_UTF_8))));
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("mockserver/status"))
@@ -1530,8 +1389,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                                   "  \"ports\" : [ " + firstNewPort + " ]" + NEW_LINE +
                                   "}"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader(CONTENT_TYPE.toString(), "application/json; charset=utf-8")
+                .withBody(json(portBindingSerializer.serialize(
+                    portBinding(getServerSecurePort(), firstNewPort, secondNewPort)
+                ), MediaType.JSON_UTF_8))));
     }
 
     @Test
@@ -1590,34 +1454,28 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withHeader(CONNECTION.toString(), "close")
-                .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_lo"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("")),
                 headersToIgnore
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withHeader(CONNECTION.toString(), "close")
                 .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_lo"),
-            makeRequest(
+                .withBody("some_lo")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("")),
                 headersToIgnore
-            )
-        );
+            ), is(response()
+                .withHeader(CONNECTION.toString(), "close")
+                .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_lo")));
     }
 
     @Test
@@ -1635,32 +1493,26 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withReasonPhrase("someReasonPhrase")
-                .withBody("some_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("")),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withReasonPhrase("someReasonPhrase")
-                .withBody("some_body"),
-            makeRequest(
+                .withBody("some_body")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withReasonPhrase("someReasonPhrase")
+                .withBody("some_body")));
     }
 
     @Test
@@ -1689,32 +1541,26 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(NOT_FOUND_404.code())
-                .withReasonPhrase(NOT_FOUND_404.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withPath(calculatePath("/api/0/applications/([0-9a-zA-Z-]+)/experiments"))
                     .withHeader("Content-Type", "application/json"),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(NOT_FOUND_404.code())
-                .withReasonPhrase(NOT_FOUND_404.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(NOT_FOUND_404.reasonPhrase())));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withSecure(true)
                     .withPath(calculatePath("/api/0/applications/([0-9a-zA-Z-]+)/experiments"))
                     .withHeader("Content-Type", "application/json"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(NOT_FOUND_404.code())
+                .withReasonPhrase(NOT_FOUND_404.reasonPhrase())));
     }
 
     @Test
@@ -1733,34 +1579,28 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_string_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath(calculatePath("some_path"))
                     .withHeader("largeHeader", largeHeaderValue),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_string_body_response"),
-            makeRequest(
+                .withBody("some_string_body_response")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withMethod("POST")
                     .withPath(calculatePath("some_path"))
                     .withHeader("largeHeader", largeHeaderValue),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_string_body_response")));
     }
 
     @Test
@@ -1788,36 +1628,30 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withHeader(CONNECTION.toString(), "keep-alive")
-                .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
-                .withHeader(CONTENT_TYPE.toString(), MediaType.ANY_AUDIO_TYPE.toString())
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(binary("some_lo".getBytes(UTF_8), MediaType.ANY_AUDIO_TYPE)),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("")),
                 headersToIgnore
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withHeader(CONNECTION.toString(), "keep-alive")
                 .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
                 .withHeader(CONTENT_TYPE.toString(), MediaType.ANY_AUDIO_TYPE.toString())
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(binary("some_lo".getBytes(UTF_8), MediaType.ANY_AUDIO_TYPE)),
-            makeRequest(
+                .withBody(binary("some_lo".getBytes(UTF_8), MediaType.ANY_AUDIO_TYPE))));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("")),
                 headersToIgnore
-            )
-        );
+            ), is(response()
+                .withHeader(CONNECTION.toString(), "keep-alive")
+                .withHeader(header(CONTENT_LENGTH.toString(), "some_long_body".length() / 2))
+                .withHeader(CONTENT_TYPE.toString(), MediaType.ANY_AUDIO_TYPE.toString())
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody(binary("some_lo".getBytes(UTF_8), MediaType.ANY_AUDIO_TYPE))));
     }
 
     @Test
@@ -1836,32 +1670,26 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("context_encoded_matched"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path"))
                     .withHeader(CONTENT_ENCODING.toString(), "gzip"),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("context_encoded_matched"),
-            makeRequest(
+                .withBody("context_encoded_matched")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path"))
                     .withHeader(CONTENT_ENCODING.toString(), "gzip"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("context_encoded_matched")));
     }
 
     @Test
@@ -2201,15 +2029,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withHeaders(
-                    header("x-callback", "test_callback_header")
-                )
-                .withBody("a_callback_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("callback"))
                     .withMethod("POST")
@@ -2218,21 +2038,18 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(ACCEPTED_202.code())
                 .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                 .withHeaders(
                     header("x-callback", "test_callback_header")
                 )
-                .withBody("a_callback_response"),
-            makeRequest(
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue()));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("callback"))
@@ -2242,10 +2059,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue(), "an_example_body_https");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue(), calculatePath("callback"));
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withHeaders(
+                    header("x-callback", "test_callback_header")
+                )
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_https", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue()));
     }
 
     @Test
@@ -2273,15 +2095,7 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withHeaders(
-                    header("x-callback", "test_callback_header")
-                )
-                .withBody("a_callback_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("callback"))
                     .withMethod("POST")
@@ -2290,21 +2104,18 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue(), "an_example_body_http");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue(), calculatePath("callback"));
-
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(ACCEPTED_202.code())
                 .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                 .withHeaders(
                     header("x-callback", "test_callback_header")
                 )
-                .withBody("a_callback_response"),
-            makeRequest(
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_http", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(0).getPath().getValue()));
+
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("callback"))
@@ -2314,10 +2125,15 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue(), "an_example_body_https");
-        assertEquals(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue(), calculatePath("callback"));
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withHeaders(
+                    header("x-callback", "test_callback_header")
+                )
+                .withBody("a_callback_response")));
+        assertThat("an_example_body_https", is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getBody().getValue()));
+        assertThat(calculatePath("callback"), is(TestClasspathTestExpectationResponseCallback.httpRequests.get(1).getPath().getValue()));
     }
 
     @Test
@@ -2368,16 +2184,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             long timeAfterRequest = System.currentTimeMillis();
 
             // and
-            assertEquals(
-                response()
+            assertThat(httpResponse, is(response()
                     .withStatusCode(ACCEPTED_202.code())
                     .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                     .withHeaders(
                         header("x-object-callback", "test_object_callback_header")
                     )
-                    .withBody("an_object_callback_response"),
-                httpResponse
-            );
+                    .withBody("an_object_callback_response")));
             assertThat(timeAfterRequest - timeBeforeRequest, greaterThanOrEqualTo(MILLISECONDS.toMillis(1900)));
             assertThat(timeAfterRequest - timeBeforeRequest, lessThanOrEqualTo(SECONDS.toMillis(4)));
         });
@@ -2430,16 +2243,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
         long timeAfterRequest = System.currentTimeMillis();
 
         // and
-        assertEquals(
-            response()
+        assertThat(httpResponse, is(response()
                 .withStatusCode(ACCEPTED_202.code())
                 .withReasonPhrase(ACCEPTED_202.reasonPhrase())
                 .withHeaders(
                     header("x-object-callback", "test_object_callback_header")
                 )
-                .withBody("an_object_callback_response"),
-            httpResponse
-        );
+                .withBody("an_object_callback_response")));
         assertThat(timeAfterRequest - timeBeforeRequest, greaterThanOrEqualTo(MILLISECONDS.toMillis(1900)));
         assertThat(timeAfterRequest - timeBeforeRequest, lessThanOrEqualTo(SECONDS.toMillis(4)));
     }
@@ -2477,16 +2287,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
             long timeAfterRequest = System.currentTimeMillis();
 
             // and
-            assertEquals(
-                response()
+            assertThat(httpResponse, is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
                     .withHeaders(
                         header("x-test", "test_headers_and_body")
                     )
-                    .withBody("some_overridden_body"),
-                httpResponse
-            );
+                    .withBody("some_overridden_body")));
             assertThat(timeAfterRequest - timeBeforeRequest, greaterThanOrEqualTo(MILLISECONDS.toMillis(1900)));
             assertThat(timeAfterRequest - timeBeforeRequest, lessThanOrEqualTo(SECONDS.toMillis(4)));
         });
@@ -2524,16 +2331,13 @@ public abstract class AbstractExtendedNettyMockingIntegrationTest extends Abstra
         long timeAfterRequest = System.currentTimeMillis();
 
         // and
-        assertEquals(
-            response()
+        assertThat(httpResponse, is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-test", "test_headers_and_body")
                 )
-                .withBody("some_overridden_body"),
-            httpResponse
-        );
+                .withBody("some_overridden_body")));
         assertThat(timeAfterRequest - timeBeforeRequest, greaterThanOrEqualTo(MILLISECONDS.toMillis(1900)));
         assertThat(timeAfterRequest - timeBeforeRequest, lessThanOrEqualTo(SECONDS.toMillis(4)));
     }

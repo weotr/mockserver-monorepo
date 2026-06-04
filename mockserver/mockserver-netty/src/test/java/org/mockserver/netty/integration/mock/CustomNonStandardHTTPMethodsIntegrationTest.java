@@ -6,12 +6,13 @@ import org.junit.Test;
 import org.mockserver.integration.ClientAndServer;
 import org.mockserver.testing.integration.mock.AbstractBasicMockingSameJVMIntegrationTest;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.configuration.ConfigurationProperties.assumeAllRequestsAreHttp;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpStatusCode.OK_200;
 import static org.mockserver.stop.Stop.stopQuietly;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 public class CustomNonStandardHTTPMethodsIntegrationTest extends AbstractBasicMockingSameJVMIntegrationTest {
 
@@ -55,23 +56,17 @@ public class CustomNonStandardHTTPMethodsIntegrationTest extends AbstractBasicMo
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("PURGE"),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
+        assertThat(makeRequest(
                 request(),
                 getHeadersToRemove()
-            )
-        );
+            ), is(localNotFoundResponse()));
     }
 }
