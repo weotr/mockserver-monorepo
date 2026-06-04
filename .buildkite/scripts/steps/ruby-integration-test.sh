@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NETWORK_NAME="mockserver-ruby-$$"
 MOCKSERVER_NAME="mockserver-ruby-server-$$"
 
+# Build a local MockServer image from the current checkout so integration
+# tests run against HEAD, not the stale :snapshot image on Docker Hub.
+# shellcheck source=../build-local-mockserver-image.sh
+source "$SCRIPT_DIR/../build-local-mockserver-image.sh"
+
 cleanup() {
   docker rm -f "$MOCKSERVER_NAME" 2>/dev/null || true
   docker network rm "$NETWORK_NAME" 2>/dev/null || true
@@ -16,7 +21,8 @@ docker network create "$NETWORK_NAME"
 docker run -d \
   --name "$MOCKSERVER_NAME" \
   --network "$NETWORK_NAME" \
-  mockserver/mockserver:snapshot
+  -e "MOCKSERVER_ATTEMPT_TO_PROXY_IF_NO_MATCHING_EXPECTATION=false" \
+  "$MOCKSERVER_IMAGE"
 
 "$SCRIPT_DIR/../run-in-docker.sh" \
   -i ruby:3.3 \

@@ -16,7 +16,7 @@ steps:
     command: ".buildkite/scripts/steps/ruby-integration-test.sh"
     artifact_paths:
       - "mockserver-client-ruby/test-reports/*.xml"
-    timeout_in_minutes: 10
+    timeout_in_minutes: 20
 
   - wait: ~
     continue_on_failure: true

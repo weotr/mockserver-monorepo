@@ -35,8 +35,9 @@ def start_mockserver_container
 
   MOCKSERVER_STATE[:port] = port
   MOCKSERVER_STATE[:host] = 'localhost'
+  image = ENV.fetch('MOCKSERVER_IMAGE', 'mockserver/mockserver:snapshot')
   container_name = "mockserver-ruby-integration-#{port}"
-  output = `docker run -d --name #{container_name} -p #{port}:1080 mockserver/mockserver:snapshot 2>&1`
+  output = `docker run -d --name #{container_name} -p #{port}:1080 -e MOCKSERVER_ATTEMPT_TO_PROXY_IF_NO_MATCHING_EXPECTATION=false #{image} 2>&1`
   raise "Failed to start container: #{output}" unless $?.success?
 
   MOCKSERVER_STATE[:container_id] = output.strip
