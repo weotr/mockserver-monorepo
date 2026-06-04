@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -110,6 +111,19 @@ public class StreamingProxyResponseIntegrationTest {
     @Before
     public void resetServer() {
         mockServerClient.reset();
+    }
+
+    /**
+     * Polls until the condition is true or the deadline (5 seconds) is exceeded.
+     */
+    private void pollUntilTrue(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("Timed out waiting for condition to become true");
+            }
+            Thread.sleep(50);
+        }
     }
 
     /**
@@ -483,8 +497,9 @@ public class StreamingProxyResponseIntegrationTest {
             }
         }
 
-        // Allow time for the completion listener to fire and the log entry to be written
-        Thread.sleep(1000);
+        // Poll until the completion listener has fired and the log entry is visible
+        pollUntilTrue(() -> mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/sse")).length >= 1);
 
         // Retrieve the recorded request/response pair via the MockServer API
         LogEventRequestAndResponse[] recorded = mockServerClient.retrieveRecordedRequestsAndResponses(
@@ -525,7 +540,9 @@ public class StreamingProxyResponseIntegrationTest {
             }
         }
 
-        Thread.sleep(1000);
+        // Poll until the completion listener has fired and the log entry is visible
+        pollUntilTrue(() -> mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/chunked")).length >= 1);
 
         LogEventRequestAndResponse[] recorded = mockServerClient.retrieveRecordedRequestsAndResponses(
             request().withPath("/chunked")
@@ -561,7 +578,9 @@ public class StreamingProxyResponseIntegrationTest {
             }
         }
 
-        Thread.sleep(1000);
+        // Poll until the completion listener has fired and the log entry is visible
+        pollUntilTrue(() -> mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/binary-stream")).length >= 1);
 
         LogEventRequestAndResponse[] recorded = mockServerClient.retrieveRecordedRequestsAndResponses(
             request().withPath("/binary-stream")

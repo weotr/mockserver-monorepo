@@ -14,7 +14,10 @@ import org.mockserver.model.HttpResponse;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.ObjectMapperFactory;
 
+import org.mockserver.socket.PortFactory;
+
 import java.util.Arrays;
+import java.util.function.BooleanSupplier;
 
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -41,12 +44,43 @@ public class ExplainUnmatchedIntegrationTest {
     public void setUp() {
         LifeCycle server = mock(LifeCycle.class);
         when(server.getScheduler()).thenReturn(mock(Scheduler.class));
-        when(server.getLocalPorts()).thenReturn(Arrays.asList(1080));
+        when(server.getLocalPorts()).thenReturn(Arrays.asList(PortFactory.findFreePort()));
         when(server.isRunning()).thenReturn(true);
 
         httpState = new HttpState(configuration(), new MockServerLogger(), mock(Scheduler.class));
         toolRegistry = new McpToolRegistry(httpState, server);
         objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
+    }
+
+    /**
+     * Polls until the condition is true or the deadline (5 seconds) is exceeded.
+     */
+    private void pollUntilTrue(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("Timed out waiting for condition to become true");
+            }
+            Thread.sleep(50);
+        }
+    }
+
+    private int retrieveUnmatchedRequestCount() {
+        ObjectNode params = objectMapper.createObjectNode();
+        JsonNode result = toolRegistry.callTool("explain_unmatched_requests", params);
+        return result.path("unmatchedRequestCount").asInt();
+    }
+
+    private int retrieveLogEntryCount() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("type", "LOGS");
+        params.put("format", "LOG_ENTRIES");
+        JsonNode result = toolRegistry.callTool("raw_retrieve", params);
+        JsonNode data = result.path("data");
+        if (data.isArray()) {
+            return data.size();
+        }
+        return 0;
     }
 
     @Test
@@ -68,8 +102,8 @@ public class ExplainUnmatchedIntegrationTest {
             .setArguments(request().withMethod("GET").withPath("/api/orders"), response().withStatusCode(404))
         );
 
-        // allow async disruptor to process
-        Thread.sleep(500);
+        // poll until the unmatched request is visible
+        pollUntilTrue(() -> retrieveUnmatchedRequestCount() >= 1);
 
         // when - call explainUnmatched
         HttpResponse explainResponse = httpState.explainUnmatched(
@@ -132,7 +166,8 @@ public class ExplainUnmatchedIntegrationTest {
             .setArguments(request().withMethod("GET").withPath("/api/users"), response().withStatusCode(404))
         );
 
-        Thread.sleep(500);
+        // poll until the unmatched request is visible
+        pollUntilTrue(() -> retrieveUnmatchedRequestCount() >= 1);
 
         // when - call the MCP tool
         ObjectNode params = objectMapper.createObjectNode();
@@ -197,7 +232,8 @@ public class ExplainUnmatchedIntegrationTest {
             .setArguments(request().withMethod("GET").withPath("/api/data"), response().withStatusCode(404))
         );
 
-        Thread.sleep(500);
+        // poll until the unmatched request is visible
+        pollUntilTrue(() -> retrieveUnmatchedRequestCount() >= 1);
 
         // when
         ObjectNode params = objectMapper.createObjectNode();
@@ -247,7 +283,10 @@ public class ExplainUnmatchedIntegrationTest {
             );
         }
 
-        Thread.sleep(500);
+        // poll until enough log entries are visible for the truncation test;
+        // with 50 expectations * 10 unmatched = 500 budget, the 11th triggers truncation,
+        // so we need >= 11 unmatched entries processed; poll on log entry count
+        pollUntilTrue(() -> retrieveLogEntryCount() >= 20);
 
         // when - request all 20 unmatched
         ObjectNode params = objectMapper.createObjectNode();
@@ -285,7 +324,8 @@ public class ExplainUnmatchedIntegrationTest {
             )
         );
 
-        Thread.sleep(500);
+        // poll until the unmatched request is visible
+        pollUntilTrue(() -> retrieveUnmatchedRequestCount() >= 1);
 
         // when
         ObjectNode params = objectMapper.createObjectNode();

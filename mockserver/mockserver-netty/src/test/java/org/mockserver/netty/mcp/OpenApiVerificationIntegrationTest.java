@@ -16,6 +16,7 @@ import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.util.Arrays;
+import java.util.function.BooleanSupplier;
 
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -136,6 +137,31 @@ public class OpenApiVerificationIntegrationTest {
         httpState = new HttpState(configuration(), new MockServerLogger(), mock(Scheduler.class));
         toolRegistry = new McpToolRegistry(httpState, server);
         objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
+    }
+
+    /**
+     * Polls until the condition is true or the deadline (5 seconds) is exceeded.
+     */
+    private void pollUntilTrue(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("Timed out waiting for condition to become true");
+            }
+            Thread.sleep(50);
+        }
+    }
+
+    private int retrieveRecordedExpectationCount() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("type", "RECORDED_EXPECTATIONS");
+        params.put("format", "JSON");
+        JsonNode result = toolRegistry.callTool("raw_retrieve", params);
+        JsonNode data = result.path("data");
+        if (data.isArray()) {
+            return data.size();
+        }
+        return 0;
     }
 
     @Test
@@ -271,7 +297,8 @@ public class OpenApiVerificationIntegrationTest {
             .setArguments(response().withStatusCode(200))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when
         ObjectNode params = objectMapper.createObjectNode();
@@ -306,7 +333,8 @@ public class OpenApiVerificationIntegrationTest {
             .setArguments(response().withStatusCode(200))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when
         ObjectNode params = objectMapper.createObjectNode();
@@ -358,7 +386,8 @@ public class OpenApiVerificationIntegrationTest {
             .setArguments(response().withStatusCode(200))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when
         ObjectNode params = objectMapper.createObjectNode();
@@ -404,7 +433,8 @@ public class OpenApiVerificationIntegrationTest {
             .setArguments(response().withStatusCode(201))
         );
 
-        Thread.sleep(500);
+        // poll until both recorded expectations are visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 2);
 
         // when - filter by GET only
         ObjectNode params = objectMapper.createObjectNode();
