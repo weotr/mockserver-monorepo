@@ -106,6 +106,45 @@ function smoke_test_variant() {
   return ${exit_code}
 }
 
+# Assert that the Docker HEALTHCHECK defined in the Dockerfile transitions the
+# container to "healthy" within a reasonable period. Every Dockerfile ships
+# HEALTHCHECK ... org.mockserver.cli.HealthCheck but no test has exercised it.
+function test_healthcheck() {
+  local tag="mockserver/mockserver:integration_testing"
+  local container="healthcheck-test"
+  export TEST_CASE="docker_healthcheck"
+  printMessage "Test: HEALTHCHECK reaches healthy"
+
+  local exit_code=0
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
+
+  # Poll docker inspect for health status; the Dockerfile defines
+  # --start-period=120s --interval=10s --retries=3 so we allow up to 180s.
+  local i health_status
+  health_status="starting"
+  for i in $(seq 1 60); do
+    health_status=$(docker inspect --format='{{.State.Health.Status}}' "${container}" 2>/dev/null || echo "unknown")
+    if [[ "${health_status}" == "healthy" ]]; then
+      break
+    elif [[ "${health_status}" == "unhealthy" ]]; then
+      printFailureMessage "HEALTHCHECK: container reached 'unhealthy' state"
+      exit_code=1
+      break
+    fi
+    sleep 3
+  done
+  if [[ "${health_status}" != "healthy" ]]; then
+    printFailureMessage "HEALTHCHECK: container never reached 'healthy' (last status: ${health_status})"
+    runCommand "docker logs ${container} | tail -30 || true"
+    exit_code=1
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  logTestResult "${exit_code}" "${TEST_CASE}"
+  return ${exit_code}
+}
+
 function run_all_tests() {
   export PASS_LOG_FILE=$(mktemp)
   export FAIL_LOG_FILE=$(mktemp)
@@ -133,6 +172,8 @@ function run_all_tests() {
       # Same gate as docker_compose_* tests: they share the same JAR + docker
       # daemon, and the helm-only CI step (helm-integration-test.sh) sets
       # SKIP_DOCKER_TESTS=true to skip both.
+      # HEALTHCHECK assertion on the default image.
+      test_healthcheck || true
       if [[ "${SKIP_VARIANT_TESTS:-}" != "true" ]]; then
         smoke_test_variant "root" || true
         smoke_test_variant "snapshot" || true
