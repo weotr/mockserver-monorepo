@@ -89,6 +89,7 @@ sitemap:
 <ul>
     <li><strong>Expectation matching</strong> &mdash; HTTP/3 requests are matched against expectations identically to HTTP/1.1 and HTTP/2</li>
     <li><strong>Response actions</strong> &mdash; all response action types (static, template, callback, etc.)</li>
+    <li><strong>Streaming / SSE responses</strong> &mdash; Server-Sent Events, chunked proxy forwarding, and LLM streaming responses are fully supported. Each body chunk is delivered as an HTTP/3 DATA frame with backpressure; the QUIC stream is cleanly shut down on completion or error</li>
     <li><strong>Request recording</strong> &mdash; HTTP/3 requests are recorded for verification</li>
     <li><strong>Proxy forwarding</strong> &mdash; unmatched requests can be forwarded when proxy mode is configured</li>
     <li><strong>Request body</strong> &mdash; text and binary request bodies are read and matched correctly</li>
@@ -102,7 +103,6 @@ sitemap:
 <h2>Limitations</h2>
 
 <ul>
-    <li><strong>Streaming/SSE responses</strong> &mdash; streaming response bodies (Server-Sent Events, chunked streaming) are not supported over HTTP/3. If an expectation returns a streaming body, MockServer logs a warning and sends only the headers and any static body bytes. Use HTTP/1.1 or HTTP/2 for streaming responses.</li>
     <li><strong>Dashboard visibility</strong> &mdash; HTTP/3 connections do not appear as a separate protocol in the MockServer dashboard (requests are logged and visible, but the protocol is not distinguished)</li>
     <li><strong>Incubator dependency</strong> &mdash; the <span class="inline_code">netty-incubator-codec-http3</span> library is a pre-release artifact; its API may change in future Netty releases</li>
 </ul>

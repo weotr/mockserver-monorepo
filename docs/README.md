@@ -29,6 +29,7 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [WASM Rules](code/wasm-rules.md) | Low | WASM custom rule engine: chicory interpreter, module ABI, REST endpoints, configuration |
 | [Async Messaging](code/async-messaging.md) | Low | AsyncAPI broker mocking: spec parsing, example generation, Kafka/MQTT publisher adapters, orchestrator |
 | [HTTP/3 (QUIC)](code/http3.md) | Low | Experimental HTTP/3 support: Http3Server, QUIC native dependency, MVP boundaries |
+| [Clustered State](code/clustered-state.md) | Low | StateBackend SPI, InMemoryStateBackend, InfinispanStateBackend (LOCAL/CLUSTERED), cross-node invalidation, config knobs, limitations |
 
 ### Infrastructure
 
