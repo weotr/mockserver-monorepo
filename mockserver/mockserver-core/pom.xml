@@ -496,7 +496,9 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- jacoco:check minimum set ~3 points below the measured unit-test floor of 0.6858 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation. -->
+            <!-- jacoco:check minimum set ~3 points below the measured unit-test floor of 0.6858 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation.
+                 BRANCH bundle minimum (0.40) ensures branch coverage doesn't regress.
+                 Per-CLASS LINE minimum (0.30) prevents fully-untested classes from hiding behind the bundle average. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -517,7 +519,26 @@
                                             <value>COVEREDRATIO</value>
                                             <minimum>0.65</minimum>
                                         </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.40</minimum>
+                                        </limit>
                                     </limits>
+                                </rule>
+                                <rule>
+                                    <element>CLASS</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.30</minimum>
+                                        </limit>
+                                    </limits>
+                                    <excludes>
+                                        <!-- Generated/framework classes that cannot reasonably meet per-class floor -->
+                                        <exclude>org.mockserver.model.ObjectWithJsonToString</exclude>
+                                    </excludes>
                                 </rule>
                             </rules>
                         </configuration>
