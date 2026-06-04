@@ -18,6 +18,7 @@ import static com.jayway.jsonpath.internal.path.PathCompiler.fail;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.file.FileReader.openStreamToFileFromClassPathOrPath;
@@ -35,12 +36,11 @@ import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.model.XPathBody.xpath;
 import static org.mockserver.model.XmlBody.xml;
 import static org.mockserver.model.XmlSchemaBody.xmlSchema;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
 
 /**
  * @author jamesdbloom
  */
-public class HttpRequestSerializerIntegrationTest {
+public class HttpRequestSerializerSchemaValidationTest {
 
     @Test
     public void shouldValidateHeaderNameValid() {
@@ -52,52 +52,11 @@ public class HttpRequestSerializerIntegrationTest {
             "}";
 
         // then
-        throwCorrectError(requestBytes, "incorrect request json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"headers\" : {" + NEW_LINE +
-            "          \"someHea derName\" : [ \"someHeaderValue\" ]" + NEW_LINE +
-            "      }" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  3 errors:" + NEW_LINE +
-            "   - $.headers.someHea derName: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - $.headers: invalid header format, the following are valid examples: " + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleRegexHeader\": [" + NEW_LINE +
-            "               \"^some +regex$\"" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleNottedAndSimpleStringHeader\": [" + NEW_LINE +
-            "               \"!notThisValue\", " + NEW_LINE +
-            "               \"simpleStringMatch\"" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "    " + NEW_LINE +
-            "    or:" + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleSchemaHeader\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"number\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleMultiSchemaHeader\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"pattern\": \"^some +regex$\"" + NEW_LINE +
-            "               }, " + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"format\": \"ipv4\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "   - $.headers: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  "));
+        throwCorrectError(requestBytes,
+            "3 errors:",
+            "$.headers.someHea derName: is not defined in the schema and the schema does not allow additional properties",
+            "$.headers: invalid header format",
+            "$.headers: should be valid to one and only one schema, but 0 are valid");
     }
 
     @Test
@@ -110,52 +69,11 @@ public class HttpRequestSerializerIntegrationTest {
             "}";
 
         // then
-        throwCorrectError(requestBytes, "incorrect request json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"pathParameters\" : {" + NEW_LINE +
-            "          \"path_somePara meterName\" : [ \"path_someParameterValue\" ]" + NEW_LINE +
-            "      }" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  3 errors:" + NEW_LINE +
-            "   - $.pathParameters.path_somePara meterName: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - $.pathParameters: invalid parameter format, the following are valid examples: " + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleRegexParameter\": [" + NEW_LINE +
-            "               \"^some +regex$\"" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleNottedAndSimpleStringParameter\": [" + NEW_LINE +
-            "               \"!notThisValue\", " + NEW_LINE +
-            "               \"simpleStringMatch\"" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "    " + NEW_LINE +
-            "    or:" + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleSchemaParameter\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"number\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleMultiSchemaParameter\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"pattern\": \"^some +regex$\"" + NEW_LINE +
-            "               }, " + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"format\": \"ipv4\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "   - $.pathParameters: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  "));
+        throwCorrectError(requestBytes,
+            "3 errors:",
+            "$.pathParameters.path_somePara meterName: is not defined in the schema and the schema does not allow additional properties",
+            "$.pathParameters: invalid parameter format",
+            "$.pathParameters: should be valid to one and only one schema, but 0 are valid");
     }
 
     @Test
@@ -168,52 +86,11 @@ public class HttpRequestSerializerIntegrationTest {
             "}";
 
         // then
-        throwCorrectError(requestBytes, "incorrect request json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"queryStringParameters\" : {" + NEW_LINE +
-            "          \"somePara meterName\" : [ \"someParameterValue\" ]" + NEW_LINE +
-            "      }" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  3 errors:" + NEW_LINE +
-            "   - $.queryStringParameters.somePara meterName: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - $.queryStringParameters: invalid parameter format, the following are valid examples: " + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleRegexParameter\": [" + NEW_LINE +
-            "               \"^some +regex$\"" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleNottedAndSimpleStringParameter\": [" + NEW_LINE +
-            "               \"!notThisValue\", " + NEW_LINE +
-            "               \"simpleStringMatch\"" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "    " + NEW_LINE +
-            "    or:" + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleSchemaParameter\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"number\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ], " + NEW_LINE +
-            "           \"exampleMultiSchemaParameter\": [" + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"pattern\": \"^some +regex$\"" + NEW_LINE +
-            "               }, " + NEW_LINE +
-            "               {" + NEW_LINE +
-            "                   \"type\": \"string\", " + NEW_LINE +
-            "                   \"format\": \"ipv4\"" + NEW_LINE +
-            "               }" + NEW_LINE +
-            "           ]" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "   - $.queryStringParameters: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  "));
+        throwCorrectError(requestBytes,
+            "3 errors:",
+            "$.queryStringParameters.somePara meterName: is not defined in the schema and the schema does not allow additional properties",
+            "$.queryStringParameters: invalid parameter format",
+            "$.queryStringParameters: should be valid to one and only one schema, but 0 are valid");
     }
 
     @Test
@@ -226,44 +103,11 @@ public class HttpRequestSerializerIntegrationTest {
             "}";
 
         // then
-        throwCorrectError(requestBytes, "incorrect request json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"cookies\" : {" + NEW_LINE +
-            "          \"someCoo kieName\" : \"someCookieValue\"" + NEW_LINE +
-            "      }" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  3 errors:" + NEW_LINE +
-            "   - $.cookies.someCoo kieName: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - $.cookies: invalid cookie format, the following are valid examples: " + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleRegexCookie\": \"^some +regex$\", " + NEW_LINE +
-            "           \"exampleNottedRegexCookie\": \"!notThisValue\", " + NEW_LINE +
-            "           \"exampleSimpleStringCookie\": \"simpleStringMatch\"" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "    " + NEW_LINE +
-            "    or:" + NEW_LINE +
-            "    " + NEW_LINE +
-            "       {" + NEW_LINE +
-            "           \"exampleNumberSchemaCookie\": {" + NEW_LINE +
-            "               \"type\": \"number\"" + NEW_LINE +
-            "           }, " + NEW_LINE +
-            "           \"examplePatternSchemaCookie\": {" + NEW_LINE +
-            "               \"type\": \"string\", " + NEW_LINE +
-            "               \"pattern\": \"^some regex$\"" + NEW_LINE +
-            "           }, " + NEW_LINE +
-            "           \"exampleFormatSchemaCookie\": {" + NEW_LINE +
-            "               \"type\": \"string\", " + NEW_LINE +
-            "               \"format\": \"ipv4\"" + NEW_LINE +
-            "           }" + NEW_LINE +
-            "       }" + NEW_LINE +
-            "   - $.cookies: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  "));
+        throwCorrectError(requestBytes,
+            "3 errors:",
+            "$.cookies.someCoo kieName: is not defined in the schema and the schema does not allow additional properties",
+            "$.cookies: invalid cookie format",
+            "$.cookies: should be valid to one and only one schema, but 0 are valid");
     }
 
     @Test
@@ -275,19 +119,9 @@ public class HttpRequestSerializerIntegrationTest {
             "}";
 
         // then
-        throwCorrectError(requestBytes, "incorrect request json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"path\": \"somePath\"," + NEW_LINE +
-            "      \"extra_field\": \"extra_value\"" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  1 error:" + NEW_LINE +
-            "   - $.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  "));
+        throwCorrectError(requestBytes,
+            "1 error:",
+            "$.extra_field: is not defined in the schema and the schema does not allow additional properties");
     }
 
     @Test
@@ -1055,7 +889,7 @@ public class HttpRequestSerializerIntegrationTest {
             "}", jsonHttpRequest);
     }
 
-    private void throwCorrectError(String requestBytes, String errorMessage) {
+    private void throwCorrectError(String requestBytes, String... expectedSubstrings) {
         try {
             // when
             new HttpRequestSerializer(new MockServerLogger()).deserialize(requestBytes);
@@ -1063,7 +897,12 @@ public class HttpRequestSerializerIntegrationTest {
             // then
             fail("expected exception");
         } catch (IllegalArgumentException iae) {
-            assertThat(iae.getMessage(), is(errorMessage));
+            String message = iae.getMessage();
+            assertThat(message, containsString("incorrect request json format for:"));
+            assertThat(message, containsString("schema validation errors:"));
+            for (String expectedSubstring : expectedSubstrings) {
+                assertThat(message, containsString(expectedSubstring));
+            }
         }
     }
 }

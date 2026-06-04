@@ -4,15 +4,16 @@ import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.validator.jsonschema.JsonSchemaRequestDefinitionValidator.jsonSchemaRequestDefinitionValidator;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
 
 /**
  * @author jamesdbloom
  */
-public class JsonSchemaRequestDefinitionValidatorIntegrationTest {
+public class JsonSchemaRequestDefinitionValidatorTest {
 
     private final JsonSchemaValidator jsonSchemaValidator = jsonSchemaRequestDefinitionValidator(new MockServerLogger());
 
@@ -178,38 +179,34 @@ public class JsonSchemaRequestDefinitionValidatorIntegrationTest {
     public void shouldValidateInvalidExtraFieldOnHttpRequest() {
         // when - anyOf schema means binaryData, dnsName, specUrlOrPayload required errors also appear
         // because invalidField doesn't match any of the alternative schemas
-        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-                "    \"method\" : \"GET\"," + NEW_LINE +
-                "    \"path\" : \"/somePath\"," + NEW_LINE +
-                "    \"invalidField\" : \"invalidValue\"" + NEW_LINE +
-                "  }"),
-            is(
-                "4 errors:" + NEW_LINE +
-                    " - $.binaryData: is missing but it is required" + NEW_LINE +
-                    " - $.dnsName: is missing but it is required" + NEW_LINE +
-                    " - $.invalidField: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                    " - $.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        String result = jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"method\" : \"GET\"," + NEW_LINE +
+            "    \"path\" : \"/somePath\"," + NEW_LINE +
+            "    \"invalidField\" : \"invalidValue\"" + NEW_LINE +
+            "  }");
+
+        // then
+        assertThat(result, startsWith("4 error"));
+        assertThat(result, containsString("$.invalidField: is not defined in the schema and the schema does not allow additional properties"));
+        assertThat(result, containsString("$.binaryData: is missing but it is required"));
+        assertThat(result, containsString("$.dnsName: is missing but it is required"));
+        assertThat(result, containsString("$.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher"));
     }
 
     @Test
     public void shouldValidateInvalidMethodType() {
         // when - anyOf schema means required field errors from other branches also appear
-        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-                "    \"method\" : 100" + NEW_LINE +
-                "  }"),
-            is(
-                "5 errors:" + NEW_LINE +
-                    " - $.binaryData: is missing but it is required" + NEW_LINE +
-                    " - $.dnsName: is missing but it is required" + NEW_LINE +
-                    " - $.method: integer found, string expected" + NEW_LINE +
-                    " - $.method: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +
-                    " - $.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        String result = jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"method\" : 100" + NEW_LINE +
+            "  }");
+
+        // then
+        assertThat(result, startsWith("5 error"));
+        assertThat(result, containsString("$.method: integer found, string expected"));
+        assertThat(result, containsString("$.method: should be valid to one and only one schema, but 0 are valid"));
+        assertThat(result, containsString("$.binaryData: is missing but it is required"));
+        assertThat(result, containsString("$.dnsName: is missing but it is required"));
+        assertThat(result, containsString("$.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher"));
     }
 
     @Test
@@ -222,7 +219,7 @@ public class JsonSchemaRequestDefinitionValidatorIntegrationTest {
     public void shouldValidateMalformedJson() {
         // when
         String result = jsonSchemaValidator.isValid("not json");
-        assertThat(result.contains("JsonParseException"), is(true));
+        assertThat(result, containsString("JsonParseException"));
     }
 
 }

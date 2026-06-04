@@ -16,7 +16,7 @@ import static org.mockserver.model.StringBody.exact;
 /**
  * @author jamesdbloom
  */
-public class HttpRequestAndHttpResponseSerializerIntegrationTest {
+public class HttpRequestAndHttpResponseSerializerSchemaValidationTest {
 
     private final HttpRequestAndHttpResponse completeHttpRequestAndHttpResponse =
         new HttpRequestAndHttpResponse()

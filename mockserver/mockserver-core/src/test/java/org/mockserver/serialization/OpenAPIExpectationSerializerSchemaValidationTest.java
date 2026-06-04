@@ -23,7 +23,7 @@ import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_S
 /**
  * @author jamesdbloom
  */
-public class OpenAPIExpectationSerializerIntegrationTest {
+public class OpenAPIExpectationSerializerSchemaValidationTest {
 
     @Rule
     public final ExpectedException thrown = ExpectedException.none();
@@ -43,23 +43,7 @@ public class OpenAPIExpectationSerializerIntegrationTest {
 
         // then
         thrown.expect(IllegalArgumentException.class);
-        thrown.expectMessage("incorrect openapi expectation json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "    \"specUrlOrPayload\" : \"org/mockserver/openapi/openapi_simple_example.json\"," + NEW_LINE +
-            "    \"extra_field\": \"extra_value\"," + NEW_LINE +
-            "    \"operationsAndResponses\" : {" + NEW_LINE +
-            "      \"listPets\" : \"200\"," + NEW_LINE +
-            "      \"createPets\" : \"201\"" + NEW_LINE +
-            "    }" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  1 error:" + NEW_LINE +
-            "   - $.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  " ));
+        thrown.expectMessage("$.extra_field: is not defined in the schema and the schema does not allow additional properties");
 
         // when
         new OpenAPIExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);

@@ -17,7 +17,7 @@ import static org.mockserver.model.PortBinding.portBinding;
 /**
  * @author jamesdbloom
  */
-public class PortBindingSerializerIntegrationTest {
+public class PortBindingSerializerSchemaValidationTest {
 
 
     @Test

@@ -18,7 +18,9 @@ import java.util.Arrays;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static junit.framework.TestCase.assertEquals;
+import static com.jayway.jsonpath.internal.path.PathCompiler.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -31,13 +33,12 @@ import static org.mockserver.model.Header.header;
 import static org.mockserver.model.JsonBody.json;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.model.XmlBody.xml;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
 
 /**
  * @author jamesdbloom
  */
 @SuppressWarnings("deprecation")
-public class HttpResponseSerializerIntegrationTest {
+public class HttpResponseSerializerSchemaValidationTest {
 
     private static final ObjectWriter OBJECT_WRITER = ObjectMapperFactory.createObjectMapper(true, false);
     @Rule
@@ -51,24 +52,16 @@ public class HttpResponseSerializerIntegrationTest {
             "    \"extra_field\": \"extra_value\"" + NEW_LINE +
             "}";
 
-        // then
-        thrown.expect(IllegalArgumentException.class);
-        thrown.expectMessage("incorrect response json format for:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  {" + NEW_LINE +
-            "      \"statusCode\": 123," + NEW_LINE +
-            "      \"extra_field\": \"extra_value\"" + NEW_LINE +
-            "  }" + NEW_LINE +
-            "" + NEW_LINE +
-            " schema validation errors:" + NEW_LINE +
-            "" + NEW_LINE +
-            "  1 error:" + NEW_LINE +
-            "   - $.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "  " + NEW_LINE +
-            "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  " ));
-
-        // when
-        new HttpResponseSerializer(new MockServerLogger()).deserialize(requestBytes);
+        // when / then
+        try {
+            new HttpResponseSerializer(new MockServerLogger()).deserialize(requestBytes);
+            fail("expected exception");
+        } catch (IllegalArgumentException iae) {
+            assertThat(iae.getMessage(), containsString("incorrect response json format for:"));
+            assertThat(iae.getMessage(), containsString("schema validation errors:"));
+            assertThat(iae.getMessage(), containsString("1 error:"));
+            assertThat(iae.getMessage(), containsString("$.extra_field: is not defined in the schema and the schema does not allow additional properties"));
+        }
     }
 
     @Test

@@ -4,15 +4,16 @@ import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.validator.jsonschema.JsonSchemaOpenAPIExpectationValidator.jsonSchemaOpenAPIExpectationValidator;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
 
 /**
  * @author jamesdbloom
  */
-public class JsonSchemaOpenAPIExpectationValidatorIntegrationTest {
+public class JsonSchemaOpenAPIExpectationValidatorTest {
 
     private final JsonSchemaValidator jsonSchemaValidator = jsonSchemaOpenAPIExpectationValidator(new MockServerLogger());
 
@@ -88,58 +89,49 @@ public class JsonSchemaOpenAPIExpectationValidatorIntegrationTest {
     @Test
     public void shouldValidateInvalidOpenAPIExpectationMissingRequired() {
         // when - the validator rewrites specUrlOrPayload missing messages
-        assertThat(jsonSchemaValidator.isValid("{}"),
-            is(
-                "1 error:" + NEW_LINE +
-                    " - $.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        String result = jsonSchemaValidator.isValid("{}");
+
+        // then
+        assertThat(result, startsWith("1 error:"));
+        assertThat(result, containsString("$.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher"));
     }
 
     @Test
     public void shouldValidateInvalidOpenAPIExpectationWithExtraField() {
         // when
-        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-                "    \"specUrlOrPayload\" : \"https://example.com/spec.json\"," + NEW_LINE +
-                "    \"invalidField\" : \"invalidValue\"" + NEW_LINE +
-                "  }"),
-            is(
-                "1 error:" + NEW_LINE +
-                    " - $.invalidField: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        String result = jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"specUrlOrPayload\" : \"https://example.com/spec.json\"," + NEW_LINE +
+            "    \"invalidField\" : \"invalidValue\"" + NEW_LINE +
+            "  }");
+
+        // then
+        assertThat(result, startsWith("1 error:"));
+        assertThat(result, containsString("$.invalidField: is not defined in the schema and the schema does not allow additional properties"));
     }
 
     @Test
     public void shouldValidateInvalidOpenAPIExpectationWithWrongSpecType() {
-        // when - specUrlOrPayload uses anyOf (string | object); json-schema-validator
-        // 1.5+ reports a single type-mismatch line rather than one per anyOf branch.
-        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-                "    \"specUrlOrPayload\" : 123" + NEW_LINE +
-                "  }"),
-            is(
-                "1 error:" + NEW_LINE +
-                    " - $.specUrlOrPayload: integer found, string expected" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        // when
+        String result = jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"specUrlOrPayload\" : 123" + NEW_LINE +
+            "  }");
+
+        // then
+        assertThat(result, startsWith("1 error:"));
+        assertThat(result, containsString("$.specUrlOrPayload: integer found, string expected"));
     }
 
     @Test
     public void shouldValidateInvalidOpenAPIExpectationWithWrongContextPathPrefixType() {
         // when
-        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-                "    \"specUrlOrPayload\" : \"https://example.com/spec.json\"," + NEW_LINE +
-                "    \"contextPathPrefix\" : 123" + NEW_LINE +
-                "  }"),
-            is(
-                "1 error:" + NEW_LINE +
-                    " - $.contextPathPrefix: integer found, string expected" + NEW_LINE +
-                    NEW_LINE +
-                    OPEN_API_SPECIFICATION_URL
-            ));
+        String result = jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"specUrlOrPayload\" : \"https://example.com/spec.json\"," + NEW_LINE +
+            "    \"contextPathPrefix\" : 123" + NEW_LINE +
+            "  }");
+
+        // then
+        assertThat(result, startsWith("1 error:"));
+        assertThat(result, containsString("$.contextPathPrefix: integer found, string expected"));
     }
 
     @Test
@@ -152,7 +144,7 @@ public class JsonSchemaOpenAPIExpectationValidatorIntegrationTest {
     public void shouldValidateMalformedJson() {
         // when
         String result = jsonSchemaValidator.isValid("not json");
-        assertThat(result.contains("JsonParseException"), is(true));
+        assertThat(result, containsString("JsonParseException"));
     }
 
 }

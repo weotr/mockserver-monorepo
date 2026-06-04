@@ -17,7 +17,7 @@ import static org.mockserver.model.HttpRequest.request;
 /**
  * @author jamesdbloom
  */
-public class VerificationSequenceSerializerIntegrationTest {
+public class VerificationSequenceSerializerSchemaValidationTest {
 
     @Test
     public void shouldDeserializeCompleteObjectWithRequests() {

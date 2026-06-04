@@ -37,7 +37,7 @@ import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_S
 /**
  * @author jamesdbloom
  */
-public class ExpectationSerializerIntegrationTest {
+public class ExpectationSerializerTest {
 
     @Test
     public void shouldAllowSingleObjectForArray() {
