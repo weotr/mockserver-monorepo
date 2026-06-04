@@ -40,6 +40,16 @@ layout: default
 	<li>an <a href="/mock_server/ai_mcp_setup.html">MCP server</a> that lets AI coding assistants drive the mock and proxy in natural language</li>
 </ul>
 
+<p>Beyond mocking and proxying, the same MockServer instance also lets you:</p>
+
+<ul>
+	<li><strong><a href="/mock_server/verification.html">verify</a></strong> that expected requests were (or were not) made &mdash; as test assertions</li>
+	<li><strong><a href="/proxy/record_and_replay.html">record and replay</a></strong> real traffic to reproduce how a system behaves</li>
+	<li><strong><a href="/mock_server/chaos_testing.html">inject chaos and faults</a></strong> &mdash; latency, errors, dropped connections, malformed responses &mdash; to test how your system copes when its dependencies misbehave (HTTP, gRPC and TCP fault injection, plus <a href="/mock_server/chaos_testing_kubernetes.html">Kubernetes</a> and <a href="/mock_server/service_mesh.html">service-mesh</a> chaos)</li>
+	<li>mock more than REST &mdash; <a href="/mock_server/grpc_mocking.html">gRPC</a>, <a href="/mock_server/asyncapi_messaging.html">AsyncAPI message brokers</a> (Kafka, MQTT, AMQP) and <a href="/mock_server/mocking_oauth2.html">OAuth2 / OIDC</a></li>
+	<li>generate mocks and validate traffic directly from an <a href="/mock_server/using_openapi.html">OpenAPI / Swagger specification</a></li>
+</ul>
+
 <p>MockServer is also <strong>AI-native</strong>: every instance ships a built-in <a href="https://modelcontextprotocol.io/" target="_blank" rel="noopener noreferrer">Model Context Protocol (MCP)</a> server at <code>/mockserver/mcp</code> with no extra configuration, and the documentation is published in machine-readable form for LLMs. In practice this means:</p>
 
 <ul>
