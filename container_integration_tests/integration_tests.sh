@@ -21,9 +21,40 @@ function build_docker() {
     runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing --build-arg source=copy ${SCRIPT_DIR}/../docker"
     runCommand "rm ${SCRIPT_DIR}/../docker/mockserver-netty-jar-with-dependencies.jar"
   fi
+  if [[ "${SKIP_DOCKER_BUILD_MOCKSERVER:-}" != "true" ]]; then
+    build_clustered_docker
+  fi
   if [[ "${SKIP_DOCKER_REBUILD_CLIENT:-}" != "true" ]]; then
     runCommand "docker build -t mockserver/mockserver:integration_testing_client_curl -f ${SCRIPT_DIR}/client_docker_images/CurlClientDockerfile ${SCRIPT_DIR}/client_docker_images"
   fi
+}
+
+# Build the -clustered image variant that includes the Infinispan state
+# backend module and its transitive dependencies. The /libs/* classpath
+# glob in the ENTRYPOINT picks up these additional JARs at runtime.
+function build_clustered_docker() {
+  local clustered_dir="${SCRIPT_DIR}/../docker/clustered"
+  local libs_dir="${clustered_dir}/libs"
+
+  # Copy fat jar
+  local source_jar
+  source_jar=$(ls "${SCRIPT_DIR}"/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1)
+  if [[ -z "${source_jar}" ]]; then
+    printFailureMessage "clustered: no local mockserver-netty fat jar found - build it first"
+    return 1
+  fi
+  cp "${source_jar}" "${clustered_dir}/mockserver-netty-jar-with-dependencies.jar"
+
+  # Copy infinispan module jar + its runtime dependencies (excluding org.mock-server)
+  rm -rf "${libs_dir}" && mkdir -p "${libs_dir}"
+  runCommand "(cd ${SCRIPT_DIR}/../mockserver && ./mvnw -pl mockserver-state-infinispan dependency:copy-dependencies -DincludeScope=runtime -DexcludeGroupIds=org.mock-server -DoutputDirectory=${libs_dir} -q)"
+  cp "${SCRIPT_DIR}"/../mockserver/mockserver-state-infinispan/target/mockserver-state-infinispan-*.jar "${libs_dir}/"
+
+  runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing_clustered ${clustered_dir}"
+
+  # Clean up build context
+  rm -f "${clustered_dir}/mockserver-netty-jar-with-dependencies.jar"
+  rm -rf "${libs_dir}"
 }
 
 function test() {
@@ -306,6 +337,53 @@ function test_arm64_build_gate() {
   return 0
 }
 
+# Smoke test for the -clustered image variant. Uses the image already built
+# by build_clustered_docker() — no rebuild needed. Verifies the container
+# starts and /mockserver/status responds 200 (Infinispan boots in LOCAL
+# mode when MOCKSERVER_CLUSTER_ENABLED is not set).
+function smoke_test_clustered() {
+  local tag="mockserver/mockserver:integration_testing_clustered"
+  local container="smoke-clustered"
+  export TEST_CASE="docker_variant_smoke_clustered"
+  printMessage "Smoke test: clustered variant"
+
+  local exit_code=0
+  # Verify the image exists (build_clustered_docker should have created it)
+  if ! docker image inspect "${tag}" >/dev/null 2>&1; then
+    printFailureMessage "clustered: image ${tag} not found — was build_clustered_docker() skipped?"
+    logTestResultNonBlocking "1" "${TEST_CASE}"
+    return 0
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  # Boot with stateBackend=infinispan but cluster disabled (LOCAL mode) —
+  # validates that the Infinispan module is on the classpath and loads.
+  runCommand "docker run -d --name ${container} -p 0:1080 -e MOCKSERVER_STATE_BACKEND=infinispan ${tag}"
+  local host_port
+  host_port=$(docker port "${container}" 1080 2>/dev/null | head -1 | awk -F: '{print $NF}')
+  if [[ -z "${host_port}" ]]; then
+    printFailureMessage "clustered: could not resolve host port for container ${container}"
+    exit_code=1
+  else
+    local i status
+    status=000
+    for i in $(seq 1 15); do
+      status=$(curl -sf -o /dev/null -w '%{http_code}' -X PUT "http://localhost:${host_port}/mockserver/status" 2>/dev/null || echo "000")
+      [[ "${status}" == "200" ]] && break
+      sleep 2
+    done
+    if [[ "${status}" != "200" ]]; then
+      printFailureMessage "clustered: /mockserver/status returned \"${status}\" (expected 200)"
+      runCommand "docker logs ${container} | tail -30 || true"
+      exit_code=1
+    fi
+  fi
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  # Non-blocking: new variant, does not fail the pipeline
+  logTestResultNonBlocking "${exit_code}" "${TEST_CASE}"
+  return 0
+}
+
 function run_all_tests() {
   export PASS_LOG_FILE=$(mktemp)
   export FAIL_LOG_FILE=$(mktemp)
@@ -346,6 +424,9 @@ function run_all_tests() {
         # root-snapshot is a new variant not yet proven in CI — non-blocking.
         smoke_test_variant_nonblocking "root-snapshot" || true
       fi
+      # Clustered variant: test that the -clustered image boots and responds
+      # to /mockserver/status. The image is already built by build_clustered_docker().
+      smoke_test_clustered || true
       # arm64 cross-platform build gate (buildx --platform linux/arm64).
       test_arm64_build_gate || true
       # WAR deployment test (Tomcat container); requires mockserver-war to
