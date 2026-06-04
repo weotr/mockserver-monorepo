@@ -571,6 +571,55 @@ Combine Options A and B: run triggers on cheap instances AND limit concurrency p
 
 If concurrent master builds remain a problem, Option E (adding concurrency groups) can be layered on top.
 
+## Dependency Caching
+
+Two layers of dependency caching reduce build times by avoiding redundant downloads from Maven Central, npm, PyPI, and RubyGems on every build.
+
+### Layer 1: Host Cache Volumes (Automatic)
+
+`run-in-docker.sh` automatically mounts persistent host directories into every Docker container:
+
+| Host Path | Container Path | Used By |
+|-----------|---------------|---------|
+| `/var/cache/buildkite/maven` | `/root/.m2/repository` | Maven (Java builds) |
+| `/var/cache/buildkite/npm` | `/root/.npm` | npm (UI, Node.js) |
+| `/var/cache/buildkite/pip` | `/root/.cache/pip` | pip (Python) |
+| `/var/cache/buildkite/bundle` | `/root/.bundle` | Bundler (Ruby, Jekyll) |
+
+These directories persist across builds on the same EC2 instance but are lost when the instance terminates (scale-to-zero). Disable with `BUILDKITE_DISABLE_HOST_CACHE=true`.
+
+### Layer 2: S3 Dependency Cache (Requires Terraform Apply)
+
+An S3 bucket (`mockserver-ci-dependency-cache`) stores cache archives keyed by lockfile hashes. This survives instance termination and provides warm caches even for freshly launched agents.
+
+```mermaid
+sequenceDiagram
+    participant S3 as S3 Cache Bucket
+    participant Agent as Buildkite Agent
+    participant Docker as Docker Container
+    participant Host as Host Cache Dir
+
+    Agent->>S3: cache-restore.sh (download by lockfile hash)
+    S3-->>Host: Extract to /var/cache/buildkite/
+    Agent->>Docker: run-in-docker.sh (mounts host cache)
+    Docker->>Docker: Build (uses cached deps)
+    Docker-->>Host: Updated cache in mounted volume
+    Agent->>S3: cache-save.sh (upload if cache key changed)
+```
+
+**Pipeline wiring:** Each pipeline has `cache-restore` before build steps and `cache-save` after, keyed on:
+- Maven: `mockserver/pom.xml`
+- npm: `package.json` per project
+- pip: `pyproject.toml`
+- Bundler: `Gemfile`
+
+Cache entries expire after 14 days via S3 lifecycle policy. Cache steps use `soft_fail: true` so builds never fail due to cache issues.
+
+**Terraform:** `terraform/buildkite-agents/dependency-cache.tf` (S3 bucket + IAM policy)
+**Scripts:** `.buildkite/scripts/cache-restore.sh`, `.buildkite/scripts/cache-save.sh`
+
+**Status:** The S3 bucket and IAM policy require `terraform apply` before the S3 cache layer is active. The host volume layer works immediately with no infrastructure changes.
+
 ## Local CI Simulation
 
 To run the Buildkite build locally:

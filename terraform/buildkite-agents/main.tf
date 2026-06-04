@@ -20,7 +20,7 @@ module "buildkite_stack" {
   agents_per_instance         = 1
   associate_public_ip_address = true
   imdsv2_tokens               = "required"
-  managed_policy_arns         = [aws_iam_policy.read_build_secrets.arn, aws_iam_policy.ecr_public_push.arn]
+  managed_policy_arns         = [aws_iam_policy.read_build_secrets.arn, aws_iam_policy.ecr_public_push.arn, aws_iam_policy.dependency_cache.arn]
 }
 
 module "buildkite_trigger_stack" {
@@ -65,5 +65,6 @@ module "buildkite_release_stack" {
     aws_iam_policy.read_release_secrets.arn,
     aws_iam_policy.ecr_public_push.arn,
     aws_iam_policy.release_website_tfstate.arn,
+    aws_iam_policy.dependency_cache.arn,
   ]
 }

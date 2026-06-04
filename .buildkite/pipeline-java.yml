@@ -6,6 +6,11 @@ steps:
   - label: ":docker: update docker image"
     command: "docker pull mockserver/mockserver:maven"
 
+  - label: ":s3: restore maven cache"
+    command: ".buildkite/scripts/cache-restore.sh maven mockserver/pom.xml"
+    timeout_in_minutes: 5
+    soft_fail: true
+
   - wait
 
   - label: ":maven: build"
@@ -28,6 +33,11 @@ steps:
       - "mockserver/mockserver-netty-no-dependencies/target/mockserver-netty-no-dependencies-*.jar"
       - "mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar"
     timeout_in_minutes: 60
+
+  - label: ":s3: save maven cache"
+    command: ".buildkite/scripts/cache-save.sh maven maven -- mockserver/pom.xml"
+    timeout_in_minutes: 10
+    soft_fail: true
 
   - wait: ~
     continue_on_failure: true

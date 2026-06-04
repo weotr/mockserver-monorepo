@@ -70,6 +70,41 @@ DOCKER_ARGS+=(--rm)
 DOCKER_ARGS+=(-v "$REPO_ROOT:/build")
 DOCKER_ARGS+=(-w "$WORKDIR")
 
+# ---------------------------------------------------------------------------
+# Host-level dependency cache mounts
+# ---------------------------------------------------------------------------
+# Mount persistent host cache directories into the container so that
+# successive builds on the same EC2 instance reuse downloaded dependencies
+# instead of re-downloading from the internet every time.
+#
+# These host directories live on the instance's 250 GiB gp3 root volume and
+# survive across Docker container invocations.  They do NOT survive instance
+# termination (scale-to-zero ASG), so they are a best-effort warm cache for
+# the common case of multiple builds on a single instance lifetime.  The S3
+# cache layer (cache-save/cache-restore scripts) covers the cold-start case.
+#
+# Disable by setting BUILDKITE_DISABLE_HOST_CACHE=true.
+# ---------------------------------------------------------------------------
+if [[ "${BUILDKITE_DISABLE_HOST_CACHE:-false}" != "true" ]]; then
+  HOST_CACHE_BASE="${BUILDKITE_HOST_CACHE_DIR:-/var/cache/buildkite}"
+
+  # Maven  (~/.m2/repository inside the container)
+  mkdir -p "${HOST_CACHE_BASE}/maven"
+  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/maven:/root/.m2/repository")
+
+  # npm    (~/.npm inside the container)
+  mkdir -p "${HOST_CACHE_BASE}/npm"
+  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/npm:/root/.npm")
+
+  # pip    (~/.cache/pip inside the container)
+  mkdir -p "${HOST_CACHE_BASE}/pip"
+  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/pip:/root/.cache/pip")
+
+  # Bundler (~/.bundle inside the container — gems cache)
+  mkdir -p "${HOST_CACHE_BASE}/bundle"
+  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/bundle:/root/.bundle")
+fi
+
 if [[ -n "$MEMORY" ]]; then
   DOCKER_ARGS+=(--memory="$MEMORY" --memory-swap="$MEMORY")
 fi

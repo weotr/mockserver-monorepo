@@ -37,3 +37,8 @@ output "ecr_public_repository_uri" {
   description = "ECR Public repository URI for MockServer Docker images"
   value       = aws_ecrpublic_repository.mockserver.repository_uri
 }
+
+output "dependency_cache_bucket" {
+  description = "S3 bucket name for CI dependency caching"
+  value       = aws_s3_bucket.dependency_cache.id
+}

@@ -1,4 +1,11 @@
 steps:
+  - label: ":s3: restore pip cache"
+    command: ".buildkite/scripts/cache-restore.sh pip mockserver-client-python/pyproject.toml"
+    timeout_in_minutes: 5
+    soft_fail: true
+
+  - wait
+
   - label: ":python: Python client unit tests"
     command: ".buildkite/scripts/steps/python-unit-test.sh"
     artifact_paths:
@@ -19,3 +26,8 @@ steps:
       - junit-annotate#8a549e5220869601737287b4d6a9293703dc5a6f:  # v2.7.0
           artifacts: "mockserver-client-python/test-reports/*.xml"
           always-annotate: true
+
+  - label: ":s3: save pip cache"
+    command: ".buildkite/scripts/cache-save.sh pip pip -- mockserver-client-python/pyproject.toml"
+    timeout_in_minutes: 5
+    soft_fail: true
