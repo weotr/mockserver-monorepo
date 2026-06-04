@@ -15,6 +15,8 @@ import io.netty.handler.codec.quic.QuicChannel;
 import io.netty.handler.codec.quic.QuicSslContext;
 import io.netty.handler.codec.quic.QuicSslContextBuilder;
 import io.netty.handler.codec.quic.QuicStreamChannel;
+import io.netty.handler.ssl.ClientAuth;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.metrics.Metrics;
@@ -27,11 +29,14 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.socket.tls.KeyAndCertificateFactoryFactory.createKeyAndCertificateFactory;
+import static org.mockserver.socket.tls.PEMToFile.x509ChainFromPEMFile;
 
 /**
  * HTTP/3 (QUIC) server for MockServer, integrated with the full request pipeline.
@@ -233,10 +238,11 @@ public class Http3Server {
     private QuicSslContext buildQuicSslContext() throws Exception {
         PrivateKey privateKey;
         X509Certificate[] certChain;
+        KeyAndCertificateFactory keyAndCertFactory = null;
 
         if (configuration != null && mockServerLogger != null) {
             // use MockServer's TLS certificate infrastructure
-            KeyAndCertificateFactory keyAndCertFactory = createKeyAndCertificateFactory(configuration, mockServerLogger);
+            keyAndCertFactory = createKeyAndCertificateFactory(configuration, mockServerLogger);
             if (keyAndCertFactory.certificateNotYetCreated()) {
                 keyAndCertFactory.buildAndSavePrivateKeyAndX509Certificate();
             }
@@ -252,10 +258,51 @@ public class Http3Server {
             LOG.info("HTTP/3 server using self-signed certificate (no configuration provided)");
         }
 
-        return QuicSslContextBuilder
+        QuicSslContextBuilder quicSslBuilder = QuicSslContextBuilder
             .forServer(privateKey, null, certChain)
-            .applicationProtocols(Http3.supportedApplicationProtocols())
-            .build();
+            .applicationProtocols(Http3.supportedApplicationProtocols());
+
+        // mTLS (client authentication) for QUIC -- mirrors the TCP path's
+        // NettySslContextFactory logic:
+        // - clientAuth is REQUIRE when tlsMutualAuthenticationRequired is true,
+        //   OPTIONAL otherwise (OPTIONAL is the safe default: it will request
+        //   a client cert but not reject connections that don't present one)
+        // - trustManager is set to the configured mTLS trust chain when present,
+        //   or an insecure trust-all factory when no explicit chain is provided
+        //   (same as the TCP path's InsecureTrustManagerFactory fallback)
+        if (configuration != null && keyAndCertFactory != null) {
+            quicSslBuilder.clientAuth(
+                configuration.tlsMutualAuthenticationRequired()
+                    ? ClientAuth.REQUIRE : ClientAuth.OPTIONAL
+            );
+            if (isNotBlank(configuration.tlsMutualAuthenticationCertificateChain())
+                || configuration.tlsMutualAuthenticationRequired()) {
+                quicSslBuilder.trustManager(buildTrustCertificateChain(keyAndCertFactory));
+            } else {
+                quicSslBuilder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+            }
+        }
+
+        return quicSslBuilder.build();
+    }
+
+    /**
+     * Build the trust certificate chain for mTLS client verification, mirroring
+     * the TCP path's {@code NettySslContextFactory.trustCertificateChain()}.
+     * When a custom mTLS trust chain is configured, it is loaded from PEM and
+     * combined with the CA certificate; otherwise, only the CA certificate is used.
+     */
+    private X509Certificate[] buildTrustCertificateChain(KeyAndCertificateFactory keyAndCertFactory) {
+        String mtlsCertChainPath = configuration.tlsMutualAuthenticationCertificateChain();
+        if (isNotBlank(mtlsCertChainPath)) {
+            List<X509Certificate> x509Certificates = x509ChainFromPEMFile(mtlsCertChainPath);
+            x509Certificates.add(keyAndCertFactory.certificateAuthorityX509Certificate());
+            return x509Certificates.toArray(new X509Certificate[0]);
+        } else {
+            return Collections
+                .singletonList(keyAndCertFactory.certificateAuthorityX509Certificate())
+                .toArray(new X509Certificate[0]);
+        }
     }
 
     /**

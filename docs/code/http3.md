@@ -278,6 +278,42 @@ declarations are needed -- they resolve automatically.
   configurable via `http3AltSvcMaxAge` (default 86400s). Advertisement can be
   suppressed via `http3AdvertiseAltSvc=false`. User-set Alt-Svc headers in
   expectations are never overwritten.
+- **W3C trace-context propagation**: `traceparent` and `tracestate` headers are
+  parsed from inbound HTTP/3 requests (or generated when `otelGenerateTraceId` is
+  enabled) and stored on the channel attribute, exactly like the TCP path's
+  `TraceContextHandler`. When `otelPropagateTraceContext` is enabled, the trace
+  headers are copied onto outbound HTTP/3 responses. This enables distributed
+  tracing across H3 and TCP requests. Both features are default-off (same config
+  gates as TCP).
+- **mTLS client-certificate capture**: when `tlsMutualAuthenticationRequired` is
+  enabled (or a `tlsMutualAuthenticationCertificateChain` is configured), the QUIC
+  SSL context requests client certificates under the same conditions as the TCP
+  path. Peer certificates are extracted from the `QuicChannel` `SSLEngine` session
+  and plumbed into the `HttpRequest` via `withClientCertificateChain`, enabling
+  cert-based expectation matching and verification over HTTP/3. When no client cert
+  is presented, the request proceeds without a cert chain (no error).
+
+## HTTP/3 Parity / Known Limitations
+
+All expectation matching, actions, recording, verification, HTTP chaos profiles,
+forward-proxy, trace-context propagation, and mTLS work over HTTP/3, matching
+the TCP (HTTP/1.1 and HTTP/2) path.
+
+### Inherently N/A over HTTP/3
+
+| Feature | Reason |
+|---------|--------|
+| **TCP chaos (TcpChaosHandler)** | QUIC has no TCP RST/FIN/slow\_close semantics. HTTP-level chaos profiles (latency, error responses, degradation ramp) DO work over H3 |
+| **WebSocket callbacks + dashboard WebSocket** | RFC 6455 HTTP/1.1 Upgrade has no HTTP/3 equivalent. The analog is WebTransport (RFC 9220), which is not yet implemented |
+| **HTTP/1.1 framing fixups** | `PreserveHeadersNettyRemoves`, `HttpContentDecompressor`, `EarlyMatchingHandler` are HTTP/1.1 pipeline handlers that have no meaning in HTTP/3 (QPACK handles header encoding, HTTP/3 frames are self-describing) |
+
+### Not-yet-supported (deferred by demand)
+
+| Feature | Status |
+|---------|--------|
+| **MCP-over-H3** | Model Context Protocol Streamable HTTP transport is TCP-only. Deferred until there is demand for MCP over QUIC |
+| **gRPC-over-H3** | gRPC officially runs over HTTP/2. gRPC over HTTP/3 is not yet standardised. Deferred until gRPC-over-QUIC is adopted by the ecosystem |
+| **Per-connection detail in dashboard** | The H3 dashboard chip shows port + aggregate connection count. Per-connection detail (remote address, stream count, duration) is deferred |
 
 ## What is NOT Implemented (follow-up work)
 

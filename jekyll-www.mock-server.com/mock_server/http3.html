@@ -97,6 +97,8 @@ sitemap:
     <li><strong>Lifecycle integration</strong> &mdash; starts and stops automatically with MockServer</li>
     <li><strong>Fail-soft startup</strong> &mdash; graceful fallback when native QUIC is unavailable</li>
     <li><strong>Alt-Svc auto-discovery</strong> &mdash; when <span class="inline_code">http3Port</span> is set, MockServer automatically adds an <span class="inline_code">Alt-Svc</span> header to all TCP (HTTP/1.1 and HTTP/2) responses advertising the HTTP/3 endpoint. HTTP/3-capable clients will automatically upgrade to QUIC on subsequent requests, with transparent fallback to HTTP/2 or HTTP/1.1 if QUIC is unavailable. The advertisement max-age is configurable via <span class="inline_code">http3AltSvcMaxAge</span> (default 86400 seconds). Set <span class="inline_code">http3AdvertiseAltSvc=false</span> to disable advertising while keeping HTTP/3 enabled</li>
+    <li><strong>W3C trace-context propagation</strong> &mdash; <span class="inline_code">traceparent</span> and <span class="inline_code">tracestate</span> headers on inbound HTTP/3 requests are parsed and stored for OpenTelemetry span parenting, matching the TCP path. When <span class="inline_code">otelPropagateTraceContext</span> is enabled, the headers are copied to outbound HTTP/3 responses. When <span class="inline_code">otelGenerateTraceId</span> is enabled, a trace context is generated for requests without a <span class="inline_code">traceparent</span> header. Both features are default-off (same config as TCP)</li>
+    <li><strong>mTLS client-certificate capture</strong> &mdash; when mTLS is configured (<span class="inline_code">tlsMutualAuthenticationRequired</span> or <span class="inline_code">tlsMutualAuthenticationCertificateChain</span>), client certificates are captured from the QUIC TLS handshake and attached to the request, enabling cert-based expectation matching and verification over HTTP/3</li>
 </ul>
 
 <a id="http3_limitations" class="anchor" href="#http3_limitations">&nbsp;</a>
@@ -104,6 +106,26 @@ sitemap:
 <h2>Limitations</h2>
 
 <ul>
-    <li><strong>Dashboard visibility</strong> &mdash; HTTP/3 connections do not appear as a separate protocol in the MockServer dashboard (requests are logged and visible, but the protocol is not distinguished)</li>
-    <li><strong>Incubator dependency</strong> &mdash; the <span class="inline_code">netty-incubator-codec-http3</span> library is a pre-release artifact; its API may change in future Netty releases</li>
+    <li><strong>Incubator dependency</strong> &mdash; the HTTP/3 codec has graduated from the Netty incubator into mainline Netty 4.2, but the API may still evolve in future releases</li>
+</ul>
+
+<a id="http3_parity" class="anchor" href="#http3_parity">&nbsp;</a>
+
+<h2>HTTP/3 parity and known differences</h2>
+
+<p>All expectation matching, actions, recording, verification, HTTP chaos profiles, forward-proxy, trace-context propagation, and mTLS work over HTTP/3, matching the TCP (HTTP/1.1 and HTTP/2) path.</p>
+
+<h3>Inherently not applicable over HTTP/3</h3>
+
+<ul>
+    <li><strong>TCP chaos (TcpChaosHandler)</strong> &mdash; QUIC has no TCP RST/FIN/slow_close semantics. HTTP-level chaos profiles (latency, error responses, degradation ramp) DO work over HTTP/3</li>
+    <li><strong>WebSocket callbacks + dashboard WebSocket</strong> &mdash; RFC 6455 HTTP/1.1 Upgrade has no HTTP/3 equivalent. The analog is WebTransport (not yet implemented)</li>
+    <li><strong>HTTP/1.1 framing fixups</strong> &mdash; handlers like <span class="inline_code">PreserveHeadersNettyRemoves</span> and <span class="inline_code">EarlyMatchingHandler</span> are HTTP/1.1-specific and have no meaning in HTTP/3</li>
+</ul>
+
+<h3>Not yet supported (deferred)</h3>
+
+<ul>
+    <li><strong>MCP-over-H3</strong> &mdash; the MCP Streamable HTTP transport is TCP-only; deferred until demand</li>
+    <li><strong>gRPC-over-H3</strong> &mdash; gRPC runs over HTTP/2; gRPC over HTTP/3 is not yet standardised</li>
 </ul>
