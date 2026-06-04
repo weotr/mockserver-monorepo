@@ -316,6 +316,7 @@
                         <configuration>
                             <workingDirectory>${project.basedir}/../../mockserver-ui</workingDirectory>
                             <installDirectory>${project.build.directory}/frontend</installDirectory>
+                            <downloadRoot>https://npmmirror.com/mirrors/node/</downloadRoot>
                         </configuration>
                         <executions>
                             <execution>
