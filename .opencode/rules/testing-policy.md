@@ -17,6 +17,7 @@ After making code changes, ALWAYS run unit tests for the affected module(s).
 
 - Tests guarded by `Assume.assumeTrue(DockerClientFactory.instance().isDockerAvailable())` (Testcontainers live-broker tests, `NET_ADMIN` transparent-proxy e2e, QUIC/HTTP-3 client tests, etc.) **actually run here** — when validating such a change, run it and confirm it PASSES, not merely that it skips.
 - **Keep the `assumeTrue(...isDockerAvailable())` gating in place** regardless. It is still correct so the suite degrades gracefully on machines/CI agents without Docker. Docker being present changes how we *validate*, not how we *write* the tests.
+- **Caveat:** on the current Docker Desktop (4.67 / Engine 29.x / API 1.54) the bundled docker-java 3.4.1 (Testcontainers 1.20.6) gets a `400` on the info endpoint, so `DockerClientFactory.isDockerAvailable()` returns **false even though Docker works** and Testcontainers-gated tests silently SKIP locally. To run such a test locally, bump docker-java/Testcontainers or gate on a `docker info` CLI check + `docker build`/`docker run` (as the transparent-proxy e2e tests do). Always confirm a Docker-gated test actually RAN (not skipped) before claiming local validation.
 - `docker build` / `docker run` are available for Dockerfile smoke checks (see `commit-workflow.md`).
 
 ## Before Committing (MANDATORY)

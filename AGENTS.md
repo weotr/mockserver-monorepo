@@ -23,7 +23,8 @@ MockServer is an open-source HTTP(S) mock server and proxy for testing, written 
 
 - **Docker-gated tests CAN and SHOULD be run locally**, not just in CI. Tests that guard on `Assume.assumeTrue(DockerClientFactory.instance().isDockerAvailable())` (Testcontainers live-broker tests, `NET_ADMIN` transparent-proxy e2e, QUIC/HTTP-3 client tests, etc.) will actually execute here — validate them by running and passing them, not merely by confirming they skip.
 - **Keep the Docker-gating in place anyway.** The `assumeTrue(...isDockerAvailable())` guard is still the correct design so the suite degrades gracefully on any CI agent or machine without Docker. Docker being present locally changes how we *validate*, not how we *write* the tests.
-- `DockerClientFactory.instance().isDockerAvailable()` is the canonical availability probe; Testcontainers is the preferred harness. `docker` CLI commands (`docker build`, `docker run`) are also available for Dockerfile smoke checks in the commit workflow.
+- `DockerClientFactory.instance().isDockerAvailable()` is the canonical availability probe and Testcontainers is the preferred harness — **but note a known local caveat:** on Docker Desktop 4.67 / Engine 29.x / API 1.54 the bundled docker-java 3.4.1 (Testcontainers 1.20.6) gets a `400` on the info endpoint, so `isDockerAvailable()` returns **false even though Docker works**, and Testcontainers-gated tests then silently SKIP locally. When you need such a test to actually run here, either bump docker-java/Testcontainers to a version that speaks API 1.54, or gate on a `docker info` CLI check and drive containers via `docker build`/`docker run` (as the transparent-proxy e2e tests do). On Buildkite CI the Testcontainers probe is expected to work.
+- `docker` CLI commands (`docker build`, `docker run`) are also available for Dockerfile smoke checks in the commit workflow.
 
 ### Project Documentation
 
