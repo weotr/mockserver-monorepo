@@ -1,13 +1,11 @@
 package org.mockserver.model;
 
-import junit.framework.TestCase;
 import org.junit.Test;
 
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
 
-import static junit.framework.TestCase.*;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.collection.IsEmptyCollection.empty;
@@ -26,227 +24,219 @@ public class HttpRequestTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(request(), HttpRequest.request());
-        assertNotSame(HttpRequest.request(), HttpRequest.request());
+        assertThat(HttpRequest.request(), is(request()));
+        assertThat(HttpRequest.request(), not(sameInstance(HttpRequest.request())));
     }
 
     @Test
     public void returnsPath() {
-        assertEquals(string("somepath"), new HttpRequest().withPath("somepath").getPath());
-        assertEquals(string("somepath"), request("somepath").getPath());
+        assertThat(new HttpRequest().withPath("somepath").getPath(), is(string("somepath")));
+        assertThat(request("somepath").getPath(), is(string("somepath")));
     }
 
     @Test
     public void returnsMethod() {
-        assertEquals(string("POST"), new HttpRequest().withMethod("POST").getMethod());
+        assertThat(new HttpRequest().withMethod("POST").getMethod(), is(string("POST")));
     }
 
     @Test
     public void setAndGetSocketAddress() {
-        assertEquals(
-            new SocketAddress()
-                .withHost("someHost")
-                .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTPS),
-            new HttpRequest().withSocketAddress(
+        assertThat(new HttpRequest().withSocketAddress(
                 new SocketAddress()
                     .withHost("someHost")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTPS)
-            ).getSocketAddress()
-        );
-        assertEquals(
-            new SocketAddress()
+            ).getSocketAddress(), is(new SocketAddress()
                 .withHost("someHost")
                 .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTPS),
-            new HttpRequest().withSocketAddress("someHost", 1234, SocketAddress.Scheme.HTTPS).getSocketAddress()
-        );
-        assertEquals(
-            new SocketAddress()
+                .withScheme(SocketAddress.Scheme.HTTPS)));
+        assertThat(new HttpRequest().withSocketAddress("someHost", 1234, SocketAddress.Scheme.HTTPS).getSocketAddress(), is(new SocketAddress()
                 .withHost("someHost")
                 .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTPS),
-            new HttpRequest().withSecure(true).withSocketAddress("someHost", 1234).getSocketAddress()
-        );
-        assertEquals(
-            new SocketAddress()
+                .withScheme(SocketAddress.Scheme.HTTPS)));
+        assertThat(new HttpRequest().withSecure(true).withSocketAddress("someHost", 1234).getSocketAddress(), is(new SocketAddress()
                 .withHost("someHost")
                 .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTP),
-            new HttpRequest().withSecure(false).withSocketAddress("someHost", 1234).getSocketAddress()
-        );
-        assertEquals(
-            new SocketAddress()
+                .withScheme(SocketAddress.Scheme.HTTPS)));
+        assertThat(new HttpRequest().withSecure(false).withSocketAddress("someHost", 1234).getSocketAddress(), is(new SocketAddress()
                 .withHost("someHost")
                 .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTPS),
-            new HttpRequest().withSocketAddress(true, "someHost", 1234).getSocketAddress()
-        );
-        assertEquals(
-            new SocketAddress()
+                .withScheme(SocketAddress.Scheme.HTTP)));
+        assertThat(new HttpRequest().withSocketAddress(true, "someHost", 1234).getSocketAddress(), is(new SocketAddress()
                 .withHost("someHost")
                 .withPort(1234)
-                .withScheme(SocketAddress.Scheme.HTTP),
-            new HttpRequest().withSocketAddress(false, "someHost", 1234).getSocketAddress()
-        );
+                .withScheme(SocketAddress.Scheme.HTTPS)));
+        assertThat(new HttpRequest().withSocketAddress(false, "someHost", 1234).getSocketAddress(), is(new SocketAddress()
+                .withHost("someHost")
+                .withPort(1234)
+                .withScheme(SocketAddress.Scheme.HTTP)));
     }
 
     @Test
     public void returnsKeepAlive() {
-        assertEquals(Boolean.TRUE, new HttpRequest().withKeepAlive(true).isKeepAlive());
-        assertEquals(Boolean.FALSE, new HttpRequest().withKeepAlive(false).isKeepAlive());
+        assertThat(new HttpRequest().withKeepAlive(true).isKeepAlive(), is(Boolean.TRUE));
+        assertThat(new HttpRequest().withKeepAlive(false).isKeepAlive(), is(Boolean.FALSE));
     }
 
     @Test
     public void returnsSsl() {
         // true secure socket address null
-        assertEquals(Boolean.TRUE, new HttpRequest().withSecure(true).isSecure());
+        assertThat(new HttpRequest().withSecure(true).isSecure(), is(Boolean.TRUE));
         // false secure socket address null
-        assertEquals(Boolean.FALSE, new HttpRequest().withSecure(false).isSecure());
+        assertThat(new HttpRequest().withSecure(false).isSecure(), is(Boolean.FALSE));
         // false secure scheme HTTP
-        assertEquals(Boolean.FALSE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSecure(false)
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTP)
-            ).isSecure());
+            ).isSecure(), is(Boolean.FALSE));
         // false secure scheme default
-        assertEquals(Boolean.FALSE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSecure(false)
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
-            ).isSecure());
+            ).isSecure(), is(Boolean.FALSE));
         // false secure scheme HTTPS
-        assertEquals(Boolean.TRUE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSecure(false)
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTPS)
-            ).isSecure());
+            ).isSecure(), is(Boolean.TRUE));
         // true secure scheme HTTPS
-        assertEquals(Boolean.TRUE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSecure(true)
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTPS)
-            ).isSecure());
+            ).isSecure(), is(Boolean.TRUE));
         // null secure scheme HTTPS
-        assertEquals(Boolean.TRUE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
                     .withScheme(SocketAddress.Scheme.HTTPS)
-            ).isSecure());
+            ).isSecure(), is(Boolean.TRUE));
         // true secure scheme HTTP
-        assertEquals(Boolean.TRUE, new HttpRequest()
+        assertThat(new HttpRequest()
             .withSecure(true)
             .withSocketAddress(
                 socketAddress()
                     .withHost("sdafgh")
                     .withPort(1234)
-            ).isSecure());
+            ).isSecure(), is(Boolean.TRUE));
     }
 
     @Test
     public void returnsPathParameters() {
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withPathParameters(new Parameter("name", "value")).getPathParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withPathParameters(Collections.singletonList(new Parameter("name", "value"))).getPathParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withPathParameter(new Parameter("name", "value")).getPathParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withPathParameter("name", "value").getPathParameterList().get(0));
-        assertEquals(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }")), new HttpRequest().withSchemaPathParameter("name", "{ \"type\": \"string\" }").getPathParameterList().get(0));
-        assertEquals(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }")), new HttpRequest().withSchemaPathParameter("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getPathParameterList().get(0));
-        assertEquals(new Parameter("name", "value_one", "value_two"), new HttpRequest().withPathParameter(new Parameter("name", "value_one")).withPathParameter(new Parameter("name", "value_two")).getPathParameterList().get(0));
-        assertEquals(new Parameter("name", "value_one", "value_two"), new HttpRequest().withPathParameter(new Parameter("name", "value_one")).withPathParameter("name", "value_two").getPathParameterList().get(0));
+        assertThat(new HttpRequest().withPathParameters(new Parameter("name", "value")).getPathParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withPathParameters(Collections.singletonList(new Parameter("name", "value"))).getPathParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withPathParameter(new Parameter("name", "value")).getPathParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withPathParameter("name", "value").getPathParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withSchemaPathParameter("name", "{ \"type\": \"string\" }").getPathParameterList().get(0), is(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"))));
+        assertThat(new HttpRequest().withSchemaPathParameter("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getPathParameterList().get(0), is(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }"))));
+        assertThat(new HttpRequest().withPathParameter(new Parameter("name", "value_one")).withPathParameter(new Parameter("name", "value_two")).getPathParameterList().get(0), is(new Parameter("name", "value_one", "value_two")));
+        assertThat(new HttpRequest().withPathParameter(new Parameter("name", "value_one")).withPathParameter("name", "value_two").getPathParameterList().get(0), is(new Parameter("name", "value_one", "value_two")));
     }
 
     @Test
     public void returnsQueryStringParameters() {
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withQueryStringParameters(new Parameter("name", "value")).getQueryStringParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withQueryStringParameters(Collections.singletonList(new Parameter("name", "value"))).getQueryStringParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withQueryStringParameter(new Parameter("name", "value")).getQueryStringParameterList().get(0));
-        assertEquals(new Parameter("name", "value"), new HttpRequest().withQueryStringParameter("name", "value").getQueryStringParameterList().get(0));
-        assertEquals(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }")), new HttpRequest().withSchemaQueryStringParameter("name", "{ \"type\": \"string\" }").getQueryStringParameterList().get(0));
-        assertEquals(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }")), new HttpRequest().withSchemaQueryStringParameter("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getQueryStringParameterList().get(0));
-        assertEquals(new Parameter("name", "value_one", "value_two"), new HttpRequest().withQueryStringParameter(new Parameter("name", "value_one")).withQueryStringParameter(new Parameter("name", "value_two")).getQueryStringParameterList().get(0));
-        assertEquals(new Parameter("name", "value_one", "value_two"), new HttpRequest().withQueryStringParameter(new Parameter("name", "value_one")).withQueryStringParameter("name", "value_two").getQueryStringParameterList().get(0));
+        assertThat(new HttpRequest().withQueryStringParameters(new Parameter("name", "value")).getQueryStringParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withQueryStringParameters(Collections.singletonList(new Parameter("name", "value"))).getQueryStringParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withQueryStringParameter(new Parameter("name", "value")).getQueryStringParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withQueryStringParameter("name", "value").getQueryStringParameterList().get(0), is(new Parameter("name", "value")));
+        assertThat(new HttpRequest().withSchemaQueryStringParameter("name", "{ \"type\": \"string\" }").getQueryStringParameterList().get(0), is(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"))));
+        assertThat(new HttpRequest().withSchemaQueryStringParameter("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getQueryStringParameterList().get(0), is(new Parameter(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }"))));
+        assertThat(new HttpRequest().withQueryStringParameter(new Parameter("name", "value_one")).withQueryStringParameter(new Parameter("name", "value_two")).getQueryStringParameterList().get(0), is(new Parameter("name", "value_one", "value_two")));
+        assertThat(new HttpRequest().withQueryStringParameter(new Parameter("name", "value_one")).withQueryStringParameter("name", "value_two").getQueryStringParameterList().get(0), is(new Parameter("name", "value_one", "value_two")));
     }
 
     @Test
     public void returnsBody() {
-        assertEquals(new StringBody("somebody"), new HttpRequest().withBody(new StringBody("somebody")).getBody());
+        assertThat(new HttpRequest().withBody(new StringBody("somebody")).getBody(), is(new StringBody("somebody")));
     }
 
     @Test
     public void returnsHeaders() {
-        assertEquals(new Header("name", "value"), new HttpRequest().withHeaders(new Header("name", "value")).getHeaderList().get(0));
-        assertEquals(new Header("name", "value"), new HttpRequest().withHeaders(Collections.singletonList(new Header("name", "value"))).getHeaderList().get(0));
-        assertEquals(new Header("name", "value"), new HttpRequest().withHeader(new Header("name", "value")).getHeaderList().get(0));
-        assertEquals(new Header("name", "value"), new HttpRequest().withHeader("name", "value").getHeaderList().get(0));
-        assertEquals(new Header(string("name"), schemaString("{ \"type\": \"string\" }")), new HttpRequest().withSchemaHeader("name", "{ \"type\": \"string\" }").getHeaderList().get(0));
-        assertEquals(new Header(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }")), new HttpRequest().withSchemaHeader("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getHeaderList().get(0));
-        assertEquals(new Header("name", ".*"), new HttpRequest().withHeader(string("name")).getHeaderList().get(0));
-        assertEquals(new Header("name", ".*"), new HttpRequest().withHeader("name").getHeaderList().get(0));
-        assertEquals(new Header("name", "value_one", "value_two"), new HttpRequest().withHeader(new Header("name", "value_one")).withHeader(new Header("name", "value_two")).getHeaderList().get(0));
-        assertEquals(new Header("name", "value_one", "value_two"), new HttpRequest().withHeader(new Header("name", "value_one")).withHeader("name", "value_two").getHeaderList().get(0));
-        assertEquals(new Header("name", "value_one", "value_two"), new HttpRequest().withHeaders(new Header("name", "value_one", "value_two")).getHeaderList().get(0));
-        assertEquals(new Header("name", (Collection<String>) null), new HttpRequest().withHeaders(new Header("name")).getHeaderList().get(0));
-        assertEquals(new Header("name"), new HttpRequest().withHeaders(new Header("name")).getHeaderList().get(0));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value")).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withHeaders(Collections.singletonList(new Header("name", "value"))).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withHeader(new Header("name", "value")).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withHeader("name", "value").getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withSchemaHeader("name", "{ \"type\": \"string\" }").getHeaderList().get(0), is(new Header(string("name"), schemaString("{ \"type\": \"string\" }"))));
+        assertThat(new HttpRequest().withSchemaHeader("name", "{ \"type\": \"string\" }", "{ \"type\": \"integer\" }").getHeaderList().get(0), is(new Header(string("name"), schemaString("{ \"type\": \"string\" }"), schemaString("{ \"type\": \"integer\" }"))));
+        assertThat(new HttpRequest().withHeader(string("name")).getHeaderList().get(0), is(new Header("name", ".*")));
+        assertThat(new HttpRequest().withHeader("name").getHeaderList().get(0), is(new Header("name", ".*")));
+        assertThat(new HttpRequest().withHeader(new Header("name", "value_one")).withHeader(new Header("name", "value_two")).getHeaderList().get(0), is(new Header("name", "value_one", "value_two")));
+        assertThat(new HttpRequest().withHeader(new Header("name", "value_one")).withHeader("name", "value_two").getHeaderList().get(0), is(new Header("name", "value_one", "value_two")));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value_one", "value_two")).getHeaderList().get(0), is(new Header("name", "value_one", "value_two")));
+        assertThat(new HttpRequest().withHeaders(new Header("name")).getHeaderList().get(0), is(new Header("name", (Collection<String>) null)));
+        assertThat(new HttpRequest().withHeaders(new Header("name")).getHeaderList().get(0), is(new Header("name")));
         assertThat(new HttpRequest().withHeaders().getHeaderList(), is(empty()));
     }
 
     @Test
     public void returnsFirstHeaders() {
-        assertEquals("value1", new HttpRequest().withHeaders(new Header("name", "value1")).getFirstHeader("name"));
-        assertEquals("value1", new HttpRequest().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("name"));
-        assertEquals("value1", new HttpRequest().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3")).getFirstHeader("name"));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).getFirstHeader("name"), is("value1"));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("name"), is("value1"));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3")).getFirstHeader("name"), is("value1"));
     }
 
     @Test
     public void shouldContainHeaderByName() {
-        assertTrue(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("names"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("value1"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(null));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(""));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name"), is(true));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("names"), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("value1"), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(null), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(""), is(false));
     }
 
     @Test
     public void shouldContainHeaderByNameAndValue() {
-        assertTrue(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name", "value1"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("names", "value1"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name", "value12"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("value1", "name"));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(null, null));
-        assertFalse(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("", ""));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name", "value1"), is(true));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("names", "value1"), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("name", "value12"), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("value1", "name"), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader(null, null), is(false));
+        assertThat(new HttpRequest().withHeaders(new Header("name", "value1")).containsHeader("", ""), is(false));
     }
 
     @Test
     public void returnsCookies() {
-        assertEquals(new Cookie("name", "value"), new HttpRequest().withCookies(new Cookie("name", "value")).getCookieList().get(0));
-        assertEquals(new Cookie("name", ""), new HttpRequest().withCookies(new Cookie("name", "")).getCookieList().get(0));
-        assertEquals(new Cookie("name", null), new HttpRequest().withCookies(new Cookie("name", null)).getCookieList().get(0));
-        assertEquals(new Cookie("name", "value"), new HttpRequest().withCookies(Collections.singletonList(new Cookie("name", "value"))).getCookieList().get(0));
+        assertThat(new HttpRequest().withCookies(new Cookie("name", "value")).getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpRequest().withCookies(new Cookie("name", "")).getCookieList().get(0), is(new Cookie("name", "")));
+        assertThat(new HttpRequest().withCookies(new Cookie("name", null)).getCookieList().get(0), is(new Cookie("name", null)));
+        assertThat(new HttpRequest().withCookies(Collections.singletonList(new Cookie("name", "value"))).getCookieList().get(0), is(new Cookie("name", "value")));
 
-        assertEquals(new Cookie("name", "value"), new HttpRequest().withCookie(new Cookie("name", "value")).getCookieList().get(0));
-        assertEquals(new Cookie("name", "value"), new HttpRequest().withCookie("name", "value").getCookieList().get(0));
-        assertEquals(new Cookie(string("name"), schemaString("{ \"type\": \"string\" }")), new HttpRequest().withSchemaCookie("name", "{ \"type\": \"string\" }").getCookieList().get(0));
-        assertEquals(new Cookie("name", ""), new HttpRequest().withCookie(new Cookie("name", "")).getCookieList().get(0));
-        assertEquals(new Cookie("name", null), new HttpRequest().withCookie(new Cookie("name", null)).getCookieList().get(0));
+        assertThat(new HttpRequest().withCookie(new Cookie("name", "value")).getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpRequest().withCookie("name", "value").getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpRequest().withSchemaCookie("name", "{ \"type\": \"string\" }").getCookieList().get(0), is(new Cookie(string("name"), schemaString("{ \"type\": \"string\" }"))));
+        assertThat(new HttpRequest().withCookie(new Cookie("name", "")).getCookieList().get(0), is(new Cookie("name", "")));
+        assertThat(new HttpRequest().withCookie(new Cookie("name", null)).getCookieList().get(0), is(new Cookie("name", null)));
     }
 
     @Test
     public void shouldReturnFormattedRequestInToString() {
-        TestCase.assertEquals("{" + NEW_LINE +
+        assertThat(request()
+                .withPath("some_path")
+                .withBody("some_body")
+                .withMethod("METHOD")
+                .withHeaders(new Header("some_header", "some_header_value"))
+                .withCookies(new Cookie("some_cookie", "some_cookie_value"))
+                .withSecure(true)
+                .withPathParameters(new Parameter("some_path_parameter", "some_path_parameter_value"))
+                .withQueryStringParameters(new Parameter("some_parameter", "some_parameter_value"))
+                .withKeepAlive(true)
+                .toString(), is("{" + NEW_LINE +
                 "  \"method\" : \"METHOD\"," + NEW_LINE +
                 "  \"path\" : \"some_path\"," + NEW_LINE +
                 "  \"pathParameters\" : {" + NEW_LINE +
@@ -264,19 +254,7 @@ public class HttpRequestTest {
                 "  \"keepAlive\" : true," + NEW_LINE +
                 "  \"secure\" : true," + NEW_LINE +
                 "  \"body\" : \"some_body\"" + NEW_LINE +
-                "}",
-            request()
-                .withPath("some_path")
-                .withBody("some_body")
-                .withMethod("METHOD")
-                .withHeaders(new Header("some_header", "some_header_value"))
-                .withCookies(new Cookie("some_cookie", "some_cookie_value"))
-                .withSecure(true)
-                .withPathParameters(new Parameter("some_path_parameter", "some_path_parameter_value"))
-                .withQueryStringParameters(new Parameter("some_parameter", "some_parameter_value"))
-                .withKeepAlive(true)
-                .toString()
-        );
+                "}"));
     }
 
     @Test
@@ -384,43 +362,43 @@ public class HttpRequestTest {
     public void parsesIpv6AndIpv4HostPort() {
         // IPv6 with port - brackets should be stripped
         String[] hostParts = HttpRequest.splitHostPort("[::1]:32890");
-        assertEquals("::1", hostParts[0]);
-        assertEquals("32890", hostParts[1]);
+        assertThat(hostParts[0], is("::1"));
+        assertThat(hostParts[1], is("32890"));
         
         // Hostname with port
         hostParts = HttpRequest.splitHostPort("localhost:32890");
-        assertEquals("localhost", hostParts[0]);
-        assertEquals("32890", hostParts[1]);
+        assertThat(hostParts[0], is("localhost"));
+        assertThat(hostParts[1], is("32890"));
         
         // IPv4 with port
         hostParts = HttpRequest.splitHostPort("127.0.0.1:32890");
-        assertEquals("127.0.0.1", hostParts[0]);
-        assertEquals("32890", hostParts[1]);
+        assertThat(hostParts[0], is("127.0.0.1"));
+        assertThat(hostParts[1], is("32890"));
         
         // IPv4 without port
         hostParts = HttpRequest.splitHostPort("127.0.0.1");
-        assertEquals("127.0.0.1", hostParts[0]);
-        assertEquals(1, hostParts.length);
+        assertThat(hostParts[0], is("127.0.0.1"));
+        assertThat(hostParts.length, is(1));
         
         // IPv6 without port - brackets should be stripped
         hostParts = HttpRequest.splitHostPort("[::1]");
-        assertEquals("::1", hostParts[0]);
-        assertEquals(1, hostParts.length);
+        assertThat(hostParts[0], is("::1"));
+        assertThat(hostParts.length, is(1));
         
         // Full IPv6 address with port
         hostParts = HttpRequest.splitHostPort("[2001:db8::1]:8080");
-        assertEquals("2001:db8::1", hostParts[0]);
-        assertEquals("8080", hostParts[1]);
+        assertThat(hostParts[0], is("2001:db8::1"));
+        assertThat(hostParts[1], is("8080"));
 
         // Malformed bracketed input (missing closing ']') — should fall through to plain split
         hostParts = HttpRequest.splitHostPort("[no-closing-bracket");
-        assertEquals("[no-closing-bracket", hostParts[0]);
-        assertEquals(1, hostParts.length);
+        assertThat(hostParts[0], is("[no-closing-bracket"));
+        assertThat(hostParts.length, is(1));
 
         // Malformed bracketed IPv6 with colons but no closing ']' — falls through to split(":");
         // callers must read defensively (hostParts[0]/[1]) since splits on all colons.
         hostParts = HttpRequest.splitHostPort("[2001:db8::1");
-        assertEquals("[2001", hostParts[0]);
+        assertThat(hostParts[0], is("[2001"));
     }
 
     @Test
@@ -433,8 +411,8 @@ public class HttpRequestTest {
         InetSocketAddress socketAddress = request.socketAddressFromHostHeader();
         
         // Then
-        assertEquals("0:0:0:0:0:0:0:1", socketAddress.getAddress().getHostAddress());
-        assertEquals(8080, socketAddress.getPort());
+        assertThat(socketAddress.getAddress().getHostAddress(), is("0:0:0:0:0:0:0:1"));
+        assertThat(socketAddress.getPort(), is(8080));
     }
 
     @Test
@@ -448,8 +426,8 @@ public class HttpRequestTest {
         InetSocketAddress socketAddress = request.socketAddressFromHostHeader();
         
         // Then
-        assertEquals("2001:db8:0:0:0:0:0:1", socketAddress.getAddress().getHostAddress());
-        assertEquals(443, socketAddress.getPort());  // Default HTTPS port
+        assertThat(socketAddress.getAddress().getHostAddress(), is("2001:db8:0:0:0:0:0:1"));
+        assertThat(socketAddress.getPort(), is(443));  // Default HTTPS port
     }
 
     @Test
@@ -459,56 +437,56 @@ public class HttpRequestTest {
             .withSocketAddress(false, "[::1]:9090", null);
         
         // Then
-        assertEquals("::1", request.getSocketAddress().getHost());
-        assertEquals(Integer.valueOf(9090), request.getSocketAddress().getPort());
+        assertThat(request.getSocketAddress().getHost(), is("::1"));
+        assertThat(request.getSocketAddress().getPort(), is(Integer.valueOf(9090)));
     }
 
     @Test
     public void shouldCreateGetRequest() {
         HttpRequest request = HttpRequest.get("/path");
-        assertEquals(string("GET"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("GET")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreatePostRequest() {
         HttpRequest request = HttpRequest.post("/path");
-        assertEquals(string("POST"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("POST")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreatePutRequest() {
         HttpRequest request = HttpRequest.put("/path");
-        assertEquals(string("PUT"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("PUT")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreateDeleteRequest() {
         HttpRequest request = HttpRequest.delete("/path");
-        assertEquals(string("DELETE"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("DELETE")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreatePatchRequest() {
         HttpRequest request = HttpRequest.patch("/path");
-        assertEquals(string("PATCH"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("PATCH")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreateHeadRequest() {
         HttpRequest request = HttpRequest.head("/path");
-        assertEquals(string("HEAD"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("HEAD")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 
     @Test
     public void shouldCreateOptionsRequest() {
         HttpRequest request = HttpRequest.options("/path");
-        assertEquals(string("OPTIONS"), request.getMethod());
-        assertEquals(string("/path"), request.getPath());
+        assertThat(request.getMethod(), is(string("OPTIONS")));
+        assertThat(request.getPath(), is(string("/path")));
     }
 }

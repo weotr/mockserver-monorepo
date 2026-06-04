@@ -13,10 +13,11 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 /**
  * @author jamesdbloom
  */
@@ -39,14 +40,14 @@ public class MockServerHttpResponseToHttpServletResponseEncoderBasicMappingTest 
         new MockServerHttpResponseToHttpServletResponseEncoder(new MockServerLogger()).mapMockServerResponseToHttpServletResponse(httpResponse, httpServletResponse);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), httpServletResponse.getStatus());
-        assertEquals("somebody", httpServletResponse.getContentAsString());
-        assertEquals("headerValue1", httpServletResponse.getHeader("headerName1"));
-        assertEquals("headerValue2", httpServletResponse.getHeader("headerName2"));
-        assertEquals(Arrays.asList(
+        assertThat(httpServletResponse.getStatus(), is(HttpStatusCode.OK_200.code()));
+        assertThat(httpServletResponse.getContentAsString(), is("somebody"));
+        assertThat(httpServletResponse.getHeader("headerName1"), is("headerValue1"));
+        assertThat(httpServletResponse.getHeader("headerName2"), is("headerValue2"));
+        assertThat(httpServletResponse.getHeaders("Set-Cookie"), is(Arrays.asList(
             "cookieName1=cookieValue1",
             "cookieName2=cookieValue2"
-        ), httpServletResponse.getHeaders("Set-Cookie"));
+        )));
     }
 
     @Test(expected = RuntimeException.class)

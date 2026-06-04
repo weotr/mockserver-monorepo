@@ -5,11 +5,9 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 
-import static junit.framework.TestCase.*;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
-
 
 /**
  * @author jamesdbloom
@@ -28,11 +26,11 @@ public class CircularHashMapTest {
         circularHashMap.put("4", "4");
 
         // then
-        assertEquals(3, circularHashMap.size());
-        assertFalse(circularHashMap.containsKey("1"));
-        assertTrue(circularHashMap.containsKey("2"));
-        assertTrue(circularHashMap.containsKey("3"));
-        assertTrue(circularHashMap.containsKey("4"));
+        assertThat(circularHashMap.size(), is(3));
+        assertThat(circularHashMap.containsKey("1"), is(false));
+        assertThat(circularHashMap.containsKey("2"), is(true));
+        assertThat(circularHashMap.containsKey("3"), is(true));
+        assertThat(circularHashMap.containsKey("4"), is(true));
     }
 
     @Test
@@ -63,14 +61,14 @@ public class CircularHashMapTest {
 
         circularHashMap.put("1", "a");
         circularHashMap.put("2", "b");
-        assertTrue(evicted.isEmpty());
+        assertThat(evicted.isEmpty(), is(true));
 
         circularHashMap.put("3", "c");
-        assertEquals(1, evicted.size());
-        assertEquals("a", evicted.get(0));
+        assertThat(evicted.size(), is(1));
+        assertThat(evicted.get(0), is("a"));
 
         circularHashMap.put("4", "d");
-        assertEquals(2, evicted.size());
-        assertEquals("b", evicted.get(1));
+        assertThat(evicted.size(), is(2));
+        assertThat(evicted.get(1), is("b"));
     }
 }

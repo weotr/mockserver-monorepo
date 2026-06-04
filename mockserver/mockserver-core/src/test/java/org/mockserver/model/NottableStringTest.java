@@ -2,7 +2,6 @@ package org.mockserver.model;
 
 import org.junit.Test;
 
-import static junit.framework.TestCase.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNot.not;
@@ -49,9 +48,9 @@ public class NottableStringTest {
 
     @Test
     public void shouldEqualIgnoreCase() {
-        assertTrue(string("value").equalsIgnoreCase(string("VALUE")));
-        assertTrue(NottableString.not("value").equalsIgnoreCase(NottableString.not("vaLUe")));
-        assertTrue(string("value").equalsIgnoreCase("VaLue"));
+        assertThat(string("value").equalsIgnoreCase(string("VALUE")), is(true));
+        assertThat(NottableString.not("value").equalsIgnoreCase(NottableString.not("vaLUe")), is(true));
+        assertThat(string("value").equalsIgnoreCase("VaLue"), is(true));
     }
 
     @Test
@@ -74,23 +73,23 @@ public class NottableStringTest {
 
     @Test
     public void shouldEqualForDoubleNegativeIgnoreCase() {
-        assertFalse(NottableString.not("value").equalsIgnoreCase(string("VAlue")));
-        assertFalse(NottableString.not("value").equalsIgnoreCase("vaLUe"));
+        assertThat(NottableString.not("value").equalsIgnoreCase(string("VAlue")), is(false));
+        assertThat(NottableString.not("value").equalsIgnoreCase("vaLUe"), is(false));
 
-        assertFalse(string("value").equalsIgnoreCase(string("other_value")));
-        assertFalse(NottableString.string("value").equalsIgnoreCase("OTHER_value"));
+        assertThat(string("value").equalsIgnoreCase(string("other_value")), is(false));
+        assertThat(NottableString.string("value").equalsIgnoreCase("OTHER_value"), is(false));
 
-        assertFalse(string("value").equalsIgnoreCase(NottableString.not("VALUE")));
+        assertThat(string("value").equalsIgnoreCase(NottableString.not("VALUE")), is(false));
     }
 
     @Test
     public void shouldEqualForNotValueNull() {
-        assertEquals(NottableString.not("value"), string("value", true));
-        assertEquals(string("value"), string("value", false));
+        assertThat(string("value", true), is(NottableString.not("value")));
+        assertThat(string("value", false), is(string("value")));
 
         NottableString initiallyTrueValue = NottableString.string("value");
-        assertEquals(initiallyTrueValue, string("value", null));
-        assertFalse(string("value", null).isNot());
+        assertThat(string("value", null), is(initiallyTrueValue));
+        assertThat(string("value", null).isNot(), is(false));
     }
 
     @Test

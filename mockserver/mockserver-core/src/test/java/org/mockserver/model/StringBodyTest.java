@@ -5,14 +5,14 @@ import org.junit.Test;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.model.StringBody.subString;
 
+import static org.hamcrest.core.IsSame.sameInstance;
+import static org.hamcrest.CoreMatchers.not;
 /**
  * @author jamesdbloom
  */
@@ -20,8 +20,8 @@ public class StringBodyTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(exact("some_body"), exact("some_body"));
-        assertNotSame(exact("some_body"), exact("some_body"));
+        assertThat(exact("some_body"), is(exact("some_body")));
+        assertThat(exact("some_body"), not(sameInstance(exact("some_body"))));
     }
 
     @Test

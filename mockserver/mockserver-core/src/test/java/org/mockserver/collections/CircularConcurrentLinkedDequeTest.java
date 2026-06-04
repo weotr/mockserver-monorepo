@@ -4,11 +4,11 @@ import org.junit.Test;
 
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 
+import static org.hamcrest.core.Is.is;
 /**
  * @author jamesdbloom
  */
@@ -26,7 +26,7 @@ public class CircularConcurrentLinkedDequeTest {
         concurrentLinkedQueue.add("4");
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue, not(contains("1")));
         assertThat(concurrentLinkedQueue, contains("2", "3", "4"));
     }
@@ -40,7 +40,7 @@ public class CircularConcurrentLinkedDequeTest {
         concurrentLinkedQueue.addAll(Arrays.asList("1", "2", "3", "4"));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue, not(contains("1")));
         assertThat(concurrentLinkedQueue, contains("2", "3", "4"));
     }

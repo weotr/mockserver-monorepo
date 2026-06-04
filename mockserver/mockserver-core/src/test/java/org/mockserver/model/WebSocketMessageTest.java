@@ -4,20 +4,19 @@ import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNot.not;
 import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockserver.model.WebSocketMessage.webSocketMessage;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class WebSocketMessageTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(webSocketMessage(), webSocketMessage());
-        assertNotSame(webSocketMessage(), webSocketMessage());
+        assertThat(webSocketMessage(), is(webSocketMessage()));
+        assertThat(webSocketMessage(), not(sameInstance(webSocketMessage())));
     }
 
     @Test

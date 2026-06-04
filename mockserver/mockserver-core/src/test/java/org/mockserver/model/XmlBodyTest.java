@@ -5,13 +5,13 @@ import org.junit.Test;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.XmlBody.xml;
 
+import static org.hamcrest.core.IsSame.sameInstance;
+import static org.hamcrest.CoreMatchers.not;
 /**
  * @author jamesdbloom
  */
@@ -19,8 +19,8 @@ public class XmlBodyTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(xml("some_body"), xml("some_body"));
-        assertNotSame(xml("some_body"), xml("some_body"));
+        assertThat(xml("some_body"), is(xml("some_body")));
+        assertThat(xml("some_body"), not(sameInstance(xml("some_body"))));
     }
 
     @Test

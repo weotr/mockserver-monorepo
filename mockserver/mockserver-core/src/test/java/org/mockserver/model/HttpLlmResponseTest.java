@@ -4,8 +4,6 @@ import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNot.not;
@@ -14,12 +12,13 @@ import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.EmbeddingResponse.embedding;
 import static org.mockserver.model.HttpLlmResponse.llmResponse;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class HttpLlmResponseTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(llmResponse(), llmResponse());
-        assertNotSame(llmResponse(), llmResponse());
+        assertThat(llmResponse(), is(llmResponse()));
+        assertThat(llmResponse(), not(sameInstance(llmResponse())));
     }
 
     @Test

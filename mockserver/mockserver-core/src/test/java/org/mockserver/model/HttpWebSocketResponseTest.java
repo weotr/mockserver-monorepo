@@ -6,8 +6,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
@@ -18,12 +16,13 @@ import static org.mockserver.model.HttpWebSocketResponse.webSocketResponse;
 import static org.mockserver.model.WebSocketMessage.webSocketMessage;
 import static org.mockserver.model.WebSocketMessageMatcher.webSocketMessageMatcher;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class HttpWebSocketResponseTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(webSocketResponse(), webSocketResponse());
-        assertNotSame(webSocketResponse(), webSocketResponse());
+        assertThat(webSocketResponse(), is(webSocketResponse()));
+        assertThat(webSocketResponse(), not(sameInstance(webSocketResponse())));
     }
 
     @Test

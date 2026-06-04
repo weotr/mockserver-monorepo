@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.*;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
@@ -22,6 +21,7 @@ import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.ConnectionOptions.connectionOptions;
 import static org.mockserver.model.HttpResponse.response;
 
+import static org.hamcrest.Matchers.nullValue;
 /**
  * @author jamesdbloom
  */
@@ -39,50 +39,50 @@ public class HttpResponseTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(response(), response());
-        assertNotSame(response(), response());
+        assertThat(response(), is(response()));
+        assertThat(response(), not(sameInstance(response())));
     }
 
     @Test
     public void returnsResponseStatusCode() {
-        assertEquals(new Integer(200), new HttpResponse().withStatusCode(200).getStatusCode());
+        assertThat(new HttpResponse().withStatusCode(200).getStatusCode(), is(new Integer(200)));
     }
 
     @Test
     public void returnsResponseReasonPhrase() {
-        assertEquals("reasonPhrase", new HttpResponse().withReasonPhrase("reasonPhrase").getReasonPhrase());
+        assertThat(new HttpResponse().withReasonPhrase("reasonPhrase").getReasonPhrase(), is("reasonPhrase"));
     }
 
     @Test
     public void returnsBody() {
-        assertEquals(base64Converter.bytesToBase64String("somebody".getBytes(UTF_8)), new HttpResponse().withBody("somebody".getBytes(UTF_8)).getBodyAsString());
-        assertEquals("somebody", new HttpResponse().withBody("somebody").getBodyAsString());
-        assertNull(new HttpResponse().withBody((byte[]) null).getBodyAsString());
-        assertNull(new HttpResponse().withBody((String) null).getBodyAsString());
+        assertThat(new HttpResponse().withBody("somebody".getBytes(UTF_8)).getBodyAsString(), is(base64Converter.bytesToBase64String("somebody".getBytes(UTF_8))));
+        assertThat(new HttpResponse().withBody("somebody").getBodyAsString(), is("somebody"));
+        assertThat(new HttpResponse().withBody((byte[]) null).getBodyAsString(), nullValue());
+        assertThat(new HttpResponse().withBody((String) null).getBodyAsString(), nullValue());
     }
 
     @Test
     public void returnsHeaders() {
-        assertEquals(new Header("name", "value"), new HttpResponse().withHeaders(new Header("name", "value")).getHeaderList().get(0));
-        assertEquals(new Header("name", "value"), new HttpResponse().withHeaders(Collections.singletonList(new Header("name", "value"))).getHeaderList().get(0));
-        assertEquals(new Header("name", "value"), new HttpRequest().withHeader(new Header("name", "value")).getHeaderList().get(0));
-        assertEquals(new Header("name", "value_one", "value_two"), new HttpRequest().withHeader(new Header("name", "value_one")).withHeader(new Header("name", "value_two")).getHeaderList().get(0));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value")).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpResponse().withHeaders(Collections.singletonList(new Header("name", "value"))).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withHeader(new Header("name", "value")).getHeaderList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpRequest().withHeader(new Header("name", "value_one")).withHeader(new Header("name", "value_two")).getHeaderList().get(0), is(new Header("name", "value_one", "value_two")));
     }
 
     @Test
     public void returnsFirstHeaders() {
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("name", "value1")).getFirstHeader("name"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("name"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3")).getFirstHeader("name"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value1")).getFirstHeader("name"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("name"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3")).getFirstHeader("name"), is("value1"));
     }
 
     @Test
     public void returnsFirstHeaderIgnoringCase() {
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("NAME", "value1")).getFirstHeader("name"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("NAME"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("NAME", "value1", "value2"), new Header("NAME", "value3"), new Header("NAME", "value4")).getFirstHeader("NAME"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3"), new Header("name", "value4")).getFirstHeader("NAME"));
-        assertEquals("value1", new HttpResponse().withHeaders(new Header("NAME", "value1", "value2"), new Header("name", "value3"), new Header("name", "value4")).getFirstHeader("name"));
+        assertThat(new HttpResponse().withHeaders(new Header("NAME", "value1")).getFirstHeader("name"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value1", "value2")).getFirstHeader("NAME"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("NAME", "value1", "value2"), new Header("NAME", "value3"), new Header("NAME", "value4")).getFirstHeader("NAME"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value1", "value2"), new Header("name", "value3"), new Header("name", "value4")).getFirstHeader("NAME"), is("value1"));
+        assertThat(new HttpResponse().withHeaders(new Header("NAME", "value1", "value2"), new Header("name", "value3"), new Header("name", "value4")).getFirstHeader("name"), is("value1"));
     }
 
     @Test
@@ -95,17 +95,17 @@ public class HttpResponseTest {
 
     @Test
     public void containsHeaderIgnoringCase() {
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("name", "value"));
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("name", "VALUE"));
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("NAME", "value"));
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "valueOne"));
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "VALUEONE"));
-        assertTrue(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("NAME", "valueTwo"));
-        assertTrue(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("name", "ValueOne"));
-        assertTrue(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("name", "valueOne"));
-        assertTrue(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("NAME", "ValueOne"));
-        assertFalse(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("otherName", "valueOne"));
-        assertFalse(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "value"));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("name", "value"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("name", "VALUE"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "value")).containsHeader("NAME", "value"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "valueOne"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "VALUEONE"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("NAME", "valueTwo"), is(true));
+        assertThat(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("name", "ValueOne"), is(true));
+        assertThat(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("name", "valueOne"), is(true));
+        assertThat(new HttpResponse().withHeader("name", "valueOne", "valueTwo").containsHeader("NAME", "ValueOne"), is(true));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("otherName", "valueOne"), is(false));
+        assertThat(new HttpResponse().withHeaders(new Header("name", "valueOne", "valueTwo")).containsHeader("name", "value"), is(false));
     }
 
     @Test
@@ -130,36 +130,33 @@ public class HttpResponseTest {
 
     @Test
     public void returnsCookies() {
-        assertEquals(new Cookie("name", "value"), new HttpResponse().withCookies(new Cookie("name", "value")).getCookieList().get(0));
-        assertEquals(new Cookie("name", ""), new HttpResponse().withCookies(new Cookie("name", "")).getCookieList().get(0));
-        assertEquals(new Cookie("name", null), new HttpResponse().withCookies(new Cookie("name", null)).getCookieList().get(0));
+        assertThat(new HttpResponse().withCookies(new Cookie("name", "value")).getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpResponse().withCookies(new Cookie("name", "")).getCookieList().get(0), is(new Cookie("name", "")));
+        assertThat(new HttpResponse().withCookies(new Cookie("name", null)).getCookieList().get(0), is(new Cookie("name", null)));
 
-        assertEquals(new Cookie("name", "value"), new HttpResponse().withCookies(Collections.singletonList(new Cookie("name", "value"))).getCookieList().get(0));
+        assertThat(new HttpResponse().withCookies(Collections.singletonList(new Cookie("name", "value"))).getCookieList().get(0), is(new Cookie("name", "value")));
 
-        assertEquals(new Cookie("name", "value"), new HttpResponse().withCookie(new Cookie("name", "value")).getCookieList().get(0));
-        assertEquals(new Cookie("name", "value"), new HttpResponse().withCookie("name", "value").getCookieList().get(0));
-        assertEquals(new Cookie("name", ""), new HttpResponse().withCookie(new Cookie("name", "")).getCookieList().get(0));
-        assertEquals(new Cookie("name", null), new HttpResponse().withCookie(new Cookie("name", null)).getCookieList().get(0));
+        assertThat(new HttpResponse().withCookie(new Cookie("name", "value")).getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpResponse().withCookie("name", "value").getCookieList().get(0), is(new Cookie("name", "value")));
+        assertThat(new HttpResponse().withCookie(new Cookie("name", "")).getCookieList().get(0), is(new Cookie("name", "")));
+        assertThat(new HttpResponse().withCookie(new Cookie("name", null)).getCookieList().get(0), is(new Cookie("name", null)));
     }
 
     @Test
     public void setsDelay() {
-        assertEquals(new Delay(TimeUnit.MILLISECONDS, 10), new HttpResponse().withDelay(new Delay(TimeUnit.MILLISECONDS, 10)).getDelay());
-        assertEquals(new Delay(TimeUnit.MILLISECONDS, 10), new HttpResponse().withDelay(TimeUnit.MILLISECONDS, 10).getDelay());
+        assertThat(new HttpResponse().withDelay(new Delay(TimeUnit.MILLISECONDS, 10)).getDelay(), is(new Delay(TimeUnit.MILLISECONDS, 10)));
+        assertThat(new HttpResponse().withDelay(TimeUnit.MILLISECONDS, 10).getDelay(), is(new Delay(TimeUnit.MILLISECONDS, 10)));
     }
 
     @Test
     public void setsConnectionOptions() {
-        assertEquals(
-            new ConnectionOptions()
-                .withContentLengthHeaderOverride(10),
-            new HttpResponse()
+        assertThat(new HttpResponse()
                 .withConnectionOptions(
                     new ConnectionOptions()
                         .withContentLengthHeaderOverride(10)
                 )
-                .getConnectionOptions()
-        );
+                .getConnectionOptions(), is(new ConnectionOptions()
+                .withContentLengthHeaderOverride(10)));
     }
 
     @Test

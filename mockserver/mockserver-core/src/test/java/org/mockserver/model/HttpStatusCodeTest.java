@@ -2,10 +2,9 @@ package org.mockserver.model;
 
 import org.junit.Test;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
-
-
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.hamcrest.Matchers.nullValue;
 /**
  * @author jamesdbloom
  */
@@ -13,15 +12,15 @@ public class HttpStatusCodeTest {
 
     @Test
     public void shouldFindEnumForCode() {
-        assertEquals(HttpStatusCode.FOUND_302, HttpStatusCode.code(302));
-        assertEquals(HttpStatusCode.BAD_GATEWAY_502, HttpStatusCode.code(502));
-        assertEquals(HttpStatusCode.INSUFFICIENT_STORAGE_507, HttpStatusCode.code(507));
-        assertNull(HttpStatusCode.code(600));
+        assertThat(HttpStatusCode.code(302), is(HttpStatusCode.FOUND_302));
+        assertThat(HttpStatusCode.code(502), is(HttpStatusCode.BAD_GATEWAY_502));
+        assertThat(HttpStatusCode.code(507), is(HttpStatusCode.INSUFFICIENT_STORAGE_507));
+        assertThat(HttpStatusCode.code(600), nullValue());
     }
 
     @Test
     public void shouldReturnCorrectValues() {
-        assertEquals(HttpStatusCode.FOUND_302.reasonPhrase(), "Moved Temporarily");
-        assertEquals(HttpStatusCode.FOUND_302.code(), 302);
+        assertThat("Moved Temporarily", is(HttpStatusCode.FOUND_302.reasonPhrase()));
+        assertThat(302, is(HttpStatusCode.FOUND_302.code()));
     }
 }

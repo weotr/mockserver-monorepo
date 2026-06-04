@@ -7,13 +7,13 @@ import jakarta.xml.bind.DatatypeConverter;
 import java.nio.charset.StandardCharsets;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.BinaryBody.binary;
 
+import static org.hamcrest.core.IsSame.sameInstance;
+import static org.hamcrest.CoreMatchers.not;
 /**
  * @author jamesdbloom
  */
@@ -25,13 +25,13 @@ public class BinaryBodyTest {
     public void shouldAlwaysCreateNewObject() {
         byte[] body = DatatypeConverter.parseBase64Binary("some_body");
 
-        assertEquals(binary(body), binary(body));
-        assertNotSame(binary(body), binary(body));
+        assertThat(binary(body), is(binary(body)));
+        assertThat(binary(body), not(sameInstance(binary(body))));
     }
 
     @Test
     public void shouldReturnFormattedRequestInToString() {
-        assertEquals(base64Converter.bytesToBase64String("some_body".getBytes(UTF_8)), binary("some_body".getBytes(UTF_8)).toString());
+        assertThat(binary("some_body".getBytes(UTF_8)).toString(), is(base64Converter.bytesToBase64String("some_body".getBytes(UTF_8))));
     }
 
     @Test

@@ -8,31 +8,30 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 import static org.mockserver.collections.SubSetMatcher.containsSubset;
 import static org.mockserver.model.NottableSchemaString.schemaString;
 import static org.mockserver.model.NottableString.string;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 public class SubSetMatcherTest {
 
     static RegexStringMatcher regexStringMatcher = new RegexStringMatcher(new MockServerLogger(), false);
 
     @Test
     public void shouldContainSubsetForEmpty() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Collections.emptyList(),
             new ArrayList<>(Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForMultiValuesAllMatching() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one_one"),
                 new ImmutableEntry(regexStringMatcher, "one", "one_two"),
@@ -44,13 +43,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one_two"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForMultiValuesSubset() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one_one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -61,13 +59,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one_two"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForNottedKey() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "!two", "two"),
@@ -77,13 +74,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "notTwo", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForNottedValue() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "!two"),
@@ -93,13 +89,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "notTwo"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForNottedMultiValue() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one_one"),
                 new ImmutableEntry(regexStringMatcher, "one", "!one_two"),
@@ -111,13 +106,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "notOne_two"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForSubsetWithPresentOptional() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -128,13 +122,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "four", "four")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForSubsetWithNotPresentOptional() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -144,13 +137,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForOptionalWrongValue() {
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -161,13 +153,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "four", "wrong")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
     public void shouldContainSubsetForOptionalWrongValueInReverse() {
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -178,13 +169,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "?four", "wrong")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
     public void shouldContainSubsetForExtraValue() {
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -196,13 +186,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "four", "four")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
     public void shouldContainSubsetForWrongValue() {
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -213,13 +202,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "two", "wrong"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "four", "four")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
     public void shouldContainSubsetForWrongKey() {
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
@@ -230,13 +218,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "wrong", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three"),
                 new ImmutableEntry(regexStringMatcher, "four", "four")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
     public void shouldContainSubsetForSchemaKey() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, schemaString("{\"type\": \"string\", \"pattern\": \"tw.{1}\"}"), string("two"))
@@ -245,13 +232,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForSchemaValue() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, string("two"), schemaString("{\"type\": \"string\", \"pattern\": \"tw.{1}\"}"))
@@ -260,13 +246,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForSchemaMultiValue() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "one", "one_one"),
                 new ImmutableEntry(regexStringMatcher, string("one"), schemaString("{\"type\": \"string\", \"pattern\": \"one_t.*\"}")),
@@ -278,13 +263,12 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one_two"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
     public void shouldContainSubsetForSchemaKeyAndMultiValue() {
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, schemaString("{\"type\": \"string\", \"pattern\": \"o.*\"}"), string("one_one")),
                 new ImmutableEntry(regexStringMatcher, schemaString("{\"type\": \"string\", \"pattern\": \"o.*\"}"), string("one_two")),
@@ -296,9 +280,8 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one_two"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+            ))), is(true));
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, schemaString("{\"type\": \"string\", \"pattern\": \"o.*\"}"), string("one_one")),
                 new ImmutableEntry(regexStringMatcher, schemaString("{\"type\": \"string\", \"pattern\": \"o.*\"}"), string("one_two")),
@@ -309,8 +292,7 @@ public class SubSetMatcherTest {
                 new ImmutableEntry(regexStringMatcher, "one", "one_one"),
                 new ImmutableEntry(regexStringMatcher, "two", "two"),
                 new ImmutableEntry(regexStringMatcher, "three", "three")
-            )))
-        );
+            ))), is(false));
     }
 
     @Test
@@ -319,15 +301,14 @@ public class SubSetMatcherTest {
         // Expectation: name=John AND NOT age
         // Request: name=John (no age parameter)
         // Should match because: 1 positive match (name) >= 1 required (name), and age is not present
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "!age", ".*")
             ),
             new ArrayList<>(Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
@@ -335,7 +316,7 @@ public class SubSetMatcherTest {
         // Expectation: name=John AND city=London AND NOT age AND NOT country
         // Request: name=John, city=London (no age or country)
         // Should match because: 2 positive matches >= 2 required, and age/country not present
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "city", "London"),
@@ -345,8 +326,7 @@ public class SubSetMatcherTest {
             new ArrayList<>(Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "city", "London")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
@@ -354,7 +334,7 @@ public class SubSetMatcherTest {
         // Expectation: name=John AND ?age AND NOT country
         // Request: name=John (no age or country)
         // Should match: 1 positive match >= 1 required, age optional, country not present
-        assertTrue(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "?age", ".*"),
@@ -362,8 +342,7 @@ public class SubSetMatcherTest {
             ),
             new ArrayList<>(Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John")
-            )))
-        );
+            ))), is(true));
     }
 
     @Test
@@ -371,7 +350,7 @@ public class SubSetMatcherTest {
         // Expectation: name=John AND NOT age
         // Request: name=John, age=25
         // Should NOT match because age is present (notted key found)
-        assertFalse(containsSubset(null, null, regexStringMatcher,
+        assertThat(containsSubset(null, null, regexStringMatcher,
             Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "!age", ".*")
@@ -379,8 +358,7 @@ public class SubSetMatcherTest {
             new ArrayList<>(Arrays.asList(
                 new ImmutableEntry(regexStringMatcher, "name", "John"),
                 new ImmutableEntry(regexStringMatcher, "age", "25")
-            )))
-        );
+            ))), is(false));
     }
 
 }

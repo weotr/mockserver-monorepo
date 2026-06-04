@@ -6,8 +6,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
@@ -17,12 +15,13 @@ import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockserver.model.HttpSseResponse.sseResponse;
 import static org.mockserver.model.SseEvent.sseEvent;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class HttpSseResponseTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(sseResponse(), sseResponse());
-        assertNotSame(sseResponse(), sseResponse());
+        assertThat(sseResponse(), is(sseResponse()));
+        assertThat(sseResponse(), not(sameInstance(sseResponse())));
     }
 
     @Test
