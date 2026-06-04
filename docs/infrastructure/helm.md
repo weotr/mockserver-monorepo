@@ -442,7 +442,7 @@ sequenceDiagram
     Script->>K3d: Import MockServer image
     Script->>Helm: helm install mockserver
     Helm->>MS: Deploy pod
-    Script->>Helm: helm test (curl /status)
+    Script->>Helm: helm test (curl -f /mockserver/status)
     Helm->>Test: Run test pod
     Script->>MS: Create expectations (curl PUT)
     Script->>MS: Validate responses (curl PUT)
