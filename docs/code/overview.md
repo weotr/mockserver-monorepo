@@ -25,6 +25,7 @@ mockserver-monorepo/
 │   ├── mockserver-integration-testing/                # Integration-test helpers
 │   ├── mockserver-integration-testing-no-dependencies/# ↑ shaded, zero transitive deps
 │   ├── mockserver-async/                              # AsyncAPI broker mocking (Kafka, MQTT)
+│   ├── mockserver-k8s-webhook/                        # K8s MutatingAdmissionWebhook for sidecar injection
 │   ├── mockserver-state-infinispan/                   # Infinispan-backed StateBackend (optional, clustered state)
 │   ├── mockserver-blob-s3/                            # S3-backed BlobStore (optional, cloud blob storage)
 │   ├── mockserver-blob-gcs/                           # GCS-backed BlobStore (optional, cloud blob storage)
@@ -79,6 +80,7 @@ Everything published to Maven Central under `org.mock-server` is produced by a m
 | `mockserver-integration-testing/` | `mockserver-integration-testing` + `mockserver-integration-testing-no-dependencies` | Integration-test helpers. |
 | `examples/java/` (repo root) | `mockserver-examples` | Published, but documents usage rather than being a consumer dependency. Relocated from `mockserver/mockserver-examples/`; still a reactor module via `../examples/java`. |
 | `mockserver-async/` | `mockserver-async` | AsyncAPI broker mocking: spec parsing, Kafka/MQTT publisher adapters, and `AsyncApiMockOrchestrator`. |
+| `mockserver-k8s-webhook/` | `mockserver-k8s-webhook` | Kubernetes MutatingAdmissionWebhook HTTPS server for automatic sidecar injection. Standalone: depends only on jackson-databind, slf4j-api, and slf4j-jdk14. |
 | `mockserver-state-infinispan/` | `mockserver-state-infinispan` | Optional Infinispan-backed `StateBackend`. Only required when `stateBackend=infinispan` is configured. Not needed for standard deployments. |
 | `mockserver-blob-s3/` | `mockserver-blob-s3` | Optional S3-backed `BlobStore`. Implements the `BlobStore` SPI against AWS SDK v2 `S3Client`. Supports S3-compatible stores (MinIO) via endpoint override. Only required when `blobStoreType=s3`. |
 | `mockserver-blob-gcs/` | `mockserver-blob-gcs` | Optional GCS-backed `BlobStore`. Implements the `BlobStore` SPI against `google-cloud-storage`. Supports fake-gcs-server for testing. Only required when `blobStoreType=gcs`. |

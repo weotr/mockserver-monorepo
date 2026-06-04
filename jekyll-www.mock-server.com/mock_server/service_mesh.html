@@ -87,6 +87,88 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
 
 <p>When <code class="inline code">sidecar.iptables.enabled</code> is <code class="inline code">true</code>, the chart renders an init container that adds a UID-based RETURN rule (to exclude MockServer's own egress) before any REDIRECT rules, preventing an infinite redirect loop. The <code class="inline code">excludeUid</code> must match <code class="inline code">app.runAsUser</code> (both default to 65534).</p>
 
+<a id="admission_webhook" class="anchor" href="#admission_webhook">&nbsp;</a>
+
+<h2>Automatic Sidecar Injection (Admission Webhook)</h2>
+
+<p>Instead of manually adding the sidecar container and iptables init container to every Deployment, you can enable the MockServer <strong>admission webhook</strong>. The webhook is a <code class="inline code">MutatingAdmissionWebhook</code> that automatically injects the MockServer transparent-proxy sidecar and iptables init container into pods that opt in.</p>
+
+<h3>How it works</h3>
+
+<ol>
+    <li>Enable the webhook in the Helm chart: <code class="inline code">--set webhook.enabled=true</code></li>
+    <li>Label the target namespace: <code class="inline code">kubectl label namespace my-namespace mockserver.org/sidecar-injection=enabled</code></li>
+    <li>Annotate pods that should receive the sidecar: <code class="inline code">mockserver.org/inject: "true"</code></li>
+    <li>When a pod is created in a labelled namespace with the opt-in annotation, the webhook injects:
+        <ul>
+            <li>An iptables init container (with UID-exclusion loop avoidance)</li>
+            <li>A MockServer sidecar container (with <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true</code>)</li>
+            <li>An idempotency marker annotation (<code class="inline code">mockserver.org/injected: "true"</code>) to prevent double-injection</li>
+        </ul>
+    </li>
+</ol>
+
+<h3>Enabling the webhook</h3>
+
+<p><strong>Prerequisites:</strong> The webhook Docker image (<code class="inline code">mockserver/mockserver-webhook</code>) is not yet published to a public registry. You must build and push it to your own container registry before enabling the webhook:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Build the webhook fat jar
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests
+
+# Build and push the Docker image to your registry
+docker build -f docker/webhook/Dockerfile \
+  --build-arg VERSION=6.1.1-SNAPSHOT \
+  -t your-registry/mockserver-webhook:6.1.1-SNAPSHOT .
+docker push your-registry/mockserver-webhook:6.1.1-SNAPSHOT</code></pre>
+
+<p>Then install with the webhook enabled, pointing to your image:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Install with the admission webhook enabled (pointing to your image)
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true \
+  --set webhook.image.repository=your-registry/mockserver-webhook
+
+# Or with cert-manager for TLS (if cert-manager is installed)
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true \
+  --set webhook.image.repository=your-registry/mockserver-webhook \
+  --set webhook.certManager.enabled=true</code></pre>
+
+<h3>Annotating pods</h3>
+
+<p>Add the <code class="inline code">mockserver.org/inject: "true"</code> annotation to your pod template:</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    metadata:
+      annotations:
+        mockserver.org/inject: "true"
+    spec:
+      containers:
+        - name: my-app
+          image: my-app:latest</code></pre>
+
+<h3>Webhook values</h3>
+
+<pre class="prettyprint lang-yaml code"><code class="code">webhook:
+  enabled: false              # enable the admission webhook
+  failurePolicy: Ignore       # Ignore = pods created even if webhook is down
+  sidecar:
+    iptablesImage: "alpine:3.19"
+    serverPort: 1080
+    redirectPorts: "80,443"
+    runAsUser: 65534           # must match the UID exclusion for loop avoidance
+    logLevel: "INFO"
+  certManager:
+    enabled: false             # use cert-manager instead of self-signed TLS
+  namespaceSelector: {}        # default: mockserver.org/sidecar-injection=enabled</code></pre>
+
+<p>The webhook uses <code class="inline code">failurePolicy: Ignore</code> by default so pods are created normally if the webhook is unavailable. TLS is bootstrapped automatically via a self-signed CA (Helm post-install hook that generates a CA, creates a TLS Secret, and patches the caBundle into the MutatingWebhookConfiguration) or via cert-manager if <code class="inline code">webhook.certManager.enabled=true</code>.</p>
+
 <a id="original_destination_resolution" class="anchor" href="#original_destination_resolution">&nbsp;</a>
 
 <h2>Original Destination Resolution</h2>
@@ -144,7 +226,7 @@ PROXY UNKNOWN\r\n</code></pre>
 
 <h3>eBPF socket metadata</h3>
 
-<p>The resolver chain also supports an <strong>eBPF socket-metadata</strong> strategy (enable with <code class="inline code">transparentProxyEbpf=true</code>): an external BPF program records the original destination in a pinned BPF map keyed by socket cookie, which MockServer reads (Linux, native transport, <code class="inline code">CAP_BPF</code>; MockServer reads the map only — it does not load the BPF program). Automatic init-container injection via a Kubernetes admission webhook remains a future enhancement.</p>
+<p>The resolver chain also supports an <strong>eBPF socket-metadata</strong> strategy (enable with <code class="inline code">transparentProxyEbpf=true</code>): an external BPF program records the original destination in a pinned BPF map keyed by socket cookie, which MockServer reads (Linux, native transport, <code class="inline code">CAP_BPF</code>; MockServer reads the map only — it does not load the BPF program). Automatic init-container injection is available via the Kubernetes <a href="#admission_webhook">admission webhook</a>.</p>
 
 <h2>Deployment Contexts</h2>
 
@@ -167,8 +249,8 @@ PROXY UNKNOWN\r\n</code></pre>
 <ul>
     <li><strong>Conntrack lookup is O(n) with a cap</strong> -- the <code class="inline code">/proc/net/nf_conntrack</code> file is parsed per connection, capped at 200,000 lines. If the conntrack table exceeds this limit, MockServer falls back to Host-header resolution. For high-throughput production use, consider a dedicated transparent proxy.</li>
     <li><strong>Linux only for conntrack</strong> -- original-destination resolution via conntrack requires Linux. On other OSes, the transparent proxy falls back to Host-header resolution.</li>
-    <li><strong>iptables not automatic</strong> -- an init container or external mechanism must configure traffic redirection.</li>
-    <li><strong>SO_ORIGINAL_DST and TPROXY need the native transport</strong> -- these kernel-level strategies require the native (epoll) transport on Linux and <code class="inline code">CAP_NET_ADMIN</code>. The eBPF socket-metadata strategy is also available (it reads a pinned BPF map populated by an external BPF program; requires <code class="inline code">CAP_BPF</code>) — only automatic admission-webhook injection remains a future enhancement.</li>
+    <li><strong>iptables not automatic without the webhook</strong> -- without the <a href="#admission_webhook">admission webhook</a>, an init container or external mechanism must configure traffic redirection manually. With the webhook enabled, iptables rules are injected automatically.</li>
+    <li><strong>SO_ORIGINAL_DST and TPROXY need the native transport</strong> -- these kernel-level strategies require the native (epoll) transport on Linux and <code class="inline code">CAP_NET_ADMIN</code>. The eBPF socket-metadata strategy is also available (it reads a pinned BPF map populated by an external BPF program; requires <code class="inline code">CAP_BPF</code>).</li>
 </ul>
 
 <a id="related" class="anchor" href="#related">&nbsp;</a>

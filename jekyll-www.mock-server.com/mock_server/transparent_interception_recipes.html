@@ -151,7 +151,7 @@ networks:
 
 <h3>eBPF original-destination resolution</h3>
 
-<p>MockServer can resolve the original destination from an <strong>eBPF</strong> map: an external BPF program (which you deploy, e.g. via an init container) records the pre-NAT destination keyed by socket cookie in a pinned BPF map, and MockServer reads it. Enable with <code class="inline code">transparentProxyEbpf=true</code> and point <code class="inline code">transparentProxyEbpfMapPath</code> at the pinned map (default <code class="inline code">/sys/fs/bpf/mockserver_orig_dst</code>). Requires Linux, the native (epoll) transport, and <code class="inline code">CAP_BPF</code>. MockServer only <em>reads</em> the map — it does not load or attach the BPF program. Automatic init-container injection via a Kubernetes admission webhook is not yet available.</p>
+<p>MockServer can resolve the original destination from an <strong>eBPF</strong> map: an external BPF program (which you deploy, e.g. via an init container) records the pre-NAT destination keyed by socket cookie in a pinned BPF map, and MockServer reads it. Enable with <code class="inline code">transparentProxyEbpf=true</code> and point <code class="inline code">transparentProxyEbpfMapPath</code> at the pinned map (default <code class="inline code">/sys/fs/bpf/mockserver_orig_dst</code>). Requires Linux, the native (epoll) transport, and <code class="inline code">CAP_BPF</code>. MockServer only <em>reads</em> the map — it does not load or attach the BPF program. Automatic sidecar + init-container injection is available via the <a href="/mock_server/service_mesh.html#admission_webhook">admission webhook</a>.</p>
 
 <a id="os_host" class="anchor" href="#os_host">&nbsp;</a>
 

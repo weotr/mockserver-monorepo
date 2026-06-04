@@ -1,0 +1,44 @@
+{{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled }}
+# cert-manager-based TLS for the admission webhook.
+# Requires cert-manager to be installed in the cluster.
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ template "release.name" . }}-webhook-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ template "release.name" . }}-webhook-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+spec:
+  secretName: {{ template "release.name" . }}-webhook-tls
+  duration: {{ .Values.webhook.certManager.duration | default "8760h" }}
+  renewBefore: {{ .Values.webhook.certManager.renewBefore | default "720h" }}
+  isCA: false
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  usages:
+    - server auth
+  dnsNames:
+    - {{ template "release.name" . }}-webhook
+    - {{ template "release.name" . }}-webhook.{{ .Release.Namespace }}
+    - {{ template "release.name" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ template "release.name" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ template "release.name" . }}-webhook-selfsigned
+    kind: Issuer
+{{- end }}

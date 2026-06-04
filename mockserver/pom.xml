@@ -112,6 +112,7 @@
         <module>mockserver-blob-s3</module>
         <module>mockserver-blob-gcs</module>
         <module>mockserver-blob-azure</module>
+        <module>mockserver-k8s-webhook</module>
     </modules>
 
     <dependencyManagement>

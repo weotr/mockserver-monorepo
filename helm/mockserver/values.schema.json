@@ -54,6 +54,28 @@
         "iptables": { "type": "object" }
       }
     },
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object" },
+        "replicaCount": { "type": "integer", "minimum": 0 },
+        "failurePolicy": { "type": "string" },
+        "timeoutSeconds": { "type": "integer" },
+        "scope": { "type": "string" },
+        "namespaceSelector": { "type": "object" },
+        "objectSelector": { "type": "object" },
+        "sidecar": { "type": "object" },
+        "certManager": { "type": "object" },
+        "tls": { "type": "object" },
+        "caBundle": { "type": "string" },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" }
+      }
+    },
     "app": {
       "type": "object",
       "properties": {

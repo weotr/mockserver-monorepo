@@ -45,6 +45,12 @@ initializerJson.json"]
 | `service-test.yaml` | Helm test pod (curl readiness check) |
 | `_helpers.tpl` | Template helper functions |
 | `NOTES.txt` | Post-install instructions |
+| `webhook-deployment.yaml` | Webhook Deployment (when `webhook.enabled`) |
+| `webhook-service.yaml` | Webhook ClusterIP Service (when `webhook.enabled`) |
+| `webhook-mutatingwebhookconfiguration.yaml` | MutatingWebhookConfiguration (when `webhook.enabled`) |
+| `webhook-rbac.yaml` | ServiceAccount, ClusterRole, ClusterRoleBinding for webhook (when `webhook.enabled`) |
+| `webhook-tls-selfsigned.yaml` | Self-signed TLS bootstrap — two Helm hook Jobs: a pre-install/pre-upgrade Job creates the TLS Secret, a post-install/post-upgrade Job patches the MWC caBundle. Split avoids `helm install --wait` deadlock. Only rendered when `webhook.enabled` and `webhook.certManager.enabled=false` |
+| `webhook-tls-certmanager.yaml` | cert-manager Issuer + Certificate (when `webhook.enabled` and `webhook.certManager.enabled=true`) |
 
 ### Default Values
 
@@ -169,6 +175,57 @@ When `app.persistence.enabled=true`, the chart:
 **Pod securityContext / PVC permissions:** on clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level `fsGroup` so the volume is group-owned and writable, e.g. `--set podSecurityContext.fsGroup=2000`. `podSecurityContext` is the general-purpose hook for any pod-level securityContext field (the container-level `securityContext` continues to carry `runAsUser` / `readOnlyRootFilesystem` / `allowPrivilegeEscalation`).
 
 **PVC retention:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data: `kubectl delete pvc <release-name> -n <namespace>`.
+
+### Admission Webhook (Automatic Sidecar Injection)
+
+When `webhook.enabled=true`, the chart deploys a MutatingAdmissionWebhook that automatically injects the MockServer transparent-proxy sidecar and iptables init container into pods that opt in. This automates the manual sidecar pattern documented in [Transparent Proxy / Sidecar Mode](https://www.mock-server.com/mock_server/service_mesh.html).
+
+**How it works:**
+
+1. The webhook watches for Pod CREATE events in namespaces labelled `mockserver.org/sidecar-injection: enabled`
+2. Pods with the annotation `mockserver.org/inject: "true"` receive:
+   - An iptables init container (with UID-exclusion loop avoidance)
+   - A MockServer sidecar container (with `MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true`)
+   - An idempotency marker annotation (`mockserver.org/injected: "true"`)
+3. Pods without the annotation, or already injected, are allowed through unchanged
+
+**TLS bootstrap:** Two options:
+- **Self-signed (default):** two Helm hook Jobs work together to avoid a deadlock under `helm install --wait` and GitOps tools (ArgoCD, Flux):
+  1. A **pre-install/pre-upgrade** Job (hook-weight -5) generates a self-signed CA + server certificate and creates the TLS Secret. This runs before Helm applies non-hook resources, so the Deployment can mount the Secret and become Ready immediately.
+  2. A **post-install/post-upgrade** Job (hook-weight 0) reads `ca.crt` from the Secret and patches the MutatingWebhookConfiguration's `caBundle`. This runs after non-hook resources exist, so the MWC is available to patch.
+  No external dependencies. Compatible with both `helm install` and `helm install --wait`.
+- **cert-manager:** set `webhook.certManager.enabled=true`. The chart creates an Issuer + Certificate and annotates the MutatingWebhookConfiguration with `cert-manager.io/inject-ca-from`.
+
+**Webhook server:** The `mockserver-k8s-webhook` module includes a runnable HTTPS server (`WebhookServer`) that handles AdmissionReview requests on `POST /inject` and serves a health check on `GET /healthz`. The server is packaged as a fat jar (`mockserver-k8s-webhook-<version>-jar-with-dependencies.jar`) and published as the `mockserver/mockserver-webhook` Docker image. Configuration (TLS cert/key paths, sidecar injection settings) is read from environment variables matching the Helm `webhook-deployment.yaml` template.
+
+**Building the webhook image:**
+
+```bash
+# Build the fat jar
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests
+
+# Build the Docker image
+docker build -f docker/webhook/Dockerfile \
+  --build-arg VERSION=6.1.1-SNAPSHOT \
+  -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT .
+```
+
+**Note:** The webhook Docker image is not yet published to Docker Hub or GHCR by the release pipeline. To deploy the webhook, build and push the image to your own registry and set `webhook.image.repository` accordingly. A CI publishing step will be added in a future release.
+
+| Value | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webhook.enabled` | bool | `false` | Enable the admission webhook |
+| `webhook.failurePolicy` | string | `Ignore` | `Ignore` = pods created even if webhook is down |
+| `webhook.timeoutSeconds` | int | `10` | Webhook call timeout |
+| `webhook.namespaceSelector` | map | `{}` | Override the default namespace selector (default: `mockserver.org/sidecar-injection: enabled`) |
+| `webhook.objectSelector` | map | `{}` | Additional pod-level selector |
+| `webhook.sidecar.serverPort` | int | `1080` | MockServer port in the injected sidecar |
+| `webhook.sidecar.redirectPorts` | string | `"80,443"` | Ports redirected by iptables |
+| `webhook.sidecar.runAsUser` | int | `65534` | UID for the sidecar (must match iptables exclusion) |
+| `webhook.certManager.enabled` | bool | `false` | Use cert-manager for TLS instead of self-signed |
+| `webhook.tls.certValidityDays` | int | `3650` | Self-signed cert validity (days) |
+
+**Backward compatibility:** Disabled by default. When disabled, no webhook-related resources are rendered.
 
 ### Health Checks
 

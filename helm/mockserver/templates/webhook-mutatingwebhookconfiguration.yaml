@@ -1,0 +1,48 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ template "release.name" . }}-sidecar-injector
+  labels:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+{{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ template "release.name" . }}-webhook-cert
+{{- end }}
+webhooks:
+  - name: sidecar-injector.mockserver.org
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy | default "Ignore" }}
+    reinvocationPolicy: IfNeeded
+    clientConfig:
+      service:
+        name: {{ template "release.name" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /inject
+        port: 443
+{{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ .Values.webhook.caBundle | default "" | quote }}
+{{- end }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+        scope: {{ .Values.webhook.scope | default "Namespaced" | quote }}
+{{- if .Values.webhook.namespaceSelector }}
+    namespaceSelector:
+{{ toYaml .Values.webhook.namespaceSelector | indent 6 }}
+{{- else }}
+    namespaceSelector:
+      matchLabels:
+        mockserver.org/sidecar-injection: enabled
+{{- end }}
+{{- if .Values.webhook.objectSelector }}
+    objectSelector:
+{{ toYaml .Values.webhook.objectSelector | indent 6 }}
+{{- end }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds | default 10 }}
+{{- end }}

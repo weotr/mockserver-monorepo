@@ -76,6 +76,30 @@ sidecar:
 
 When `sidecar.transparentProxy` is true, the `MOCKSERVER_TRANSPARENT_PROXY_ENABLED` environment variable is set in the deployment.
 
+### Automatic Sidecar Injection (Admission Webhook)
+
+When `webhook.enabled=true`, the chart deploys a MutatingAdmissionWebhook that automatically injects the MockServer sidecar and iptables init container into pods. This removes the need to manually edit every Deployment. See [helm.md](helm.md) for full details.
+
+**Prerequisites:** The webhook Docker image (`mockserver/mockserver-webhook`) is not yet published to a public registry. You must build and push it to your own registry before enabling the webhook:
+
+```bash
+# Build the fat jar and Docker image
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests
+cd .. && docker build -f docker/webhook/Dockerfile \
+  --build-arg VERSION=6.1.1-SNAPSHOT \
+  -t your-registry/mockserver-webhook:6.1.1-SNAPSHOT .
+docker push your-registry/mockserver-webhook:6.1.1-SNAPSHOT
+```
+
+Then install with the webhook enabled, pointing to your image:
+```bash
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true \
+  --set webhook.image.repository=your-registry/mockserver-webhook
+kubectl label namespace my-namespace mockserver.org/sidecar-injection=enabled
+# Annotate pods: mockserver.org/inject: "true"
+```
+
 ## Implementation
 
 | Component | Location |
@@ -84,8 +108,14 @@ When `sidecar.transparentProxy` is true, the `MOCKSERVER_TRANSPARENT_PROXY_ENABL
 | Transparent proxy logic | `mockserver-netty/.../proxy/TransparentProxyInitializer.java` |
 | SO_ORIGINAL_DST / conntrack | `mockserver-netty/.../proxy/SoOriginalDstHelper.java` |
 | Pipeline handler (sets REMOTE_SOCKET) | `mockserver-netty/.../proxy/TransparentProxyHandler.java` |
+| Webhook HTTPS server | `mockserver-k8s-webhook/.../webhook/WebhookServer.java` |
+| Admission webhook handler | `mockserver-k8s-webhook/.../webhook/AdmissionReviewHandler.java` |
+| JSONPatch builder | `mockserver-k8s-webhook/.../webhook/SidecarPatchBuilder.java` |
+| Injection config | `mockserver-k8s-webhook/.../webhook/SidecarInjectionConfig.java` |
+| Webhook Dockerfile | `docker/webhook/Dockerfile` |
 | Helm values | `helm/mockserver/values.yaml` |
 | Helm deployment | `helm/mockserver/templates/deployment.yaml` |
+| Helm webhook templates | `helm/mockserver/templates/webhook-*.yaml` |
 
 ## SO_ORIGINAL_DST / Conntrack Resolution
 
@@ -123,4 +153,4 @@ This approach:
 
 - **Conntrack lookup is O(n) with a cap**: The `/proc/net/nf_conntrack` parsing scans the conntrack table per connection, capped at 200,000 lines to bound CPU cost. If the table exceeds this limit, MockServer falls back to Host-header resolution. For high-connection-rate production deployments, a JNI-based `getsockopt(SO_ORIGINAL_DST)` would be more efficient (not yet implemented).
 - **Linux only**: conntrack-based original-destination resolution requires Linux with `nf_conntrack`. On other OSes, the transparent proxy falls back to Host-header resolution, which works for HTTP traffic but requires the Host header to be correct.
-- **iptables required for interception**: The transparent proxy itself does not set up iptables rules. An init container or external mechanism must configure traffic redirection.
+- **iptables required without the webhook**: Without the admission webhook, an init container or external mechanism must configure traffic redirection. With the webhook enabled, iptables rules are injected automatically into opted-in pods.
