@@ -83,6 +83,36 @@ sitemap:
         <tr><td><code>responseHeaders</code></td><td>object</td><td>No</td><td>Response headers as key-value pairs</td></tr>
         <tr><td><code>times</code></td><td>integer</td><td>No</td><td>Number of times the expectation should be used. Defaults to unlimited.</td></tr>
         <tr><td><code>timeToLive</code></td><td>string</td><td>No</td><td>How long the expectation remains active, in format <code>&lt;number&gt; &lt;UNIT&gt;</code> (e.g. <code>"60 SECONDS"</code>). Defaults to unlimited.</td></tr>
+        <tr><td><code>chaos</code></td><td>object</td><td>No</td><td>Declarative HTTP chaos/fault-injection profile for resilience testing &mdash; probabilistic errors, latency, connection drops, body corruption, slow (dribbled) responses, time/count-based outage windows, and a stateful request quota (see the table below).</td></tr>
+    </tbody>
+</table>
+
+<p><strong><code>chaos</code> fields</strong> (all optional):</p>
+
+<table>
+    <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>errorStatus</code></td><td>integer</td><td>HTTP status to inject on error (e.g. <code>500</code>, <code>503</code>, <code>429</code>).</td></tr>
+        <tr><td><code>errorProbability</code></td><td>number</td><td>Probability 0.0&ndash;1.0 of injecting an error. Fractional values are non-deterministic unless <code>seed</code> is set.</td></tr>
+        <tr><td><code>retryAfter</code></td><td>string</td><td>Optional <code>Retry-After</code> header value on an injected error.</td></tr>
+        <tr><td><code>latency</code></td><td>object</td><td>Injected latency delay &mdash; an object with <code>timeUnit</code> (e.g. <code>MILLISECONDS</code>, <code>SECONDS</code>) and <code>value</code> (integer).</td></tr>
+        <tr><td><code>dropConnectionProbability</code></td><td>number</td><td>Probability 0.0&ndash;1.0 of dropping the TCP connection without sending any response.</td></tr>
+        <tr><td><code>seed</code></td><td>integer</td><td>Optional seed for reproducible probabilistic draws.</td></tr>
+        <tr><td><code>succeedFirst</code></td><td>integer</td><td>First N matches are <strong>not</strong> eligible for chaos (&ge; 0).</td></tr>
+        <tr><td><code>failRequestCount</code></td><td>integer</td><td>After <code>succeedFirst</code>, the next M matches <strong>are</strong> eligible for chaos (&ge; 1).</td></tr>
+        <tr><td><code>outageAfterMillis</code></td><td>integer</td><td>Time-based outage window: chaos becomes active this many ms after the first match (&ge; 0).</td></tr>
+        <tr><td><code>outageDurationMillis</code></td><td>integer</td><td>Time-based outage window: chaos stays active for this many ms then self-heals (&ge; 1).</td></tr>
+        <tr><td><code>truncateBodyAtFraction</code></td><td>number</td><td>Corrupt the response body by keeping only this leading fraction (0.0&ndash;1.0) of its bytes.</td></tr>
+        <tr><td><code>malformedBody</code></td><td>boolean</td><td>Corrupt the response body by appending a broken-JSON fragment so it fails to parse.</td></tr>
+        <tr><td><code>slowResponseChunkSize</code></td><td>integer</td><td>Dribble the response body in chunks of this many bytes (&ge; 1); requires <code>slowResponseChunkDelay</code>.</td></tr>
+        <tr><td><code>slowResponseChunkDelay</code></td><td>object</td><td>Delay between dribbled response chunks &mdash; an object with <code>timeUnit</code> and <code>value</code> (integer).</td></tr>
+        <tr><td><code>quotaName</code></td><td>string</td><td>Stateful quota: shared counter key; expectations with the same <code>quotaName</code> share one rate-limit counter.</td></tr>
+        <tr><td><code>quotaLimit</code></td><td>integer</td><td>Stateful quota: max requests allowed per window before requests are rejected (&ge; 1).</td></tr>
+        <tr><td><code>quotaWindowMillis</code></td><td>integer</td><td>Stateful quota: fixed-window length in milliseconds (&ge; 1).</td></tr>
+        <tr><td><code>quotaErrorStatus</code></td><td>integer</td><td>Stateful quota: status returned when the quota is exceeded (default <code>429</code>).</td></tr>
+        <tr><td><code>degradationRampMillis</code></td><td>integer</td><td>Gradual degradation: ramp <code>errorProbability</code> and <code>dropConnectionProbability</code> from 0 to full over this many ms from the first match (&ge; 1).</td></tr>
     </tbody>
 </table>
 

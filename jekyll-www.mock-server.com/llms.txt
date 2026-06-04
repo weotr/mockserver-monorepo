@@ -16,13 +16,24 @@
 ## Getting Started
 - [Getting Started](https://www.mock-server.com/mock_server/getting_started.html): Quick start guide covering starting MockServer, creating expectations, running tests, and verifying requests
 - [Running MockServer](https://www.mock-server.com/mock_server/running_mock_server.html): How to run MockServer via Docker, Maven plugin, JUnit, npm, Homebrew, or standalone JAR
+- [Testcontainers](https://www.mock-server.com/mock_server/mockserver_testcontainers.html): Run MockServer in your tests with the mockserver-testcontainers module — helpers for DNS, transparent proxy, HTTP/3, init JSON, and a ready-wired client
+- [Troubleshooting Matching](https://www.mock-server.com/mock_server/troubleshooting_matching.html): Step-by-step checklist to diagnose why MockServer returns 404 when a request does not match, including common pitfalls and the debug mismatch endpoint
 
 ## Creating Expectations
 - [Creating Expectations](https://www.mock-server.com/mock_server/creating_expectations.html): How to set up request matchers and response actions including literal responses, templated responses, class/closure callbacks, forwards, and errors
 - [OpenAPI Expectations](https://www.mock-server.com/mock_server/using_openapi.html): Generate expectations from OpenAPI/Swagger specifications
+- [Importing Expectations](https://www.mock-server.com/mock_server/importing_expectations.html): Import expectations from HAR (HTTP Archive) or Postman Collection files via a single PUT /mockserver/import request, with format auto-detection
+- [Expectation Initializers](https://www.mock-server.com/mock_server/initializing_expectations.html): Load expectations automatically when MockServer starts using a Java initializer class, JSON file, OpenAPI spec, or Maven plugin initializer
+- [Persisting Expectations](https://www.mock-server.com/mock_server/persisting_expectations.html): Persist expectations and recorded proxy traffic to disk so they survive restarts and enable record-and-replay workflows
+- [Before & After Actions](https://www.mock-server.com/mock_server/before_and_after_actions.html): Run extra HTTP webhooks or callbacks before or after an expectation's response — to mirror (tee), shadow, fan-out, or gate live traffic against other services
+- [WASM Custom Rules](https://www.mock-server.com/mock_server/wasm_rules.html): Use WebAssembly modules as custom body matchers for complex matching logic that runs in a sandboxed WASM interpreter
+- [CORS Support](https://www.mock-server.com/mock_server/CORS_support.html): Enable and configure CORS headers for control-plane and mocked responses, with permissive and restrictive policy examples
+- [Clock Control](https://www.mock-server.com/mock_server/clock_control.html): Freeze, advance, or reset MockServer's controllable clock for deterministic time-based testing of date-sensitive responses and expectation TimeToLive
 
 ## Verification
 - [Verifying Requests](https://www.mock-server.com/mock_server/verification.html): Verify that requests were received, including exact counts and sequence verification
+- [Pact Contract Export & Verification](https://www.mock-server.com/mock_server/pact_export.html): Export active expectations as a Pact v3 consumer contract, or verify expectations satisfy a Pact contract — closing the contract-testing loop
+- [Mock Drift Detection](https://www.mock-server.com/mock_server/drift_detection.html): Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes
 
 ## Configuration
 - [Configuration Properties](https://www.mock-server.com/mock_server/configuration_properties.html): All configuration properties with defaults, including memory limits, logging, TLS, and performance tuning
@@ -37,19 +48,35 @@
 - [REST API (OpenAPI Spec)](https://www.mock-server.com/mockserver-openapi.yaml): Full OpenAPI 3.0 specification for MockServer's control plane API
 - [REST API on SwaggerHub](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi): Interactive API explorer
 
+## Data Store & File Storage
+- [File Storage](https://www.mock-server.com/mock_server/file_storage.html): Store, retrieve, list, and delete named binary or text files in MockServer's in-memory file store to use as response bodies, test fixtures, or certificate payloads
+- [CRUD Data Store](https://www.mock-server.com/mock_server/crud_data_store.html): Auto-generate a fully functional REST CRUD API over an in-memory JSON data store using a single PUT /mockserver/crud request, with no expectations required
+
 ## Chaos Testing & Fault Injection
 - [Chaos Testing](https://www.mock-server.com/mock_server/chaos_testing.html): Inject errors, latency, and outages into mocked and proxied responses using declarative chaos profiles for resilience testing
 - [Chaos Proxy in Kubernetes](https://www.mock-server.com/mock_server/chaos_testing_kubernetes.html): Deploy MockServer as a chaos proxy in Kubernetes to inject faults into real service-to-service and external API calls using reverse proxy, egress proxy, and sidecar patterns
+- [Chaos Orchestrators](https://www.mock-server.com/mock_server/chaos_testing_orchestrators.html): Drive MockServer's service-scoped chaos from Chaos Toolkit, AWS FIS, Azure Chaos Studio, and LitmusChaos via the control-plane endpoint, with a TTL dead-man's switch for safe auto-revert
 
 ## Docker
 - [Docker Container](https://www.mock-server.com/where/docker.html): Run MockServer as a Docker container with environment variable configuration
 
 ## Proxying
 - [Proxying Overview](https://www.mock-server.com/proxy/getting_started.html): Use MockServer as a recording proxy to capture and inspect HTTP traffic between services
+- [Record & Replay](https://www.mock-server.com/proxy/record_and_replay.html): Record HTTP/HTTPS traffic through the proxy and replay it as mock expectations for offline testing and service virtualization
+- [Configuring the System Under Test](https://www.mock-server.com/proxy/configuring_sut.html): Configure your application to proxy through MockServer using port forwarding, HTTP proxy, HTTPS tunnel, or SOCKS proxy
+- [Verifying Proxied Requests](https://www.mock-server.com/proxy/verification.html): Verify that proxied requests were received a specific number of times or in a particular order using Java, JavaScript, or the REST API
+- [Debugging Proxied Traffic](https://www.mock-server.com/proxy/debugging_proxied_traffic.html): Debug proxied traffic using the dashboard UI or the retrieve and download API, exporting requests as JSON, HAR, or cURL
 - [Network Latency Debugging](https://www.mock-server.com/proxy/network_latency_debugging.html): Capture per-request timing (connect, TTFB, total), export HAR with timing breakdowns, flag slow requests, and track latency percentiles via Prometheus
+- [Isolate Single Service](https://www.mock-server.com/mock_server/isolating_single_service.html): Use MockServer as a reverse proxy to route one service to a local debug instance while forwarding all other requests to the real environment
+- [Transparent Proxy / Sidecar Mode](https://www.mock-server.com/mock_server/service_mesh.html): Run MockServer as a Kubernetes sidecar with transparent proxy interception for service mesh integration
+- [Transparent Interception Recipes](https://www.mock-server.com/mock_server/transparent_interception_recipes.html): Recipes for routing traffic to MockServer — Kubernetes sidecars, firewall rules, DNS steering, cloud routes, browser and CI proxies
 
 ## TLS / HTTPS
 - [TLS Configuration](https://www.mock-server.com/mock_server/HTTPS_TLS.html): Configure TLS/HTTPS including custom certificates, mTLS, and CA certificate chains
+
+## Protocols
+- [HTTP/3 (QUIC) Support](https://www.mock-server.com/mock_server/http3.html): Experimental HTTP/3 over QUIC support, enabled via the http3Port property and routed through the full expectation matching pipeline
+- [AsyncAPI Broker Mocking](https://www.mock-server.com/mock_server/asyncapi_messaging.html): Mock Kafka and MQTT brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, validate against JSON Schema, all via REST or Java API
 
 ## Optional
 - [Performance Tuning](https://www.mock-server.com/mock_server/performance.html): Optimize MockServer for high-throughput scenarios

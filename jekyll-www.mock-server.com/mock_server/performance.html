@@ -39,6 +39,8 @@ lastmod: 2019-11-10T08:00:00+01:00
     <li>basic GET request matching third expectation (i.e. three matches are attempted for each request)</li>
 </ul>
 
+<p><strong>These figures are historical and indicative.</strong> They were measured on an older Java 13 JVM on specific hardware, so they are not a guarantee of current performance. Real-world throughput and latency depend on your hardware, payload size, expectation complexity, and JVM/configuration tuning &mdash; treat the numbers below as a rough reference and benchmark your own workload rather than as a fixed Java 17 baseline.</p>
+
 <p>During the test MockServer was run on a Java 13 JVM, with the following command:</p>
 
 <pre class="prettyprint lang-bash code"><code class="code">java -Xmx500m -Dmockserver.logLevel=WARN -Dmockserver.disableLogging=true -jar ~/.m2/repository/org/mock-server/mockserver-netty/{{ site.mockserver_version }}/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080</code></pre>

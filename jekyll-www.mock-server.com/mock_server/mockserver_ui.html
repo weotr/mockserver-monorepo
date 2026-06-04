@@ -21,6 +21,8 @@ sitemap:
     <li><strong><a href="#ui_library_section">Library</a></strong> — manage cassette files, WASM modules, and export traffic</li>
     <li><strong><a href="#ui_chaos_section">Chaos</a></strong> — configure and inject HTTP, gRPC, and TCP faults (added latency, error responses, dropped connections) that apply to all forwarded requests to a given upstream host or service, with a TTL so chaos auto-expires</li>
     <li><strong><a href="#ui_drift_section">Drift</a></strong> — review mock drift records where stubbed responses diverge from the real upstream</li>
+    <li><strong><a href="#ui_verification_section">Verification</a></strong> — assert that MockServer received the requests you expected (a single request a given number of times, or an ordered sequence) without writing test code</li>
+    <li><strong><a href="#ui_async_section">AsyncAPI</a></strong> — inspect the AsyncAPI broker mock: loaded spec, active channels, and messages recorded from broker subscriptions</li>
     <li><strong><a href="#ui_metrics_section">Metrics</a></strong> — JVM, request-latency, chaos, expectations-by-type, and MCP-tool-call charts (shown when metrics are enabled)</li>
 </ul>
 
@@ -375,6 +377,37 @@ sitemap:
 <img class="ui_image" src="/images/MockServerDrift.png" alt="MockServer Drift Detection">
 
 <p>The Drift view surfaces <strong>mock drift</strong> — where a stubbed response no longer matches what the real upstream returns. When MockServer proxies a request that also has a matching response expectation, it compares the two and records any differences. Each row shows the affected <strong>expectation</strong>, the <strong>drift type</strong> (status, schema field added/removed, schema type changed, or header added/removed/changed), the <strong>field</strong>, the <strong>expected</strong> vs <strong>actual</strong> values, a <strong>confidence</strong> score, and the time. Filter by expectation, or use <strong>Clear</strong> to reset the recorded drift. This makes it easy to spot stubs that have silently fallen out of sync with the services they stand in for.</p>
+
+<a id="ui_verification_section" class="anchor" href="#ui_verification_section">&nbsp;</a>
+
+<h2>Verification</h2>
+
+<p>The Verification view lets you assert — straight from the dashboard — that MockServer actually received the requests you expected, without writing any test code. It checks against the requests MockServer has already recorded: a pass means it happened, and a failure shows the closest matching requests and the actual count so you can see what went wrong. Switch to it using the <strong>Verify</strong> button in the navigation bar.</p>
+
+<p>A toggle at the top picks one of two modes:</p>
+
+<ul>
+    <li><strong>Single request</strong> — describe one request to match (Method, Path, Headers, Query parameters, Body), then assert how many times it was received: <strong>at least</strong>, <strong>at most</strong>, <strong>exactly</strong>, or <strong>between</strong> two counts. Click <strong>Verify</strong> to run the check.</li>
+    <li><strong>Ordered sequence</strong> — describe two or more requests that must have been received <em>in this order</em> (other requests may occur in between). Add or remove steps as needed, then click <strong>Verify sequence</strong>.</li>
+</ul>
+
+<p>Each request matcher accepts the same fields as the rest of MockServer: a method, a path, header name/value lines, query <code>key=value</code> lines, and a body to match as a substring or JSON. Leave a field blank to match any value. This is the visual equivalent of the <a href="/mock_server/verification.html">verification API</a> — handy for confirming, during exploratory testing, that a client made the calls you expected.</p>
+
+<a id="ui_async_section" class="anchor" href="#ui_async_section">&nbsp;</a>
+
+<h2>AsyncAPI</h2>
+
+<p>The AsyncAPI view shows the live status of the <a href="/mock_server/asyncapi_messaging.html">AsyncAPI broker mock</a> — MockServer's message-broker mocking for Kafka, AMQP, MQTT, and other async transports. Switch to it using the <strong>Async</strong> button in the navigation bar. The view polls the server every few seconds and refreshes automatically; you can also refresh on demand.</p>
+
+<p>At the top a status chip shows whether a spec is loaded (and its title and version). The view then shows:</p>
+
+<ul>
+    <li><strong>Channels</strong> — each channel (topic) defined by the loaded AsyncAPI spec, whether it has a message schema, and how many example messages it carries.</li>
+    <li><strong>Publisher / subscriber summary</strong> — how many publishers and subscribers are active, and how many messages have been recorded.</li>
+    <li><strong>Recorded Messages</strong> — messages captured from broker subscriptions, showing the channel, message key, payload, schema-validity, and time. A filter box narrows the list by channel, key, or payload.</li>
+</ul>
+
+<p>Load a spec from the <strong>AsyncAPI broker mock</strong> entry in the title-bar Tools menu (or via the <code>PUT /mockserver/asyncapi</code> endpoint). To see recorded messages, enable consumers in your broker configuration and publish messages to the channels. If the optional AsyncAPI module is not on the server's classpath, the view shows an <em>unavailable</em> notice instead.</p>
 
 <a id="ui_metrics_section" class="anchor" href="#ui_metrics_section">&nbsp;</a>
 

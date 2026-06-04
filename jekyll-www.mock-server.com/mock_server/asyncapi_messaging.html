@@ -340,10 +340,11 @@ client.verifyAsyncMessage("{\"channel\":\"orders\", \"payloadJsonPath\":\"user.n
 
 <a id="asyncapi_deferred" class="anchor" href="#asyncapi_deferred">&nbsp;</a>
 
+<p>The AsyncAPI broker state is now visible in the MockServer dashboard's AsyncAPI (<strong>Async</strong>) view, reachable from the dashboard's top toolbar. It shows the loaded spec's channels, a publisher/subscriber summary, and messages recorded from broker subscriptions.</p>
+
 <h2>Not yet supported</h2>
 
 <ul>
-    <li><strong>Dashboard UI</strong> &mdash; async messaging state is not yet visible in the MockServer dashboard</li>
     <li><strong>Advanced AsyncAPI bindings</strong> &mdash; channel-specific binding configurations (e.g. Kafka partition assignment, MQTT retain flag) are not parsed or applied</li>
     <li><strong>Security schemes</strong> &mdash; AsyncAPI security scheme definitions (SASL, TLS client certs) are not applied to broker connections; configure broker security via standard client properties</li>
     <li><strong>Correlation IDs</strong> &mdash; AsyncAPI correlation ID definitions are not tracked</li>
