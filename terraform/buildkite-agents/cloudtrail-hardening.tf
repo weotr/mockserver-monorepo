@@ -182,7 +182,13 @@ resource "aws_cloudtrail" "management" {
   # When advanced selectors are used, management events must be explicitly
   # included (they are not implicit like in classic mode).
 
-  # Management events (replaces the classic event_selector)
+  # Management events (replaces the classic event_selector).
+  #
+  # NOTE: Secrets Manager API calls — including GetSecretValue on the build and
+  # release secrets — are MANAGEMENT events and are captured here. Secrets
+  # Manager is not a supported CloudTrail data-event resource type, so there is
+  # no separate data-event selector for it (an "AWS::SecretsManager::Secret"
+  # data selector is rejected with InvalidEventSelectorsException).
   advanced_event_selector {
     name = "ManagementEvents"
 
@@ -211,31 +217,6 @@ resource "aws_cloudtrail" "management" {
     field_selector {
       field       = "resources.ARN"
       starts_with = ["arn:aws:s3:::mockserver-terraform-state/"]
-    }
-  }
-
-  # Data events: audit Secrets Manager GetSecretValue calls on build and
-  # release secrets. Classic event_selector does not support Secrets Manager;
-  # advanced_event_selector is required.
-  advanced_event_selector {
-    name = "SecretsManagerDataEvents"
-
-    field_selector {
-      field  = "eventCategory"
-      equals = ["Data"]
-    }
-
-    field_selector {
-      field  = "resources.type"
-      equals = ["AWS::SecretsManager::Secret"]
-    }
-
-    field_selector {
-      field = "resources.ARN"
-      starts_with = [
-        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:mockserver-build/",
-        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:mockserver-release/",
-      ]
     }
   }
 }

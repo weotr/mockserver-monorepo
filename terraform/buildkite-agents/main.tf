@@ -3,6 +3,30 @@ provider "aws" {
   profile = "mockserver-build"
 }
 
+# IAM policy ARNs constructed from the (statically-known) policy name + account
+# id so that each module's `managed_policy_arns` is fully known at PLAN time.
+#
+# Passing the resource `.arn` directly (a computed attribute, unknown until
+# apply) makes the elastic-ci-stack module's internal
+# `for_each = toset(var.managed_policy_arns)` fail on a clean apply with
+# "Invalid for_each argument" — the set keys can't be determined pre-apply.
+# Referencing `.name` (known from config) instead of `.arn` still creates the
+# dependency edge that orders policy creation before the module, while keeping
+# the value static so `for_each` resolves at plan time.
+locals {
+  account_id = data.aws_caller_identity.current.account_id
+  policy_arn = {
+    read_build_secrets_default = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.read_build_secrets_default.name}"
+    read_build_secrets_release = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.read_build_secrets_release.name}"
+    read_release_secrets       = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.read_release_secrets.name}"
+    read_dockerhub_secret      = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.read_dockerhub_secret.name}"
+    read_buildkite_api_token   = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.read_buildkite_api_token.name}"
+    ecr_public_push            = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.ecr_public_push.name}"
+    perf_results               = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.perf_results.name}"
+    release_website_tfstate    = "arn:aws:iam::${local.account_id}:policy/${aws_iam_policy.release_website_tfstate.name}"
+  }
+}
+
 module "buildkite_stack" {
   source  = "buildkite/elastic-ci-stack-for-aws/buildkite"
   version = "~> 0.8.0"
@@ -21,9 +45,9 @@ module "buildkite_stack" {
   associate_public_ip_address = true
   imdsv2_tokens               = "required"
   managed_policy_arns = [
-    aws_iam_policy.read_build_secrets_default.arn,
-    aws_iam_policy.read_dockerhub_secret.arn,
-    aws_iam_policy.ecr_public_push.arn, # snapshot Docker push (java-docker-push-snapshot.sh) runs on default queue
+    local.policy_arn.read_build_secrets_default,
+    local.policy_arn.read_dockerhub_secret,
+    local.policy_arn.ecr_public_push, # snapshot Docker push (java-docker-push-snapshot.sh) runs on default queue
   ]
 }
 
@@ -44,7 +68,7 @@ module "buildkite_trigger_stack" {
   agents_per_instance         = 4
   associate_public_ip_address = true
   imdsv2_tokens               = "required"
-  managed_policy_arns         = [aws_iam_policy.read_buildkite_api_token.arn]
+  managed_policy_arns         = [local.policy_arn.read_buildkite_api_token]
 }
 
 # Dedicated PERFORMANCE queue. Reproducible numbers matter far more here than
@@ -71,8 +95,8 @@ module "buildkite_perf_stack" {
   associate_public_ip_address = true
   imdsv2_tokens               = "required"
   managed_policy_arns = [
-    aws_iam_policy.read_buildkite_api_token.arn, # Buildkite API token (commit guard / compare)
-    aws_iam_policy.perf_results.arn,             # S3 results history bucket
+    local.policy_arn.read_buildkite_api_token, # Buildkite API token (commit guard / compare)
+    local.policy_arn.perf_results,             # S3 results history bucket
   ]
 }
 
@@ -94,10 +118,10 @@ module "buildkite_release_stack" {
   associate_public_ip_address = true
   imdsv2_tokens               = "required"
   managed_policy_arns = [
-    aws_iam_policy.read_build_secrets_release.arn,
-    aws_iam_policy.read_release_secrets.arn,
-    aws_iam_policy.read_dockerhub_secret.arn,
-    aws_iam_policy.ecr_public_push.arn,
-    aws_iam_policy.release_website_tfstate.arn,
+    local.policy_arn.read_build_secrets_release,
+    local.policy_arn.read_release_secrets,
+    local.policy_arn.read_dockerhub_secret,
+    local.policy_arn.ecr_public_push,
+    local.policy_arn.release_website_tfstate,
   ]
 }

@@ -170,13 +170,13 @@ Release scripts write secrets to `0600` files under `.tmp/` (volume-mounted into
 
 All release Docker images (Docker Hub + ECR) are cosign-signed by digest after push, using the same key stored in `mockserver-release/cosign-key`. This allows consumers to verify image provenance. Signing is non-fatal if the key or binary is absent. See [Docker](../infrastructure/docker.md#verifying-image-signatures) for the verification command.
 
-### CloudTrail Data Events
+### CloudTrail Audit Events
 
 The CloudTrail trail (`mockserver-management-trail`) uses advanced event selectors to capture:
-- All S3 object-level events on the Terraform state bucket (`mockserver-terraform-state/`)
-- All `GetSecretValue` calls on `mockserver-build/` and `mockserver-release/` Secrets Manager secrets
+- All management events (which include every Secrets Manager API call — `GetSecretValue` on `mockserver-build/` and `mockserver-release/` secrets is logged here)
+- All S3 object-level **data** events on the Terraform state bucket (`mockserver-terraform-state/`)
 
-Classic event selectors do not support Secrets Manager data events; advanced selectors are required.
+Secrets Manager is not a supported CloudTrail data-event resource type, so secret access is audited via management events rather than a dedicated data-event selector (an `AWS::SecretsManager::Secret` data selector is rejected by the CloudTrail API with `InvalidEventSelectorsException`).
 
 ### GuardDuty Alerting
 

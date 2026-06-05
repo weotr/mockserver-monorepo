@@ -271,7 +271,7 @@ Policies are scoped per queue — each agent role receives only the secrets and 
 | Control | Status |
 |---------|--------|
 | Account-level S3 public access block | Enabled (all 4 flags) |
-| CloudTrail | `mockserver-management-trail` — multi-region, log file validation, KMS-encrypted, data events on tfstate bucket + Secrets Manager |
+| CloudTrail | `mockserver-management-trail` — multi-region, log file validation, KMS-encrypted; management events (incl. Secrets Manager access) + S3 data events on the tfstate bucket |
 | GuardDuty | Enabled with S3 data events; HIGH/CRITICAL findings alert via EventBridge -> SNS |
 | Access Analyzer | Account-level analyzer enabled |
 | VPC flow logs | ALL traffic logged to CloudWatch on all 4 VPCs (default, trigger, release, perf) |
