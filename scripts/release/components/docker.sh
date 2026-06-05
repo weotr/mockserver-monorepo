@@ -64,6 +64,7 @@ fi
 log_info "Using JAR: $SHADED_JAR"
 cp "$SHADED_JAR" docker/local/mockserver-netty-jar-with-dependencies.jar
 cp "$SHADED_JAR" docker/graaljs/mockserver-netty-jar-with-dependencies.jar
+cp "$SHADED_JAR" docker/clustered/mockserver-netty-jar-with-dependencies.jar
 
 # Stage a CA bundle into the graaljs build context. The alpine stages COPY it
 # in and (when non-empty) trust it before `apk add`, so builds behind a
@@ -74,6 +75,58 @@ if [[ -n "$LOCAL_CA" && -f "$LOCAL_CA" ]]; then
   cp "$LOCAL_CA" docker/graaljs/ca-bundle.pem
 else
   : > docker/graaljs/ca-bundle.pem
+fi
+
+# ---- Resolve Infinispan clustered-state libs for the -clustered image ------
+# Use Maven to resolve the transitive runtime dependencies of the
+# mockserver-state-infinispan module. The module JAR itself is downloaded
+# separately from Maven Central (it's excluded by -DexcludeGroupIds).
+find_local_infinispan_jar() {
+  find mockserver/mockserver-state-infinispan/target \
+    -name 'mockserver-state-infinispan-*.jar' \
+    ! -name '*-sources.jar' \
+    ! -name '*-javadoc.jar' \
+    ! -name '*-tests.jar' \
+    -print -quit 2>/dev/null || true
+}
+
+mkdir -p docker/clustered/libs
+INFINISPAN_JAR=$(find_local_infinispan_jar)
+if [[ -z "$INFINISPAN_JAR" ]]; then
+  log_info "Infinispan JAR not found locally — downloading from Maven Central"
+  INFINISPAN_JAR="mockserver/mockserver-state-infinispan/target/mockserver-state-infinispan-${RELEASE_VERSION}.jar"
+  INFINISPAN_CENTRAL_URL="https://repo1.maven.org/maven2/org/mock-server/mockserver-state-infinispan/${RELEASE_VERSION}/mockserver-state-infinispan-${RELEASE_VERSION}.jar"
+  if is_dry_run && ! curl -sf -I "$INFINISPAN_CENTRAL_URL" >/dev/null 2>&1; then
+    log_dry "skip: download infinispan $RELEASE_VERSION JAR (not yet on Maven Central)"
+    INFINISPAN_JAR=$(find_local_infinispan_jar)
+    if [[ -z "$INFINISPAN_JAR" ]]; then
+      log_dry "no local infinispan JAR available — running 'mvn package' to produce one"
+      in_maven -w /build/mockserver \
+        -- mvn -DskipTests -pl mockserver-state-infinispan -am package
+      INFINISPAN_JAR=$(find_local_infinispan_jar)
+    fi
+  else
+    mkdir -p mockserver/mockserver-state-infinispan/target
+    curl -fsSL --max-time 300 --connect-timeout 30 --retry 3 --retry-delay 5 \
+      -o "$INFINISPAN_JAR" \
+      "$INFINISPAN_CENTRAL_URL"
+  fi
+fi
+
+BUILD_CLUSTERED=false
+if [[ -n "$INFINISPAN_JAR" && -f "$INFINISPAN_JAR" ]]; then
+  log_info "Using infinispan JAR: $INFINISPAN_JAR"
+  cp "$INFINISPAN_JAR" docker/clustered/libs/
+
+  # Resolve transitive runtime dependencies (Infinispan, JGroups, etc.)
+  log_info "Resolving infinispan transitive dependencies"
+  in_maven -w /build/mockserver \
+    -- mvn -pl mockserver-state-infinispan dependency:copy-dependencies \
+      -DincludeScope=runtime -DexcludeGroupIds=org.mock-server \
+      -DoutputDirectory=/build/docker/clustered/libs
+  BUILD_CLUSTERED=true
+else
+  log_info "WARNING: Infinispan JAR not available — skipping clustered image build"
 fi
 
 # ---- Auth (skipped in dry-run) --------------------------------------------
@@ -159,6 +212,17 @@ if is_dry_run; then
     --tag "${ECR_REPO}:latest-graaljs" \
     docker/graaljs
 
+  if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+    docker build \
+      --tag "mockserver/mockserver:clustered-$FULL_TAG" \
+      --tag "mockserver/mockserver:clustered-$SHORT_TAG" \
+      --tag "mockserver/mockserver:clustered-latest" \
+      --tag "${ECR_REPO}:clustered-$FULL_TAG" \
+      --tag "${ECR_REPO}:clustered-$SHORT_TAG" \
+      --tag "${ECR_REPO}:clustered-latest" \
+      docker/clustered
+  fi
+
   if [[ "$BUILD_WEBHOOK" == "true" ]]; then
     docker build \
       --tag "mockserver/mockserver-webhook:$FULL_TAG" \
@@ -197,6 +261,24 @@ else
     --tag "${ECR_REPO}:$SHORT_TAG-graaljs" \
     --tag "${ECR_REPO}:latest-graaljs" \
     docker/graaljs
+
+  if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+    # Error-isolated: a clustered image push failure must never abort the
+    # release — the main + GraalJS images have already been published above.
+    echo "--- :docker: Building and pushing clustered image variant"
+    if ! docker buildx build \
+      --platform "linux/amd64,linux/arm64" \
+      --push \
+      --tag "mockserver/mockserver:clustered-$FULL_TAG" \
+      --tag "mockserver/mockserver:clustered-$SHORT_TAG" \
+      --tag "mockserver/mockserver:clustered-latest" \
+      --tag "${ECR_REPO}:clustered-$FULL_TAG" \
+      --tag "${ECR_REPO}:clustered-$SHORT_TAG" \
+      --tag "${ECR_REPO}:clustered-latest" \
+      docker/clustered; then
+      log_info "WARNING: clustered image push failed — continuing (main images already published)"
+    fi
+  fi
 
   if [[ "$BUILD_WEBHOOK" == "true" ]]; then
     # Push webhook to Docker Hub first (primary registry used by Helm chart).

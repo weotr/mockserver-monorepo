@@ -60,6 +60,45 @@ docker buildx build \
   --file docker/graaljs/Dockerfile \
   .
 
+echo "--- :docker: Building and pushing clustered image variant"
+# Stage the clustered image build context (shaded JAR + Infinispan libs).
+# The shaded JAR is already built by the Maven Central step; the Infinispan
+# module JAR and its transitive dependencies are resolved from Maven Central.
+CLUSTERED_JAR=""
+CLUSTERED_JAR=$(find mockserver/mockserver-state-infinispan/target \
+  -name 'mockserver-state-infinispan-*.jar' \
+  ! -name '*-sources.jar' \
+  ! -name '*-javadoc.jar' \
+  ! -name '*-tests.jar' \
+  -print -quit 2>/dev/null || true)
+
+if [[ -z "$CLUSTERED_JAR" ]]; then
+  echo "WARNING: Infinispan module JAR not found — skipping clustered image push"
+else
+  mkdir -p docker/clustered/libs
+  cp "$CLUSTERED_JAR" docker/clustered/libs/
+  # Copy the main fat jar
+  cp docker/local/mockserver-netty-jar-with-dependencies.jar docker/clustered/ 2>/dev/null \
+    || cp "$(find mockserver/mockserver-netty-no-dependencies/target -name 'mockserver-netty-no-dependencies-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' ! -name 'original-*' -print -quit 2>/dev/null)" \
+       docker/clustered/mockserver-netty-jar-with-dependencies.jar 2>/dev/null || true
+
+  # Resolve transitive runtime dependencies
+  cd mockserver && ./mvnw -pl mockserver-state-infinispan dependency:copy-dependencies \
+    -DincludeScope=runtime -DexcludeGroupIds=org.mock-server \
+    -DoutputDirectory=../docker/clustered/libs -q && cd ..
+
+  if ! docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --push \
+    --tag "mockserver/mockserver:clustered-${FULL_TAG}" \
+    --tag "mockserver/mockserver:clustered-${SHORT_TAG}" \
+    --tag "${ECR_REPO}:clustered-${FULL_TAG}" \
+    --tag "${ECR_REPO}:clustered-${SHORT_TAG}" \
+    docker/clustered; then
+    echo "WARNING: clustered image push failed — continuing (main images already published)"
+  fi
+fi
+
 echo "--- :docker: Building and pushing webhook image"
 # Copy the webhook fat jar into the docker/webhook build context.
 # The jar is built during the Maven Central step; fall back to local build tree.
