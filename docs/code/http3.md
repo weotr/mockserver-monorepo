@@ -424,8 +424,22 @@ bidi-streaming) work over HTTP/3, matching the TCP (HTTP/1.1 and HTTP/2) path.
 - **InsecureQuicTokenHandler**: the QUIC server uses `InsecureQuicTokenHandler`
   which performs no source-address validation (no Retry token). This is acceptable
   for a test/mock tool but means the server does not protect against address
-  spoofing. A production deployment behind a real network would need a proper
-  token handler.
+  spoofing or QUIC amplification (a forged-source Initial packet can elicit a
+  response up to `initialMaxData`). A production-exposed deployment would need a
+  source-address-validating (stateless-retry) token handler. Tracked as a known
+  limitation; not changed here to avoid an untested change to the QUIC handshake.
+- **CONNECT-UDP is an open UDP relay (SSRF)**: when `http3ConnectUdpEnabled=true`
+  (default `false`), `Http3ConnectUdpHandler` relays datagrams to **any** target
+  authority the client names, with no allowlist — including private networks,
+  loopback, and cloud metadata endpoints (e.g. 169.254.169.254). This is an
+  SSRF-equivalent capability and is intended for controlled test environments
+  only. Keep it disabled unless needed, and never expose a CONNECT-UDP–enabled
+  HTTP/3 port to untrusted clients. (A future `http3ConnectUdpAllowedTargets`
+  allowlist could constrain destinations.)
+- **Request body size cap**: HTTP/3 request bodies are accumulated up to
+  `maxRequestBodySize` (default 10 MiB), matching the HTTP/1.1 and HTTP/2 paths;
+  a request exceeding the cap is rejected (413 / stream shutdown) rather than
+  buffered unboundedly.
 - **QUIC transport parameters**: transport parameters (`maxIdleTimeout`,
   `initialMaxData`, `initialMaxStreamDataBidirectional`, `initialMaxStreamsBidirectional`)
   and the QPACK dynamic table capacity are now configurable via `Configuration` /
