@@ -15,6 +15,9 @@ import org.mockserver.authentication.AuthenticationException;
 import org.mockserver.authentication.AuthenticationHandler;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.cors.CORSHeaders;
+import org.mockserver.grpc.GrpcException;
+import org.mockserver.grpc.GrpcProtoDescriptorStore;
+import org.mockserver.grpc.GrpcStatusMapper;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mappers.JDKCertificateToMockServerX509Certificate;
@@ -151,6 +154,16 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
                 return;
             }
 
+            // gRPC-over-HTTP/3: detect gRPC requests by content-type and route
+            // through the gRPC adapter, which decodes gRPC framing, converts
+            // protobuf to JSON for matching, and writes the response with correct
+            // gRPC trailing HEADERS framing. Non-gRPC requests take the normal path.
+            String contentType = request.getFirstHeader("content-type");
+            if (GrpcHttp3Adapter.isGrpcRequest(contentType)) {
+                handleGrpcRequest(ctx, request);
+                return;
+            }
+
             ResponseWriter responseWriter = new Http3ResponseWriter(configuration, mockServerLogger, ctx);
 
             // first, try control-plane handling (expectations CRUD, status, etc.)
@@ -178,6 +191,108 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
             }
         } finally {
             releaseBodyAccumulator();
+        }
+    }
+
+    /**
+     * Handle a gRPC request over HTTP/3: decode the gRPC framing, convert
+     * protobuf to JSON for expectation matching, and write the response with
+     * correct gRPC wire framing (initial HEADERS + DATA + trailing HEADERS
+     * with grpc-status).
+     * <p>
+     * This reuses the existing {@link GrpcHttp3Adapter} and
+     * {@link Http3GrpcResponseWriter} to avoid duplicating any gRPC codec logic.
+     * The descriptor store from {@link HttpState} provides the protobuf schema
+     * needed for JSON conversion.
+     */
+    private void handleGrpcRequest(ChannelHandlerContext ctx, HttpRequest request) {
+        GrpcProtoDescriptorStore descriptorStore = httpState.getGrpcDescriptorStore();
+
+        if (descriptorStore == null || !descriptorStore.hasServices()) {
+            // No proto descriptors loaded: pass the request through unchanged.
+            // The body remains gRPC-framed (binary), which lets raw binary
+            // expectations match, and the response writer will frame
+            // grpc-status correctly in trailing HEADERS.
+            Http3GrpcResponseWriter grpcResponseWriter = new Http3GrpcResponseWriter(
+                configuration, mockServerLogger, ctx, descriptorStore, null, null
+            );
+            processRequestThroughPipeline(ctx, request, grpcResponseWriter);
+            return;
+        }
+
+        try {
+            HttpRequest grpcRequest = GrpcHttp3Adapter.transformGrpcRequest(request, descriptorStore);
+            // Extract service/method from the transformed request so the
+            // response writer can re-encode the JSON response to protobuf
+            String grpcService = grpcRequest.getFirstHeader("x-grpc-service");
+            String grpcMethod = grpcRequest.getFirstHeader("x-grpc-method");
+            Http3GrpcResponseWriter grpcResponseWriter = new Http3GrpcResponseWriter(
+                configuration, mockServerLogger, ctx, descriptorStore, grpcService, grpcMethod
+            );
+            processRequestThroughPipeline(ctx, grpcRequest, grpcResponseWriter);
+        } catch (GrpcException e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setHttpRequest(request)
+                    .setMessageFormat("gRPC request error over HTTP/3:{}:{}")
+                    .setArguments(request.getPath(), e.getMessage())
+            );
+            GrpcStatusMapper.GrpcStatusCode statusCode =
+                e.getMessage() != null && e.getMessage().startsWith("unknown gRPC method")
+                    ? GrpcStatusMapper.GrpcStatusCode.UNIMPLEMENTED
+                    : GrpcStatusMapper.GrpcStatusCode.INTERNAL;
+            Http3GrpcResponseWriter errorWriter = new Http3GrpcResponseWriter(
+                configuration, mockServerLogger, ctx, descriptorStore, null, null
+            );
+            errorWriter.writeErrorResponse(statusCode, e.getMessage());
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setHttpRequest(request)
+                    .setMessageFormat("failed to convert gRPC request to JSON over HTTP/3:{}:{}")
+                    .setArguments(request.getPath(), e.getMessage())
+            );
+            Http3GrpcResponseWriter errorWriter = new Http3GrpcResponseWriter(
+                configuration, mockServerLogger, ctx, descriptorStore, null, null
+            );
+            errorWriter.writeErrorResponse(
+                GrpcStatusMapper.GrpcStatusCode.INTERNAL,
+                "failed to decode gRPC request: " + e.getMessage()
+            );
+        }
+    }
+
+    /**
+     * Route a request through the standard MockServer pipeline (control-plane
+     * then data-plane), using the given response writer.
+     */
+    private void processRequestThroughPipeline(
+        ChannelHandlerContext ctx,
+        HttpRequest request,
+        ResponseWriter responseWriter
+    ) {
+        if (!httpState.handle(request, responseWriter, false)) {
+            try {
+                httpActionHandler.processAction(
+                    request,
+                    responseWriter,
+                    ctx,
+                    buildLocalAddresses(ctx),
+                    false,
+                    true
+                );
+            } catch (Throwable throwable) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setHttpRequest(request)
+                        .setMessageFormat("exception processing gRPC request over HTTP/3:{}error:{}")
+                        .setArguments(request, throwable.getMessage())
+                        .setThrowable(throwable)
+                );
+            }
         }
     }
 
