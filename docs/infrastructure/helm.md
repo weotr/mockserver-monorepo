@@ -45,6 +45,7 @@ initializerJson.json"]
 | `service-test.yaml` | Helm test pod (curl readiness check) |
 | `_helpers.tpl` | Template helper functions |
 | `NOTES.txt` | Post-install instructions |
+| `headless-service.yaml` | Headless Service for JGroups DNS_PING pod discovery (when `clustering.enabled`) |
 | `webhook-deployment.yaml` | Webhook Deployment (when `webhook.enabled`) |
 | `webhook-service.yaml` | Webhook ClusterIP Service (when `webhook.enabled`) |
 | `webhook-mutatingwebhookconfiguration.yaml` | MutatingWebhookConfiguration (when `webhook.enabled`) |
@@ -111,9 +112,34 @@ resources: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+clustering:
+  enabled: false
+  clusterName: "mockserver-cluster"
+  transportConfig: "jgroups-kubernetes.xml"
+  jgroupsPort: 7800
 imagePullSecrets: []
 releasenameOverride: ""
 ```
+
+### Clustering
+
+When `clustering.enabled=true`, the chart:
+
+1. Creates a **headless Service** (`<release>-headless`) for JGroups `DNS_PING` pod discovery
+2. Sets `MOCKSERVER_STATE_BACKEND=infinispan`, `MOCKSERVER_CLUSTER_ENABLED=true`, `MOCKSERVER_CLUSTER_NAME`, `MOCKSERVER_CLUSTER_TRANSPORT_CONFIG`, and `JGROUPS_DNS_QUERY` environment variables
+3. Exposes the JGroups TCP port (default 7800) as a container port
+4. Disables the `/libs` ConfigMap volume mount (the `-clustered` image ships its own `/libs`)
+
+**Requires the `-clustered` image variant** (`mockserver/mockserver:clustered-<version>`) which bundles the Infinispan/JGroups libraries. The default image does not include these — enabling clustering with the default image fails at startup.
+
+| Value | Type | Default | Description |
+|-------|------|---------|-------------|
+| `clustering.enabled` | bool | `false` | Enable clustered state backend |
+| `clustering.clusterName` | string | `mockserver-cluster` | JGroups cluster name; all pods sharing state must use the same value |
+| `clustering.transportConfig` | string | `jgroups-kubernetes.xml` | JGroups transport config file; built-in default uses TCP + DNS_PING |
+| `clustering.jgroupsPort` | int | `7800` | JGroups inter-pod TCP port |
+
+See the [Centralized Deployment](https://www.mock-server.com/mock_server/centralized_deployment.html) consumer docs for deployment examples.
 
 ### Deployment Architecture
 

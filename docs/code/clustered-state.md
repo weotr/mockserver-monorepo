@@ -6,6 +6,8 @@
 
 **Consumer guide:** For an operator-facing deployment guide covering the single-node, clustered HA, and persistence-only options with configuration examples and trade-offs, see the [Centralized Deployment](https://www.mock-server.com/mock_server/centralized_deployment.html) page in the consumer documentation (`jekyll-www.mock-server.com/mock_server/centralized_deployment.html`).
 
+**Docker image:** The `-clustered` Docker image variant (`mockserver/mockserver:clustered-<version>`) bundles the Infinispan module and its transitive dependencies. It is built and pushed by the release pipeline (`scripts/release/components/docker.sh`) alongside the base and GraalJS images, multi-arch (linux/amd64 + linux/arm64). The Dockerfile is at `docker/clustered/Dockerfile`. The Helm chart's `clustering.enabled` value assumes this image variant (see `helm/mockserver/values.yaml`).
+
 ## Overview
 
 MockServer ships a `StateBackend` SPI that abstracts all shared server state — expectations, scenario states, CRUD entity stores, and blob persistence — behind a pluggable interface. The default implementation (`InMemoryStateBackend`) wraps the same concurrent in-memory data structures that have always existed. An optional second implementation (`InfinispanStateBackend`, in the `mockserver-state-infinispan` module) can replicate that state across a JGroups cluster, enabling multiple MockServer nodes to share the same expectation set.

@@ -28,6 +28,9 @@ gcr.io/distroless/java17:nonroot"]
         WEBHOOK["docker/webhook/Dockerfile
 Admission Webhook
 gcr.io/distroless/java17:nonroot"]
+        CLUSTERED["docker/clustered/Dockerfile
+Clustered (Infinispan)
+gcr.io/distroless/java17:nonroot"]
     end
 
     subgraph "Build Images"
@@ -51,7 +54,7 @@ grafana/k6"]
 | Root Snapshot | `docker/root-snapshot/Dockerfile` | `gcr.io/distroless/java17` | `root` | Testing pre-release (root) |
 | Local | `docker/local/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Building from local JAR |
 | Webhook | `docker/webhook/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Kubernetes admission webhook for sidecar injection |
-| Clustered | `docker/clustered/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Includes Infinispan state backend for clustered deployments |
+| Clustered | `docker/clustered/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Infinispan state backend for multi-node clustering |
 
 ### Docker Registries
 
@@ -64,7 +67,9 @@ Images are published to two registries:
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver` | Avoids Docker Hub rate limits for AWS-based CI/CD |
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver-webhook` | Webhook image on ECR |
 
-Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, and `-graaljs` release variants (plus the same version tags for the webhook image). The `:latest` tag is pushed only by the release pipeline, not by the legacy Buildkite docker-push-release step. The `:latest` tag always points to the most recent official release, not the development branch.
+Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the legacy Buildkite docker-push-release step. The `:latest` tag always points to the most recent official release, not the development branch.
+
+The `-clustered` image variant (`clustered-X.Y.Z`, `clustered-mockserver-X.Y.Z`, `clustered-latest`) is published alongside the base and GraalJS images at release time. It bundles the `mockserver-state-infinispan` module and its transitive dependencies (Infinispan, JGroups, etc.) plus `netty-tcnative-boringssl-static` for native TLS. The build is error-isolated: a clustered image push failure does not abort the release since the main images have already been published.
 
 ### Docker HEALTHCHECK
 

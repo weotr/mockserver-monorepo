@@ -113,6 +113,29 @@ app:
     and a JGroups-capable network between nodes.
 </p>
 
+<h3>The <code class="inline code">-clustered</code> image variant</h3>
+<p>
+    The default <code class="inline code">mockserver/mockserver</code> Docker image does <strong>not</strong> include
+    the Infinispan and JGroups libraries to keep its size lean for single-node use.
+    For clustering, use the <code class="inline code">-clustered</code> image variant which bundles the
+    <code class="inline code">mockserver-state-infinispan</code> module and all of its transitive dependencies:
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">docker pull mockserver/mockserver:clustered-{{ site.mockserver_version }}</code></pre>
+
+<p>
+    This image is published to Docker Hub and ECR Public alongside every release, built for both
+    <code class="inline code">linux/amd64</code> and <code class="inline code">linux/arm64</code>.
+    It also includes <code class="inline code">netty-tcnative-boringssl-static</code> for native TLS performance,
+    the same as the base image.
+</p>
+
+<p>
+    <strong>Important:</strong> setting <code class="inline code">MOCKSERVER_STATE_BACKEND=infinispan</code> with the default
+    (non-clustered) image will fail at startup with a <code class="inline code">ClassNotFoundException</code>.
+    Always use the <code class="inline code">clustered-</code> image tag when enabling clustering.
+</p>
+
 <h3>What is clustered</h3>
 
 <p>
@@ -232,7 +255,7 @@ for production-grade stacks with discovery appropriate for your network.</p>
 <pre class="prettyprint lang-yaml code"><code class="code">version: "3.9"
 services:
   mockserver-a:
-    image: mockserver/mockserver:{{ site.mockserver_version }}
+    image: mockserver/mockserver:clustered-{{ site.mockserver_version }}
     environment:
       MOCKSERVER_STATE_BACKEND: infinispan
       MOCKSERVER_CLUSTER_ENABLED: "true"
@@ -244,7 +267,7 @@ services:
       - "1080:1080"
 
   mockserver-b:
-    image: mockserver/mockserver:{{ site.mockserver_version }}
+    image: mockserver/mockserver:clustered-{{ site.mockserver_version }}
     environment:
       MOCKSERVER_STATE_BACKEND: infinispan
       MOCKSERVER_CLUSTER_ENABLED: "true"
@@ -255,56 +278,79 @@ services:
     ports:
       - "1081:1080"</code></pre>
 
-<h3>Setup: Kubernetes (Helm + StatefulSet)</h3>
+<h3>Setup: Kubernetes (Helm chart)</h3>
 
 <p>
-    On Kubernetes, JGroups can discover cluster members using the Kubernetes API or DNS.
-    The recommended approach is a <strong>StatefulSet</strong> with a <strong>headless Service</strong>
-    so that each pod has a stable DNS name that JGroups can use for TCPPING or KUBE_PING discovery.
-</p>
-
-<p>
-    The standard MockServer Helm chart deploys a Deployment (not a StatefulSet). For a clustered deployment,
-    you can either:
+    The MockServer Helm chart has built-in support for clustering via the <code class="inline code">clustering.enabled</code> value.
+    When enabled, the chart automatically:
 </p>
 
 <ol>
-    <li>
-        <strong>Use a Deployment with KUBE_PING</strong> &mdash; JGroups KUBE_PING discovers pods via the Kubernetes API.
-        This works with a regular Deployment and requires a ServiceAccount with permissions to list/get pods.
-        Supply a <code class="inline code">jgroups-kube-ping.xml</code> transport configuration with
-        <a target="_blank" href="https://github.com/jgroups-extras/jgroups-kubernetes" rel="noopener noreferrer">KUBE_PING</a>
-        and mount it via the chart's <code class="inline code">app.config.extraFiles</code> value.
-    </li>
-    <li>
-        <strong>Use a StatefulSet with DNS-based discovery</strong> &mdash; deploy a StatefulSet and headless Service
-        outside the Helm chart, with TCPPING pointing at the stable pod DNS names
-        (<code class="inline code">&lt;release&gt;-&lt;ordinal&gt;.&lt;headless-svc&gt;</code>).
-        This is more operationally predictable but requires managing the StatefulSet separately.
-    </li>
+    <li>Sets the <code class="inline code">MOCKSERVER_STATE_BACKEND</code>, <code class="inline code">MOCKSERVER_CLUSTER_ENABLED</code>,
+        <code class="inline code">MOCKSERVER_CLUSTER_NAME</code>, and <code class="inline code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG</code>
+        environment variables</li>
+    <li>Creates a <strong>headless Service</strong> for JGroups <code class="inline code">DNS_PING</code> pod discovery</li>
+    <li>Sets the <code class="inline code">JGROUPS_DNS_QUERY</code> environment variable so JGroups discovers all pod IPs
+        automatically</li>
+    <li>Exposes the JGroups TCP port (default 7800) as a container port</li>
 </ol>
 
 <p>
-    Whichever approach you use, mount the JGroups transport XML as a ConfigMap and pass its path via
-    <code class="inline code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG</code>.
-    A minimal Helm values file for Option 1 (Deployment + KUBE_PING) looks like:
+    You only need to set <code class="inline code">clustering.enabled=true</code>, point the image to the
+    <code class="inline code">-clustered</code> variant, and increase <code class="inline code">replicaCount</code>.
+    A minimal values file:
 </p>
 
 <pre class="prettyprint lang-yaml code"><code class="code">replicaCount: 3
 
+image:
+  repositoryNameAndTag: "mockserver/mockserver:clustered-{{ site.mockserver_version }}"
+
+clustering:
+  enabled: true
+  # clusterName: "mockserver-cluster"   # default
+  # transportConfig: "jgroups-kubernetes.xml"  # default — uses DNS_PING
+  # jgroupsPort: 7800                   # default</code></pre>
+
+<pre class="prettyprint lang-bash code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace \
+  --version {{ site.mockserver_version }} \
+  -f cluster-values.yaml \
+  mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
+
+<p>
+    <strong>How DNS_PING discovery works:</strong>
+    the chart creates a headless Service (ClusterIP: None) with <code class="inline code">publishNotReadyAddresses: true</code>.
+    JGroups <code class="inline code">DNS_PING</code> queries the headless Service DNS name
+    (<code class="inline code">&lt;release&gt;-headless.&lt;namespace&gt;.svc.cluster.local</code>)
+    and receives A records for all pod IPs, including pods still starting up.
+    This allows the cluster to form without additional RBAC or Kubernetes API access.
+</p>
+
+<h4>Advanced: custom JGroups transport</h4>
+
+<p>
+    The built-in <code class="inline code">jgroups-kubernetes.xml</code> transport uses TCP + DNS_PING and works
+    out of the box with the headless Service. For non-Kubernetes environments or advanced tuning, you can
+    supply a custom JGroups XML via the chart's <code class="inline code">app.config.extraFiles</code> value:
+</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">replicaCount: 3
+
+image:
+  repositoryNameAndTag: "mockserver/mockserver:clustered-{{ site.mockserver_version }}"
+
+clustering:
+  enabled: true
+  transportConfig: /config/jgroups-custom.xml
+
 app:
   config:
     enabled: true
-    properties: |
-      mockserver.stateBackend=infinispan
-      mockserver.clusterEnabled=true
-      mockserver.clusterName=shared-cluster
-      mockserver.clusterTransportConfig=/config/jgroups-kube-ping.xml
     extraFiles:
-      jgroups-kube-ping.xml: |
+      jgroups-custom.xml: |
         &lt;config xmlns="urn:org:jgroups"&gt;
-            &lt;TCP bind_port="7600" /&gt;
-            &lt;KUBE_PING namespace="mockserver" /&gt;
+            &lt;TCP bind_port="7800" /&gt;
+            &lt;dns.DNS_PING dns_query="my-headless-svc.my-ns.svc.cluster.local" /&gt;
             &lt;MERGE3/&gt;
             &lt;FD_SOCK/&gt;
             &lt;FD_ALL/&gt;
@@ -316,39 +362,13 @@ app:
             &lt;pbcast.STATE_TRANSFER/&gt;
         &lt;/config&gt;</code></pre>
 
-<pre class="prettyprint lang-bash code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace \
-  --version {{ site.mockserver_version }} \
-  -f cluster-values.yaml \
-  mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
-
 <p>
-    You also need a ServiceAccount with permission to list and get pods in the <code class="inline code">mockserver</code>
-    namespace for KUBE_PING. Create the required RBAC resources before installing the chart:
+    See the <a target="_blank" href="https://jgroups.org/manual5/index.html#protlist" rel="noopener noreferrer">JGroups documentation</a>
+    for the full protocol reference. Alternative discovery protocols include
+    <a target="_blank" href="https://github.com/jgroups-extras/jgroups-kubernetes" rel="noopener noreferrer">KUBE_PING</a>
+    (uses the Kubernetes API; requires a ServiceAccount with pod list/get RBAC) and
+    <code class="inline code">TCPPING</code> (static member list).
 </p>
-
-<pre class="prettyprint lang-yaml code"><code class="code">apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: mockserver-kube-ping
-  namespace: mockserver
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: mockserver-kube-ping
-  namespace: mockserver
-subjects:
-  - kind: ServiceAccount
-    name: default
-    namespace: mockserver
-roleRef:
-  kind: Role
-  name: mockserver-kube-ping
-  apiGroup: rbac.authorization.k8s.io</code></pre>
 
 <h3>Trade-offs and limitations</h3>
 
@@ -478,7 +498,7 @@ roleRef:
         <tr>
             <td>Times match limits are global</td>
             <td>Yes</td>
-            <td>No — node-local counters</td>
+            <td>Yes — cluster-wide CAS</td>
             <td>Yes</td>
         </tr>
         <tr>
