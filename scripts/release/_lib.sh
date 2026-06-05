@@ -19,7 +19,7 @@ export REPO_ROOT
 # Override via env var if needed for a specific run.
 # -----------------------------------------------------------------------------
 
-MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9.9-eclipse-temurin-11}"
+MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9.9-eclipse-temurin-17}"
 NODE_IMAGE="${NODE_IMAGE:-node:20-bookworm}"
 RUBY_IMAGE="${RUBY_IMAGE:-ruby:3.2-bookworm}"
 HELM_IMAGE="${HELM_IMAGE:-alpine/helm:3.16.2}"
