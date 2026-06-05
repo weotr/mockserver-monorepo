@@ -409,10 +409,12 @@ The `buildkite_agent_token` is a sensitive credential that grants agent registra
 export TF_VAR_buildkite_agent_token=$(aws ssm get-parameter \
   --name /buildkite/buildkite/agent-token \
   --with-decryption --query Parameter.Value --output text \
-  --profile mockserver-build)
+  --profile mockserver-build --region eu-west-2)
 ```
 
-The `run.sh` wrapper does this automatically.
+The `run.sh` wrapper does this automatically (it loads the parameter into `TF_VAR_buildkite_agent_token` before every `init`/`plan`/`apply`).
+
+**Cluster migration:** Buildkite deprecated unclustered (organization-level) agents, so all pipelines and agents now live in the **Default cluster**. The token above is a *cluster* agent token, minted by the `terraform/buildkite-pipelines` stack (`buildkite_cluster_agent_token`) and published to the SSM SecureString `/buildkite/buildkite/agent-token`. That stack also defines the four cluster queues (`default`, `trigger`, `release`, `perf`) and assigns every pipeline to the cluster via `cluster_id`. Apply order: `buildkite-pipelines` (mints token + queues) **before** `buildkite-agents` (consumes the token from SSM).
 
 ### Quick Start
 

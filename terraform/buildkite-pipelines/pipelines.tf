@@ -182,6 +182,11 @@ resource "buildkite_pipeline" "pipeline" {
   emoji          = each.value.emoji
   visibility     = contains(local.public_pipelines, each.key) ? "PUBLIC" : "PRIVATE"
 
+  # Assign every pipeline to the Default cluster (Buildkite deprecated
+  # unclustered agents — see clusters.tf). Agents register with the cluster
+  # token and only run jobs from pipelines in this cluster.
+  cluster_id = data.buildkite_cluster.default.id
+
   cancel_intermediate_builds = true
   skip_intermediate_builds   = true
 
