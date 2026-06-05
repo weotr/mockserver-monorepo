@@ -88,21 +88,22 @@ DOCKER_ARGS+=(-w "$WORKDIR")
 if [[ "${BUILDKITE_DISABLE_HOST_CACHE:-false}" != "true" ]]; then
   HOST_CACHE_BASE="${BUILDKITE_HOST_CACHE_DIR:-/var/cache/buildkite}"
 
-  # Maven  (~/.m2/repository inside the container)
-  mkdir -p "${HOST_CACHE_BASE}/maven"
-  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/maven:/root/.m2/repository")
+  # Only mount a cache dir if it can actually be created. The Buildkite agent
+  # may run as a non-root user without write access to ${HOST_CACHE_BASE}
+  # (e.g. /var/cache) — in that case host caching is silently skipped rather
+  # than aborting the build under `set -euo pipefail`. The `if mkdir` form
+  # (not a bare `mkdir`) is essential: a bare failure would kill the script.
+  #   $1 = cache subdir name, $2 = container mount target
+  add_host_cache_volume() {
+    if mkdir -p "${HOST_CACHE_BASE}/$1" 2>/dev/null; then
+      DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/$1:$2")
+    fi
+  }
 
-  # npm    (~/.npm inside the container)
-  mkdir -p "${HOST_CACHE_BASE}/npm"
-  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/npm:/root/.npm")
-
-  # pip    (~/.cache/pip inside the container)
-  mkdir -p "${HOST_CACHE_BASE}/pip"
-  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/pip:/root/.cache/pip")
-
-  # Bundler (~/.bundle inside the container — gems cache)
-  mkdir -p "${HOST_CACHE_BASE}/bundle"
-  DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/bundle:/root/.bundle")
+  add_host_cache_volume maven  /root/.m2/repository   # Maven
+  add_host_cache_volume npm    /root/.npm             # npm
+  add_host_cache_volume pip    /root/.cache/pip       # pip
+  add_host_cache_volume bundle /root/.bundle          # Bundler gems
 fi
 
 if [[ -n "$MEMORY" ]]; then
