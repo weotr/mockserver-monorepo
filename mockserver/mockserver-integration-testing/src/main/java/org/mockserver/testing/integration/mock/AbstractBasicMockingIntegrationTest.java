@@ -69,26 +69,7 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
 
     protected abstract boolean supportsHTTP2();
 
-    @Test
-    public void shouldReturnResponseWithOnlyBody() {
-        // when
-        Expectation[] upsertedExpectations = mockServerClient.when(request()).respond(response().withBody("some_body"));
-
-        // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body"),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("")),
-                getHeadersToRemove()
-            )
-        );
-        assertThat(upsertedExpectations.length, is(1));
-        assertThat(upsertedExpectations[0], is(new Expectation(request()).thenRespond(response().withBody("some_body"))));
-    }
+    // shouldReturnResponseWithOnlyBody — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
 
     @Test
     public void shouldReturnResponseInHTTP() {
@@ -245,155 +226,9 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
         );
     }
 
-    @Test
-    public void shouldReturnResponseWithOnlyStatusCode() {
-        // when
-        mockServerClient
-            .when(
-                request()
-                    .withMethod("POST")
-                    .withPath(calculatePath("some_path"))
-            )
-            .respond(
-                response()
-                    .withStatusCode(200)
-            );
-
-        // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some_path"))
-                    .withMethod("POST"),
-                getHeadersToRemove()
-            )
-        );
-    }
-
-    @Test
-    public void shouldReturnResponseByMatchingSchemaPathAndSchemaMethod() {
-        // when
-        mockServerClient
-            .when(
-                request()
-                    .withMethodSchema("{" + NEW_LINE +
-                        "   \"type\": \"string\"," + NEW_LINE +
-                        "   \"pattern\": \"^PO[A-Z]{2}$\"" + NEW_LINE +
-                        "}")
-                    .withPathSchema("{" + NEW_LINE +
-                        "   \"type\": \"string\"," + NEW_LINE +
-                        "   \"pattern\": \"some_[a-z]{4}$\"" + NEW_LINE +
-                        "}")
-            )
-            .respond(
-                response()
-                    .withStatusCode(200)
-            );
-
-        // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some_path"))
-                    .withMethod("POST"),
-                getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some_other_path"))
-                    .withMethod("POST"),
-                getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some_path"))
-                    .withMethod("PUT"),
-                getHeadersToRemove()
-            )
-        );
-    }
-
-    @Test
-    public void shouldReturnResponseByMatchingSchemaPathVariable() {
-        // when
-        mockServerClient
-            .when(
-                request()
-                    .withPath("/some/path/{variableOne}/{variableTwo}")
-                    .withPathParameters(
-                        schemaParam("variableO[a-z]{2}", "{" + NEW_LINE +
-                            "   \"type\": \"string\"," + NEW_LINE +
-                            "   \"pattern\": \"variableOneV[a-z]{4}$\"" + NEW_LINE +
-                            "}"),
-                        schemaParam("variableTwo", "{" + NEW_LINE +
-                            "   \"type\": \"string\"," + NEW_LINE +
-                            "   \"pattern\": \"variableTwoV[a-z]{4}$\"" + NEW_LINE +
-                            "}")
-                    )
-            )
-            .respond(
-                response()
-                    .withStatusCode(200)
-            );
-
-        // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some/path/variableOneValue/variableTwoValue")),
-                getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some/other/path")),
-                getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some/path/variableOneValue/variableTwoOtherValue")),
-                getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
-                request()
-                    .withPath(calculatePath("some/path/variableOneOtherValue/variableTwoValue")),
-                getHeadersToRemove()
-            )
-        );
-    }
+    // shouldReturnResponseWithOnlyStatusCode — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
+    // shouldReturnResponseByMatchingSchemaPathAndSchemaMethod — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
+    // shouldReturnResponseByMatchingSchemaPathVariable — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
 
     @Test
     public void shouldReturnResponseByMatchingStringBody() {
@@ -629,42 +464,7 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
         );
     }
 
-    @Test
-    public void shouldReturnResponseByMatchingPathAndMethod() {
-        // when
-        mockServerClient
-            .when(
-                request()
-                    .withMethod("GET")
-                    .withPath(calculatePath("some_pathRequest"))
-            )
-            .respond(
-                response()
-                    .withStatusCode(ACCEPTED_202.code())
-                    .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                    .withBody("some_body_response")
-            );
-
-        // then
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
-                request()
-                    .withMethod("GET")
-                    .withPath(calculatePath("some_pathRequest"))
-                    .withQueryStringParameters(
-                        param("queryStringParameterOneName", "queryStringParameterOneValue"),
-                        param("queryStringParameterTwoName", "queryStringParameterTwoValue")
-                    )
-                    .withHeaders(header("headerNameRequest", "headerValueRequest"))
-                    .withCookies(cookie("cookieNameRequest", "cookieValueRequest")),
-                getHeadersToRemove()
-            )
-        );
-    }
+    // shouldReturnResponseByMatchingPathAndMethod — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
 
     @Test
     public void shouldReturnResponseForExpectationWithDelay() {
@@ -1611,63 +1411,7 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
         );
     }
 
-    @Test
-    public void shouldRetrieveActiveExpectations() {
-        // when
-        HttpRequest complexRequest = request()
-            .withPath(calculatePath("some_path.*"))
-            .withHeader("some", "header")
-            .withQueryStringParameter("some", "parameter")
-            .withCookie("some", "parameter")
-            .withBody("some_body");
-        mockServerClient.when(complexRequest, exactly(4))
-            .respond(response().withBody("some_body"));
-        mockServerClient.when(request().withPath(calculatePath("some_path.*")))
-            .respond(response().withBody("some_body"));
-        mockServerClient.when(request().withPath(calculatePath("some_other_path")))
-            .respond(response().withBody("some_other_body"));
-        mockServerClient.when(request().withPath(calculatePath("some_forward_path")))
-            .forward(forward());
-
-        // then
-        assertThat(
-            mockServerClient.retrieveActiveExpectations(request().withPath(calculatePath("some_path.*"))),
-            arrayContaining(
-                new Expectation(complexRequest, exactly(4), TimeToLive.unlimited(), 0)
-                    .thenRespond(response().withBody("some_body")),
-                new Expectation(request().withPath(calculatePath("some_path.*")))
-                    .thenRespond(response().withBody("some_body"))
-            )
-        );
-
-        assertThat(
-            mockServerClient.retrieveActiveExpectations(null),
-            arrayContaining(
-                new Expectation(complexRequest, exactly(4), TimeToLive.unlimited(), 0)
-                    .thenRespond(response().withBody("some_body")),
-                new Expectation(request().withPath(calculatePath("some_path.*")))
-                    .thenRespond(response().withBody("some_body")),
-                new Expectation(request().withPath(calculatePath("some_other_path")))
-                    .thenRespond(response().withBody("some_other_body")),
-                new Expectation(request().withPath(calculatePath("some_forward_path")))
-                    .thenForward(forward())
-            )
-        );
-
-        assertThat(
-            mockServerClient.retrieveActiveExpectations(request()),
-            arrayContaining(
-                new Expectation(complexRequest, exactly(4), TimeToLive.unlimited(), 0)
-                    .thenRespond(response().withBody("some_body")),
-                new Expectation(request().withPath(calculatePath("some_path.*")))
-                    .thenRespond(response().withBody("some_body")),
-                new Expectation(request().withPath(calculatePath("some_other_path")))
-                    .thenRespond(response().withBody("some_other_body")),
-                new Expectation(request().withPath(calculatePath("some_forward_path")))
-                    .thenForward(forward())
-            )
-        );
-    }
+    // shouldRetrieveActiveExpectations — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
 
     @Test
     public void shouldRetrieveRecordedExpectations() throws InterruptedException {
