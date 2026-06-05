@@ -382,11 +382,16 @@ Repository metadata lives in [`helm/artifacthub-repo.yml`](../../helm/artifacthu
 bootstrap (manual — needs an Artifact Hub account):
 
 1. Artifact Hub → Control Panel → Repositories → Add → kind **Helm charts**, OCI based, URL
-   `oci://ghcr.io/mock-server/charts`.
+   `oci://ghcr.io/mock-server/charts/mockserver`.
+   > **The URL must be the full chart path, not the namespace.** Artifact Hub's OCI Helm format
+   > requires `oci://registry/namespace/chart-name`. Pointing it at the namespace
+   > (`oci://ghcr.io/mock-server/charts`) indexes **zero charts** — the namespace holds only the
+   > `artifacthub.io` metadata tag, not the semver chart versions — so the listing silently shows
+   > an empty repository.
 2. Copy the generated **Repository ID** into `repositoryID` in `helm/artifacthub-repo.yml`.
-3. Publish the metadata file to the registry root so Artifact Hub can verify ownership:
+3. Publish the metadata file to the chart path so Artifact Hub can verify ownership:
    ```bash
-   oras push ghcr.io/mock-server/charts:artifacthub.io \
+   oras push ghcr.io/mock-server/charts/mockserver:artifacthub.io \
      helm/artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
    ```
 
