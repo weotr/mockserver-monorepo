@@ -35,6 +35,15 @@ resource "buildkite_cluster_queue" "agents" {
   description = "MockServer ${each.value} agents (terraform/buildkite-agents)"
 }
 
+# Make "default" the cluster's default queue. Each pipeline's bootstrap step
+# (`buildkite-agent pipeline upload`) carries no explicit `agents: queue:` tag,
+# so it runs on the cluster default queue. Without this it would target the
+# auto-created "default-queue" (which has no agents) and every build would hang.
+resource "buildkite_cluster_default_queue" "default" {
+  cluster_id = data.buildkite_cluster.default.id
+  queue_id   = buildkite_cluster_queue.agents["default"].id
+}
+
 # Cluster-scoped agent registration token. Replaces the legacy org-level token.
 # The value is sensitive and surfaced only via SSM below.
 resource "buildkite_cluster_agent_token" "agents" {
