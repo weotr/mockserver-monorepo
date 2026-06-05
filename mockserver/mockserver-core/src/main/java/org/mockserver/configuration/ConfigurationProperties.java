@@ -1772,7 +1772,7 @@ public class ConfigurationProperties {
     /**
      * The value used for CORS in the access-control-allow-credentials header.
      * <p>
-     * The default is true
+     * The default is false
      *
      * @param allow the value used for CORS in the access-control-allow-credentials header
      */
@@ -1787,7 +1787,7 @@ public class ConfigurationProperties {
     /**
      * The value used for CORS in the access-control-max-age header.
      * <p>
-     * The default is 300
+     * The default is 0
      *
      * @param ageInSeconds the value used for CORS in the access-control-max-age header.
      */

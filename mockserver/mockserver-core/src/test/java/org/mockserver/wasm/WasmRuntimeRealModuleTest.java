@@ -1,6 +1,9 @@
 package org.mockserver.wasm;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -25,6 +28,18 @@ import static org.hamcrest.Matchers.notNullValue;
  * apart.
  */
 public class WasmRuntimeRealModuleTest {
+
+    private int originalMaxPages;
+
+    @Before
+    public void saveConfig() {
+        originalMaxPages = ConfigurationProperties.wasmMaxMemoryPages();
+    }
+
+    @After
+    public void restoreConfig() {
+        ConfigurationProperties.wasmMaxMemoryPages(originalMaxPages);
+    }
 
     private static byte[] amountOver1000Module() throws IOException {
         try (InputStream in = WasmRuntimeRealModuleTest.class.getResourceAsStream("amount-over-1000.wasm")) {
@@ -80,5 +95,19 @@ public class WasmRuntimeRealModuleTest {
     public void shouldTolerateWhitespaceAroundColon() throws IOException {
         WasmRuntime runtime = new WasmRuntime(amountOver1000Module());
         assertThat(runtime.callMatch("{ \"amount\" :   2500 }"), is(true));
+    }
+
+    @Test
+    public void shouldMatchWithExplicitMemoryPageLimit() throws IOException {
+        // 256 pages (default) should be more than enough for this simple module
+        WasmRuntime runtime = new WasmRuntime(amountOver1000Module(), 256);
+        assertThat(runtime.callMatch("{\"amount\": 5000}"), is(true));
+    }
+
+    @Test
+    public void shouldMatchWithConfiguredMemoryPageLimit() throws IOException {
+        ConfigurationProperties.wasmMaxMemoryPages(128);
+        WasmRuntime runtime = new WasmRuntime(amountOver1000Module());
+        assertThat(runtime.callMatch("{\"amount\": 5000}"), is(true));
     }
 }

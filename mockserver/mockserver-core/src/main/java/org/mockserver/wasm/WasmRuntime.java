@@ -4,6 +4,7 @@ import com.dylibso.chicory.runtime.ExportFunction;
 import com.dylibso.chicory.runtime.Instance;
 import com.dylibso.chicory.wasm.Parser;
 import com.dylibso.chicory.wasm.WasmModule;
+import com.dylibso.chicory.wasm.types.MemoryLimits;
 
 import java.nio.charset.StandardCharsets;
 
@@ -23,9 +24,25 @@ import java.nio.charset.StandardCharsets;
 public class WasmRuntime {
 
     private final byte[] wasmBytes;
+    private final int maxMemoryPages;
 
+    /**
+     * Create a runtime with the default memory page limit from
+     * {@link org.mockserver.configuration.ConfigurationProperties#wasmMaxMemoryPages()}.
+     */
     public WasmRuntime(byte[] wasmBytes) {
+        this(wasmBytes, org.mockserver.configuration.ConfigurationProperties.wasmMaxMemoryPages());
+    }
+
+    /**
+     * Create a runtime with an explicit memory page limit.
+     *
+     * @param wasmBytes      the compiled WASM binary
+     * @param maxMemoryPages maximum number of WASM linear memory pages (each page is 64 KiB)
+     */
+    public WasmRuntime(byte[] wasmBytes, int maxMemoryPages) {
         this.wasmBytes = wasmBytes;
+        this.maxMemoryPages = maxMemoryPages;
     }
 
     /**
@@ -38,7 +55,19 @@ public class WasmRuntime {
     public boolean callMatch(String requestBody) {
         try {
             WasmModule module = Parser.parse(wasmBytes);
-            Instance instance = Instance.builder(module).build();
+            Instance.Builder builder = Instance.builder(module);
+
+            // Cap the WASM module's linear memory at maxMemoryPages while preserving
+            // the module's declared initial pages (needed for data segment initialization).
+            if (module.memorySection().isPresent()
+                && module.memorySection().get().memoryCount() > 0) {
+                MemoryLimits declared = module.memorySection().get().getMemory(0).limits();
+                int effectiveMax = Math.min(declared.maximumPages(), maxMemoryPages);
+                int effectiveInit = Math.min(declared.initialPages(), effectiveMax);
+                builder.withMemoryLimits(new MemoryLimits(effectiveInit, effectiveMax));
+            }
+
+            Instance instance = builder.build();
             byte[] input = requestBody != null
                 ? requestBody.getBytes(StandardCharsets.UTF_8)
                 : new byte[0];

@@ -1858,23 +1858,27 @@ public class HttpState {
             } else if (request.matches("PUT", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    try {
-                        String moduleName = request.getFirstQueryStringParameter("name");
-                        if (isBlank(moduleName)) {
-                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
-                        } else {
-                            byte[] bodyBytes = request.getBodyAsRawBytes();
-                            if (bodyBytes != null && bodyBytes.length > 0) {
-                                org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
-                                responseWriter.writeResponse(request, withDashboardCORS(request, response()
-                                    .withStatusCode(CREATED.code())
-                                    .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8)), true);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
+                    } else {
+                        try {
+                            String moduleName = request.getFirstQueryStringParameter("name");
+                            if (isBlank(moduleName)) {
+                                responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
                             } else {
-                                responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                                byte[] bodyBytes = request.getBodyAsRawBytes();
+                                if (bodyBytes != null && bodyBytes.length > 0) {
+                                    org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
+                                    responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                                        .withStatusCode(CREATED.code())
+                                        .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8)), true);
+                                } else {
+                                    responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                                }
                             }
+                        } catch (Exception e) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
                         }
-                    } catch (Exception e) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 canHandle.complete(true);
@@ -2074,17 +2078,21 @@ public class HttpState {
             }
             if (request.matches("GET", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    try {
-                        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
-                        com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
-                        for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
-                            modulesArray.add(name);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
+                    } else {
+                        try {
+                            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                            com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
+                            for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
+                                modulesArray.add(name);
+                            }
+                            responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                                .withStatusCode(OK.code())
+                                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8)), true);
+                        } catch (Exception e) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
                         }
-                        responseWriter.writeResponse(request, withDashboardCORS(request, response()
-                            .withStatusCode(OK.code())
-                            .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8)), true);
-                    } catch (Exception e) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 return true;
@@ -2146,14 +2154,18 @@ public class HttpState {
 
             if (request.matches("DELETE", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    String moduleName = request.getFirstQueryStringParameter("name");
-                    if (isBlank(moduleName)) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
-                    } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
-                        org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
-                        responseWriter.writeResponse(request, withDashboardCORS(request, response().withStatusCode(OK.code())), true);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
                     } else {
-                        responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                        String moduleName = request.getFirstQueryStringParameter("name");
+                        if (isBlank(moduleName)) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                        } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
+                            org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
+                            responseWriter.writeResponse(request, withDashboardCORS(request, response().withStatusCode(OK.code())), true);
+                        } else {
+                            responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                        }
                     }
                 }
                 return true;

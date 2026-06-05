@@ -124,13 +124,13 @@ curl -X DELETE "http://localhost:1080/mockserver/wasm/modules?name=myMatcher"
       <td><span class="inline_code">mockserver.wasmEnabled</span></td>
       <td><span class="inline_code">MOCKSERVER_WASM_ENABLED</span></td>
       <td><span class="inline_code">false</span></td>
-      <td>Enable WASM body matching. Must be set to <span class="inline_code">true</span> to use WASM modules.</td>
+      <td>Enable WASM body matching. Must be set to <span class="inline_code">true</span> to upload, list, delete, or match with WASM modules. When <span class="inline_code">false</span>, control-plane endpoints return 403 and matchers return no match.</td>
     </tr>
     <tr>
       <td><span class="inline_code">mockserver.wasmMaxMemoryPages</span></td>
       <td><span class="inline_code">MOCKSERVER_WASM_MAX_MEMORY_PAGES</span></td>
       <td><span class="inline_code">256</span></td>
-      <td>Maximum number of WASM linear memory pages (each page is 64 KiB). Default 256 = 16 MiB.</td>
+      <td>Maximum number of WASM linear memory pages (each page is 64 KiB). Default 256 = 16 MiB. Enforced at WASM instance creation via chicory's memory limits.</td>
     </tr>
   </tbody>
 </table>
@@ -143,7 +143,7 @@ curl -X DELETE "http://localhost:1080/mockserver/wasm/modules?name=myMatcher"
 
 <ul>
   <li>WASM modules run inside the chicory interpreter sandbox -- they cannot access the host filesystem, network, or JVM internals</li>
-  <li>Memory is capped by <span class="inline_code">wasmMaxMemoryPages</span> to prevent resource exhaustion</li>
-  <li>The feature is opt-in (disabled by default)</li>
+  <li>Linear memory is capped at <span class="inline_code">wasmMaxMemoryPages</span> pages (default 256 = 16 MiB) to prevent resource exhaustion. The limit is enforced at instance creation via chicory's <span class="inline_code">MemoryLimits</span>.</li>
+  <li>The feature is opt-in (disabled by default). When <span class="inline_code">wasmEnabled</span> is <span class="inline_code">false</span>, all WASM control-plane endpoints (upload, list, delete) return <strong>403 Forbidden</strong>, and WASM body matchers always return <strong>no match</strong>.</li>
   <li>All WASM control-plane endpoints respect MockServer's authentication settings (mTLS/JWT)</li>
 </ul>

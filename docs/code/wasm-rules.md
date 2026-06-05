@@ -44,7 +44,7 @@ The module must declare at least one page of linear memory. The maximum memory i
 
 ### WasmRuntime
 
-`org.mockserver.wasm.WasmRuntime` -- parses the module with chicory's `Parser` and runs it via an `Instance`. Creates a fresh WASM instance per invocation for thread safety. Fails closed (returns `false`) on any error.
+`org.mockserver.wasm.WasmRuntime` -- parses the module with chicory's `Parser` and runs it via an `Instance`. Creates a fresh WASM instance per invocation for thread safety. Fails closed (returns `false`) on any error. The WASM instance is created with `MemoryLimits(min(declared.initialPages, effectiveMax), min(declared.maximumPages, wasmMaxMemoryPages))` — capping linear memory at `wasmMaxMemoryPages` while preserving the module's declared initial pages.
 
 ### WasmBody
 
@@ -52,7 +52,7 @@ The module must declare at least one page of linear memory. The maximum memory i
 
 ### WasmBodyMatcher
 
-`org.mockserver.matchers.WasmBodyMatcher` -- extends `BodyMatcher<String>`. Looks up the module bytes from `WasmStore`, creates a `WasmRuntime`, and calls `callMatch()` with the request body string.
+`org.mockserver.matchers.WasmBodyMatcher` -- extends `BodyMatcher<String>`. Checks `ConfigurationProperties.wasmEnabled()` first; if WASM is disabled, returns `false` (no match). Otherwise looks up the module bytes from `WasmStore`, creates a `WasmRuntime`, and calls `callMatch()` with the request body string.
 
 ### WasmBodyDTO
 
@@ -66,7 +66,7 @@ The module must declare at least one page of linear memory. The maximum memory i
 | GET | `/mockserver/wasm/modules` | List loaded module names (JSON array) |
 | DELETE | `/mockserver/wasm/modules?name={name}` | Remove a loaded module |
 
-All endpoints require control-plane authentication when enabled.
+All endpoints require control-plane authentication when enabled. All WASM endpoints also require `wasmEnabled=true`; when disabled they return **403 Forbidden** with a descriptive message.
 
 ## Configuration
 
@@ -95,5 +95,5 @@ All endpoints require control-plane authentication when enabled.
 
 - WASM modules run inside the chicory interpreter sandbox -- they cannot access the host filesystem, network, or JVM internals
 - Fail-closed design: any WASM error (parse failure, runtime trap, missing export) returns no-match
-- The feature is disabled by default (`wasmEnabled = false`) -- users must explicitly opt in
-- Memory is capped by `wasmMaxMemoryPages` to prevent resource exhaustion
+- The feature is disabled by default (`wasmEnabled = false`) -- users must explicitly opt in. When disabled, all WASM control-plane endpoints return 403 Forbidden, and `WasmBodyMatcher` returns no-match.
+- Linear memory is capped by `wasmMaxMemoryPages` (default 256 = 16 MiB) via chicory's `MemoryLimits`, enforced at instance creation
