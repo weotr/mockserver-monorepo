@@ -70,42 +70,6 @@ DOCKER_ARGS+=(--rm)
 DOCKER_ARGS+=(-v "$REPO_ROOT:/build")
 DOCKER_ARGS+=(-w "$WORKDIR")
 
-# ---------------------------------------------------------------------------
-# Host-level dependency cache mounts
-# ---------------------------------------------------------------------------
-# Mount persistent host cache directories into the container so that
-# successive builds on the same EC2 instance reuse downloaded dependencies
-# instead of re-downloading from the internet every time.
-#
-# These host directories live on the instance's 250 GiB gp3 root volume and
-# survive across Docker container invocations.  They do NOT survive instance
-# termination (scale-to-zero ASG), so they are a best-effort warm cache for
-# the common case of multiple builds on a single instance lifetime.  The S3
-# cache layer (cache-save/cache-restore scripts) covers the cold-start case.
-#
-# Disable by setting BUILDKITE_DISABLE_HOST_CACHE=true.
-# ---------------------------------------------------------------------------
-if [[ "${BUILDKITE_DISABLE_HOST_CACHE:-false}" != "true" ]]; then
-  HOST_CACHE_BASE="${BUILDKITE_HOST_CACHE_DIR:-/var/cache/buildkite}"
-
-  # Only mount a cache dir if it can actually be created. The Buildkite agent
-  # may run as a non-root user without write access to ${HOST_CACHE_BASE}
-  # (e.g. /var/cache) — in that case host caching is silently skipped rather
-  # than aborting the build under `set -euo pipefail`. The `if mkdir` form
-  # (not a bare `mkdir`) is essential: a bare failure would kill the script.
-  #   $1 = cache subdir name, $2 = container mount target
-  add_host_cache_volume() {
-    if mkdir -p "${HOST_CACHE_BASE}/$1" 2>/dev/null; then
-      DOCKER_ARGS+=(-v "${HOST_CACHE_BASE}/$1:$2")
-    fi
-  }
-
-  add_host_cache_volume maven  /root/.m2/repository   # Maven
-  add_host_cache_volume npm    /root/.npm             # npm
-  add_host_cache_volume pip    /root/.cache/pip       # pip
-  add_host_cache_volume bundle /root/.bundle          # Bundler gems
-fi
-
 if [[ -n "$MEMORY" ]]; then
   DOCKER_ARGS+=(--memory="$MEMORY" --memory-swap="$MEMORY")
 fi

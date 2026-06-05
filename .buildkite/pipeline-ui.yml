@@ -1,11 +1,4 @@
 steps:
-  - label: ":s3: restore npm cache"
-    command: ".buildkite/scripts/cache-restore.sh npm-ui mockserver-ui/package.json"
-    timeout_in_minutes: 5
-    soft_fail: true
-
-  - wait
-
   - label: ":react: UI lint and typecheck"
     command: ".buildkite/scripts/steps/ui-lint.sh"
     timeout_in_minutes: 10
@@ -30,8 +23,3 @@ steps:
   - label: ":package: UI build"
     command: ".buildkite/scripts/steps/ui-build.sh"
     timeout_in_minutes: 10
-
-  - label: ":s3: save npm cache"
-    command: ".buildkite/scripts/cache-save.sh npm-ui npm -- mockserver-ui/package.json"
-    timeout_in_minutes: 5
-    soft_fail: true

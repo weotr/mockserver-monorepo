@@ -1,16 +1,4 @@
 steps:
-  - label: ":s3: restore bundler cache"
-    command: ".buildkite/scripts/cache-restore.sh bundler-website jekyll-www.mock-server.com/Gemfile"
-    timeout_in_minutes: 5
-    soft_fail: true
-
-  - wait
-
   - label: ":jekyll: validate Jekyll site"
     command: ".buildkite/scripts/steps/website-build.sh"
     timeout_in_minutes: 10
-
-  - label: ":s3: save bundler cache"
-    command: ".buildkite/scripts/cache-save.sh bundler-website bundle -- jekyll-www.mock-server.com/Gemfile"
-    timeout_in_minutes: 5
-    soft_fail: true

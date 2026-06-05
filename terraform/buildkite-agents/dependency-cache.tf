@@ -1,5 +1,16 @@
 # ---------------------------------------------------------------------------
-# S3 Dependency Cache for CI Builds
+# S3 Dependency Cache for CI Builds — INACTIVE / RESERVED
+# ---------------------------------------------------------------------------
+# STATUS: The runtime wiring (host-volume mounts in run-in-docker.sh +
+# cache-restore.sh / cache-save.sh pipeline steps) was REVERTED because the
+# host-volume layer broke on non-root agents and the S3 layer was coupled to
+# it.  This Terraform config (S3 bucket + IAM policy) is RETAINED as inactive
+# infrastructure, ready for a future correct implementation using either the
+# Buildkite cache plugin or a same-agent approach that avoids host-path
+# permission issues.
+#
+# The IAM policy remains attached to agent roles so no Terraform change is
+# needed when the cache is re-enabled — only new pipeline scripts.
 # ---------------------------------------------------------------------------
 # Provides a shared S3 bucket for caching Maven, npm, pip, and Bundler
 # dependencies across ephemeral scale-to-zero build agents.  Without this,

@@ -196,7 +196,7 @@ rate 1 min"]
 | S3 Bucket (secrets) | Buildkite managed secrets (versioned, encrypted, public access blocked) |
 | S3 Bucket (secrets logs) | Secrets bucket access logs (versioned, encrypted, public access blocked) |
 | S3 Bucket (CloudTrail) | CloudTrail audit logs (encrypted, 90-day lifecycle, public access blocked) |
-| S3 Bucket (dependency cache) | CI dependency cache for Maven/npm/pip/Bundler (encrypted, 14-day lifecycle, public access blocked) |
+| S3 Bucket (dependency cache) | CI dependency cache for Maven/npm/pip/Bundler (encrypted, 14-day lifecycle, public access blocked) — **inactive**: runtime wiring reverted, S3 infra retained for future use |
 
 #### Container Registry
 
@@ -237,7 +237,7 @@ rate 1 min"]
 | Instance Profile | Attached to EC2 instances |
 | IAM Policy (`buildkite-read-dockerhub-secret`) | Allows agents to read Docker Hub credentials from Secrets Manager |
 | IAM Policy (`buildkite-ecr-public-push`) | Allows agents to push Docker images to ECR Public |
-| IAM Policy (`buildkite-dependency-cache`) | Allows agents to read/write the CI dependency cache S3 bucket |
+| IAM Policy (`buildkite-dependency-cache`) | Allows agents to read/write the CI dependency cache S3 bucket — **inactive**: runtime wiring reverted, policy retained for future use |
 | Service-linked roles | AutoScaling, EC2Spot, Organizations, SSO, Support, TrustedAdvisor, ResourceExplorer |
 
 #### Security
