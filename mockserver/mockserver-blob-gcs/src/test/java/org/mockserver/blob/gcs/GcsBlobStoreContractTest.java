@@ -67,6 +67,13 @@ public class GcsBlobStoreContractTest extends BlobStoreContract {
 
     @AfterClass
     public static void stopFakeGcs() {
+        if (storage != null) {
+            try {
+                storage.close();
+            } catch (Exception e) {
+                // best-effort cleanup
+            }
+        }
         if (gcsContainer != null) {
             gcsContainer.stop();
         }

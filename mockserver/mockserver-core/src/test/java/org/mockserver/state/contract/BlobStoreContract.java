@@ -168,6 +168,39 @@ public abstract class BlobStoreContract {
         assertThat(result.get().getMetadata().get("path"), is("a/b/c"));
     }
 
+    /**
+     * Verifies that metadata keys which differ only in a non-alphanumeric
+     * character survive a put/get round-trip with the EXACT original key names
+     * and do NOT collide. {@code x-custom-type} and {@code x_custom_type} are the
+     * canonical collision case: a backend that sanitises {@code -} to {@code _}
+     * (as the Azure backend previously did) would map both keys to the same
+     * stored key, silently losing one. Both keys are also valid HTTP header
+     * tokens, so they are representable on every backend (S3 stores metadata as
+     * {@code x-amz-meta-*} headers, which forbid characters like {@code =}).
+     */
+    @Test
+    public void shouldRoundTripMetadataKeysWithNonAlphanumericCharacters() {
+        Map<String, String> meta = new HashMap<>();
+        meta.put("x-custom-type", "hyphenated");
+        meta.put("x_custom_type", "underscored");
+        meta.put("simple", "value");
+
+        store.put("roundtrip-meta", "payload".getBytes(StandardCharsets.UTF_8), meta);
+
+        Optional<Blob> result = store.get("roundtrip-meta");
+        assertTrue("blob should be present", result.isPresent());
+
+        Map<String, String> retrievedMeta = result.get().getMetadata();
+        assertThat("hyphenated key should round-trip exactly (no collision)",
+            retrievedMeta.get("x-custom-type"), is("hyphenated"));
+        assertThat("underscored key should round-trip exactly (no collision)",
+            retrievedMeta.get("x_custom_type"), is("underscored"));
+        assertThat("simple alphanumeric key should round-trip",
+            retrievedMeta.get("simple"), is("value"));
+        assertThat("metadata should have exactly 3 entries (no key collision)",
+            retrievedMeta.size(), is(3));
+    }
+
     // --- empty and large data ---
 
     @Test

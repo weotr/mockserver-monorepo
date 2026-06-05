@@ -6,6 +6,7 @@ import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobListDetails;
 import com.azure.storage.blob.models.BlobStorageException;
 import com.azure.storage.blob.models.ListBlobsOptions;
+import com.azure.storage.blob.options.BlobParallelUploadOptions;
 import org.mockserver.state.Blob;
 import org.mockserver.state.BlobStore;
 import org.slf4j.Logger;
@@ -59,17 +60,19 @@ public class AzureBlobStore implements BlobStore {
     @Override
     public void put(String key, byte[] data, Map<String, String> metadata) {
         String azureName = toAzureName(key);
-        // Azure metadata keys must match [a-zA-Z_][a-zA-Z0-9_]* -- sanitize if needed
-        Map<String, String> sanitizedMeta = metadata != null ? sanitizeMetadataKeys(metadata) : Collections.emptyMap();
+        Map<String, String> encodedMeta = metadata != null ? encodeMetadataKeys(metadata) : Collections.emptyMap();
 
         var blobClient = containerClient.getBlobClient(azureName);
-        blobClient.upload(new ByteArrayInputStream(data), data.length, true);
-        if (!sanitizedMeta.isEmpty()) {
-            blobClient.setMetadata(sanitizedMeta);
-        }
+
+        // Upload data and metadata atomically via BlobParallelUploadOptions
+        // so that a concurrent get() never sees data without its metadata.
+        BlobParallelUploadOptions uploadOptions = new BlobParallelUploadOptions(
+            new ByteArrayInputStream(data), data.length)
+            .setMetadata(encodedMeta.isEmpty() ? null : encodedMeta);
+        blobClient.uploadWithResponse(uploadOptions, null, null);
 
         LOG.debug("put blob '{}' to azure://{}/{} ({} bytes, {} metadata entries)",
-            key, containerClient.getBlobContainerName(), azureName, data.length, sanitizedMeta.size());
+            key, containerClient.getBlobContainerName(), azureName, data.length, encodedMeta.size());
     }
 
     @Override
@@ -83,8 +86,9 @@ public class AzureBlobStore implements BlobStore {
             byte[] data = outputStream.toByteArray();
 
             var properties = blobClient.getProperties();
-            Map<String, String> metadata = properties.getMetadata() != null
-                ? new HashMap<>(properties.getMetadata())
+            Map<String, String> encodedMeta = properties.getMetadata();
+            Map<String, String> metadata = encodedMeta != null
+                ? decodeMetadataKeys(encodedMeta)
                 : Collections.emptyMap();
 
             return Optional.of(new Blob(key, data, metadata));
@@ -132,19 +136,125 @@ public class AzureBlobStore implements BlobStore {
     }
 
     /**
-     * Sanitize metadata keys for Azure compatibility. Azure requires
-     * metadata keys to be valid C# identifiers: start with letter or
-     * underscore, followed by letters, digits, or underscores.
+     * Reversible metadata key encoding for Azure compatibility.
+     * <p>
+     * Azure blob metadata keys must be valid C# identifiers:
+     * {@code [a-zA-Z_][a-zA-Z0-9_]*}. Original keys may contain
+     * characters like {@code -}, {@code =}, {@code .}, etc.
+     * <p>
+     * Encoding scheme (prefix-hex escape):
+     * <ul>
+     *   <li>Literal underscore {@code _} is escaped to {@code _5f}
+     *       (its lowercase hex code point)</li>
+     *   <li>Any other character outside {@code [a-zA-Z0-9]} is
+     *       escaped to {@code _XX} where {@code XX} is the two-digit
+     *       lowercase hex of the character's code point</li>
+     *   <li>Letters and digits pass through unescaped</li>
+     *   <li>If the encoded key starts with a digit, it is prefixed
+     *       with {@code _00} (decoded back to empty string on read)</li>
+     * </ul>
+     * <p>
+     * This is fully reversible: {@code decode(encode(k)).equals(k)}
+     * for all keys with code points in {@code [0x00, 0xFF]}. Keys
+     * with the same characters never collide because the escape is
+     * injective (underscore itself is always escaped).
+     *
+     * @param metadata the original metadata map
+     * @return a new map with Azure-safe encoded keys
      */
-    private static Map<String, String> sanitizeMetadataKeys(Map<String, String> metadata) {
+    static Map<String, String> encodeMetadataKeys(Map<String, String> metadata) {
         Map<String, String> result = new HashMap<>();
         for (Map.Entry<String, String> entry : metadata.entrySet()) {
-            String key = entry.getKey().replaceAll("[^a-zA-Z0-9_]", "_");
-            if (!key.isEmpty() && Character.isDigit(key.charAt(0))) {
-                key = "_" + key;
-            }
-            result.put(key, entry.getValue());
+            String encoded = encodeKey(entry.getKey());
+            result.put(encoded, entry.getValue());
         }
         return result;
+    }
+
+    /**
+     * Decodes metadata keys that were encoded by {@link #encodeMetadataKeys}.
+     *
+     * @param metadata the Azure metadata map with encoded keys
+     * @return a new map with the original decoded keys
+     */
+    static Map<String, String> decodeMetadataKeys(Map<String, String> metadata) {
+        Map<String, String> result = new HashMap<>();
+        for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            String decoded = decodeKey(entry.getKey());
+            result.put(decoded, entry.getValue());
+        }
+        return result;
+    }
+
+    /**
+     * Encode a single metadata key to an Azure-safe identifier.
+     */
+    private static String encodeKey(String key) {
+        StringBuilder sb = new StringBuilder(key.length() * 2);
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+                sb.append(c);
+            } else {
+                // Escape as _XX (two-digit lowercase hex)
+                sb.append('_');
+                sb.append(String.format("%02x", (int) c));
+            }
+        }
+        String encoded = sb.toString();
+        // Azure keys must start with a letter or underscore. If the
+        // encoded result starts with a digit, prefix with _00 (which
+        // decodes to an empty character and is stripped on decode).
+        if (!encoded.isEmpty() && Character.isDigit(encoded.charAt(0))) {
+            encoded = "_00" + encoded;
+        }
+        return encoded;
+    }
+
+    /**
+     * Decode a single Azure metadata key back to the original.
+     */
+    private static String decodeKey(String encoded) {
+        // Strip the _00 leading-digit guard prefix if present
+        if (encoded.startsWith("_00") && encoded.length() > 3
+            && Character.isDigit(encoded.charAt(3))) {
+            encoded = encoded.substring(3);
+        }
+        StringBuilder sb = new StringBuilder(encoded.length());
+        int i = 0;
+        while (i < encoded.length()) {
+            char c = encoded.charAt(i);
+            if (c == '_' && i + 2 < encoded.length()) {
+                String hex = encoded.substring(i + 1, i + 3);
+                try {
+                    int codePoint = Integer.parseInt(hex, 16);
+                    sb.append((char) codePoint);
+                    i += 3;
+                } catch (NumberFormatException e) {
+                    // Not a valid escape sequence; pass through literally
+                    sb.append(c);
+                    i++;
+                }
+            } else {
+                sb.append(c);
+                i++;
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Closes the Azure blob store. The Azure {@link BlobServiceClient}
+     * and {@link BlobContainerClient} do not implement
+     * {@link AutoCloseable} -- the underlying Netty/Reactor HTTP client
+     * is managed by the SDK and does not expose an explicit close. This
+     * is a documented no-op.
+     */
+    @Override
+    public void close() {
+        // Azure BlobServiceClient / BlobContainerClient do not implement
+        // AutoCloseable. The SDK manages the underlying HTTP client
+        // lifecycle internally. No explicit resource release is needed.
+        LOG.debug("close() called on AzureBlobStore (no-op: Azure SDK manages HTTP client lifecycle)");
     }
 }

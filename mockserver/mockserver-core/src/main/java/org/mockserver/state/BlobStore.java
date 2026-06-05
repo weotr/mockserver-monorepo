@@ -11,8 +11,13 @@ import java.util.Optional;
  * The in-memory implementation holds blobs in a {@code ConcurrentHashMap};
  * a filesystem implementation delegates to the existing file I/O paths;
  * cloud implementations (S3, GCS, Azure Blob) are SPI-only for now.
+ * <p>
+ * Extends {@link AutoCloseable} so that cloud implementations can release
+ * their SDK client resources (connection pools, threads) on shutdown.
+ * The default {@link #close()} is a no-op so in-memory and filesystem
+ * implementations need no change.
  */
-public interface BlobStore {
+public interface BlobStore extends AutoCloseable {
 
     /**
      * Stores a blob, overwriting any existing blob with the same key.
@@ -46,4 +51,14 @@ public interface BlobStore {
      * @return true if the key was present
      */
     boolean delete(String key);
+
+    /**
+     * Releases any resources held by this blob store (e.g. cloud SDK
+     * client connection pools). The default implementation is a no-op,
+     * suitable for in-memory and filesystem stores.
+     */
+    @Override
+    default void close() {
+        // no-op by default
+    }
 }

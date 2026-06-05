@@ -72,7 +72,9 @@ public class GcsBlobStore implements BlobStore {
     public Optional<Blob> get(String key) {
         String gcsName = toGcsName(key);
         com.google.cloud.storage.Blob gcsBlob = storage.get(BlobId.of(bucket, gcsName));
-        if (gcsBlob == null || !gcsBlob.exists()) {
+        // storage.get() returns null when the object does not exist --
+        // no need for a separate gcsBlob.exists() network call.
+        if (gcsBlob == null) {
             return Optional.empty();
         }
 
@@ -107,5 +109,23 @@ public class GcsBlobStore implements BlobStore {
             LOG.debug("deleted blob '{}' from gs://{}/{}", key, bucket, gcsName);
         }
         return deleted;
+    }
+
+    /**
+     * Closes the underlying GCS {@link Storage} client, releasing its
+     * HTTP transport resources. {@code Storage} implements
+     * {@link AutoCloseable}.
+     */
+    @Override
+    public void close() {
+        if (storage != null) {
+            try {
+                storage.close();
+                LOG.debug("closed GCS storage client for bucket '{}'", bucket);
+            } catch (Exception e) {
+                LOG.warn("failed to close GCS storage client for bucket '{}': {}",
+                    bucket, e.getMessage());
+            }
+        }
     }
 }

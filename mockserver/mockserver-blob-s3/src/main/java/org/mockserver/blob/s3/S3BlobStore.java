@@ -36,7 +36,7 @@ public class S3BlobStore implements BlobStore {
     /**
      * Creates an S3 blob store.
      *
-     * @param s3Client  the AWS S3 client (caller owns lifecycle)
+     * @param s3Client  the AWS S3 client
      * @param bucket    the S3 bucket name
      * @param keyPrefix optional key prefix (e.g. "mockserver/"); empty string
      *                  for no prefix
@@ -79,26 +79,22 @@ public class S3BlobStore implements BlobStore {
         String s3Key = toS3Key(key);
         try {
             byte[] data;
+            Map<String, String> metadata;
             try (var response = s3Client.getObject(GetObjectRequest.builder()
                 .bucket(bucket)
                 .key(s3Key)
                 .build())) {
+                // Capture metadata from the getObject response itself --
+                // response.response() returns the GetObjectResponse which
+                // carries the S3 user metadata. No separate headObject
+                // call is needed.
+                metadata = response.response().metadata() != null
+                    ? new HashMap<>(response.response().metadata())
+                    : Collections.emptyMap();
                 data = response.readAllBytes();
             } catch (IOException e) {
                 throw new UncheckedIOException("failed to read blob from S3: " + key, e);
             }
-
-            // Retrieve metadata via head (getObject response metadata
-            // is available from the response but we need HeadObject to
-            // get user metadata reliably on all S3-compatible backends)
-            HeadObjectResponse head = s3Client.headObject(HeadObjectRequest.builder()
-                .bucket(bucket)
-                .key(s3Key)
-                .build());
-
-            Map<String, String> metadata = head.metadata() != null
-                ? new HashMap<>(head.metadata())
-                : Collections.emptyMap();
 
             return Optional.of(new Blob(key, data, metadata));
         } catch (NoSuchKeyException e) {
@@ -136,7 +132,14 @@ public class S3BlobStore implements BlobStore {
     public boolean delete(String key) {
         String s3Key = toS3Key(key);
         try {
-            // Check if the object exists first
+            // NOTE: head-then-delete is inherently non-atomic (TOCTOU).
+            // S3 has no atomic conditional-delete operation, so another
+            // client could delete or overwrite the object between the
+            // headObject check and the deleteObject call. This is
+            // acceptable for the BlobStore contract: the worst case is
+            // returning true when the object was already deleted by a
+            // concurrent caller, or deleting an object that was
+            // concurrently re-created.
             s3Client.headObject(HeadObjectRequest.builder()
                 .bucket(bucket)
                 .key(s3Key)
@@ -152,5 +155,17 @@ public class S3BlobStore implements BlobStore {
 
         LOG.debug("deleted blob '{}' from s3://{}/{}", key, bucket, s3Key);
         return true;
+    }
+
+    /**
+     * Closes the underlying {@link S3Client}, releasing its HTTP connection
+     * pool and I/O threads.
+     */
+    @Override
+    public void close() {
+        if (s3Client != null) {
+            s3Client.close();
+            LOG.debug("closed S3 client for bucket '{}'", bucket);
+        }
     }
 }
