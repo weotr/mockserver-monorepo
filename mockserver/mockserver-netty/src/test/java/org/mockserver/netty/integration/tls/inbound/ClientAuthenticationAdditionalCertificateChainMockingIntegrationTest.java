@@ -180,7 +180,8 @@ public class ClientAuthenticationAdditionalCertificateChainMockingIntegrationTes
                     containsString("Received fatal alert: internal_error"),
                     containsString("readHandshakeRecord"),
                     containsString("Broken pipe"),
-                    containsString("wrong type for socket")
+                    containsString("wrong type for socket"),
+                    containsString("Connection reset")
                 )
             );
         }
