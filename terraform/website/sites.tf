@@ -11,14 +11,6 @@ resource "aws_s3_bucket" "site" {
   }
 }
 
-resource "aws_s3_bucket_website_configuration" "site" {
-  provider = aws.eu-west-2
-  for_each = var.sites
-  bucket   = aws_s3_bucket.site[each.key].id
-  index_document { suffix = "index.html" }
-  error_document { key = "404.html" }
-}
-
 resource "aws_s3_bucket_public_access_block" "site" {
   provider                = aws.eu-west-2
   for_each                = var.sites
@@ -34,6 +26,14 @@ resource "aws_s3_bucket_public_access_block" "site" {
 # distribution. OAI resources are kept for now so bucket policies grant BOTH
 # principals during the cutover — eliminates any 403 window. The OAIs will be
 # removed in a follow-up apply once OAC traffic is verified stable.
+#
+# LIVE FOLLOW-UP: verify via CloudFront access logs (see cloudfront_logs bucket
+# in security-hardening.tf) that ALL traffic is OAC-signed (SigV4) and no
+# requests arrive via the legacy OAI path. Once confirmed, remove the following
+# resources and the "AllowLegacyOAIRead" bucket-policy statement:
+#   - aws_cloudfront_origin_access_identity.site
+#   - aws_cloudfront_origin_access_identity.main
+# Until then, both OAI and OAC principals remain in the bucket policies.
 
 resource "aws_cloudfront_origin_access_identity" "site" {
   for_each = var.sites
@@ -110,6 +110,48 @@ resource "aws_s3_bucket_policy" "site" {
   })
 }
 
+# Audit finding F-WEB-17: attach security response headers to every
+# CloudFront distribution. One managed policy serves both distributions.
+#
+# NOTE: the Content-Security-Policy directive below is conservative and may
+# need tuning against the live site (e.g. additional script-src / style-src
+# origins for third-party widgets). If breakage is observed after apply,
+# temporarily swap content_security_policy for Content-Security-Policy-Report-Only
+# semantics (CloudFront has no native report-only field — front it with a
+# custom_headers_config "Content-Security-Policy-Report-Only" entry) to collect
+# violations without blocking, then tighten once the report is clean.
+resource "aws_cloudfront_response_headers_policy" "security" {
+  name    = "mockserver-security-headers"
+  comment = "Security headers for mock-server.com distributions"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+
+    content_type_options {
+      override = true
+    }
+
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = true
+    }
+
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+
+    content_security_policy {
+      content_security_policy = "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com; font-src 'self' data:; connect-src 'self' https://www.google-analytics.com; frame-ancestors 'self'"
+      override                = true
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "site" {
   for_each            = var.sites
   enabled             = true
@@ -140,11 +182,12 @@ resource "aws_cloudfront_distribution" "site" {
   }
 
   default_cache_behavior {
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-${each.value.bucket_name}"
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = "S3-${each.value.bucket_name}"
+    viewer_protocol_policy     = "redirect-to-https"
+    compress                   = true
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
 
     forwarded_values {
       query_string = false
@@ -205,11 +248,12 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   default_cache_behavior {
-    allowed_methods        = ["GET", "HEAD"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-${var.sites[var.latest_version].bucket_name}"
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    target_origin_id           = "S3-${var.sites[var.latest_version].bucket_name}"
+    viewer_protocol_policy     = "redirect-to-https"
+    compress                   = true
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
 
     forwarded_values {
       query_string = false
@@ -263,4 +307,18 @@ resource "aws_route53_record" "www" {
     zone_id                = aws_cloudfront_distribution.main.hosted_zone_id
     evaluate_target_health = false
   }
+}
+
+# Audit finding F-WEB-18: CAA records restrict certificate issuance to Amazon
+# (ACM). Prevents a compromised or rogue CA from issuing a cert for the domain.
+resource "aws_route53_record" "caa" {
+  zone_id = var.zone_id
+  name    = var.domain
+  type    = "CAA"
+  ttl     = 300
+
+  records = [
+    "0 issue \"amazon.com\"",
+    "0 issuewild \"amazon.com\"",
+  ]
 }

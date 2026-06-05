@@ -173,6 +173,45 @@ bundle exec jekyll build
 
 See [AWS Infrastructure](../infrastructure/aws-infrastructure.md) and [Release Process](release-process.md) for details.
 
+## Website Infrastructure Security
+
+The following controls are applied to the CloudFront distributions and DNS for `mock-server.com`. These are managed by Terraform in `terraform/website/`.
+
+### CloudFront Response Security Headers
+
+A shared `aws_cloudfront_response_headers_policy` (`mockserver-security-headers`) is attached to the default cache behaviour of all distributions:
+
+| Header | Value |
+|--------|-------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `SAMEORIGIN` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Content-Security-Policy` | Conservative allow-list (self + Google Analytics) — may need tuning for third-party widgets |
+
+All headers have `override = true` so they cannot be suppressed by S3 object metadata.
+
+### CAA DNS Records
+
+Route 53 CAA records on `mock-server.com` restrict TLS certificate issuance to Amazon CA:
+
+```
+0 issue    "amazon.com"
+0 issuewild "amazon.com"
+```
+
+This prevents a compromised or rogue CA from issuing a certificate for the domain. Managed by `aws_route53_record.caa` in `terraform/website/sites.tf`.
+
+### S3 Static Website Hosting
+
+S3 static-website hosting (`aws_s3_bucket_website_configuration`) is **not** configured. CloudFront uses the private OAC REST S3 origin with `default_root_object = "index.html"`, which avoids exposing the S3 website endpoint publicly.
+
+### Cross-Account Role ExternalId
+
+The `mockserver-release-website` IAM role in the website account optionally enforces `sts:ExternalId` on the trust policy when `var.role_external_id` is set. The current default is `""` (condition inactive). To activate, store the secret in `mockserver-release/website-external-id` in the build account's Secrets Manager and supply it at apply time via `TF_VAR_role_external_id`. See `terraform/website/README.md` for the full wiring procedure.
+
+**Legacy OAI removal:** The legacy Origin Access Identity resources (`aws_cloudfront_origin_access_identity`) are still present in the Terraform state during the OAI→OAC transition. They will be removed in a follow-up apply once CloudFront access logs confirm all traffic arrives via OAC (SigV4-signed requests).
+
 ## SEO & Metadata Files
 
 | File | Purpose |

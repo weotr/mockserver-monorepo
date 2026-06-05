@@ -36,3 +36,10 @@ variable "website_role_arn" {
   default     = ""
   description = "IAM role ARN the release pipeline assumes for website-account operations. Leave empty when running terraform manually (the AWS_PROFILE credential chain is used instead)."
 }
+
+variable "role_external_id" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "ExternalId for cross-account AssumeRole. Supplied at apply time from a secret (e.g. TF_VAR_role_external_id); never committed. Must match the condition on aws_iam_role.release_website and the provider assume_role blocks."
+}

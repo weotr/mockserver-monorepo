@@ -2,11 +2,21 @@ resource "aws_iam_role" "release_website" {
   name = "mockserver-release-website"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { AWS = var.build_account_agent_role_arn }
-      Action    = "sts:AssumeRole"
-    }]
+    Statement = [merge(
+      {
+        Effect    = "Allow"
+        Principal = { AWS = var.build_account_agent_role_arn }
+        Action    = "sts:AssumeRole"
+      },
+      # Only emit the Condition key when an external id is supplied. Emitting
+      # `Condition = null` produces `"Condition": null` in the policy JSON,
+      # which the IAM API normalises away — causing perpetual plan drift. When
+      # role_external_id is "" (the default) the trust policy stays as-is so the
+      # current cross-account apply keeps working until the external id is wired.
+      var.role_external_id != "" ? {
+        Condition = { StringEquals = { "sts:ExternalId" = var.role_external_id } }
+      } : {}
+    )]
   })
 }
 
@@ -31,21 +41,16 @@ resource "aws_iam_role_policy" "release_website" {
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
-          "s3:GetObjectAcl",
-          "s3:PutObjectAcl",
           "s3:ListBucket",
           "s3:GetBucketLocation",
           "s3:GetBucketVersioning",
           "s3:GetBucketTagging",
-          "s3:GetBucketAcl",
           "s3:GetBucketPolicy",
-          "s3:GetBucketWebsite",
           "s3:GetBucketPublicAccessBlock",
           "s3:GetBucketOwnershipControls",
           # Bucket-level (versioned-site.sh creates new buckets)
           "s3:CreateBucket",
           "s3:PutBucketPolicy",
-          "s3:PutBucketWebsite",
           "s3:PutPublicAccessBlock",
           "s3:PutBucketPublicAccessBlock",
           "s3:PutBucketOwnershipControls",
