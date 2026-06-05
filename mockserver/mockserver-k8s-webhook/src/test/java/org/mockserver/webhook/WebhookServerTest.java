@@ -277,6 +277,12 @@ class WebhookServerTest {
         URL url = URI.create("https://127.0.0.1:" + port + path).toURL();
         HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
         conn.setSSLSocketFactory(clientSslContext.getSocketFactory());
+        // TEST-ONLY: accept any hostname for this in-process test client. It connects to the
+        // webhook test server on 127.0.0.1 using an ephemeral self-signed certificate, where
+        // hostname verification is not meaningful. This is not production code — the real
+        // webhook serves TLS normally and the kube-apiserver verifies it via the configured
+        // caBundle. The corresponding CodeQL alert (java/unsafe-hostname-verification) is
+        // dismissed as "used in tests".
         conn.setHostnameVerifier((hostname, session) -> true);
         conn.setRequestMethod(method);
         conn.setConnectTimeout(5000);

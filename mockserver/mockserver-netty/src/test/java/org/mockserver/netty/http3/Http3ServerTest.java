@@ -516,6 +516,13 @@ public class Http3ServerTest {
 
     /**
      * Creates a trust-all TrustManager for the self-signed certificate.
+     * <p>
+     * TEST-ONLY: this trust-all TrustManager is used solely by the in-JVM test HTTP client
+     * to call the test server's {@code /mockserver/http3status} endpoint over the server's
+     * ephemeral self-signed certificate on loopback. It is not production code and has no
+     * effect on MockServer's runtime TLS trust, which is governed by configuration (e.g.
+     * {@code forwardProxyTLSX509CertificatesTrustManagerType}). The corresponding CodeQL
+     * alert (java/insecure-trustmanager) is dismissed as "used in tests".
      */
     @SuppressWarnings("TrustAllX509TrustManager")
     private static TrustManager trustAllManager() {
