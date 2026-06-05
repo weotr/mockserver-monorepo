@@ -210,7 +210,7 @@ S3 static-website hosting (`aws_s3_bucket_website_configuration`) is **not** con
 
 The `mockserver-release-website` IAM role in the website account optionally enforces `sts:ExternalId` on the trust policy when `var.role_external_id` is set. The current default is `""` (condition inactive). To activate, store the secret in `mockserver-release/website-external-id` in the build account's Secrets Manager and supply it at apply time via `TF_VAR_role_external_id`. See `terraform/website/README.md` for the full wiring procedure.
 
-**Legacy OAI removal:** The legacy Origin Access Identity resources (`aws_cloudfront_origin_access_identity`) are still present in the Terraform state during the OAI→OAC transition. They will be removed in a follow-up apply once CloudFront access logs confirm all traffic arrives via OAC (SigV4-signed requests).
+**OAC-only origin access:** All distributions authenticate to S3 through a single Origin Access Control (OAC), signing origin requests with SigV4. The legacy Origin Access Identity resources and the `AllowLegacyOAIRead` bucket-policy grant were removed (2026-06-05) after confirming all 9 distributions reference only `origin_access_control_id` in their origin config, so the OAI grants were dead code.
 
 ## SEO & Metadata Files
 

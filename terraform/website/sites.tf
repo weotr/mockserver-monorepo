@@ -21,28 +21,13 @@ resource "aws_s3_bucket_public_access_block" "site" {
   restrict_public_buckets = true
 }
 
-# Audit finding F-WEB-14: migrate from legacy Origin Access Identity (OAI) to
-# the newer Origin Access Control (OAC). One OAC instance serves every
-# distribution. OAI resources are kept for now so bucket policies grant BOTH
-# principals during the cutover — eliminates any 403 window. The OAIs will be
-# removed in a follow-up apply once OAC traffic is verified stable.
-#
-# LIVE FOLLOW-UP: verify via CloudFront access logs (see cloudfront_logs bucket
-# in security-hardening.tf) that ALL traffic is OAC-signed (SigV4) and no
-# requests arrive via the legacy OAI path. Once confirmed, remove the following
-# resources and the "AllowLegacyOAIRead" bucket-policy statement:
-#   - aws_cloudfront_origin_access_identity.site
-#   - aws_cloudfront_origin_access_identity.main
-# Until then, both OAI and OAC principals remain in the bucket policies.
-
-resource "aws_cloudfront_origin_access_identity" "site" {
-  for_each = var.sites
-  comment  = "OAI for ${each.key}.${var.domain} (legacy — kept for transition; remove after OAC cutover)"
-}
-
-resource "aws_cloudfront_origin_access_identity" "main" {
-  comment = "OAI for ${var.domain} main distribution (legacy — kept for transition; remove after OAC cutover)"
-}
+# Audit finding F-WEB-14: every distribution reads its S3 origin through a
+# single Origin Access Control (OAC) instance, signing origin requests with
+# SigV4. The legacy Origin Access Identity (OAI) resources and the
+# "AllowLegacyOAIRead" bucket-policy grant were removed after confirming (live,
+# 2026-06-05) that all 9 distributions reference only `origin_access_control_id`
+# in their origin config — no distribution presents an OAI principal, so the
+# OAI grants were dead code.
 
 resource "aws_cloudfront_origin_access_control" "s3" {
   name                              = "mockserver-website-s3"
@@ -59,19 +44,6 @@ resource "aws_s3_bucket_policy" "site" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        # Legacy OAI principal — kept during OAC transition, removed after.
-        Sid    = "AllowLegacyOAIRead"
-        Effect = "Allow"
-        Principal = {
-          AWS = concat(
-            [aws_cloudfront_origin_access_identity.site[each.key].iam_arn],
-            each.key == var.latest_version ? [aws_cloudfront_origin_access_identity.main.iam_arn] : []
-          )
-        }
-        Action   = "s3:GetObject"
-        Resource = "${aws_s3_bucket.site[each.key].arn}/*"
-      },
       {
         # Audit finding F-WEB-14: OAC principal — CloudFront service identity,
         # scoped by SourceArn condition to only the distributions that should

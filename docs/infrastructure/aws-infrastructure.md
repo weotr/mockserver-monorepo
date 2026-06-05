@@ -469,7 +469,7 @@ The website account runs its own AWS Organization with a separate IAM Identity C
 
 19 distributions — one per S3 bucket, each mapped to a domain alias. The main site serves `mock-server.com`, with versioned subdomains (`4-0` through `5-14`) for archived documentation. **Managed by `terraform/website/sites.tf`** (`aws_cloudfront_distribution.site` per version + `aws_cloudfront_distribution.main` for the apex).
 
-All distributions authenticate to S3 via Origin Access Control (OAC); legacy Origin Access Identity (OAI) grants remain in the bucket policies during the OAI→OAC cutover. S3 buckets are not publicly accessible — only CloudFront can read objects.
+All distributions authenticate to S3 via Origin Access Control (OAC) only; the legacy Origin Access Identity (OAI) grants were removed from the bucket policies after the OAC cutover was verified. S3 buckets are not publicly accessible — only CloudFront can read objects.
 
 Main distribution config: `PriceClass_All`, HTTP/2+3, TLSv1.2_2021 minimum, redirect HTTP→HTTPS, custom 403→404 mapping to `/error403.html`. The private (OAC) bucket returns 403 for any missing object; CloudFront serves the friendly error page but preserves a real **404** status. `error403.html` still `meta refresh`es human visitors to the homepage, so deep-link/moved-URL refreshes land somewhere useful, while search-engine crawlers receive the 404 and drop deleted URLs (old apidocs, retired path-based copies) instead of treating thousands of soft-404s as duplicate indexable pages. The main distribution `depends_on` the per-version distributions so promoting a new `latest_version` doesn't trip the CloudFront "CNAME already associated" error.
 
