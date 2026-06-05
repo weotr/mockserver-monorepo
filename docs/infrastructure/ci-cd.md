@@ -274,8 +274,8 @@ linux/amd64 + linux/arm64"]
 The `mockserver/mockserver:maven` image is defined in `docker_build/maven/Dockerfile`:
 
 - Base: Ubuntu 24.04 (Noble)
-- JDK: OpenJDK 21
-- Maven: 3.9.15 (manually installed from Apache)
+- JDK: OpenJDK 17
+- Maven: 3.9.16 (manually installed from Apache)
 - Dependencies: Pre-fetched by running a throwaway build during image creation
 - Corporate CA: Optional certificate injection for TLS proxy environments (see [Docker](docker.md#maven-ci-image))
 
@@ -330,7 +330,7 @@ Two workflows run on GitHub Actions, both triggered automatically on push and pu
 ```mermaid
 flowchart LR
     TRIGGER[Push/PR/Schedule] --> CHECKOUT[Checkout code]
-    CHECKOUT --> SETUP_JDK[Set up JDK 11]
+    CHECKOUT --> SETUP_JDK[Set up JDK 17]
     SETUP_JDK --> INIT[Initialize CodeQL]
     INIT --> BUILD[Maven compile
 skip tests]
@@ -340,7 +340,7 @@ skip tests]
 
 The workflow:
 1. Checks out the repository
-2. Sets up JDK 11 (Temurin distribution)
+2. Sets up JDK 17 (Temurin distribution)
 3. Initializes CodeQL for Java, JavaScript, Python, and Ruby
 4. For Java: Runs `./mvnw clean compile -DskipTests -Dmaven.javadoc.skip=true` (CodeQL autobuild)
 5. For JavaScript, Python, and Ruby: Analyzes source files directly (no build required)

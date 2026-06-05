@@ -71,7 +71,7 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 | Label | Description |
 |-------|-------------|
 | `version` | Full version (e.g. `6.1.0`) |
-| `major_minor_version` | Major.minor version (e.g. `5.15`) |
+| `major_minor_version` | Major.minor version (e.g. `6.1`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
 | `git_hash` | Abbreviated git commit hash the build was produced from, or `unknown` when no git metadata is available |
@@ -187,6 +187,6 @@ Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`regist
 
 | GroupId | ArtifactId | Version | Purpose |
 |---------|-----------|---------|---------|
-| `io.prometheus` | `prometheus-metrics-core` | 1.3.6 | Prometheus client library (Gauge, MultiCollector, PrometheusRegistry) |
-| `io.prometheus` | `prometheus-metrics-exposition-formats` | 1.3.6 | Prometheus exposition format writers |
-| `io.prometheus` | `prometheus-metrics-model` | 1.3.6 | Prometheus metric snapshots and labels |
+| `io.prometheus` | `prometheus-metrics-core` | 1.6.1 | Prometheus client library (Gauge, MultiCollector, PrometheusRegistry) |
+| `io.prometheus` | `prometheus-metrics-exposition-formats` | 1.6.1 | Prometheus exposition format writers |
+| `io.prometheus` | `prometheus-metrics-model` | 1.6.1 | Prometheus metric snapshots and labels |

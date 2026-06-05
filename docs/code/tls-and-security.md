@@ -198,7 +198,7 @@ The MCP endpoint (`/mockserver/mcp`) enforces the same control-plane authenticat
 
 ### Supported JWS Algorithms
 
-`JWTValidator` supports 15 JWS algorithms:
+`JWTValidator` supports 14 JWS algorithms:
 
 | Family | Algorithms |
 |--------|-----------|
@@ -231,7 +231,7 @@ SOCKS5 proxy also supports username/password authentication (configured separate
 |----------|---------|---------|
 | `tlsMutualAuthenticationRequired` | false | Require client certificates |
 | `tlsMutualAuthenticationCertificateChain` | (none) | PEM file with trusted CA chain for client certs |
-| `dynamicallyCreateCertificateAuthorityCertificate` | true | Auto-generate CA cert |
+| `dynamicallyCreateCertificateAuthorityCertificate` | false | Auto-generate CA cert |
 | `certificateAuthorityPrivateKey` | (auto) | PEM file for custom CA private key |
 | `certificateAuthorityCertificate` | (auto) | PEM file for custom CA certificate |
 | `forwardProxyTLSX509CertificatesTrustManagerType` | ANY | Trust mode for upstream connections |

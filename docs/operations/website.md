@@ -19,8 +19,8 @@ The MockServer documentation website at `https://www.mock-server.com` is a Jekyl
 | Sass output | `:compressed` |
 | `mockserver_version` | `6.1.0` |
 | `mockserver_api_version` | `6.1.x` |
-| `mockserver_snapshot_version` | `5.16.0-SNAPSHOT` |
-| Google Analytics | `UA-32687194-4` (in `_includes/head.html`, not `_config.yml`) |
+| `mockserver_snapshot_version` | `6.1.1-SNAPSHOT` |
+| Google Analytics | GA4 measurement ID `G-20BB7EJG4E` (in `_config.yml` as `ga4_measurement_id`) |
 | Custom plugin | `jekyll-code-example-tag` |
 
 ## Site Structure

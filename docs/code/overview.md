@@ -131,7 +131,7 @@ REST API handler"]
     ACTION --> MATCH{"Expectation
 matched?"}
     MATCH -->|Yes| DISPATCH["Action Dispatcher
-14 action types"]
+19 action types"]
     MATCH -->|No, proxy mode| FWD["Forward to
 original destination"]
     MATCH -->|No, mock mode| NF[404 Not Found]
@@ -260,7 +260,7 @@ See: [Dashboard UI](dashboard-ui.md)
 
 ### 5. Action Dispatch Pattern
 
-Matched expectations produce one of 14 action types across two categories (response vs forward), each with a dedicated handler class. This pattern cleanly separates matching from action execution.
+Matched expectations produce one of 19 action types across two categories (response vs forward), each with a dedicated handler class. This pattern cleanly separates matching from action execution.
 
 See: [Request Processing, Mocking & Proxying](request-processing.md)
 

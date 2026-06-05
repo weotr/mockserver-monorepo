@@ -472,7 +472,7 @@ Certificates are **not** managed by Terraform — issuance was a one-time manual
 |---------|--------|
 | Account-level S3 public access block | Enabled (all 4 flags) |
 | Bucket-level S3 public access blocks | Enabled on all 19 buckets |
-| CloudFront OAI | All 19 distributions use Origin Access Identity — S3 not directly accessible |
+| CloudFront OAC | All 19 distributions use Origin Access Control — S3 not directly accessible |
 | CloudTrail | `mockserver-website-trail` — multi-region, log file validation, 90-day retention |
 | Root MFA | Enabled |
 | IAM users | None (SSO-only access) |

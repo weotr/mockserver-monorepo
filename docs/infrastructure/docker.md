@@ -33,7 +33,7 @@ gcr.io/distroless/java17:nonroot"]
     subgraph "Build Images"
         MVN["docker_build/maven/Dockerfile
 Maven CI
-Ubuntu 24.04 + JDK 21 + Maven 3.9"]
+Ubuntu 24.04 + JDK 17 + Maven 3.9"]
         PERF["docker_build/performance/Dockerfile
 Performance
 grafana/k6"]
@@ -51,6 +51,7 @@ grafana/k6"]
 | Root Snapshot | `docker/root-snapshot/Dockerfile` | `gcr.io/distroless/java17` | `root` | Testing pre-release (root) |
 | Local | `docker/local/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Building from local JAR |
 | Webhook | `docker/webhook/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Kubernetes admission webhook for sidecar injection |
+| Clustered | `docker/clustered/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Includes Infinispan state backend for clustered deployments |
 
 ### Docker Registries
 
@@ -115,7 +116,7 @@ Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1
 
 | Image | Dockerfile | Base | Purpose |
 |-------|-----------|------|---------|
-| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 21, Maven 3.9.16 |
+| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 17, Maven 3.9.16 |
 | `mockserver/mockserver:performance` | `docker_build/performance/Dockerfile` | `grafana/k6` | Load testing with k6 |
 
 ## Docker Compose Examples
@@ -175,13 +176,13 @@ scripts/local_docker_launch.sh
 
 ## Container Integration Tests
 
-The `container_integration_tests/` directory contains 15 automated tests:
+The `container_integration_tests/` directory contains 24 automated tests (16 Docker Compose + 8 Helm), plus non-blocking smoke tests for image variants:
 
 ```mermaid
 graph TD
     TESTS[integration_tests.sh]
 
-    subgraph "Docker Compose Tests (10)"
+    subgraph "Docker Compose Tests (16)"
         DC1[Without server port]
         DC2[Default properties file]
         DC3[Custom properties file]
@@ -192,14 +193,23 @@ graph TD
         DC8[Persisted expectations]
         DC9[Expectation initialiser]
         DC10[Forward with override]
+        DC11[mTLS]
+        DC12[JVM options]
+        DC13[Libs classpath]
+        DC14[Graceful shutdown]
+        DC15[Metrics]
+        DC16[WAR Tomcat]
     end
 
-    subgraph "Helm Tests (5)"
+    subgraph "Helm Tests (8)"
         H1[Default Helm values]
         H2[Helm with local Docker image]
         H3[Helm with custom port]
         H4[Helm with remote host/port]
         H5[Helm with inline config]
+        H6[Helm ConfigMap injection]
+        H7[Helm MockServer config chart]
+        H8[Clustered state convergence]
     end
 
     TESTS --> DC1
@@ -212,15 +222,24 @@ graph TD
     TESTS --> DC8
     TESTS --> DC9
     TESTS --> DC10
+    TESTS --> DC11
+    TESTS --> DC12
+    TESTS --> DC13
+    TESTS --> DC14
+    TESTS --> DC15
+    TESTS --> DC16
     TESTS --> H1
     TESTS --> H2
     TESTS --> H3
     TESTS --> H4
     TESTS --> H5
+    TESTS --> H6
+    TESTS --> H7
+    TESTS --> H8
 ```
 
 Each test:
-1. Starts MockServer (via Docker Compose or Helm/Kind)
+1. Starts MockServer (via Docker Compose or Helm/k3d)
 2. Creates expectations via the REST API
 3. Validates responses using a curl-based client container
 4. Tears down the environment
@@ -231,7 +250,7 @@ Each test:
 |--------|---------|
 | `integration_tests.sh` | Main orchestrator: builds images, runs all tests, prints summary |
 | `docker-compose.sh` | Docker Compose helpers: `start-up`, `tear-down`, `docker-exec`, `container-logs` |
-| `helm-deploy.sh` | Kind cluster lifecycle: `start-up-k8s`, `tear-down-k8s`, Helm install/uninstall |
+| `helm-deploy.sh` | k3d cluster lifecycle: `start-up-k8s`, `tear-down-k8s`, Helm install/uninstall |
 | `logging.sh` | Coloured terminal output, `runCommand`, `retryCommand`, `logTestResult` |
 
 ### Environment Variable Controls
@@ -243,7 +262,7 @@ Each test:
 | `SKIP_DOCKER_REBUILD_CLIENT` | Skip rebuilding the curl client image |
 | `SKIP_ALL_TESTS` | Skip all tests (build only) |
 | `SKIP_DOCKER_TESTS` | Skip Docker Compose tests |
-| `SKIP_HELM_TESTS` | Skip Helm/Kind tests |
+| `SKIP_HELM_TESTS` | Skip Helm/k3d tests |
 
 See [Testing](../testing.md) for full details on running container integration tests.
 

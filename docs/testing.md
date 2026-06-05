@@ -17,8 +17,8 @@ graph TB
         GI["Gradle — 2 sub-builds"]
     end
     subgraph "Container Integration Tests"
-        DC["Docker Compose — 10 tests"]
-        HT["Helm/k3d — 5 tests"]
+        DC["Docker Compose — 16 tests"]
+        HT["Helm/k3d — 8 tests"]
     end
     subgraph "Performance Tests"
         PT["k6"]
@@ -276,7 +276,7 @@ SKIP_JAVA_BUILD=true SKIP_DOCKER_BUILD_MOCKSERVER=true container_integration_tes
 | `SKIP_DOCKER_TESTS` | unset | Skip Docker Compose tests |
 | `SKIP_HELM_TESTS` | unset | Skip Helm/k3d tests |
 
-### Docker Compose Tests (10)
+### Docker Compose Tests (16)
 
 Each test has its own directory containing a `docker-compose.yml` and `integration_test.sh`:
 
@@ -292,8 +292,14 @@ Each test has its own directory containing a `docker-compose.yml` and `integrati
 | `docker_compose_with_persisted_expectations` | Persisted expectations file |
 | `docker_compose_with_server_port_from_default_properties_file` | Port from `mockserver.properties` |
 | `docker_compose_with_server_port_from_custom_properties_file` | Port from custom properties file |
+| `docker_compose_with_mtls` | Mutual TLS (mTLS) client certificate verification |
+| `docker_compose_jvm_options` | Custom JVM options via `JAVA_OPTS` |
+| `docker_compose_libs_classpath` | Additional JARs on the `/libs` classpath |
+| `docker_compose_graceful_shutdown` | Graceful shutdown on SIGTERM |
+| `docker_compose_metrics` | Prometheus metrics endpoint |
+| `docker_compose_war_tomcat` | WAR deployment on Tomcat |
 
-### Helm Tests (5)
+### Helm Tests (8)
 
 Helm tests use k3d (k3s in Docker) to create a local cluster:
 
@@ -302,8 +308,11 @@ Helm tests use k3d (k3s in Docker) to create a local cluster:
 | `helm_default_config` | Default Helm chart values |
 | `helm_local_docker_container` | Local Docker image loaded into k3d |
 | `helm_custom_server_port` | Custom server port via Helm values |
-| `helm_inline_config` | Inline config via Helm values (`app.config.enabled`, `app.config.initializerJson`) |
 | `helm_remote_host_and_port` | Remote host/port via Helm values |
+| `helm_inline_config` | Inline config via Helm values (`app.config.enabled`, `app.config.initializerJson`) |
+| `helm_configmap_injection` | External config via ConfigMap |
+| `helm_mockserver_config_chart` | Standalone MockServer config Helm chart |
+| `helm_clustered_convergence` | Clustered state convergence (Infinispan, non-blocking) |
 
 ### Helper Scripts
 
@@ -522,10 +531,10 @@ Supports three output modes controlled by `-Dmockserver.testOutput`:
 |-------|-----------|-----|-------|
 | Module-level | Maven `-T` flag | `-T 1C` (1 thread/core) | `-T 3C` (3 threads/core) |
 | Maven Invoker tests | `<parallelThreads>` | 2 threads | 2 threads |
-| Intra-module test parallelism | None | None | None |
-| Fork count | Default (1 fork/module) | Default | Default |
+| `mockserver-core` unit tests | Two-phase Surefire: phase 1 `parallel=classes/threadCount=4`; phase 2 sequential | 4 threads (phase 1) | 4 threads (phase 1) |
+| Other modules | Default (1 fork/module) | Default | Default |
 
-There is **no intra-module test parallelisation** — no `parallel`, `threadCount`, or `useUnlimitedThreads` settings in Surefire/Failsafe.
+`mockserver-core` uses a two-phase Surefire configuration: the default execution runs most unit tests in parallel (`parallel=classes`, `threadCount=4`), while a second execution (`sequential-tests`) runs a curated list of state-sensitive or timing-sensitive tests single-threaded. Tests excluded from the parallel phase include `MockServerEventLogTest`, `HttpStateTest`, template engine tests, and others that have wall-clock timing assertions or shared static state. All other modules run Surefire with its default (single-threaded) settings.
 
 ### Maven Profiles (Test-Related)
 

@@ -21,27 +21,40 @@ CI builds are orchestrated by `.buildkite/scripts/generate-pipeline.sh` which se
 
 ### Maven Configuration
 
-MockServer uses Maven 3.9.0 via the Maven Wrapper (`mvnw`). The project targets Java 17 source/target compatibility — produced bytecode runs on Java 17+, and building from source requires JDK 17+.
+MockServer uses Maven 3.9.16 via the Maven Wrapper (`mvnw`). The project targets Java 17 source/target compatibility — produced bytecode runs on Java 17+, and building from source requires JDK 17+.
 
 `mockserver/.mvn/maven.config` sets `-T 1C` so the reactor builds with the parallel (one-thread-per-core) `MultiThreadedBuilder` by default, matching CI (`./mvnw -T 1C clean install`). This is a free speed-up on the multi-module compile/package phases and composes with the within-module parallel unit tests (see [performance-tuning.md](performance-tuning.md)). Pass `-T 1` on the command line to force a single-threaded build when debugging reactor ordering or interleaved log output.
 
 ### Modules
 
-The project comprises 11 Maven modules:
+The project comprises 24 Maven modules:
 
 | Module | Packaging | Purpose |
 |--------|-----------|---------|
+| `mockserver-testing` | jar | Shared test utilities |
+| `mockserver-client-java` | jar | Java client API (`MockServerClient`) |
+| `mockserver-client-java-no-dependencies` | jar (shaded) | Client with all dependencies shaded |
 | `mockserver-core` | jar | Domain model, matching, TLS, templates, codecs, event log, action handlers |
-| `mockserver-netty` | jar (+fat, shaded) | Netty server, CLI, dashboard, proxy relay |
-| `mockserver-client-java` | jar (+shaded) | Java client API (`MockServerClient`) |
+| `mockserver-integration-testing` | jar | Integration test base classes |
+| `mockserver-integration-testing-no-dependencies` | jar (shaded) | Integration test base classes, shaded |
 | `mockserver-war` | war | Servlet WAR deployment |
 | `mockserver-proxy-war` | war | Proxy-only WAR deployment |
-| `mockserver-junit-rule` | jar (+shaded) | JUnit 4 `@Rule` integration |
-| `mockserver-junit-jupiter` | jar (+shaded) | JUnit 5 `@ExtendWith` integration |
-| `mockserver-spring-test-listener` | jar (+shaded) | Spring Test integration |
-| `mockserver-testing` | jar | Shared test utilities |
-| `mockserver-integration-testing` | jar (+shaded) | Integration test base classes |
-| `mockserver-examples` (at repo-root `examples/java`) | jar | Usage examples |
+| `mockserver-netty` | jar (+fat, shaded) | Netty server, CLI, dashboard, proxy relay |
+| `mockserver-netty-no-dependencies` | jar (shaded) | Netty server with all dependencies shaded |
+| `mockserver-junit-rule` | jar | JUnit 4 `@Rule` integration |
+| `mockserver-junit-rule-no-dependencies` | jar (shaded) | JUnit 4 rule, shaded |
+| `mockserver-junit-jupiter` | jar | JUnit 5 `@ExtendWith` integration |
+| `mockserver-junit-jupiter-no-dependencies` | jar (shaded) | JUnit 5 extension, shaded |
+| `mockserver-spring-test-listener` | jar | Spring Test integration |
+| `mockserver-spring-test-listener-no-dependencies` | jar (shaded) | Spring Test integration, shaded |
+| `mockserver-examples` (at `../examples/java`) | jar | Usage examples |
+| `mockserver-async` | jar | AsyncAPI broker mocking |
+| `mockserver-testcontainers` | jar | Testcontainers integration module |
+| `mockserver-state-infinispan` | jar | Infinispan-backed clustered state backend |
+| `mockserver-blob-s3` | jar | S3 blob storage backend |
+| `mockserver-blob-gcs` | jar | GCS blob storage backend |
+| `mockserver-blob-azure` | jar | Azure blob storage backend |
+| `mockserver-k8s-webhook` | jar (+fat) | Kubernetes admission webhook for sidecar injection |
 
 ### Quick Reference
 
@@ -73,7 +86,7 @@ cd mockserver
 | `scripts/buildkite_quick_build.sh` | CI build — `mvnw clean install` with 8GB heap |
 | `scripts/buildkite_deploy_snapshot.sh` | CI deploy — `mvnw clean deploy` to Sonatype snapshots |
 | `scripts/local_quick_build.sh` | Local build — Java 17, 3 threads, includes integration tests |
-| `scripts/local_online_build.sh` | Local build — Java 13, includes integration tests |
+| `scripts/local_online_build.sh` | Local build — Java 17, includes integration tests |
 | `scripts/local_buildkite_build.sh` | Run Buildkite build locally inside Docker |
 | `scripts/local_build_module_by_module.sh` | Build each module sequentially |
 | `scripts/local_release.sh` | Maven release (prepare + perform) to Sonatype staging |

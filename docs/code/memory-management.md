@@ -59,9 +59,9 @@ maxExpectations  = min(heapAvailableInKB / 10, 15000)
 
 | Component | File | Line |
 |-----------|------|------|
-| `heapAvailableInKB()` | `ConfigurationProperties.java` | 493 |
-| `maxLogEntries()` default | `ConfigurationProperties.java` | 517 |
-| `maxExpectations()` default | `ConfigurationProperties.java` | 499 |
+| `heapAvailableInKB()` | `ConfigurationProperties.java` | 896 |
+| `maxLogEntries()` default | `ConfigurationProperties.java` | 920 |
+| `maxExpectations()` default | `ConfigurationProperties.java` | 902 |
 | `ringBufferSize()` | `Configuration.java` | 2220 |
 | Heap measurement | `MemoryMonitoring.getJVMMemory()` | `MemoryMonitoring.java:59` |
 

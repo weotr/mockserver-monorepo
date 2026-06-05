@@ -117,7 +117,7 @@ disruptor.getRingBuffer().tryPublishEvent(
 
 ## LogEntry
 
-Each event is represented by a `LogEntry` with 24 possible types, organized into `LogMessageTypeCategory` groups for per-category log level overrides:
+Each event is represented by a `LogEntry` with 25 possible types, organized into `LogMessageTypeCategory` groups for per-category log level overrides:
 
 | Category Group | Types |
 |----------------|-------|
