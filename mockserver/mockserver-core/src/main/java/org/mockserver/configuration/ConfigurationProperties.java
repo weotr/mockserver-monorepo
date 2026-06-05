@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
@@ -3205,6 +3206,46 @@ public class ConfigurationProperties {
         }
     }
 
+    static final String REDACTED_VALUE = "***REDACTED***";
+
+    private static final Set<String> SENSITIVE_SUBSTRINGS = Stream.of(
+        "password",
+        "secret",
+        "accesskey",
+        "access_key",
+        "apikey",
+        "api_key",
+        "connectionstring",
+        "connection_string",
+        "token",
+        "privatekey",
+        "private_key",
+        "credential",
+        "passphrase"
+    ).collect(Collectors.toCollection(LinkedHashSet::new));
+
+    /**
+     * Returns {@code true} when the property name (with or without the
+     * {@code mockserver.} prefix) contains a substring that indicates the
+     * value is a secret and must not be logged verbatim.
+     */
+    static boolean isSensitivePropertyName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        // Strip prefix so "mockserver.llmApiKey" matches "apikey"
+        if (lower.startsWith("mockserver.")) {
+            lower = lower.substring("mockserver.".length());
+        }
+        for (String sensitive : SENSITIVE_SUBSTRINGS) {
+            if (lower.contains(sensitive)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @SuppressWarnings("ConstantConditions")
     private static Properties readPropertyFile() {
 
@@ -3274,7 +3315,8 @@ public class ConfigurationProperties {
             propertiesLogDump.append("Reading properties from property file [").append(propertyFile()).append("]:").append(NEW_LINE);
             while (propertyNames.hasMoreElements()) {
                 String propertyName = String.valueOf(propertyNames.nextElement());
-                propertiesLogDump.append("  ").append(propertyName).append(" = ").append(properties.getProperty(propertyName)).append(NEW_LINE);
+                String displayValue = isSensitivePropertyName(propertyName) ? REDACTED_VALUE : properties.getProperty(propertyName);
+                propertiesLogDump.append("  ").append(propertyName).append(" = ").append(displayValue).append(NEW_LINE);
             }
 
             Level logLevel = Level.valueOf(getSLF4JOrJavaLoggerToSLF4JLevelMapping().get(readPropertyHierarchically(properties, MOCKSERVER_LOG_LEVEL, "MOCKSERVER_LOG_LEVEL", DEFAULT_LOG_LEVEL).toUpperCase()));
