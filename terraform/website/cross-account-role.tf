@@ -129,6 +129,9 @@ resource "aws_iam_role_policy" "release_website" {
           "kms:GetKeyPolicy",
           "kms:GetKeyRotationStatus",
           "kms:ListResourceTags",
+          # kms:ListAliases has no resource-level scoping; needed to refresh
+          # aws_kms_alias.dnssec.
+          "kms:ListAliases",
           "wafv2:GetWebACL",
           "wafv2:ListTagsForResource",
           "wafv2:GetLoggingConfiguration",
@@ -137,6 +140,10 @@ resource "aws_iam_role_policy" "release_website" {
           "access-analyzer:GetAnalyzer",
           "access-analyzer:ListTagsForResource",
           "ec2:GetEbsEncryptionByDefault",
+          # route53domains:GetDomainDetail refreshes the registrar-side DNSSEC
+          # delegation signer record (aws_route53domains_delegation_signer_record);
+          # route53domains is global and not resource-scopable.
+          "route53domains:GetDomainDetail",
         ]
         Resource = "*"
       },
@@ -150,6 +157,9 @@ resource "aws_iam_role_policy" "release_website" {
           "route53:GetHostedZone",
           "route53:ListResourceRecordSets",
           "route53:ListTagsForResource",
+          # Refresh of the DNSSEC resources (aws_route53_key_signing_key,
+          # aws_route53_hosted_zone_dnssec) reads the zone's DNSSEC status.
+          "route53:GetDNSSEC",
         ]
         Resource = "arn:aws:route53:::hostedzone/${var.zone_id}"
       },
