@@ -48,6 +48,20 @@ resource "aws_iam_role_policy" "release_website" {
           "s3:GetBucketPolicy",
           "s3:GetBucketPublicAccessBlock",
           "s3:GetBucketOwnershipControls",
+          # Bucket-level reads Terraform performs when REFRESHING the existing
+          # aws_s3_bucket resources in this state (every plan/apply refreshes
+          # all managed buckets). Without these, `terraform plan` aborts during
+          # refresh with AccessDenied (GetBucketAcl etc.) before it can apply.
+          "s3:GetBucketAcl",
+          "s3:GetBucketCORS",
+          "s3:GetBucketWebsite",
+          "s3:GetBucketLogging",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetReplicationConfiguration",
+          "s3:GetEncryptionConfiguration",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketRequestPayment",
+          "s3:GetAccelerateConfiguration",
           # Bucket-level (versioned-site.sh creates new buckets)
           "s3:CreateBucket",
           "s3:PutBucketPolicy",
@@ -92,6 +106,37 @@ resource "aws_iam_role_policy" "release_website" {
           "cloudfront:TagResource",
           "cloudfront:UntagResource",
           "cloudfront:ListTagsForResource",
+          # Read-only gets Terraform performs when refreshing the security-
+          # hardening CloudFront resources (OAC + response-headers policy) that
+          # live in this state. Required for `terraform plan` refresh to succeed.
+          "cloudfront:GetOriginAccessControl",
+          "cloudfront:GetResponseHeadersPolicy",
+        ]
+        Resource = "*"
+      },
+      {
+        # Read-only describes Terraform performs when REFRESHING the security-
+        # hardening resources added to this state (security-hardening.tf,
+        # dnssec.tf): WAFv2 web ACL, GuardDuty detectors, IAM Access Analyzer,
+        # EBS encryption-by-default, and the DNSSEC KMS key. The release role
+        # never creates or modifies these (an admin apply manages them); it only
+        # needs to read them so `terraform plan` refresh does not abort with
+        # AccessDenied. All actions are read-only.
+        Sid    = "SecurityHardeningRefreshReadOnly"
+        Effect = "Allow"
+        Action = [
+          "kms:DescribeKey",
+          "kms:GetKeyPolicy",
+          "kms:GetKeyRotationStatus",
+          "kms:ListResourceTags",
+          "wafv2:GetWebACL",
+          "wafv2:ListTagsForResource",
+          "wafv2:GetLoggingConfiguration",
+          "guardduty:GetDetector",
+          "guardduty:ListTagsForResource",
+          "access-analyzer:GetAnalyzer",
+          "access-analyzer:ListTagsForResource",
+          "ec2:GetEbsEncryptionByDefault",
         ]
         Resource = "*"
       },
