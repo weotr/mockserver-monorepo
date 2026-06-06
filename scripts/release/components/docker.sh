@@ -425,23 +425,26 @@ else
   # which the push/pull token may lack (403 insufficient scope) — skipped with a
   # warning in that case so it never aborts a release.
   sync_dockerhub_description() {
-    local desc_file="$REPO_ROOT/docker/DOCKERHUB.md" user token jwt code
+    local desc_file="$REPO_ROOT/docker/DOCKERHUB.md" user token bearer code
     [[ -f "$desc_file" ]] || { log_info "  no docker/DOCKERHUB.md — skipping overview sync"; return 0; }
     user=$(load_secret "mockserver-release/dockerhub" "username") || return 1
     token=$(load_secret "mockserver-release/dockerhub" "token") || return 1
-    jwt=$(curl -s --max-time 30 -H "Content-Type: application/json" \
-      -d "{\"username\":\"${user}\",\"password\":\"${token}\"}" \
-      https://hub.docker.com/v2/users/login/ \
-      | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
-    [[ -n "$jwt" ]] || { log_info "  Docker Hub API login failed — skipping overview sync"; return 1; }
-    code=$(python3 - "$jwt" "$desc_file" <<'PY'
+    # A Docker Hub Personal/Org Access Token must be exchanged for a bearer via
+    # /v2/auth/token (it cannot be used as a bearer directly, and the legacy
+    # /v2/users/login JWT lacks the scope to edit repo metadata).
+    bearer=$(curl -s --max-time 30 -H "Content-Type: application/json" \
+      -d "{\"identifier\":\"${user}\",\"secret\":\"${token}\"}" \
+      https://hub.docker.com/v2/auth/token \
+      | python3 -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+    [[ -n "$bearer" ]] || { log_info "  Docker Hub token exchange failed — skipping overview sync"; return 1; }
+    code=$(python3 - "$bearer" "$desc_file" <<'PY'
 import sys, json, urllib.request, urllib.error
-jwt, path = sys.argv[1], sys.argv[2]
+bearer, path = sys.argv[1], sys.argv[2]
 body = json.dumps({"full_description": open(path).read()}).encode()
 req = urllib.request.Request(
     "https://hub.docker.com/v2/repositories/mockserver/mockserver/",
     data=body, method="PATCH",
-    headers={"Content-Type": "application/json", "Authorization": "JWT " + jwt})
+    headers={"Content-Type": "application/json", "Authorization": "Bearer " + bearer})
 try:
     print(urllib.request.urlopen(req, timeout=30).status)
 except urllib.error.HTTPError as e:
@@ -451,7 +454,9 @@ PY
     if [[ "$code" == "200" ]]; then
       log_info "  Docker Hub overview updated from docker/DOCKERHUB.md"
     else
-      log_info "  WARNING: Docker Hub overview update returned HTTP ${code:-?} (token may lack repo-write scope) — skipped"
+      # Editing the repo description needs a token with repo:admin scope; the
+      # push token is typically repo:write only (HTTP 403). Non-fatal.
+      log_info "  WARNING: Docker Hub overview update returned HTTP ${code:-?} (the token needs repo:admin scope, not just repo:write) — skipped"
       return 1
     fi
   }
