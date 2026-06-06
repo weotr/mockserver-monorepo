@@ -251,6 +251,18 @@ resource "aws_iam_policy" "read_release_secrets" {
         ]
       },
       {
+        # docker.sh and helm.sh gate cosign signing behind
+        # `aws secretsmanager describe-secret mockserver-release/cosign-key`
+        # (a value-free "is signing configured?" probe). DescribeSecret is a
+        # distinct action from GetSecretValue, so without this grant the probe
+        # fails with AccessDenied and BOTH signers silently skip — publishing
+        # the chart and images unsigned (no Artifact Hub "Signed" badge).
+        # Metadata-only; the key value is still read via GetSecretValue above.
+        Effect   = "Allow"
+        Action   = "secretsmanager:DescribeSecret"
+        Resource = data.aws_secretsmanager_secret.cosign.arn
+      },
+      {
         # Cross-account assume of the website-release role.
         # Account ID is the mockserver-website account (014848309742). The
         # target role's trust policy is already scoped to a specific build-account
