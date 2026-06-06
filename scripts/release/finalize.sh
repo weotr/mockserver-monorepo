@@ -34,9 +34,15 @@ sync_to_origin_master
 # ---- Deploy next SNAPSHOT to Sonatype --------------------------------------
 log_info "Bump pom.xml: $RELEASE_VERSION -> $NEXT_VERSION"
 if is_dry_run; then
-  log_dry "would: update_pom_versions mockserver/ $RELEASE_VERSION $NEXT_VERSION"
+  log_dry "would: update_pom_versions \$REPO_ROOT $RELEASE_VERSION $NEXT_VERSION"
 else
-  update_pom_versions "$REPO_ROOT/mockserver" "$RELEASE_VERSION" "$NEXT_VERSION"
+  # Scan the whole repo (not just mockserver/): the reactor includes sibling
+  # modules outside mockserver/ (examples/java, wired in via ../examples/java).
+  # If examples/java is left at the released version while the rest moves to the
+  # next SNAPSHOT, it detaches from the in-reactor parent and the `mvn deploy`
+  # below fails (e.g. examples checkstyle can no longer resolve checkstyle.xml).
+  # Mirrors the same fix in prepare.sh.
+  update_pom_versions "$REPO_ROOT" "$RELEASE_VERSION" "$NEXT_VERSION"
 fi
 
 if is_dry_run; then
@@ -54,6 +60,8 @@ else
          --settings .buildkite-settings.xml
 fi
 
-git_commit_and_push "release: set next development version $NEXT_VERSION" mockserver/
+git_commit_and_push "release: set next development version $NEXT_VERSION" \
+  mockserver/ \
+  examples/java/pom.xml
 
 log_info "Finalize complete"
