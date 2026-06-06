@@ -1396,6 +1396,13 @@
                     </excludes>
                     <systemPropertyVariables>
                         <mockserver.logLevel>${mockserver.testLogLevel}</mockserver.logLevel>
+                        <!-- Cap the event-log ring buffer in test JVMs. By default maxLogEntries
+                             is min(heap/8, 100000), so each MockServerEventLog pre-allocates a
+                             disruptor RingBuffer of nextPowerOfTwo(100000)=131072 LogEntry objects.
+                             Tests create many event logs in one reused fork, exhausting the heap
+                             (OutOfMemoryError -> GC thrash -> the build hangs). A small cap keeps
+                             ring buffers tiny in tests; production sizing is unaffected. -->
+                        <mockserver.maxLogEntries>1000</mockserver.maxLogEntries>
                     </systemPropertyVariables>
                     <argLine>@{argLine} -Duser.language=en -Duser.country=GB -Dmockserver.testOutput=${mockserver.testOutput} ${mockserver.testArgLine}</argLine>
                     <disableXmlReport>${disableXmlReport}</disableXmlReport>
@@ -1423,6 +1430,9 @@
                         <mockserver.logLevel>${mockserver.testLogLevel}</mockserver.logLevel>
                         <project.version>${project.version}</project.version>
                         <project.basedir>${project.basedir}</project.basedir>
+                        <!-- See surefire config above: cap event-log ring buffer in test JVMs
+                             to avoid OutOfMemoryError from oversized disruptor pre-allocation. -->
+                        <mockserver.maxLogEntries>1000</mockserver.maxLogEntries>
                     </systemPropertyVariables>
                     <argLine>@{argLine} -Duser.language=en -Duser.country=GB -Dmockserver.testOutput=${mockserver.testOutput} ${mockserver.testArgLine}</argLine>
                     <disableXmlReport>${disableXmlReport}</disableXmlReport>
