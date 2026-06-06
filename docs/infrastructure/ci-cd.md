@@ -511,6 +511,15 @@ curl -sH "Authorization: Bearer $TOKEN" \
 
 This avoids creating and managing separate API tokens. The token is the same OAuth token created by `bk auth login`.
 
+> **Reading build logs requires the `bk` CLI token — not the Secrets Manager API tokens.** The Buildkite API tokens in Secrets Manager (`mockserver-build/buildkite-api-token` and `-readonly`) are scoped for build state, triggering, and retrying jobs, but **lack the `read_build_logs` scope**, so `/jobs/<id>/log` returns `"doesn't have the read_build_logs scope"`. Use `bk auth token` (above) or `bk api` with the locally-authenticated CLI:
+>
+> ```bash
+> bk api "pipelines/mockserver-release/builds/<N>/jobs/<JOB_ID>/log" \
+>   | python3 -c "import sys,json; print(json.load(sys.stdin).get('content',''))"
+> ```
+>
+> The `chrome-devtools` MCP browser cannot read the UI either — it is a separate browser profile that is not logged into Buildkite.
+
 ### Opencode Integration
 
 Once `bk` is installed and authenticated, opencode agents can use it directly for build operations (cancel, rebuild, inspect) without needing a separate API token. The `bk` CLI is the recommended approach.

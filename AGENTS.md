@@ -100,6 +100,19 @@ To investigate or manage AWS infrastructure:
 4. **Corporate TLS proxy**: if behind a TLS inspection proxy, set `AWS_CA_BUNDLE` to a **combined bundle** containing both the system root CAs AND your corporate root CA. Pointing it at the corporate root alone (e.g. `tesco_root_ca.pem`) is **not enough** — AWS endpoints whose certificates don't chain through the corporate proxy (e.g. SNS in us-east-1) will fail TLS validation and the AWS SDK / Terraform's AWS provider will retry silently, appearing to hang. Typical fix: build a combined `ca-bundle-with-tesco.pem` (system roots + corporate CA), then `export AWS_CA_BUNDLE=/path/to/ca-bundle-with-tesco.pem` (the same file commonly used for `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE`).
 5. **macOS + Python 3.14 + Homebrew**: if you get `pyexpat` symbol errors, set `export DYLD_LIBRARY_PATH=/opt/homebrew/opt/expat/lib`
 
+### Reading Buildkite Builds and Logs
+
+**To read a Buildkite build log, use the local `bk` CLI — NOT the API tokens in Secrets Manager.** The tokens at `mockserver-build/buildkite-api-token` (write) and `-readonly` work for build **state**, **triggering**, and **retrying** jobs, but they intentionally lack the `read_build_logs` scope, so fetching `/jobs/<id>/log` with them returns `"doesn't have the read_build_logs scope"`. The developer's locally-authenticated `bk` CLI (`~/.config/bk.yaml`) has full scope.
+
+```bash
+# Job log (bk api prepends the org path — pass a RELATIVE endpoint):
+bk api "pipelines/mockserver-release/builds/<N>/jobs/<JOB_ID>/log" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('content',''))" \
+  | sed 's/\x1b\[[0-9;]*m//g; s/_bk;t=[0-9]*//g; s/\r//g'
+```
+
+Use the API token (via `aws secretsmanager get-secret-value` + `curl`) only for build state, creating builds, and retrying jobs. Driving the Buildkite UI through the `chrome-devtools` MCP does **not** work for logs: that automation browser is a separate, logged-out profile from the developer's own browser. See [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md).
+
 ### Buildkite Agent Infrastructure
 
 Build agents run on EC2 instances in AutoScaling Groups, managed by Lambda-based autoscalers. Infrastructure is managed by Terraform in `terraform/buildkite-agents/`. See [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) for full details.
