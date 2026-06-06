@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [7.0.0] - 2026-06-06
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [7.0.0] - 2026-06-06
+
 This cycle centres on **first-class LLM / AI-agent mocking** and a major **platform modernisation**, alongside broader resilience-testing and dashboard improvements. Highlights (see the per-item entries below for detail):
 
 - **HTTP/3 streaming responses** — SSE, chunked proxy forwarding, and LLM streaming are now fully supported over HTTP/3 (QUIC). Each body chunk is sent as an HTTP/3 DATA frame with backpressure via `StreamingBody.requestMore()`; the QUIC stream is cleanly shut down on completion or error. Bundled native QUIC removes the need for a separately downloaded BoringSSL library.
