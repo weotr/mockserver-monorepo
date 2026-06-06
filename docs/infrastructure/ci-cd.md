@@ -284,7 +284,7 @@ The pipeline has two steps separated by a `- wait` directive:
 
 Builds and pushes the production MockServer Docker images as multi-arch images (`linux/amd64` + `linux/arm64` via QEMU). Three image variants are published: main, GraalJS, and webhook.
 
-Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-6.1.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
+Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-7.0.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
 
 Tags pushed per image:
 - `mockserver/mockserver:mockserver-X.Y.Z` + `:X.Y.Z` (main + GraalJS variants)

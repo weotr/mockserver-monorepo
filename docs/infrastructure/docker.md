@@ -90,7 +90,7 @@ cosign verify \
 # Or verify the tag (resolves to digest internally)
 cosign verify \
   --key <path-to-cosign.pub> \
-  mockserver/mockserver:6.1.0
+  mockserver/mockserver:7.0.0
 ```
 
 The public key corresponding to `mockserver-release/cosign-key` must be obtained from the project maintainers or from the key stored in `mockserver-release/cosign-key` (field `key` contains the private key; the corresponding `.pub` must be extracted with `cosign public-key --key cosign.key`).

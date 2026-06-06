@@ -31,7 +31,7 @@
     "tasks",
     "index.js",
     "downloadJar.js",
-    "mockserver-netty-6.1.0-jar-with-dependencies.jar",
+    "mockserver-netty-7.0.0-jar-with-dependencies.jar",
     "stop_MockServer.sh"
   ],
   "devDependencies": {

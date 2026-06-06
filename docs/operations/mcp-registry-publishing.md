@@ -45,12 +45,12 @@ Keep `server.json` in sync with each MockServer release — the OCI `identifier`
    after changing membership visibility (the token caches namespaces at login time).
 2. **OCI package shape.** For `registryType: oci`: **no** `registryBaseUrl`, **no** package
    `version` field — put the full canonical reference in `identifier`, e.g.
-   `docker.io/mockserver/mockserver:6.1.0`.
+   `docker.io/mockserver/mockserver:7.0.0`.
 3. **OCI image ownership label.** The referenced image **must** carry
    `LABEL io.modelcontextprotocol.server.name="io.github.mock-server/mockserver"`. This is set in
    `docker/Dockerfile`, so it ships on images built from that change onward — **but the publish only
    succeeds once a release carrying the label is on Docker Hub** and `server.json`'s `identifier`
-   points at that tag. (Images built before the label — e.g. 6.1.0 — are rejected.)
+   points at that tag. (Images built before the label — e.g. 7.0.0 — are rejected.)
 
 So to finish publishing: ship a labelled image (the next release, or a one-off labelled
 rebuild+push of the referenced tag), point `identifier` at it, then `mcp-publisher publish`.

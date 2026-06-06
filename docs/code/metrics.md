@@ -77,7 +77,7 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 
 | Label | Description |
 |-------|-------------|
-| `version` | Full version (e.g. `6.1.0`) |
+| `version` | Full version (e.g. `7.0.0`) |
 | `major_minor_version` | Major.minor version (e.g. `6.1`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |

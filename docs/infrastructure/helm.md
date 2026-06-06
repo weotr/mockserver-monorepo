@@ -28,8 +28,8 @@ initializerJson.json"]
 
 | Chart | Path | Version | Purpose |
 |-------|------|---------|---------|
-| `mockserver` | `helm/mockserver/` | 6.1.0 | Main deployment chart (includes optional ConfigMap) |
-| `mockserver-config` | `helm/mockserver-config/` | 6.1.0 | Example external ConfigMap chart (for reference) |
+| `mockserver` | `helm/mockserver/` | 7.0.0 | Main deployment chart (includes optional ConfigMap) |
+| `mockserver-config` | `helm/mockserver-config/` | 7.0.0 | Example external ConfigMap chart (for reference) |
 
 ## mockserver Chart
 
@@ -267,7 +267,7 @@ docker build -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT docker/webhook
 helm install mockserver oci://ghcr.io/mock-server/charts/mockserver
 
 # Pin a version
-helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 6.1.0
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.0.0
 
 # --- Option B: Legacy HTTP repo ------------------------------------------
 helm repo add mockserver https://www.mock-server.com
