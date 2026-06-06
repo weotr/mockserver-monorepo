@@ -10,8 +10,8 @@ import CircularProgress from '@mui/material/CircularProgress';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useMetricsPolling } from '../hooks/useMetricsPolling';
-import { findSample, metricValue, metricValueByLabel, hasMetric, labelValues } from '../lib/prometheusParser';
-import { gaugeSeries, gaugeSeriesByLabel, ratePerSecond, latestRate } from '../lib/metricsDerive';
+import { findSample, metricValue, metricValueByLabel, metricSum, hasMetric, labelValues } from '../lib/prometheusParser';
+import { gaugeSeries, gaugeSeriesByLabel, gaugeSeriesSum, ratePerSecond, latestRate } from '../lib/metricsDerive';
 import { histogramQuantile } from '../lib/histogramQuantile';
 import MetricsLineChart from './MetricsLineChart';
 
@@ -20,6 +20,8 @@ const CHAOS_METRIC = 'mock_server_http_chaos_injected_total';
 const ACTIVE_CHAOS_METRIC = 'mock_server_active_service_chaos';
 const EXPECTATIONS_BY_TYPE_METRIC = 'mock_server_expectations_by_type';
 const MCP_TOOL_CALLS_METRIC = 'mock_server_mcp_tool_calls_total';
+const ASYNC_PUBLISHED_METRIC = 'mock_server_async_messages_published_total';
+const ASYNC_CONSUMED_METRIC = 'mock_server_async_messages_consumed_total';
 
 // All HTTP chaos fault types, in display order. Any fault_type the server emits
 // that is not listed here still renders (appended, title-cased) so the UI never
@@ -131,6 +133,15 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
         .sort((a, b) => b.value - a.value)
     : [];
   const mcpToolCallsEnabled = mcpToolRows.length > 0;
+
+  // Async message activity — two counters (published / consumed) labeled by channel,
+  // summed across channels into two cumulative lines on a chart separate from HTTP.
+  const asyncPublishedTotal = latest ? metricSum(latest.samples, ASYNC_PUBLISHED_METRIC) : 0;
+  const asyncConsumedTotal = latest ? metricSum(latest.samples, ASYNC_CONSUMED_METRIC) : 0;
+  const asyncEnabled = latest
+    ? hasMetric(latest.samples, ASYNC_PUBLISHED_METRIC) || hasMetric(latest.samples, ASYNC_CONSUMED_METRIC)
+    : false;
+  const asyncHasData = asyncPublishedTotal > 0 || asyncConsumedTotal > 0;
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
@@ -278,15 +289,47 @@ MOCKSERVER_METRICS_ENABLED=true`}
             </Paper>
           )}
 
-          {/* Request activity over time — the four request counters as separate lines */}
+          {/* HTTP request activity over time — the four request counters as separate lines */}
           <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
-            <Typography variant="caption" color="text.secondary">Request activity (cumulative)</Typography>
+            <Typography variant="caption" color="text.secondary">HTTP request activity (cumulative)</Typography>
             <MetricsLineChart
               height={200}
               valueFormatter={(v) => Math.round(v).toLocaleString()}
               series={SUMMARY.map(({ name, label }) => ({ data: gaugeSeries(history, name), label }))}
             />
           </Paper>
+
+          {/* Async message activity — broker messages published/consumed, kept separate from HTTP
+              request counts (different semantics/units). Only shown when async metrics have data. */}
+          {asyncEnabled && asyncHasData && (
+            <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">Async message activity (cumulative)</Typography>
+              <Box sx={{ display: 'flex', gap: 3, mt: 0.5, flexWrap: 'wrap' }}>
+                <Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                    {asyncPublishedTotal.toLocaleString()}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">published</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+                    {asyncConsumedTotal.toLocaleString()}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">consumed</Typography>
+                </Box>
+              </Box>
+              <Box sx={{ mt: 1 }}>
+                <MetricsLineChart
+                  height={200}
+                  valueFormatter={(v) => Math.round(v).toLocaleString()}
+                  series={[
+                    { data: gaugeSeriesSum(history, ASYNC_PUBLISHED_METRIC), label: 'Published' },
+                    { data: gaugeSeriesSum(history, ASYNC_CONSUMED_METRIC), label: 'Consumed' },
+                  ]}
+                />
+              </Box>
+            </Paper>
+          )}
 
           {/* Actions executed over time — one line per action type */}
           <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>

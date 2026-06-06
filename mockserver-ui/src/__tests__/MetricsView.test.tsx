@@ -37,10 +37,33 @@ describe('MetricsView', () => {
     );
     render(<MetricsView connectionParams={params} />);
     await waitFor(() => expect(screen.getByText('Throughput (derived)')).toBeInTheDocument());
-    expect(screen.getByText('Request activity (cumulative)')).toBeInTheDocument();
+    expect(screen.getByText('HTTP request activity (cumulative)')).toBeInTheDocument();
     // the standalone number cards were removed — those counts now live only in
     // the Request activity timeline graph, not as a card value
     expect(screen.queryByText('42')).not.toBeInTheDocument();
+  });
+
+  it('renders a separate Async message activity panel when async metrics are present', async () => {
+    stubFetch(
+      200,
+      'requests_received_count 42.0\n' +
+        'mock_server_async_messages_published_total{channel="orders/placed"} 6.0\n' +
+        'mock_server_async_messages_published_total{channel="payments/processed"} 4.0\n' +
+        'mock_server_async_messages_consumed_total{channel="orders/placed"} 6.0\n',
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Async message activity (cumulative)')).toBeInTheDocument());
+    // summed across channels: published 6+4 = 10, consumed 6
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.getByText('published')).toBeInTheDocument();
+    expect(screen.getByText('consumed')).toBeInTheDocument();
+  });
+
+  it('hides the Async message activity panel when no async metrics are present', async () => {
+    stubFetch(200, 'requests_received_count 42.0\n');
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Throughput (derived)')).toBeInTheDocument());
+    expect(screen.queryByText('Async message activity (cumulative)')).not.toBeInTheDocument();
   });
 
   it('renders the request-activity and actions-executed graph panels', async () => {
@@ -52,7 +75,7 @@ describe('MetricsView', () => {
     );
     render(<MetricsView connectionParams={params} />);
     // the request-activity graph is the second-last panel, actions-executed the last
-    await waitFor(() => expect(screen.getByText('Request activity (cumulative)')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP request activity (cumulative)')).toBeInTheDocument());
     expect(screen.getByText('Actions executed')).toBeInTheDocument();
     // with an action counter present, the actions panel shows the chart, not the empty state
     expect(screen.queryByText('No actions executed yet.')).not.toBeInTheDocument();

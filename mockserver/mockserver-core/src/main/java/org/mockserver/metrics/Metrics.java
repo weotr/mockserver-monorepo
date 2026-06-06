@@ -39,6 +39,11 @@ public class Metrics {
     private static volatile Counter httpChaosInjectedTotal;
     // Counter for MCP tool calls, labeled by tool name. Null until metrics are enabled.
     private static volatile Counter mcpToolCallsTotal;
+    // Counters for async/broker messages published to and consumed from a broker,
+    // labeled by channel. Null until metrics are enabled. Incremented by the
+    // mockserver-async module (publish path + subscriber record path).
+    private static volatile Counter asyncMessagesPublishedTotal;
+    private static volatile Counter asyncMessagesConsumedTotal;
     // Supplier of active expectations, set by HttpState at startup so the
     // expectations-by-type GaugeWithCallback can read live state at scrape time
     // without a core->netty dependency.
@@ -73,6 +78,16 @@ public class Metrics {
                 .name("mock_server_mcp_tool_calls")
                 .help("Total MCP tool calls by tool name")
                 .labelNames("tool")
+                .register();
+            asyncMessagesPublishedTotal = Counter.builder()
+                .name("mock_server_async_messages_published")
+                .help("Total async/broker messages published by channel")
+                .labelNames("channel")
+                .register();
+            asyncMessagesConsumedTotal = Counter.builder()
+                .name("mock_server_async_messages_consumed")
+                .help("Total async/broker messages consumed/recorded by channel")
+                .labelNames("channel")
                 .register();
             // Callback gauge, labeled by action_type: read active expectations at
             // scrape time and group by action type, so no imperative tracking is needed.
@@ -147,6 +162,8 @@ public class Metrics {
         slowRequestTotal = null;
         httpChaosInjectedTotal = null;
         mcpToolCallsTotal = null;
+        asyncMessagesPublishedTotal = null;
+        asyncMessagesConsumedTotal = null;
         otelRequestDurationHistogram = null;
         activeExpectationsSupplier.set(null);
         metrics.clear();
@@ -283,6 +300,66 @@ public class Metrics {
         }
         try {
             return (long) counter.labelValues(toolName).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Increment the async-messages-published counter for the given channel.
+     * No-op when metrics are disabled (counter not registered) or channel is null.
+     * Called by the mockserver-async publish path (one increment per message published to a broker).
+     *
+     * @param channel the broker channel/topic the message was published to
+     */
+    public static void incrementAsyncMessagePublished(String channel) {
+        Counter counter = asyncMessagesPublishedTotal;
+        if (counter != null && channel != null) {
+            counter.labelValues(channel).inc();
+        }
+    }
+
+    /**
+     * Increment the async-messages-consumed counter for the given channel.
+     * No-op when metrics are disabled (counter not registered) or channel is null.
+     * Called by the mockserver-async subscriber record path (one increment per message recorded from a broker).
+     *
+     * @param channel the broker channel/topic the message was consumed from
+     */
+    public static void incrementAsyncMessageConsumed(String channel) {
+        Counter counter = asyncMessagesConsumedTotal;
+        if (counter != null && channel != null) {
+            counter.labelValues(channel).inc();
+        }
+    }
+
+    /**
+     * Return the current async-messages-published count for the given channel, or 0 if
+     * metrics are disabled.
+     */
+    public static long getAsyncMessagePublishedCount(String channel) {
+        Counter counter = asyncMessagesPublishedTotal;
+        if (counter == null || channel == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(channel).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Return the current async-messages-consumed count for the given channel, or 0 if
+     * metrics are disabled.
+     */
+    public static long getAsyncMessageConsumedCount(String channel) {
+        Counter counter = asyncMessagesConsumedTotal;
+        if (counter == null || channel == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(channel).get();
         } catch (Exception e) {
             return 0L;
         }

@@ -385,6 +385,17 @@ Security configuration is applied through testable utility classes:
 
 The security objects are parsed from the `brokerConfig` JSON in `AsyncApiControlPlaneImpl.parseBrokerConfig()` and threaded through to the publisher/subscriber constructors.
 
+## Metrics
+
+When the server is started with metrics enabled (`mockserver.metricsEnabled=true`), the async module emits two Prometheus counters labelled by `channel`:
+
+| Metric | Incremented |
+|--------|-------------|
+| `mock_server_async_messages_published_total{channel}` | Once per message published to a broker (`AsyncApiMockOrchestrator.publishAll()` — both publish-on-load and scheduled publishing) |
+| `mock_server_async_messages_consumed_total{channel}` | Once per message recorded from a broker subscription (`KafkaMessageSubscriber` / `MqttMessageSubscriber` record path) |
+
+The module calls the static `Metrics.incrementAsyncMessagePublished(channel)` / `Metrics.incrementAsyncMessageConsumed(channel)` helpers in `mockserver-core`; they are null-safe no-ops when metrics are disabled, so the async hot paths pay nothing when metrics are off. The `optional` Maven scope on `mockserver-core` simply keeps it from being re-exported to downstream consumers of `mockserver-async` — the static import is still a compile-time dependency. The counters move only when a real broker is connected — a broker-less spec load (no `kafkaBootstrapServers`/`mqttBrokerUrl`) leaves them at zero. The dashboard Metrics view charts them on a dedicated "Async message activity" panel, separate from HTTP request activity. See [metrics.md](metrics.md#async-message-counters).
+
 ## Build/Docker Wiring
 
 The `mockserver-async` module is wired into the running server:

@@ -197,6 +197,58 @@ public class MetricsTest {
         Metrics.incrementMcpToolCall(null);
     }
 
+    // --- async message counters tests ---
+
+    @Test
+    public void registersAsyncMessageCounters() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessageConsumed("orders/placed");
+
+        assertThat(scrapeContains("mock_server_async_messages_published"), is(true));
+        assertThat(scrapeContains("mock_server_async_messages_consumed"), is(true));
+    }
+
+    @Test
+    public void asyncMessageCountersIncrementPerChannel() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessagePublished("payments/processed");
+        Metrics.incrementAsyncMessageConsumed("orders/placed");
+
+        assertThat(scrapeCounterValue("mock_server_async_messages_published", "channel", "orders/placed"), is(2.0));
+        assertThat(scrapeCounterValue("mock_server_async_messages_published", "channel", "payments/processed"), is(1.0));
+        assertThat(scrapeCounterValue("mock_server_async_messages_consumed", "channel", "orders/placed"), is(1.0));
+    }
+
+    @Test
+    public void getAsyncMessageCountsReturnPerChannelCount() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessageConsumed("orders/placed");
+
+        assertThat(Metrics.getAsyncMessagePublishedCount("orders/placed"), is(2L));
+        assertThat(Metrics.getAsyncMessageConsumedCount("orders/placed"), is(1L));
+        assertThat(Metrics.getAsyncMessagePublishedCount("nonexistent"), is(0L));
+    }
+
+    @Test
+    public void incrementAsyncMessageDoesNotThrowWhenDisabled() {
+        // safe to call when counters not registered (no-op)
+        Metrics.incrementAsyncMessagePublished("orders/placed");
+        Metrics.incrementAsyncMessageConsumed("orders/placed");
+    }
+
+    @Test
+    public void incrementAsyncMessageDoesNotThrowWhenChannelIsNull() {
+        new Metrics(configuration().metricsEnabled(true));
+        // should not throw
+        Metrics.incrementAsyncMessagePublished(null);
+        Metrics.incrementAsyncMessageConsumed(null);
+    }
+
     // --- expectations by type gauge tests ---
 
     @Test

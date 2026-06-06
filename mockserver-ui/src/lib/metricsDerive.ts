@@ -6,7 +6,7 @@
  */
 
 import type { PrometheusSample } from './prometheusParser';
-import { metricValue, metricValueByLabel } from './prometheusParser';
+import { metricValue, metricValueByLabel, metricSum } from './prometheusParser';
 
 export interface MetricsSnapshot {
   /** epoch millis when the snapshot was scraped */
@@ -17,6 +17,11 @@ export interface MetricsSnapshot {
 /** The value of a gauge across every snapshot (one point per snapshot). */
 export function gaugeSeries(history: MetricsSnapshot[], name: string): number[] {
   return history.map((snapshot) => metricValue(snapshot.samples, name));
+}
+
+/** The summed value of a labeled counter across all label values, per snapshot (e.g. total across all channels). */
+export function gaugeSeriesSum(history: MetricsSnapshot[], name: string): number[] {
+  return history.map((snapshot) => metricSum(snapshot.samples, name));
 }
 
 /** The value of a label-scoped gauge across every snapshot (e.g. area="heap"). */

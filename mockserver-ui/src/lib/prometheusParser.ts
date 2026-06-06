@@ -109,6 +109,11 @@ export function hasMetric(samples: PrometheusSample[], name: string): boolean {
   return samples.some((s) => s.name === name);
 }
 
+/** Sum of all samples named `name` across every label combination, or 0 when absent. */
+export function metricSum(samples: PrometheusSample[], name: string): number {
+  return samples.reduce((total, s) => (s.name === name ? total + s.value : total), 0);
+}
+
 /**
  * Distinct values of `labelKey` across all samples named `name`, in first-seen
  * order. Lets the UI render one entry per label value present (e.g. every

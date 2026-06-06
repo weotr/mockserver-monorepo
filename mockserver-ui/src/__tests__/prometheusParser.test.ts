@@ -5,6 +5,7 @@ import {
   metricValue,
   metricValueByLabel,
   hasMetric,
+  metricSum,
   labelValues,
 } from '../lib/prometheusParser';
 
@@ -84,6 +85,19 @@ describe('parsePrometheusText', () => {
     const samples = parsePrometheusText('jvm_threads_current 12\n');
     expect(hasMetric(samples, 'jvm_threads_current')).toBe(true);
     expect(hasMetric(samples, 'jvm_memory_used_bytes')).toBe(false);
+  });
+
+  it('metricSum totals all samples of a name across label combinations', () => {
+    const samples = parsePrometheusText(
+      [
+        'mock_server_async_messages_published_total{channel="orders/placed"} 6',
+        'mock_server_async_messages_published_total{channel="payments/processed"} 4',
+        'other_metric{channel="ignored"} 99',
+        '',
+      ].join('\n'),
+    );
+    expect(metricSum(samples, 'mock_server_async_messages_published_total')).toBe(10);
+    expect(metricSum(samples, 'absent_metric')).toBe(0);
   });
 
   it('labelValues lists distinct label values in first-seen order', () => {

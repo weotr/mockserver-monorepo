@@ -13,11 +13,14 @@
 #   npm run demo
 #
 # Options:
-#   --rebuild      Force rebuild of the MockServer JAR even if one exists
-#   --no-browser   Do not auto-open the browser
-#   --port PORT    MockServer port (default: 1080)
-#   --ui-port PORT UI dev server port (default: 3000)
-#   --help         Show this help
+#   --rebuild       Force rebuild of the MockServer JAR even if one exists
+#   --no-browser    Do not auto-open the browser
+#   --with-broker   Start a Mosquitto MQTT broker (Docker) so the AsyncAPI panel's
+#                   Recorded Messages table populates with a live, ticking feed
+#   --port PORT     MockServer port (default: 1080)
+#   --ui-port PORT  UI dev server port (default: 3000)
+#   --mqtt-port P   MQTT broker port (default: 1883; only with --with-broker)
+#   --help          Show this help
 #
 # Press Ctrl+C to stop both servers.
 
@@ -35,17 +38,26 @@ MOCKSERVER_PORT=1080
 UI_PORT=3000
 REBUILD=false
 NO_BROWSER=false
+WITH_BROKER=false
+MQTT_PORT=1883
+MQTT_CONTAINER="mockserver-demo-mqtt"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --rebuild) REBUILD=true; shift ;;
     --no-browser) NO_BROWSER=true; shift ;;
+    --with-broker) WITH_BROKER=true; shift ;;
     --port) MOCKSERVER_PORT="$2"; shift 2 ;;
     --ui-port) UI_PORT="$2"; shift 2 ;;
+    --mqtt-port) MQTT_PORT="$2"; shift 2 ;;
     --help|-h) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (use --help)"; exit 1 ;;
   esac
 done
+
+if [ "$WITH_BROKER" = true ]; then
+  command -v docker >/dev/null 2>&1 || { echo "ERROR: '--with-broker' needs Docker (for the Mosquitto MQTT broker)"; exit 1; }
+fi
 
 echo "========================================"
 echo "MockServer UI + Demo Data"
@@ -104,6 +116,7 @@ cleanup() {
   echo "→ Stopping servers..."
   [ -n "${UI_PID:-}" ] && kill "$UI_PID" 2>/dev/null || true
   [ -n "${MOCKSERVER_PID:-}" ] && kill "$MOCKSERVER_PID" 2>/dev/null || true
+  [ "$WITH_BROKER" = true ] && docker rm -f "$MQTT_CONTAINER" >/dev/null 2>&1 || true
   wait 2>/dev/null || true
   echo "✓ Stopped"
 }
@@ -123,9 +136,30 @@ wait_for() {
 wait_for "http://localhost:$MOCKSERVER_PORT/mockserver/status" "MockServer" PUT
 echo "✓ MockServer ready (PID $MOCKSERVER_PID)"
 
+# --- optional MQTT broker (for AsyncAPI Recorded Messages) -----------------
+# Starts a throwaway Mosquitto broker with anonymous access so the populate
+# script can load the AsyncAPI spec in live-broker mode (publish + consume),
+# making the AsyncAPI panel's Recorded Messages table fill with a live feed.
+DEMO_MQTT_BROKER_URL=""
+if [ "$WITH_BROKER" = true ]; then
+  echo "→ Starting Mosquitto MQTT broker on port $MQTT_PORT (Docker container: $MQTT_CONTAINER)..."
+  docker rm -f "$MQTT_CONTAINER" >/dev/null 2>&1 || true
+  docker run -d --name "$MQTT_CONTAINER" -p "$MQTT_PORT:1883" eclipse-mosquitto:2 \
+    sh -c "printf 'listener 1883\nallow_anonymous true\n' > /mosquitto/config/mosquitto.conf && exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf" >/dev/null
+  # Wait for the broker TCP port to accept connections (bash /dev/tcp — no nc dependency).
+  broker_elapsed=0
+  until (exec 3<>"/dev/tcp/localhost/$MQTT_PORT") 2>/dev/null; do
+    [ "$broker_elapsed" -ge 30 ] && { echo "ERROR: MQTT broker did not open port $MQTT_PORT within 30s"; docker logs "$MQTT_CONTAINER" 2>&1 | tail -10; exit 1; }
+    sleep 1; broker_elapsed=$((broker_elapsed + 1))
+  done
+  exec 3>&- 2>/dev/null || true
+  DEMO_MQTT_BROKER_URL="tcp://localhost:$MQTT_PORT"
+  echo "✓ MQTT broker ready ($DEMO_MQTT_BROKER_URL)"
+fi
+
 # --- populate demo data ----------------------------------------------------
 echo "→ Populating demo data..."
-node "$SCRIPT_DIR/populate-demo-data.mjs" --url "http://localhost:$MOCKSERVER_PORT"
+DEMO_MQTT_BROKER_URL="$DEMO_MQTT_BROKER_URL" node "$SCRIPT_DIR/populate-demo-data.mjs" --url "http://localhost:$MOCKSERVER_PORT"
 
 # --- start UI dev server ---------------------------------------------------
 echo "→ Starting UI dev server on port $UI_PORT..."
