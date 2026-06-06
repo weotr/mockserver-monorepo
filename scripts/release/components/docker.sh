@@ -417,6 +417,46 @@ else
   else
     log_info "cosign key not configured (mockserver-release/cosign-key) — skipping Docker image signing"
   fi
+
+  # ---- Sync the Docker Hub "Overview" from docker/DOCKERHUB.md --------------
+  # Keeps the repo's Docker Hub landing page in sync with version control so it
+  # never goes stale (it previously drifted: dead Trello board + Heroku Slack
+  # link). STRICTLY non-fatal: needs a Docker Hub token with repo-write scope,
+  # which the push/pull token may lack (403 insufficient scope) — skipped with a
+  # warning in that case so it never aborts a release.
+  sync_dockerhub_description() {
+    local desc_file="$REPO_ROOT/docker/DOCKERHUB.md" user token jwt code
+    [[ -f "$desc_file" ]] || { log_info "  no docker/DOCKERHUB.md — skipping overview sync"; return 0; }
+    user=$(load_secret "mockserver-release/dockerhub" "username") || return 1
+    token=$(load_secret "mockserver-release/dockerhub" "token") || return 1
+    jwt=$(curl -s --max-time 30 -H "Content-Type: application/json" \
+      -d "{\"username\":\"${user}\",\"password\":\"${token}\"}" \
+      https://hub.docker.com/v2/users/login/ \
+      | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+    [[ -n "$jwt" ]] || { log_info "  Docker Hub API login failed — skipping overview sync"; return 1; }
+    code=$(python3 - "$jwt" "$desc_file" <<'PY'
+import sys, json, urllib.request, urllib.error
+jwt, path = sys.argv[1], sys.argv[2]
+body = json.dumps({"full_description": open(path).read()}).encode()
+req = urllib.request.Request(
+    "https://hub.docker.com/v2/repositories/mockserver/mockserver/",
+    data=body, method="PATCH",
+    headers={"Content-Type": "application/json", "Authorization": "JWT " + jwt})
+try:
+    print(urllib.request.urlopen(req, timeout=30).status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+PY
+)
+    if [[ "$code" == "200" ]]; then
+      log_info "  Docker Hub overview updated from docker/DOCKERHUB.md"
+    else
+      log_info "  WARNING: Docker Hub overview update returned HTTP ${code:-?} (token may lack repo-write scope) — skipped"
+      return 1
+    fi
+  }
+  log_info "Sync Docker Hub overview from docker/DOCKERHUB.md"
+  sync_dockerhub_description || log_info ":warning: Docker Hub overview not updated (non-fatal)"
 fi
 
 log_info "Docker publish complete"

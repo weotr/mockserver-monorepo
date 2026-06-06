@@ -28,6 +28,16 @@ In addition it is possible to <a href="#docker_container_customization">customis
 
 <p>This is not strictly necessary as the image will be automatically pulled if it does not exist when the run command is used. However, using the pull command will ensure the latest version of the image is downloaded.</p>
 
+<a id="verify_docker_image_signature" class="anchor" href="#verify_docker_image_signature">&nbsp;</a>
+
+<h3>Verifying Image Signatures</h3>
+
+<p>Release images are signed with <a target="_blank" href="https://docs.sigstore.dev/cosign/overview/" rel="noopener noreferrer">Sigstore cosign</a> using the MockServer public key, published at <a href="https://www.mock-server.com/mockserver-cosign.pub">https://www.mock-server.com/mockserver-cosign.pub</a> (the same key signs the Helm chart). To verify an image before running it:</p>
+
+<pre class="prettyprint code"><code class="code">cosign verify --key https://www.mock-server.com/mockserver-cosign.pub mockserver/mockserver:{{ site.mockserver_version }}</code></pre>
+
+<p>A successful verification prints the signed payload and exits with status <span class="keyword">0</span>. The same key verifies the <span class="inline_code">-graaljs</span> and <span class="inline_code">clustered-</span> image variants and the ECR Public mirror. Image versions before {{ site.mockserver_version }} predate signing.</p>
+
 <a id="run_docker_container" class="anchor" href="#run_docker_container">&nbsp;</a>
 
 <h3>Run MockServer Container</h3>

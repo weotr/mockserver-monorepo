@@ -406,6 +406,18 @@ signature (it detects them automatically for OCI repositories — no annotation 
 pipeline has a **guarded, opt-in** signing step in `scripts/release/components/helm.sh`: it is a
 **no-op until a signing key exists**, so it never affects unsigned releases.
 
+The public key is **published at `https://www.mock-server.com/mockserver-cosign.pub`** (and `Chart.yaml`'s
+`artifacthub.io/links` surfaces it on the Artifact Hub page). Users verify with:
+
+```bash
+cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mock-server/charts/mockserver:<version>
+```
+
+> **IAM note:** signing is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`,
+> so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret (not just
+> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.0.0 chart
+> publishing unsigned until the grant was added to `read_release_secrets`.
+
 To enable signing:
 
 1. **Generate a cosign key pair** (once): `cosign generate-key-pair` → `cosign.key` (encrypted with a

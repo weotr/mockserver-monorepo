@@ -38,7 +38,7 @@ helm push mockserver-{{ site.mockserver_version }}.tgz oci://&lt;your-private-re
 
 <p>Recent chart releases are signed with <a target="_blank" href="https://docs.sigstore.dev/cosign/overview/" rel="noopener noreferrer">Sigstore cosign</a>. You can verify a chart against the published MockServer public key before installing it:</p>
 
-<pre class="prettyprint code"><code class="code">cosign verify --key https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/helm/mockserver/cosign.pub oci://ghcr.io/mock-server/charts/mockserver:{{ site.mockserver_version }}</code></pre>
+<pre class="prettyprint code"><code class="code">cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mock-server/charts/mockserver:{{ site.mockserver_version }}</code></pre>
 
 <p>A successful verification prints the signed payload and exits with status <span class="keyword">0</span>. Older chart versions predate signing, so verification will report no matching signatures for them.</p>
 

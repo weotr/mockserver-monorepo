@@ -28,6 +28,16 @@ helm upgrade --install --create-namespace --namespace mockserver mockserver http
 helm upgrade --install --create-namespace --namespace mockserver mockserver helm/mockserver
 ```
 
+### Verifying the chart signature
+
+The OCI chart is signed with [cosign](https://github.com/sigstore/cosign) using MockServer's signing key, published at **https://www.mock-server.com/mockserver-cosign.pub** (the same key signs the Docker images):
+
+```bash
+cosign verify \
+  --key https://www.mock-server.com/mockserver-cosign.pub \
+  ghcr.io/mock-server/charts/mockserver:7.0.0
+```
+
 Each of the commands above installs MockServer into a **namespace** called `mockserver` with default configuration (as per the embedded [values.yaml](https://github.com/mock-server/mockserver-monorepo/blob/master/helm/mockserver/values.yaml)).  
 MockServer will then be available on domain name `mockserver.mockserver.svc.cluster.local`, as long as the namespace you are calling from isn't prevented (by network policy) to call the `mockserver` namespace.
 
