@@ -126,6 +126,8 @@ updates:
       - "/docker/snapshot"
       - "/docker/graaljs"
       - "/docker/local"
+      - "/docker/webhook"
+      - "/docker/clustered"
       - "/docker_build/maven"
       - "/docker_build/performance"
     schedule:

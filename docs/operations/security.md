@@ -45,7 +45,7 @@ Dependabot monitors **8 package ecosystems** across the monorepo for outdated an
 | Docker | `/docker` + subdirs, `/docker_build/*` | 10 |
 | Terraform | `/terraform/*` | 10 |
 
-The Docker and Terraform directory columns are summarised; Dependabot has no glob support, so each directory is listed explicitly in [`.github/dependabot.yml`](../../.github/dependabot.yml) (8 Docker dirs, 4 Terraform dirs). When you add a new Docker/Terraform directory, add it there too or it will not be scanned.
+The Docker and Terraform directory columns are summarised; Dependabot has no glob support, so each directory is listed explicitly in [`.github/dependabot.yml`](../../.github/dependabot.yml) (10 Docker dirs, 4 Terraform dirs). When you add a new Docker/Terraform directory, add it there too or it will not be scanned.
 
 Dependabot runs **daily** and opens pull requests for version updates and security patches. Minor and patch updates are **grouped per ecosystem** (e.g. `maven-minor-and-patch`) so related bumps land in a single PR instead of many.
 
@@ -262,6 +262,10 @@ In the Maven ecosystem, a `-SNAPSHOT` suffix (e.g., `5.16.0-SNAPSHOT`) indicates
 4. The Snyk policy file's ignore expiry dates are reviewed and renewed only when a deliberate constraint still prevents a fix
 
 **Between releases**, the `master` branch and SNAPSHOT artifacts may temporarily carry unresolved advisories -- for example, when a new CVE is published against a dependency but the fix has not yet been integrated.
+
+### Base Image OS CVEs (Expected Baseline)
+
+Container scanners (Trivy, Grype, the ArtifactHub Helm security report) will always list a residual set of CVEs against the Debian OS packages baked into the `gcr.io/distroless/java17` base image (`libc6`, `libexpat1`, `zlib1g`, `libuuid1`, `libpng16`, `liblcms2-2`, `libbz2-1.0`). These belong to the JRE base layer, not to MockServer code or its Maven dependencies, and are **expected** — most carry `Fixed in: -` (no upstream Debian patch yet), so they cannot be remediated at build time regardless of the JRE/Java version. The pinned base-image digests are kept current automatically by Dependabot's `docker` ecosystem, so fixes are adopted as soon as distroless rebuilds. See [Docker → Base Image CVE Baseline](../infrastructure/docker.md#base-image-cve-baseline) for the full triage guide.
 
 ### Recommendations for Consumers
 
