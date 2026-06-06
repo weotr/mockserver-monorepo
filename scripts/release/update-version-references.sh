@@ -124,11 +124,19 @@ else
       -not -name "changelog.md" -not -name "CHANGELOG.md" \
       -not -path "*/mockserver-node/package.json" \
       -not -path "*/mockserver-client-node/package.json" \
+      -not -path "*/mockserver-ui/package.json" \
       -not -name "package-lock.json" -print0 2>/dev/null \
     | while IFS= read -r -d '' file; do
-        sed_i -E "/${HISTORICAL_RE}/!s/${OLD_PAT}/${NEW_REP}/g" "$file" 2>/dev/null || true
+        # Anchor the version so it only matches a COMPLETE version token, never a
+        # substring of a larger version. Without the boundaries, OLD_VERSION 6.1.0
+        # matched inside a third-party dependency range like "^16.1.0" and bumped
+        # it to the non-existent "^17.0.0", breaking `npm ci` for mockserver-ui
+        # (and thus every mvn build of mockserver-netty + CodeQL). The leading
+        # group requires a non-digit/non-dot before the version; the trailing
+        # group a non-digit after it.
+        sed_i -E "/${HISTORICAL_RE}/!s/(^|[^0-9.])${OLD_PAT}([^0-9]|\$)/\1${NEW_REP}\2/g" "$file" 2>/dev/null || true
         if [[ "$OLD_API_VERSION" != "$API_VERSION" ]]; then
-          sed_i -E "/${HISTORICAL_RE}/!s/${OLD_API_PAT}/${NEW_API}/g" "$file" 2>/dev/null || true
+          sed_i -E "/${HISTORICAL_RE}/!s/(^|[^0-9.])${OLD_API_PAT}([^0-9]|\$)/\1${NEW_API}\2/g" "$file" 2>/dev/null || true
         fi
       done
   done
@@ -175,6 +183,7 @@ else
       -not -name "changelog.md" -not -name "CHANGELOG.md" \
       -not -path "*/mockserver-node/package.json" \
       -not -path "*/mockserver-client-node/package.json" \
+      -not -path "*/mockserver-ui/package.json" \
       -not -name "package-lock.json" -print0 2>/dev/null)
   done
   # De-duplicate.
