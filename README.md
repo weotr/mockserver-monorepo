@@ -4,7 +4,22 @@ MockServer &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [![Build
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/mockserver)](https://artifacthub.io/packages/search?repo=mockserver)
 =====
 
-MockServer is an HTTP(S) **mock server and proxy** for testing. Mock any HTTP/HTTPS, REST, gRPC, or JSON-RPC dependency; record-and-replay real traffic as a proxy; and drive it all from a client library (Java, Node, Python, Ruby) or a built-in dashboard. Recent releases add first-class **LLM / AI-agent** provider mocking (Anthropic, OpenAI, Gemini, Bedrock, Ollama and more), an **MCP server** for AI coding assistants, and **chaos / fault injection** on mocked *and* forwarded responses — see the [changelog](changelog.md) for what has shipped in each version.
+MockServer is an HTTP(S) **mock server** and **proxy** for testing, with support for HTTP/2, HTTP/3, gRPC, WebSockets, raw TCP, message brokers like Kafka and MQTT, and AI/LLM APIs such as OpenAI, Anthropic, and Gemini. Mock the APIs your application depends on to develop and test against systems that are unavailable, incomplete, or hard to reproduce; proxy real traffic to record, inspect, and modify requests in flight; and simulate dependencies both working normally and failing — injecting latency, dropped connections, and errors — to test how your application copes either way.
+
+### Main Features
+
+- **Mock any API** — HTTP/1.1, HTTPS, HTTP/2, HTTP/3, gRPC, gRPC-Web, JSON-RPC, WebSockets, raw TCP, and message brokers (Kafka, MQTT). Match requests on method, path, query, headers, cookies and body (JSON, XML, JSONPath, XPath, regex, OpenAPI) and return configured responses.
+- **Proxy & record** — port forwarding, web (HTTP) proxy, HTTPS tunneling (CONNECT) and SOCKS, with full visibility of even TLS-encrypted traffic.
+- **Dynamic responses** — response templating (Velocity, Mustache, JavaScript), class/closure callbacks and webhooks.
+- **OpenAPI** — generate expectations directly from an OpenAPI/Swagger specification.
+- **Verification** — assert which requests were received, in what order, and how many times.
+- **Chaos & resilience testing** — inject latency, dropped/slow connections and failures to test how your system copes with a misbehaving dependency.
+- **LLM / AI mocking** — mock chat-completion APIs for OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI and Ollama (including streaming), plus a built-in MCP server for AI coding assistants.
+- **Live dashboard** — watch requests, expectations and logs in real time at `/mockserver/dashboard`.
+- **Clients & integrations** — Java, JavaScript/Node, Python and Ruby clients, plus JUnit and Spring support.
+- **Run anywhere** — Docker, Helm/Kubernetes, JAR or WAR, with optional clustered state for multi-instance deployments.
+
+See the [changelog](changelog.md) for what has shipped in each version.
 
 ### Quick Start
 
@@ -162,7 +177,8 @@ See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html)
 ##### Previous Versions
 | Version        | Date        | Git & Docker Tag / Git Hash                                                                                                                                                                                   | Documentation                                 | Java API                                                               | REST API                                                                                  |
 |:---------------|:------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------|:-----------------------------------------------------------------------|:------------------------------------------------------------------------------------------|
-| 7.0.0 (latest) | 27 May 2026 | [mockserver-7.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-7.0.0)   / [33c273](https://github.com/mock-server/mockserver-monorepo/commit/33c2739febd07ce1bf1e3f31ed9d93a61ac871dc) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/7.0.0/apidocs/index.html)  | [7.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/7.0.x)   |
+| 7.0.0 (latest) | 06 Jun 2026 | [mockserver-7.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-7.0.0)   / [9755e9](https://github.com/mock-server/mockserver-monorepo/commit/9755e9ccf4d3bcad1d1cc2dd218614f59441c0f3) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/7.0.0/apidocs/index.html)  | [7.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/7.0.x)   |
+| 6.1.0          | 27 May 2026 | [mockserver-6.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.1.0)   / [33c273](https://github.com/mock-server/mockserver-monorepo/commit/33c2739febd07ce1bf1e3f31ed9d93a61ac871dc) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.1.0/apidocs/index.html)  | [6.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x)   |
 | 6.0.0          | 20 May 2026 | [mockserver-6.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.0.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.0.0/apidocs/index.html)  | [6.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.0.x)   |
 | 5.15.0         | 11 Jan 2023 | [mockserver-5.15.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.15.0) / [7c071b](https://github.com/mock-server/mockserver-monorepo/commit/7c071b8be3608036f2a2ea45eee6970d2f2b8d02) | [Documentation](https://5-15.mock-server.com) | [Java API](https://mock-server.com/versions/5.15.0/apidocs/index.html) | [5.15.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.15.x) |
 | 5.14.0         | 22 Aug 2022 | [mockserver-5.14.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.14.0) / [808eba](https://github.com/mock-server/mockserver-monorepo/commit/808ebaa44a88b630ca181e62712aa47d4c9c7ff4) | [Documentation](https://5-14.mock-server.com) | [Java API](https://mock-server.com/versions/5.14.0/apidocs/index.html) | [5.14.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.14.x) |

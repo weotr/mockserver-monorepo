@@ -11,15 +11,15 @@
 
 ## Main Features
 
-MockServer is an HTTP(S) **mock server** and **proxy** for testing. Mock the APIs your application depends on so you can develop and test against systems that are unavailable, incomplete, or hard to reproduce — and proxy real traffic to record, inspect, and modify requests in flight.
+MockServer is an HTTP(S) **mock server** and **proxy** for testing, with support for HTTP/2, HTTP/3, gRPC, WebSockets, raw TCP, message brokers like Kafka and MQTT, and AI/LLM APIs such as OpenAI, Anthropic, and Gemini. Mock the APIs your application depends on to develop and test against systems that are unavailable, incomplete, or hard to reproduce; proxy real traffic to record, inspect, and modify requests in flight; and simulate dependencies both working normally and failing — injecting latency, dropped connections, and errors — to test how your application copes either way.
 
-- **Mock HTTP/HTTPS services** — match requests on method, path, query, headers, cookies and body (JSON, XML, JSONPath, XPath, regex, OpenAPI) and return configured responses.
+- **Mock any API** — HTTP/1.1, HTTPS, HTTP/2, HTTP/3, gRPC, gRPC-Web, JSON-RPC, WebSockets, raw TCP, and message brokers (Kafka, MQTT). Match requests on method, path, query, headers, cookies and body (JSON, XML, JSONPath, XPath, regex, OpenAPI) and return configured responses.
 - **Proxy & record** — port forwarding, web (HTTP) proxy, HTTPS tunneling (CONNECT) and SOCKS, with full visibility of even TLS-encrypted traffic.
 - **Dynamic responses** — response templating (Velocity, Mustache, JavaScript), class/closure callbacks and webhooks.
 - **OpenAPI** — generate expectations directly from an OpenAPI/Swagger specification.
 - **Verification** — assert which requests were received, in what order, and how many times.
 - **Chaos & resilience testing** — inject latency, dropped/slow connections and failures to test how your system copes with a misbehaving dependency.
-- **LLM / AI mocking** — mock OpenAI/Bedrock-style chat completion APIs, including streaming.
+- **LLM / AI mocking** — mock chat-completion APIs for OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI and Ollama (including streaming), plus a built-in MCP server for AI coding assistants.
 - **Live dashboard** — watch requests, expectations and logs in real time at `/mockserver/dashboard`.
 - **Clients & integrations** — Java, JavaScript/Node, Python and Ruby clients, plus JUnit and Spring support.
 - **Run anywhere** — Docker, Helm/Kubernetes, JAR or WAR, with optional clustered state for multi-instance deployments.
