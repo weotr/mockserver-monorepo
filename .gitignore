@@ -53,6 +53,9 @@ Thumbs.db
 .idea
 *.iml
 
+# Visual Studio #
+.vscode
+
 # Eclipse config files #
 ########################
 .project
