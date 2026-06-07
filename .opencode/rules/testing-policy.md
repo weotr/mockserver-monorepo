@@ -11,6 +11,15 @@ After making code changes, ALWAYS run unit tests for the affected module(s).
 - Do NOT run integration tests automatically — they are slow and run in CI
 - If changes span multiple modules, run tests for ALL affected modules: `./mvnw test -pl <module1>,<module2>`
 
+## Docker-Gated Tests
+
+**Docker is available locally** (Docker Desktop on the developer Mac) — see `AGENTS.md` → "Local Development Environment".
+
+- Tests guarded by `Assume.assumeTrue(DockerClientFactory.instance().isDockerAvailable())` (Testcontainers live-broker tests, `NET_ADMIN` transparent-proxy e2e, QUIC/HTTP-3 client tests, etc.) **actually run here** — when validating such a change, run it and confirm it PASSES, not merely that it skips.
+- **Keep the `assumeTrue(...isDockerAvailable())` gating in place** regardless. It is still correct so the suite degrades gracefully on machines/CI agents without Docker. Docker being present changes how we *validate*, not how we *write* the tests.
+- The `DockerClientFactory.isDockerAvailable()` probe works correctly with Testcontainers 1.21.4+ (docker-java 3.4.2) on Docker Desktop 4.67 / Engine 29.x / API 1.54. Always confirm a Docker-gated test actually RAN (not skipped) before claiming local validation.
+- `docker build` / `docker run` are available for Dockerfile smoke checks (see `commit-workflow.md`).
+
 ## Before Committing (MANDATORY)
 
 Follow the full pre-commit workflow in `commit-workflow.md`. That workflow covers all file types (Java, Terraform, Bash, Docker, Helm, docs). This file covers the Java-specific testing details.
@@ -38,7 +47,7 @@ If unit tests already passed earlier in this conversation for the exact same cha
 | `mockserver-spring-test-listener/` | `mockserver-spring-test-listener` |
 | `mockserver-testing/` | `mockserver-testing` |
 | `mockserver-integration-testing/` | `mockserver-integration-testing` |
-| `mockserver-examples/` | `mockserver-examples` |
+| `examples/java/` | `mockserver-examples` |
 
 ## Maven Test Commands
 

@@ -1,6 +1,7 @@
 MockServer &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [![Build status](https://badge.buildkite.com/3b6803f4fe98cb5ed7bf18292a1434f800b53d8fecb92811d8.svg?branch=master&style=square&theme=slack)](https://buildkite.com/mockserver/mockserver) 
 [![GitHub license](https://img.shields.io/github/license/mock-server/mockserver-monorepo.svg)](https://github.com/mock-server/mockserver-monorepo/blob/master/LICENSE.md) 
-[![GitHub stars](https://img.shields.io/github/stars/mock-server/mockserver-monorepo.svg)](https://github.com/mock-server/mockserver-monorepo/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/mock-server/mockserver-monorepo.svg)](https://github.com/mock-server/mockserver-monorepo/stargazers) 
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/mockserver)](https://artifacthub.io/packages/search?repo=mockserver)
 =====
 
 MockServer is an HTTP(S) **mock server and proxy** for testing. Mock any HTTP/HTTPS, REST, gRPC, or JSON-RPC dependency; record-and-replay real traffic as a proxy; and drive it all from a client library (Java, Node, Python, Ruby) or a built-in dashboard. Recent releases add first-class **LLM / AI-agent** provider mocking (Anthropic, OpenAI, Gemini, Bedrock, Ollama and more), an **MCP server** for AI coding assistants, and **chaos / fault injection** on mocked *and* forwarded responses — see the [changelog](changelog.md) for what has shipped in each version.
@@ -11,6 +12,13 @@ Run MockServer with Docker in seconds:
 
 ```bash
 docker run -d --rm -p 1080:1080 mockserver/mockserver
+```
+
+…or, on macOS / Linux, install it with [Homebrew](https://brew.sh/) and run the `mockserver` command:
+
+```bash
+brew install mockserver
+mockserver -serverPort 1080
 ```
 
 Then create your first expectation and call it (MockServer exposes a REST control plane on the same port):
@@ -120,9 +128,25 @@ Docker Hub contains the following artifacts:
 
 * [MockServer Docker Container](https://hub.docker.com/r/mockserver/mockserver/) - a Docker container containing the Netty MockServer and proxy
 
+##### Homebrew [![Homebrew version](https://img.shields.io/homebrew/v/mockserver.svg)](https://formulae.brew.sh/formula/mockserver)
+
+MockServer is available in [Homebrew](https://brew.sh/) (homebrew-core), the package manager for macOS and Linux:
+
+```bash
+brew install mockserver   # then run: mockserver -serverPort 1080
+```
+
+See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html) and the [command-line usage guide](https://www.mock-server.com/mock_server/running_mock_server.html#running_from_command_line_using_homebrew).
+
 ##### Helm Chart
 
-* [MockServer Helm Chart](helm/mockserver/README.md) - a Helm Chart that installs MockServer to a Kubernetes cluster (latest: [6.1.0](https://www.mock-server.com/mockserver-6.1.0.tgz)). See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all available versions and configuration options.
+* [MockServer Helm Chart](helm/mockserver/README.md) - installs MockServer into a Kubernetes cluster. The chart is published to the GitHub Container Registry as an OCI artifact (no `helm repo add` needed):
+
+  ```bash
+  helm upgrade --install --create-namespace --namespace mockserver --version 6.1.0 mockserver oci://ghcr.io/mock-server/charts/mockserver
+  ```
+
+  See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all versions and configuration options. A legacy `.tgz` is also available from [www.mock-server.com](https://www.mock-server.com/mockserver-6.1.0.tgz).
 
 ##### MockServer Clients
 

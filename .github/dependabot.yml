@@ -21,6 +21,10 @@ updates:
       # semver-major bumps and keeps us on the Java-17-compatible 12.x line.
       - dependency-name: "com.puppycrawl.tools:checkstyle"
         versions: [">=13.0.0"]
+      # Infinispan 15.x requires Java 21 runtime; we target Java 17.
+      # Pin the ceiling below 15.0.0 to stay on the Java-17-compatible 14.0.x line.
+      - dependency-name: "org.infinispan:infinispan-core"
+        versions: [">=15.0.0"]
 
   - package-ecosystem: "maven"
     directory: "/mockserver/mockserver-maven-plugin"

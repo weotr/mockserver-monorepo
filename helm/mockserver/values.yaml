@@ -2,6 +2,16 @@ replicaCount: 1
 
 releasenameOverride: ""
 
+# Pod-level securityContext, rendered verbatim into the Deployment's
+# spec.template.spec.securityContext. Any pod-level field is supported. The most
+# common need is fsGroup, so the pod can read/write a mounted PersistentVolume
+# (for example when persisting expectations to a PVC — see persistence below).
+# Empty by default (no pod securityContext is emitted). Example:
+#   podSecurityContext:
+#     fsGroup: 2000
+#     fsGroupChangePolicy: OnRootMismatch
+podSecurityContext: {}
+
 app:
   logLevel: "INFO"
   serverPort: "1080"
@@ -146,5 +156,35 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Sidecar / transparent proxy mode
+#
+# When `transparentProxy` is enabled MockServer reads the original destination of
+# intercepted connections (Linux iptables REDIRECT + nf_conntrack) and forwards
+# there, with a graceful Host-header fallback. This requires Linux nodes and the
+# NET_ADMIN capability, and is a no-op on non-Linux hosts. The optional iptables
+# init container redirects outbound TCP to MockServer so application traffic is
+# transparently intercepted without code changes.
+#
+sidecar:
+  enabled: false
+  transparentProxy: false
+  # Add the NET_ADMIN capability (required for SO_ORIGINAL_DST / iptables). Only
+  # applied when transparentProxy is true.
+  netAdmin: true
+  # Optional iptables init container that REDIRECTs outbound TCP to MockServer.
+  # Requires a privileged init container; disable if iptables rules are applied
+  # by the platform (e.g. an Istio CNI plugin) instead.
+  iptables:
+    enabled: false
+    image: "istio/proxyv2:1.20.0"
+    # Destination ports to redirect to MockServer (the transparent proxy port).
+    redirectPorts: "80,443"
+    # The MockServer port iptables REDIRECTs intercepted traffic to.
+    proxyPort: 1080
+    # UID to exclude from iptables REDIRECT. Traffic originating from this UID
+    # is returned (not redirected) to prevent MockServer's own upstream egress
+    # from looping back to itself. Must match app.runAsUser (default 65534).
+    excludeUid: 65534
 
 imagePullSecrets: []

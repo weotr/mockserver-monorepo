@@ -31,6 +31,38 @@
     "closeConnection": {
       "type": "boolean"
     },
+    "graphqlSubscriptionFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GraphQL subscription query filter for graphql-transport-ws protocol. When set, incoming subscribe messages are AST-matched against this filter.",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "operationName": {
+          "type": "string"
+        },
+        "variablesSchema": {
+          "type": "string"
+        },
+        "selectionSetMatchType": {
+          "enum": [
+            "NORMALISED_STRING",
+            "AST_EXACT",
+            "AST_SUBSET"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
     "primary": {
       "type": "boolean"
     }

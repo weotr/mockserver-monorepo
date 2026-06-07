@@ -33,6 +33,10 @@ export interface HttpChaosProfileDTO {
   quotaWindowMillis?: number;
   quotaErrorStatus?: number;
   degradationRampMillis?: number;
+  graphqlErrors?: boolean;
+  graphqlErrorMessage?: string;
+  graphqlErrorCode?: string;
+  graphqlNullifyData?: boolean;
 }
 
 export interface ServiceChaosResponse {
@@ -92,6 +96,20 @@ export async function removeServiceChaos(params: ConnectionParams, host: string)
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ host, remove: true }),
+  });
+  await ensureOk(res);
+}
+
+/** Patch (partially update) the chaos profile for a host. */
+export async function patchServiceChaos(
+  params: ConnectionParams,
+  host: string,
+  partial: Partial<HttpChaosProfileDTO>,
+): Promise<void> {
+  const res = await fetch(endpoint(params), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host, chaos: partial }),
   });
   await ensureOk(res);
 }
@@ -176,6 +194,16 @@ export function summarizeChaosProfile(profile: HttpChaosProfileDTO): string[] {
   }
   if (profile.outageAfterMillis != null || profile.outageDurationMillis != null) {
     parts.push('outage window');
+  }
+  if (profile.seed != null) {
+    parts.push(`seed ${profile.seed}`);
+  }
+  if (profile.graphqlErrors) {
+    const code = profile.graphqlErrorCode ? ` (${profile.graphqlErrorCode})` : '';
+    parts.push(`GraphQL error${code}`);
+  }
+  if (profile.graphqlErrors && profile.graphqlNullifyData) {
+    parts.push('nullify data');
   }
   return parts;
 }

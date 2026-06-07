@@ -27,6 +27,15 @@
             <groupId>${project.groupId}</groupId>
             <artifactId>mockserver-core</artifactId>
         </dependency>
+        <!-- AsyncAPI messaging module — optional feature; wired into the
+             running server so the PUT/GET /mockserver/asyncapi control-plane
+             endpoints are functional. The module self-registers via
+             AsyncApiControlPlaneImpl.registerIfAvailable() at startup. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>mockserver-async</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>mockserver-integration-testing</artifactId>
@@ -74,6 +83,45 @@
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative-boringssl-static</artifactId>
+        </dependency>
+        <!-- Epoll API classes (pure Java, no native classifier) — needed at compile
+             time for SoOriginalDstResolver to reference EpollSocketChannel/Epoll.
+             The native .so is only required at runtime on Linux. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+        </dependency>
+        <!-- Epoll native .so — bundles the Linux-specific JNI library that activates
+             io.netty.channel.epoll.Epoll.isAvailable(). Runtime-only; on non-Linux
+             platforms these JARs are inert (no native to load). Both x86_64 and aarch64
+             are included so Docker images work on both AMD64 and ARM64 hosts. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <classifier>linux-x86_64</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <classifier>linux-aarch_64</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- JNA — used by SoOriginalDstResolver for getsockopt(SO_ORIGINAL_DST)
+             on Linux. On non-Linux platforms the JNA code path is never invoked;
+             the resolver reports unsupported and falls through to conntrack. -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+
+        <!-- HTTP/3 (QUIC) — experimental; the native QUIC library is bundled
+             transitively by netty-incubator-codec-http3 for supported platforms.
+             CI/CD must run on a platform where the native is available (linux-x86_64,
+             osx-x86_64, osx-aarch_64) or the HTTP/3 feature will be unavailable. -->
+        <dependency>
+            <groupId>io.netty.incubator</groupId>
+            <artifactId>netty-incubator-codec-http3</artifactId>
         </dependency>
 
         <!-- commons & guava -->
@@ -212,7 +260,8 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- jacoco:check minimum set ~4 points below the measured unit-test floor of 0.5931 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation. -->
+            <!-- jacoco:check minimum set ~4 points below the measured unit-test floor of 0.5931 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation.
+                 BRANCH bundle minimum (0.35) ensures branch coverage doesn't regress. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -233,8 +282,15 @@
                                             <value>COVEREDRATIO</value>
                                             <minimum>0.55</minimum>
                                         </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.35</minimum>
+                                        </limit>
                                     </limits>
                                 </rule>
+                                <!-- per-CLASS LINE floor removed: not enforceable here (many existing
+                                     handlers have <30% unit-line coverage). BUNDLE LINE+BRANCH retained. -->
                             </rules>
                         </configuration>
                     </execution>
@@ -260,6 +316,7 @@
                         <configuration>
                             <workingDirectory>${project.basedir}/../../mockserver-ui</workingDirectory>
                             <installDirectory>${project.build.directory}/frontend</installDirectory>
+                            <downloadRoot>https://npmmirror.com/mirrors/node/</downloadRoot>
                         </configuration>
                         <executions>
                             <execution>

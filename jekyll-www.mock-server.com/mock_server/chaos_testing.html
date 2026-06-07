@@ -24,6 +24,10 @@ schema_faq:
     answer: "Yes. Deploy MockServer as a sidecar proxy, egress proxy, or reverse proxy in your Kubernetes cluster and attach chaos profiles to inject faults into the traffic flowing through it. MockServer operates at the HTTP layer (L7) and requires explicit routing (e.g. HTTP_PROXY environment variable or Service rewrite)."
   - question: "How do I make a mock fail the first few requests then recover?"
     answer: "Use the succeedFirst and failRequestCount fields on the chaos profile. Set succeedFirst to 0 (or omit it) and failRequestCount to the number of requests that should fail. For example, failRequestCount of 2 with errorStatus 503 and errorProbability 1.0 makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies."
+  - question: "How do I simulate a GraphQL partial error?"
+    answer: "Set graphqlErrors to true and graphqlNullifyData to false on your chaos profile. MockServer will parse the original response body as JSON and embed it as the data value in the error envelope, producing {\"data\":{...},\"errors\":[{\"message\":\"...\"}]}. Use graphqlErrorMessage and graphqlErrorCode to customise the error entry. This works on both expectation-level chaos and service-scoped chaos (PUT /mockserver/serviceChaos)."
+  - question: "How do I simulate a broken gRPC server that omits the status trailer?"
+    answer: "Set omitGrpcStatus to true on a gRPC chaos profile registered via PUT /mockserver/grpcChaos. MockServer will send the HTTP 200 response without a grpc-status trailer, which most gRPC clients treat as a protocol error or stream reset. Use this to test that your client does not silently accept an incomplete RPC as a success."
 ---
 
 <p>MockServer's chaos testing feature lets you inject realistic faults into HTTP responses — both <strong>mocked responses</strong> and <strong>forwarded/proxied upstream responses</strong> — so you can verify that your application handles errors, latency, and outages gracefully.</p>
@@ -168,6 +172,30 @@ schema_faq:
             <td>integer</td>
             <td>Gradual degradation: ramp <code class="inline code">errorProbability</code> and <code class="inline code">dropConnectionProbability</code> linearly from 0 up to their configured values over this many milliseconds from the expectation's first match, modelling a dependency that deteriorates over time. Measured with the controllable clock.</td>
             <td>&ge; 1 (default: omitted = no ramp)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrors</code></td>
+            <td>boolean</td>
+            <td>Rewrite the response as a GraphQL error envelope: HTTP 200 with a JSON body of the form <code class="inline code">{"data":null,"errors":[{"message":"...","extensions":{"code":"..."}}]}</code>, <code class="inline code">Content-Type: application/json</code>, and <code class="inline code">Content-Length</code> stripped. Takes precedence over <code class="inline code">truncateBodyAtFraction</code> and <code class="inline code">malformedBody</code>. Metered as <code class="inline code">fault_type=graphql</code>.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrorMessage</code></td>
+            <td>string</td>
+            <td>The message placed in <code class="inline code">errors[0].message</code>. Only used when <code class="inline code">graphqlErrors</code> is true. Defaults to <code class="inline code">"simulated GraphQL error"</code> when omitted.</td>
+            <td>any string (default: "simulated GraphQL error")</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlErrorCode</code></td>
+            <td>string</td>
+            <td>Optional value placed in <code class="inline code">errors[0].extensions.code</code> (for example <code class="inline code">"INTERNAL_SERVER_ERROR"</code> or <code class="inline code">"UNAUTHENTICATED"</code>). The <code class="inline code">extensions</code> object is omitted entirely when this field is not set.</td>
+            <td>any string (default: omitted = no extensions)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">graphqlNullifyData</code></td>
+            <td>boolean</td>
+            <td>Controls the <code class="inline code">data</code> field in the GraphQL error envelope. When <code class="inline code">true</code> (the default), <code class="inline code">data</code> is <code class="inline code">null</code> — a full error. When <code class="inline code">false</code>, MockServer tries to parse the original response body as JSON and embed it as the <code class="inline code">data</code> value, simulating a partial success (data plus errors). Falls back to <code class="inline code">data: null</code> if the original body is not valid JSON.</td>
+            <td>true / false (default: omitted = true, i.e. data:null)</td>
         </tr>
     </tbody>
 </table>
@@ -329,6 +357,52 @@ schema_faq:
     <li><strong>Test a flaky upstream in proxy mode:</strong> attach body corruption to a forward action to see how your application copes with a dependency returning damaged payloads.</li>
 </ul>
 
+<a id="graphql_error_injection" class="anchor" href="#graphql_error_injection">&nbsp;</a>
+
+<h2>GraphQL Error Injection</h2>
+
+<p>GraphQL APIs always return HTTP 200, even for errors — error details are carried in a JSON <code class="inline code">errors</code> array in the response body. Standard HTTP error injection (which changes the status code to 500 or 503) does not reproduce this pattern. The <code class="inline code">graphqlErrors</code> flag rewrites the response into a spec-compliant GraphQL error envelope so your GraphQL client's error-handling logic is exercised correctly.</p>
+
+<p><strong>How it works:</strong> when <code class="inline code">graphqlErrors: true</code> is set, MockServer replaces the response body with a JSON envelope of the form:</p>
+
+<pre class="code"><code class="code">{"data":null,"errors":[{"message":"simulated GraphQL error","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]}</code></pre>
+
+<p>The response is sent as HTTP 200 with <code class="inline code">Content-Type: application/json</code>. Any stale <code class="inline code">Content-Length</code> header is removed. Set <code class="inline code">graphqlNullifyData: false</code> to embed the original response body JSON as the <code class="inline code">data</code> value instead — this simulates a partial success where the server returns some data alongside errors (a common pattern in GraphQL APIs that use partial responses).</p>
+
+<p><strong>Priority:</strong> <code class="inline code">graphqlErrors</code> takes precedence over <code class="inline code">truncateBodyAtFraction</code> and <code class="inline code">malformedBody</code> — when GraphQL injection is active, body corruption is skipped because the envelope is the intended body. The slow-response dribble (<code class="inline code">slowResponseChunkSize</code> + <code class="inline code">slowResponseChunkDelay</code>) still applies to trickle the envelope. Like body corruption, GraphQL injection is deterministic (no probability draw) and respects the count window (<code class="inline code">succeedFirst</code> / <code class="inline code">failRequestCount</code>). Error and connection-drop injection (which change the HTTP status) still take priority over everything — GraphQL injection only fires on the real, non-error response path.</p>
+
+<p><strong>Works with service-scoped chaos too:</strong> <code class="inline code">graphqlErrors</code> can be set on a service-scoped profile (<code class="inline code">PUT /mockserver/serviceChaos</code>), making it easy to inject GraphQL errors into all matching forwards to a GraphQL upstream without touching individual expectations.</p>
+
+<pre class="code"><code class="code">// Simulate a full GraphQL error on all calls to a GraphQL service
+PUT /mockserver/serviceChaos
+{
+  "host": "graphql.api.svc",
+  "chaos": {
+    "graphqlErrors": true,
+    "graphqlErrorMessage": "upstream database unavailable",
+    "graphqlErrorCode": "INTERNAL_SERVER_ERROR"
+  }
+}
+
+// Simulate a partial success (data present alongside errors)
+PUT /mockserver/serviceChaos
+{
+  "host": "graphql.api.svc",
+  "chaos": {
+    "graphqlErrors": true,
+    "graphqlNullifyData": false,
+    "graphqlErrorMessage": "partial result: one field failed",
+    "graphqlErrorCode": "DOWNSTREAM_ERROR"
+  }
+}</code></pre>
+
+<p><strong>Common use cases:</strong></p>
+<ul>
+    <li><strong>Test GraphQL error handling:</strong> verify that your client reads <code class="inline code">errors[0].message</code> and surfaces it to the user instead of silently treating the HTTP 200 as a success.</li>
+    <li><strong>Test per-error-code branching:</strong> set <code class="inline code">graphqlErrorCode</code> to a code your client acts on (e.g. <code class="inline code">"UNAUTHENTICATED"</code>) and verify the client triggers a re-authentication flow.</li>
+    <li><strong>Test partial-success handling:</strong> set <code class="inline code">graphqlNullifyData: false</code> and verify your client renders the partial data while also surfacing the error.</li>
+</ul>
+
 <a id="slow_response" class="anchor" href="#slow_response">&nbsp;</a>
 
 <h2>Slow (Dribbled) Response</h2>
@@ -391,6 +465,31 @@ GET /mockserver/serviceChaos</code></pre>
 <p>The <a href="/mock_server/mockserver_ui.html">dashboard UI</a> also has a <strong>Chaos</strong> tab for managing service-scoped chaos interactively: register a host with an error status / error probability / drop probability / latency (and an optional TTL), see every active registration with a summary of its faults, watch the live TTL auto-revert countdown, and remove a single host or clear them all.</p>
 
 <p>Because the control plane is a single HTTP call with a built-in TTL safety timer, it is also the integration point for external chaos orchestrators — register the fault at the start of an experiment, verify the application copes, and let the TTL revert it even if the orchestrator never sends the clear. See <a href="/mock_server/chaos_testing_orchestrators.html">Driving MockServer from Chaos Orchestrators</a> for Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos recipes.</p>
+
+<a id="live_chaos_tuning" class="anchor" href="#live_chaos_tuning">&nbsp;</a>
+
+<h2>Live Tuning of Service Chaos (PATCH)</h2>
+
+<p>Once a service-scoped chaos profile is registered, you can update individual fields without replacing the whole profile and without restarting MockServer. Use <code class="inline code">PATCH /mockserver/serviceChaos</code> to apply <strong>JSON Merge Patch</strong> semantics: only non-null fields in the request body are updated; all other fields and the current TTL are preserved.</p>
+
+<p>This is useful when you want to adjust a live experiment's fault rates mid-run — for example, ramp error probability up or down while the application is running — without having to recreate the profile or lose the TTL countdown on an active time-boxed registration.</p>
+
+<pre class="code"><code class="code">// Increase the error probability on an already-active profile without touching latency or TTL
+PATCH /mockserver/serviceChaos
+{ "host": "payments.svc", "chaos": { "errorProbability": 0.9 } }
+
+// Switch from error injection to connection-drop injection mid-experiment
+PATCH /mockserver/serviceChaos
+{ "host": "payments.svc", "chaos": { "errorProbability": 0.0, "dropConnectionProbability": 0.5 } }
+
+// Add latency to an existing error-injection profile
+PATCH /mockserver/serviceChaos
+{ "host": "payments.svc", "chaos": { "latency": { "timeUnit": "MILLISECONDS", "value": 2000 } } }</code></pre>
+
+<p><strong>Semantics:</strong> the <code class="inline code">PATCH</code> request requires a <code class="inline code">host</code> field and a <code class="inline code">chaos</code> object containing at least one field to update. Only the fields you supply are changed — unspecified fields in the existing profile are left unchanged. If no profile exists yet for the host, the partial is registered as a new profile with no TTL. The TTL of an existing timed registration is always preserved; <code class="inline code">PATCH</code> cannot change or extend it. To replace a profile entirely, use <code class="inline code">PUT /mockserver/serviceChaos</code>.</p>
+
+<p>The response body echoes the host and the resulting merged chaos profile:</p>
+<pre class="code"><code class="code">{ "status": "patched", "host": "payments.svc", "chaos": { "errorStatus": 503, "errorProbability": 0.9, "latency": { ... } } }</code></pre>
 
 <a id="gradual_degradation" class="anchor" href="#gradual_degradation">&nbsp;</a>
 
@@ -487,19 +586,19 @@ GET /mockserver/serviceChaos</code></pre>
         <tr>
             <td><code class="inline code">mock_server_http_chaos_injected_total</code></td>
             <td>Counter</td>
-            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code></td>
+            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">graphql</code></td>
             <td>Cumulative count of HTTP chaos faults injected, split by fault type</td>
         </tr>
         <tr>
             <td><code class="inline code">mock_server_active_service_chaos</code></td>
             <td>Gauge</td>
-            <td><em>none</em></td>
-            <td>Number of hosts with a currently-active service-scoped chaos profile; drops to 0 as profiles are cleared or their TTLs lapse</td>
+            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">quota</code> | <code class="inline code">graphql</code></td>
+            <td>Number of currently-active service-scoped chaos profiles configured with each fault type (a profile with several faults counts under each); drops to 0 as profiles are cleared or their TTLs lapse</td>
         </tr>
     </tbody>
 </table>
 
-<p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>), an "active services" count from the gauge, and a per-fault-type chart (visible only when a chaos metric has non-zero data).</p>
+<p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>, <code class="inline code">graphql</code>), a per-fault-type chart of cumulative injections, and a per-fault-type chart of the active service-scoped chaos gauge (visible only when a chaos metric has non-zero data).</p>
 
 <p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape.</p>
 
@@ -510,14 +609,374 @@ rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 # Total latency faults injected
 mock_server_http_chaos_injected_total{fault_type="latency"}
 
-# Alert while any service-scoped chaos is still live
-mock_server_active_service_chaos &gt; 0</code></pre>
+# Alert while any service-scoped chaos is still live (across all fault types)
+sum(mock_server_active_service_chaos) &gt; 0
+
+# Active service-scoped chaos injecting connection drops
+mock_server_active_service_chaos{fault_type="drop"}</code></pre>
 
 <a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
 
 <h2>Dashboard UI</h2>
 
 <p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for all seven chaos profile properties. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
+
+<a id="grpc_fault_injection" class="anchor" href="#grpc_fault_injection">&nbsp;</a>
+
+<h2>gRPC Fault Injection</h2>
+
+<p>MockServer can inject gRPC-level faults — error status codes, latency, and rate-limit exhaustion — on matched gRPC RPC calls. This is <strong>distinct from the gRPC health-check chaos</strong> (which controls the <code class="inline code">grpc.health.v1.Health/Check</code> serving-status response): gRPC fault injection fires <em>before</em> normal gRPC request conversion in <code class="inline code">GrpcToHttpRequestHandler</code> and applies to any RPC method on any loaded service, not just health probes.</p>
+
+<p>Register one chaos profile per gRPC service name. The profile is applied to every matched call to that service. An empty string (<code class="inline code">""</code>) registers a default profile that applies to all services without a more-specific override.</p>
+
+<p><strong>Why use this:</strong> gRPC clients have their own retry, deadline, and circuit-breaker logic that is separate from HTTP clients. Injecting <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, or <code class="inline code">RESOURCE_EXHAUSTED</code> statuses at the RPC layer tests that gRPC-native error handling, backoff, and deadline propagation work correctly — without having to modify the real service.</p>
+
+<p>The gRPC chaos profile covers: status injection, latency, request quota, count windows, trailer manipulation (<code class="inline code">omitGrpcStatus</code>, <code class="inline code">corruptGrpcStatus</code>, <code class="inline code">customTrailers</code>), and client-streaming abort (<code class="inline code">abortAfterMessages</code>). Drop or truncation of individual stream messages mid-stream is planned for a future release.</p>
+
+<h3>gRPC Chaos Profile Fields</h3>
+
+<p>A gRPC chaos profile is a JSON object (or <code class="inline code">GrpcChaosProfile</code> in the Java model) with the following fields. All fields are optional — omit any you don't need.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Valid values / range</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">errorStatusCode</code></td>
+            <td>string</td>
+            <td>The gRPC status code name to return when a fault fires. When set, the handler writes an HTTP 200 response with the corresponding <code class="inline code">grpc-status</code> trailer. Must be one of the 17 canonical gRPC status code names.</td>
+            <td>See table below</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorMessage</code></td>
+            <td>string</td>
+            <td>The <code class="inline code">grpc-message</code> trailer value sent alongside the error status code. Optional — omit to send no message.</td>
+            <td>any string</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorProbability</code></td>
+            <td>number</td>
+            <td>Probability (0.0 to 1.0) that a matched call receives the error instead of normal processing. <code class="inline code">0.0</code> or omitted means no error injection; <code class="inline code">1.0</code> means every call gets the error.</td>
+            <td>0.0 &ndash; 1.0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">seed</code></td>
+            <td>integer</td>
+            <td>Fixed seed for the random number generator used by <code class="inline code">errorProbability</code>. When set, the same seed + probability always produces the same inject/skip outcome, making tests reproducible.</td>
+            <td>any long integer</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">latencyMs</code></td>
+            <td>integer</td>
+            <td>Artificial delay in milliseconds added before the response (whether an error is injected or not).</td>
+            <td>&ge; 0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">succeedFirst</code></td>
+            <td>integer</td>
+            <td>The first N calls to this service bypass fault injection (succeed normally). Combine with <code class="inline code">failRequestCount</code> for a finite fault window.</td>
+            <td>&ge; 0 (default: omitted = 0)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">failRequestCount</code></td>
+            <td>integer</td>
+            <td>After the <code class="inline code">succeedFirst</code> window, the next M calls receive the fault; after that the service recovers. Omit for unlimited faults after the succeed window.</td>
+            <td>&ge; 1 (default: omitted = unlimited)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaName</code></td>
+            <td>string</td>
+            <td>Stateful rate-limit counter key. Required (with <code class="inline code">quotaLimit</code> and <code class="inline code">quotaWindowMillis</code>) to enable quota enforcement. Calls over the limit return <code class="inline code">RESOURCE_EXHAUSTED</code>.</td>
+            <td>(default: omitted = no quota)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaLimit</code></td>
+            <td>integer</td>
+            <td>Maximum number of calls allowed within the window before quota is exceeded.</td>
+            <td>&ge; 1 (default: omitted = no quota)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaWindowMillis</code></td>
+            <td>integer</td>
+            <td>Fixed-window length in milliseconds. The first call starts the window; it resets after this duration elapses. Calls beyond <code class="inline code">quotaLimit</code> within the window return <code class="inline code">RESOURCE_EXHAUSTED</code>.</td>
+            <td>&ge; 1 (default: omitted = no quota)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">omitGrpcStatus</code></td>
+            <td>boolean</td>
+            <td>When <code class="inline code">true</code>, the fault response is sent with <strong>no</strong> <code class="inline code">grpc-status</code> trailer at all. This simulates an incomplete or broken RPC stream — the server starts a response but never terminates it correctly, causing gRPC clients to raise a stream-reset or missing-trailer error. Takes precedence over <code class="inline code">corruptGrpcStatus</code>.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">corruptGrpcStatus</code></td>
+            <td>boolean</td>
+            <td>When <code class="inline code">true</code> (and <code class="inline code">omitGrpcStatus</code> is false), the fault response sets <code class="inline code">grpc-status</code> to the non-numeric value <code class="inline code">malformed</code>, which violates the gRPC spec (grpc-status must be a decimal integer). Tests how clients cope with an unparseable status trailer &mdash; a genuine protocol violation rather than merely an unrecognised numeric code.</td>
+            <td>true / false (default: omitted = false)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">customTrailers</code></td>
+            <td>object</td>
+            <td>A JSON object of arbitrary trailer key/value pairs injected on the fault response. These are written in addition to (or instead of, when <code class="inline code">omitGrpcStatus</code> is set) the normal status trailers. Useful for injecting vendor-specific error metadata that your client reads (e.g. <code class="inline code">x-ratelimit-remaining: 0</code>).</td>
+            <td>any string-to-string map (default: omitted = no custom trailers)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">abortAfterMessages</code></td>
+            <td>integer</td>
+            <td>For client-streaming RPCs: when the number of decoded gRPC messages in the request body reaches this threshold, MockServer immediately responds with <code class="inline code">ABORTED</code> (or the profile's <code class="inline code">errorMessage</code> if set). The message count is determined by decoding the 5-byte gRPC length-prefixed frames in the request body. Use this to test how a streaming client handles mid-stream server abort — for example, a server that rejects an oversized batch.</td>
+            <td>&ge; 1 (default: omitted = no abort)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Supported gRPC Status Codes</h3>
+
+<p>The <code class="inline code">errorStatusCode</code> field accepts any of the 17 canonical gRPC status code names. The most commonly injected for resilience testing are:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Name</th>
+            <th>Typical test scenario</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>4</td><td><code class="inline code">DEADLINE_EXCEEDED</code></td><td>Client deadline propagation, timeout handling</td></tr>
+        <tr><td>8</td><td><code class="inline code">RESOURCE_EXHAUSTED</code></td><td>Rate-limit / quota exhaustion handling (also the quota fault code)</td></tr>
+        <tr><td>13</td><td><code class="inline code">INTERNAL</code></td><td>Unexpected server-side failure handling</td></tr>
+        <tr><td>14</td><td><code class="inline code">UNAVAILABLE</code></td><td>Service outage, retry and circuit-breaker testing</td></tr>
+        <tr><td>16</td><td><code class="inline code">UNAUTHENTICATED</code></td><td>Auth-token expiry and re-authentication flows</td></tr>
+        <tr><td>10</td><td><code class="inline code">ABORTED</code></td><td>Optimistic concurrency, transaction conflict handling</td></tr>
+    </tbody>
+</table>
+
+<p>All 17 canonical codes are accepted: <code class="inline code">OK</code>, <code class="inline code">CANCELLED</code>, <code class="inline code">UNKNOWN</code>, <code class="inline code">INVALID_ARGUMENT</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, <code class="inline code">NOT_FOUND</code>, <code class="inline code">ALREADY_EXISTS</code>, <code class="inline code">PERMISSION_DENIED</code>, <code class="inline code">RESOURCE_EXHAUSTED</code>, <code class="inline code">FAILED_PRECONDITION</code>, <code class="inline code">ABORTED</code>, <code class="inline code">OUT_OF_RANGE</code>, <code class="inline code">UNIMPLEMENTED</code>, <code class="inline code">INTERNAL</code>, <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DATA_LOSS</code>, <code class="inline code">UNAUTHENTICATED</code>.</p>
+
+<h3>gRPC Chaos REST API</h3>
+
+<pre class="code"><code class="code">// register a fault profile for a specific gRPC service (replaces any existing one)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorStatusCode": "UNAVAILABLE", "errorProbability": 0.3, "latencyMs": 200 } }
+
+// register with a TTL (auto-revert after 5 minutes)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorStatusCode": "UNAVAILABLE", "errorProbability": 1.0 }, "ttlMillis": 300000 }
+
+// register a default profile that applies to ALL gRPC services (empty string key)
+PUT /mockserver/grpcChaos
+{ "service": "", "chaos": { "errorStatusCode": "DEADLINE_EXCEEDED", "errorProbability": 0.2 } }
+
+// remove the profile for a service
+PUT /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "remove": true }
+
+// clear all gRPC chaos profiles
+PUT /mockserver/grpcChaos
+{ "clear": true }
+
+// read all active gRPC chaos profiles and TTL countdowns
+GET /mockserver/grpcChaos
+
+// merge-patch — update only the specified fields, preserve the rest and the TTL
+PATCH /mockserver/grpcChaos
+{ "service": "com.example.payments.PaymentService", "chaos": { "errorProbability": 0.9 } }
+
+// simulate a server that omits the grpc-status trailer (broken stream)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.orders.OrderService", "chaos": { "omitGrpcStatus": true } }
+
+// simulate a server that sends a non-numeric grpc-status (genuine protocol violation)
+PUT /mockserver/grpcChaos
+{ "service": "com.example.orders.OrderService", "chaos": { "corruptGrpcStatus": true } }
+
+// inject custom trailers alongside the error (e.g. rate-limit metadata)
+PUT /mockserver/grpcChaos
+{
+  "service": "com.example.orders.OrderService",
+  "chaos": {
+    "errorStatusCode": "RESOURCE_EXHAUSTED",
+    "errorProbability": 1.0,
+    "customTrailers": { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1748700000" }
+  }
+}
+
+// abort a client-streaming RPC after 5 messages
+PUT /mockserver/grpcChaos
+{ "service": "com.example.upload.UploadService", "chaos": { "abortAfterMessages": 5 } }</code></pre>
+
+<p>The <code class="inline code">GET</code> response reports active profiles under a <code class="inline code">services</code> map (service name &rarr; profile) and, when any registrations carry a TTL, a <code class="inline code">ttlRemainingMillis</code> map alongside it.</p>
+
+<p>The <code class="inline code">PATCH</code> endpoint applies JSON Merge Patch semantics: only the fields you supply are updated; unspecified fields in the existing profile and the current TTL are left unchanged. If no profile exists yet for the service, the partial is registered as a new profile with no TTL.</p>
+
+<p>Like <a href="#service_scoped_chaos">service-scoped HTTP chaos</a> and <a href="#tcp_layer_chaos">TCP chaos</a>, registrations support an optional <code class="inline code">ttlMillis</code> for automatic expiry and are cleared on server reset.</p>
+
+<p><strong>Relationship to gRPC health-check chaos:</strong> the gRPC health-check feature (<code class="inline code">PUT /mockserver/grpc/health</code>) controls the <code class="inline code">grpc.health.v1.Health/Check</code> serving-status response — changing it makes a Kubernetes readiness probe fail. gRPC fault injection (this section, <code class="inline code">PUT /mockserver/grpcChaos</code>) injects status errors into any RPC method on your application services. The two mechanisms are independent.</p>
+
+<a id="tcp_layer_chaos" class="anchor" href="#tcp_layer_chaos">&nbsp;</a>
+
+<h2>TCP-Layer Chaos</h2>
+
+<p>In addition to HTTP-level chaos (which operates on decoded HTTP requests and responses), MockServer supports <strong>TCP-layer chaos</strong> that operates on raw bytes <em>before</em> HTTP decoding. This enables transport-layer fault injection that mirrors <a href="https://github.com/Shopify/toxiproxy">Toxiproxy's</a> named toxics.</p>
+
+<p>TCP-layer chaos is managed separately from HTTP chaos profiles. It is registered against a <strong>host</strong> and applied to all connections from that host at the raw byte level.</p>
+
+<h3>TCP Chaos Fault Types</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Fault type</th>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>latency</strong></td>
+            <td><code class="inline code">latencyMs</code></td>
+            <td>long</td>
+            <td>Delays all inbound data by the specified milliseconds before it reaches the HTTP decoder</td>
+        </tr>
+        <tr>
+            <td><strong>down</strong></td>
+            <td><code class="inline code">down</code></td>
+            <td>boolean</td>
+            <td>Silently drops all inbound data so the service appears completely down</td>
+        </tr>
+        <tr>
+            <td><strong>bandwidth</strong></td>
+            <td><code class="inline code">bandwidthBytesPerSec</code></td>
+            <td>long</td>
+            <td>Throttles inbound data to the specified bytes per second</td>
+        </tr>
+        <tr>
+            <td><strong>slow_close</strong></td>
+            <td><code class="inline code">slowClose</code></td>
+            <td>boolean</td>
+            <td>Delays the TCP FIN by 2 seconds on close, simulating a slow connection teardown</td>
+        </tr>
+        <tr>
+            <td><strong>timeout</strong></td>
+            <td><code class="inline code">timeout</code></td>
+            <td>boolean</td>
+            <td>Never sends FIN on close; the connection hangs indefinitely</td>
+        </tr>
+        <tr>
+            <td><strong>reset_peer</strong></td>
+            <td><code class="inline code">resetPeer</code></td>
+            <td>boolean</td>
+            <td>Sends a TCP RST and closes the connection immediately on first data</td>
+        </tr>
+        <tr>
+            <td><strong>slicer</strong></td>
+            <td><code class="inline code">slicerChunkSize</code></td>
+            <td>integer</td>
+            <td>Fragments inbound data into chunks of the specified size (bytes)</td>
+        </tr>
+        <tr>
+            <td><strong>limit_data</strong></td>
+            <td><code class="inline code">limitDataBytes</code></td>
+            <td>long</td>
+            <td>Closes the connection after the specified total bytes have been received</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>When multiple fault types are configured on the same profile, they are evaluated in priority order: <strong>down &gt; reset_peer &gt; limit_data &gt; slicer &gt; bandwidth &gt; latency</strong>.</p>
+
+<h3>TCP Chaos REST API</h3>
+
+<pre class="code"><code class="code">// register a TCP chaos profile for a host
+PUT /mockserver/tcpChaos
+{ "host": "upstream.svc", "chaos": { "latencyMs": 500, "slicerChunkSize": 64 } }
+
+// register with a TTL (auto-revert after 5 minutes)
+PUT /mockserver/tcpChaos
+{ "host": "upstream.svc", "chaos": { "down": true }, "ttlMillis": 300000 }
+
+// remove the profile for a host
+PUT /mockserver/tcpChaos
+{ "host": "upstream.svc", "remove": true }
+
+// clear all TCP chaos profiles
+PUT /mockserver/tcpChaos
+{ "clear": true }
+
+// read all active TCP chaos profiles
+GET /mockserver/tcpChaos
+
+// merge-patch an existing profile (only update specified fields)
+PATCH /mockserver/tcpChaos
+{ "host": "upstream.svc", "chaos": { "down": true } }</code></pre>
+
+<p>The API follows the same patterns as <a href="#service_scoped_chaos">service-scoped HTTP chaos</a>: host matching is case-insensitive and ignores port suffixes, registrations support optional TTL-based auto-expiry, and all registrations are cleared on server reset.</p>
+
+<p><strong>Difference from HTTP chaos:</strong> TCP chaos operates at the raw byte level before HTTP decoding. This means it can simulate faults that are impossible to reproduce with HTTP-level chaos, such as TCP RST, connection timeouts (never sending FIN), bandwidth throttling, and data fragmentation. HTTP chaos operates on decoded HTTP requests/responses and can inject application-level faults like error status codes, body corruption, and rate limiting.</p>
+
+<a id="replay_under_chaos" class="anchor" href="#replay_under_chaos">&nbsp;</a>
+
+<h2>Replay Under Chaos (foundational)</h2>
+
+<p>MockServer can retrieve recorded proxy traffic and replay it with an optional HTTP chaos overlay so you can compare how a service behaves under fault conditions against its known baseline. This is useful for a "record once, stress under chaos" workflow: record normal traffic through MockServer in proxy mode, then replay that traffic with errors or latency injected and inspect the per-request comparison report.</p>
+
+<p><strong>Note:</strong> replay is a foundational capability. The report tracking, rate limiting, and chaos overlay infrastructure are complete, but the underlying network sender is a placeholder pending lifecycle wiring — replayed requests currently complete immediately with an error result. The API contract and report shape are stable and described here so you can plan integrations.</p>
+
+<h3>Starting a replay</h3>
+
+<pre class="code"><code class="code">PUT /mockserver/replay
+{
+  "ratePerSecond": 10,
+  "chaosProfile": {
+    "errorStatus": 503,
+    "errorProbability": 0.3
+  }
+}</code></pre>
+
+<p>Fields:</p>
+<ul>
+    <li><code class="inline code">ratePerSecond</code> — maximum requests per second to send; <code class="inline code">0</code> means unlimited (all requests sent as fast as possible)</li>
+    <li><code class="inline code">chaosProfile</code> — optional <a href="#chaos_profile_fields">chaos profile</a> applied as a service-scoped overlay for all hosts seen in the recorded traffic; uses a 5-minute TTL that auto-clears after the replay window</li>
+</ul>
+
+<p>MockServer reads all previously-recorded <code class="inline code">FORWARDED_REQUEST</code> log entries as the traffic source. The request returns immediately with a <code class="inline code">201 Created</code> response containing a <code class="inline code">replayId</code> and the total count of requests to replay:</p>
+
+<pre class="code"><code class="code">{ "replayId": "a3f2...", "totalRequests": 42, "status": "RUNNING" }</code></pre>
+
+<h3>Polling the replay report</h3>
+
+<pre class="code"><code class="code">GET /mockserver/replay/{replayId}</code></pre>
+
+<p>Returns a <code class="inline code">ReplayReport</code> object:</p>
+
+<pre class="code"><code class="code">{
+  "replayId": "a3f2...",
+  "status": "RUNNING",          // RUNNING | COMPLETED | FAILED
+  "totalRequests": 42,
+  "completedRequests": 17,
+  "successCount": 14,
+  "failureCount": 3,
+  "results": [
+    {
+      "method": "GET",
+      "path": "/api/orders",
+      "baselineStatusCode": 200,
+      "replayStatusCode": 503,
+      "baselineLatencyMs": 45,
+      "replayLatencyMs": 38,
+      "latencyDeltaMs": -7,
+      "statusMatch": false
+    }
+  ]
+}</code></pre>
+
+<p>A result entry is added for each completed request. <code class="inline code">statusMatch</code> is <code class="inline code">true</code> when the replayed HTTP status code equals the baseline. <code class="inline code">latencyDeltaMs</code> is positive when the replay was slower than baseline, negative when faster. When the replay finishes, <code class="inline code">status</code> changes to <code class="inline code">COMPLETED</code> and the full <code class="inline code">results</code> array is available. An unknown <code class="inline code">replayId</code> returns 404.</p>
 
 <a id="coming_soon" class="anchor" href="#coming_soon">&nbsp;</a>
 
@@ -566,4 +1025,14 @@ mock_server_active_service_chaos &gt; 0</code></pre>
 <button id="button_faq_fail_then_recover" class="accordion">How do I make a mock fail the first few requests then recover?</button>
 <div class="panel">
     <p>Use the <code class="inline code">succeedFirst</code> and <code class="inline code">failRequestCount</code> fields on the chaos profile. Set <code class="inline code">succeedFirst</code> to <code class="inline code">0</code> (or omit it) and <code class="inline code">failRequestCount</code> to the number of requests that should fail. For example, <code class="inline code">failRequestCount: 2</code> with <code class="inline code">errorStatus: 503</code> and <code class="inline code">errorProbability: 1.0</code> makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies. See the <a href="#button_chaos_fail_then_recover">fail-then-recover example</a> and the <a href="#stateful_count_based_faults">Stateful / Count-Based Faults</a> section above.</p>
+</div>
+
+<button id="button_faq_graphql_partial_error" class="accordion">How do I simulate a GraphQL partial error (data present alongside errors)?</button>
+<div class="panel">
+    <p>Set <code class="inline code">graphqlErrors: true</code> and <code class="inline code">graphqlNullifyData: false</code> on your chaos profile. MockServer will try to parse the original response body as JSON and embed it as the <code class="inline code">data</code> value in the GraphQL error envelope, resulting in a response like <code class="inline code">{"data":{...},"errors":[{"message":"..."}]}</code>. If the original body is not valid JSON, <code class="inline code">data</code> falls back to <code class="inline code">null</code>. Use <code class="inline code">graphqlErrorMessage</code> and <code class="inline code">graphqlErrorCode</code> to customise the error entry. This works on both expectation-level chaos and service-scoped chaos (<code class="inline code">PUT /mockserver/serviceChaos</code>). See the <a href="#graphql_error_injection">GraphQL Error Injection</a> section above.</p>
+</div>
+
+<button id="button_faq_grpc_omit_status" class="accordion">How do I simulate a broken gRPC server that omits the status trailer?</button>
+<div class="panel">
+    <p>Set <code class="inline code">omitGrpcStatus: true</code> on a gRPC chaos profile. MockServer will send the HTTP 200 response with a <code class="inline code">content-type: application/grpc</code> header but deliberately omit the <code class="inline code">grpc-status</code> trailer. Most gRPC clients treat this as a protocol error or stream reset — which is exactly what you want to test to ensure the client does not silently accept an incomplete RPC as a success. Register the profile via <code class="inline code">PUT /mockserver/grpcChaos</code> with <code class="inline code">{"service": "...", "chaos": {"omitGrpcStatus": true}}</code>. See the <a href="#grpc_fault_injection">gRPC Fault Injection</a> section above.</p>
 </div>

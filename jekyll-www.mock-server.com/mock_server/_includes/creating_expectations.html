@@ -1,3 +1,5 @@
+<p>An expectation can also run extra webhooks or callbacks before or after its response — see <a href="before_and_after_actions.html">Before &amp; After Actions</a> for mirroring, fan-out, shadow, and gating patterns.</p>
+
 <button class="accordion"><strong>Java Code Example</strong></button>
 <div class="panel">
     <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript and the REST API below.</em></p>
@@ -71,7 +73,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 <p>A <strong>request matcher expectation</strong> may contain:</p>
 <ul>
     <li><strong><a href="#request_matchers">request matcher</a></strong> - used to match which requests this expectation should be applied to</li>
-    <li><strong><a href="#actions">action</a></strong> - what action to take, actions include <strong>response</strong>, <strong>forward</strong>, <strong>callback</strong> and <strong>error</strong></li>
+    <li><strong><a href="#actions">action</a></strong> - what action to take, actions include <strong>response</strong>, <strong>forward</strong>, <strong><a href="#forward_with_fallback_action">forward with fallback</a></strong>, <strong>callback</strong> and <strong>error</strong></li>
     <li><strong><a href="#button_match_request_by_path_exactly_twice">times</a></strong> <em>(optional)</em> - how many times the action should be taken</li>
     <li><strong><a href="#button_match_request_by_path_exactly_once_in_the_next_60_seconds">timeToLive</a></strong> <em>(optional)</em> - how long the expectation should stay active</li>
     <li><strong><a href="#button_match_request_by_priority">priority</a></strong> <em>(optional)</em> - matching is ordered by priority (highest first) then creation (earliest first)</li>
@@ -377,6 +379,125 @@ conversation()
 
 <p>Scenarios are independent of each other — different scenario names maintain separate state. All scenario states are reset when MockServer is <a href="/mock_server/clearing_and_resetting.html">reset</a>.</p>
 
+<a id="timed_scenario_flows" class="anchor" href="#timed_scenario_flows">&nbsp;</a>
+
+<h4>Timed and Triggered Scenario Flows</h4>
+
+<p>Beyond expectation-driven state transitions, MockServer supports <strong>timed auto-transitions</strong> and <strong>external triggers</strong> via REST endpoints. These let you model scenarios where state changes happen after a time delay (e.g. a background process completing) or are driven externally by a test harness.</p>
+
+<p><strong>Get current state:</strong></p>
+<pre class="prettyprint lang-bash code"><code class="code"># Returns {"scenarioName": "DeployFlow", "currentState": "Started"}
+curl -X GET http://localhost:1080/mockserver/scenario/DeployFlow</code></pre>
+
+<p><strong>Set state immediately:</strong></p>
+<pre class="prettyprint lang-bash code"><code class="code"># Set the scenario to "Deploying" state
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying"}'</code></pre>
+
+<p><strong>Set state with timed auto-transition:</strong> The scenario enters "Deploying" immediately, then automatically transitions to "Deployed" after 5 seconds (if still in "Deploying").</p>
+<pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying", "transitionAfterMs": 5000, "nextState": "Deployed"}'</code></pre>
+
+<p><strong>External trigger:</strong> Advance the scenario to a specific state from your test harness or CI pipeline.</p>
+<pre class="prettyprint lang-bash code"><code class="code"># Jump directly to "Failed" state
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"newState": "Failed"}'</code></pre>
+
+<p><strong>Example - Deployment Pipeline Flow:</strong> Combine expectation-based matching with timed transitions to model a deployment that takes time to complete.</p>
+<pre class="prettyprint lang-java code"><code class="code">// Step 1: Register expectations for each state
+// When Deploying, GET /status returns "in progress"
+{
+    "httpRequest": { "method": "GET", "path": "/status" },
+    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"deploying\"}" },
+    "scenarioName": "DeployFlow",
+    "scenarioState": "Deploying"
+}
+
+// When Deployed, GET /status returns "complete"
+{
+    "httpRequest": { "method": "GET", "path": "/status" },
+    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"complete\"}" },
+    "scenarioName": "DeployFlow",
+    "scenarioState": "Deployed"
+}
+
+// Step 2: Start the flow with a timed transition
+// PUT /mockserver/scenario/DeployFlow
+// Body: {"state": "Deploying", "transitionAfterMs": 3000, "nextState": "Deployed"}
+//
+// Now: GET /status returns "deploying"
+// After 3 seconds: GET /status returns "complete"</code></pre>
+
+<p>Timed transitions are guarded: the transition only fires if the scenario is still in the expected <span class="inline_code">currentState</span> when the timer expires. If the scenario has already moved to a different state (e.g. via an external trigger or expectation match), the timed transition becomes a no-op. Scheduling a new transition for the same scenario cancels any pending one.</p>
+
+<a id="cross_protocol_scenario_correlation" class="anchor" href="#cross_protocol_scenario_correlation">&nbsp;</a>
+
+<h4>Cross-Protocol Scenario Correlation</h4>
+
+<p>Scenario state transitions are not limited to HTTP request matches. A DNS query, WebSocket connection, gRPC request, or HTTP request can drive a scenario forward via a <strong>cross-protocol trigger</strong>. This lets you model multi-protocol test flows — for example: "when a WebSocket connects, advance scenario X so the next HTTP expectation for that state becomes active."</p>
+
+<p>Add a <span class="inline_code">crossProtocolScenarios</span> array to an expectation. Each entry specifies:</p>
+<ul>
+    <li><strong>trigger</strong> — the protocol event that fires the transition: <span class="inline_code">DNS_QUERY</span>, <span class="inline_code">WEBSOCKET_CONNECT</span>, <span class="inline_code">GRPC_REQUEST</span>, or <span class="inline_code">HTTP_REQUEST</span></li>
+    <li><strong>matchPattern</strong> — optional substring filter on the event identifier (DNS query name, gRPC service name, HTTP path, or WebSocket URL); if omitted, all events of that type match</li>
+    <li><strong>scenarioName</strong> — the name of the scenario to advance</li>
+    <li><strong>targetState</strong> — the state to transition the scenario to</li>
+</ul>
+
+<p><strong>Example — WebSocket connect advances an HTTP scenario:</strong> When any WebSocket connection is established, the "ConnectionFlow" scenario transitions to "WsConnected", activating the HTTP expectation that requires that state.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">// Expectation 1: dummy WebSocket endpoint that fires the cross-protocol transition
+{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/ws/events"
+    },
+    "httpResponse": {
+        "statusCode": 101
+    },
+    "crossProtocolScenarios": [
+        {
+            "trigger": "WEBSOCKET_CONNECT",
+            "scenarioName": "ConnectionFlow",
+            "targetState": "WsConnected"
+        }
+    ]
+}
+
+// Expectation 2: only active after the WebSocket has connected
+{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/api/status"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\": \"connected\"}"
+    },
+    "scenarioName": "ConnectionFlow",
+    "scenarioState": "WsConnected"
+}</code></pre>
+
+<p><strong>Example — DNS query activates a downstream-failure scenario:</strong> When a DNS query for <span class="inline_code">payments.svc</span> is observed, advance the scenario to "DnsObserved" so a chaos-injecting HTTP expectation becomes active.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": { "method": "GET", "path": "/_internal/dns-trigger" },
+    "httpResponse": { "statusCode": 200 },
+    "crossProtocolScenarios": [
+        {
+            "trigger": "DNS_QUERY",
+            "matchPattern": "payments.svc",
+            "scenarioName": "PaymentsFlow",
+            "targetState": "DnsObserved"
+        }
+    ]
+}</code></pre>
+
+<p>The <span class="inline_code">matchPattern</span> is a substring match against the event identifier. For <span class="inline_code">DNS_QUERY</span> it is the query name; for <span class="inline_code">GRPC_REQUEST</span> it is the gRPC service name; for <span class="inline_code">HTTP_REQUEST</span> it is the request path; for <span class="inline_code">WEBSOCKET_CONNECT</span> it is the WebSocket URL. When <span class="inline_code">matchPattern</span> is omitted, all events of that trigger type match. Multiple entries in <span class="inline_code">crossProtocolScenarios</span> are evaluated independently — a single event can advance several scenarios in one fire.</p>
+
 <a id="sequential_responses" class="anchor" href="#sequential_responses">&nbsp;</a>
 
 <h4>Sequential / Cycling Responses</h4>
@@ -627,6 +748,14 @@ new MockServerClient("localhost", 1080)
     <li><strong>query</strong> (required) - the GraphQL query string. Whitespace is normalized before comparison, so <span class="inline_code">{ user { name } }</span> matches <span class="inline_code">{\n  user {\n    name\n  }\n}</span></li>
     <li><strong>operationName</strong> (optional) - match the operation name exactly, or using a regex pattern (e.g. <span class="inline_code">Get.*</span>)</li>
     <li><strong>variablesSchema</strong> (optional) - a <a target="_blank" href="https://json-schema.org/" rel="noopener noreferrer">JSON Schema</a> to validate the <span class="inline_code">variables</span> field</li>
+    <li><strong>selectionSetMatchType</strong> (optional) - controls how the selection set (fields) is compared. Values:
+        <ul>
+            <li><span class="inline_code">NORMALISED_STRING</span> (default) - whitespace-normalised string comparison of the full query</li>
+            <li><span class="inline_code">AST_EXACT</span> - matches operation type, name, and the exact set of top-level field names (ignores whitespace, nested fields, and argument differences)</li>
+            <li><span class="inline_code">AST_SUBSET</span> - matches when the expected top-level fields are a subset of the actual request's fields (useful when the request may contain additional fields)</li>
+        </ul>
+    </li>
+    <li><strong>fields</strong> (optional) - explicit list of top-level field names to match in AST modes. If not specified, fields are extracted from the <span class="inline_code">query</span> string</li>
 </ul>
 
 <p><strong>Example - match a GraphQL query:</strong></p>
@@ -679,6 +808,112 @@ new MockServerClient("localhost", 1080)
         "body": "{\"data\": {\"createUser\": {\"id\": \"123\", \"name\": \"Alice\"}}}"
     }
 }</code></pre>
+
+<p><strong>Example - AST subset matching (match any query containing a "users" field):</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/graphql",
+        "body": {
+            "type": "GRAPHQL",
+            "query": "query { users { id } }",
+            "selectionSetMatchType": "AST_SUBSET",
+            "fields": ["users"]
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\": {\"users\": [{\"id\": \"1\", \"name\": \"Alice\"}]}}"
+    }
+}</code></pre>
+
+<p><strong>Example - AST exact matching (match a query with exactly these top-level fields):</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/graphql",
+        "body": {
+            "type": "GRAPHQL",
+            "query": "query GetDashboard { user profile settings }",
+            "selectionSetMatchType": "AST_EXACT"
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\": {\"user\": {}, \"profile\": {}, \"settings\": {}}}"
+    }
+}</code></pre>
+
+<a id="graphql_subscriptions" class="anchor" href="#graphql_subscriptions">&nbsp;</a>
+
+<h4>GraphQL Subscriptions over WebSocket</h4>
+
+<p>MockServer supports mocking <a target="_blank" href="https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md" rel="noopener noreferrer">GraphQL subscriptions over WebSocket</a> using the <span class="inline_code">graphql-transport-ws</span> protocol (also accepts the legacy <span class="inline_code">graphql-ws</span> subprotocol). This allows testing GraphQL subscription clients without a real GraphQL server.</p>
+
+<p>The protocol flow is:</p>
+<ol>
+    <li>Client opens a WebSocket connection with <span class="inline_code">Sec-WebSocket-Protocol: graphql-transport-ws</span></li>
+    <li>Client sends <span class="inline_code">connection_init</span>, MockServer replies <span class="inline_code">connection_ack</span></li>
+    <li>Client sends <span class="inline_code">subscribe</span> with a GraphQL query; MockServer AST-matches the query against the configured filter</li>
+    <li>On match: MockServer pushes a sequence of <span class="inline_code">next</span> messages (with optional delays), then <span class="inline_code">complete</span></li>
+    <li>On no match: MockServer sends an <span class="inline_code">error</span> message</li>
+    <li>Client can send <span class="inline_code">complete</span> to cancel a subscription</li>
+    <li><span class="inline_code">ping</span>/<span class="inline_code">pong</span> keepalive is supported</li>
+</ol>
+
+<p>To configure a GraphQL subscription mock, use an <span class="inline_code">httpWebSocketResponse</span> with:</p>
+<ul>
+    <li><strong>subprotocol</strong> - set to <span class="inline_code">graphql-transport-ws</span> (or <span class="inline_code">graphql-ws</span>)</li>
+    <li><strong>graphqlSubscriptionFilter</strong> - a GraphQL body filter specifying the subscription query to match. Supports the same <span class="inline_code">selectionSetMatchType</span> options as <a href="#graphql_body_matching">GraphQL body matching</a></li>
+    <li><strong>messages</strong> - the sequence of payloads to push as <span class="inline_code">next</span> events. Each message's <span class="inline_code">text</span> is wrapped in the protocol envelope <span class="inline_code">{"id":"...","type":"next","payload":{"data":...}}</span></li>
+</ul>
+
+<p><strong>Example - mock a GraphQL subscription that pushes two events:</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/graphql"
+    },
+    "httpWebSocketResponse": {
+        "subprotocol": "graphql-transport-ws",
+        "graphqlSubscriptionFilter": {
+            "query": "subscription { userUpdated { id name } }",
+            "selectionSetMatchType": "AST_SUBSET"
+        },
+        "messages": [
+            {"text": "{\"id\": \"1\", \"name\": \"Alice\"}"},
+            {"text": "{\"id\": \"2\", \"name\": \"Bob\"}", "delay": {"timeUnit": "MILLISECONDS", "value": 500}}
+        ]
+    }
+}</code></pre>
+
+<p><strong>Example - Java API:</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">mockServerClient.when(
+    request()
+        .withMethod("GET")
+        .withPath("/graphql")
+).respondWithWebSocket(
+    webSocketResponse()
+        .withSubprotocol("graphql-transport-ws")
+        .withGraphqlSubscriptionFilter(
+            GraphQLBody.graphQL("subscription { userUpdated { id name } }")
+                .withSelectionSetMatchType(SelectionSetMatchType.AST_SUBSET)
+        )
+        .withMessage(webSocketMessage("{\"id\": \"1\", \"name\": \"Alice\"}"))
+        .withMessage(webSocketMessage("{\"id\": \"2\", \"name\": \"Bob\"}"))
+);</code></pre>
+
+<p>When a client connects and sends:</p>
+<pre class="prettyprint lang-java code"><code class="code">{"type": "connection_init"}
+// MockServer replies: {"type": "connection_ack"}
+
+{"id": "1", "type": "subscribe", "payload": {"query": "subscription { userUpdated { id name } }"}}
+// MockServer replies:
+// {"id": "1", "type": "next", "payload": {"data": {"id": "1", "name": "Alice"}}}
+// {"id": "1", "type": "next", "payload": {"data": {"id": "2", "name": "Bob"}}}
+// {"id": "1", "type": "complete"}</code></pre>
+
+<p><strong>Note:</strong> The legacy <span class="inline_code">graphql-ws</span> subprotocol (used by the older <a target="_blank" href="https://github.com/apollographql/subscriptions-transport-ws" rel="noopener noreferrer">subscriptions-transport-ws</a> library) is also accepted. Both use the same message format in MockServer's implementation.</p>
 
 <button id="button_request" class="accordion title"><strong>Request Properties Matcher Code Examples</strong></button>
 <div class="panel title">
@@ -831,6 +1066,72 @@ new MockServerClient("localhost", 1080)
     {% include_subpage _includes/forward_action_code_examples.html %}
 </div>
 
+<a id="forward_with_fallback_action" class="anchor" href="#forward_with_fallback_action">&nbsp;</a>
+
+<h3>Forward with Fallback</h3>
+
+<p>A <strong>forward with fallback action</strong> (<span class="inline_code">httpForwardWithFallback</span>) forwards the request to an upstream service, but returns a pre-configured fallback response when the upstream returns an error status code or the connection fails. This is unique to MockServer's hybrid mock+proxy architecture.</p>
+
+<p>Use cases:</p>
+<ul>
+    <li><strong>Resilience testing</strong> - test your application's behaviour when a downstream service is flaky</li>
+    <li><strong>Development against partially-available services</strong> - work offline with cached/mock responses while still connecting to real services when they are available</li>
+    <li><strong>Circuit breaker simulation</strong> - provide a fallback response on specific status codes like 429 (rate limited) or 503 (service unavailable)</li>
+</ul>
+
+<h4>Configuration</h4>
+<ul>
+    <li><strong>httpForward</strong> - the upstream target (host, port, scheme)</li>
+    <li><strong>fallbackResponse</strong> - the mock response to return when fallback is triggered</li>
+    <li><strong>fallbackOnStatusCodes</strong> - list of HTTP status codes that trigger the fallback (defaults to 500-599 when not specified)</li>
+    <li><strong>fallbackOnTimeout</strong> - whether to return the fallback on connection errors or timeouts (defaults to true)</li>
+</ul>
+
+<h4>Java Client Example</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/api/downstream")
+    )
+    .forwardWithFallback(
+        forwardWithFallback()
+            .withForward(
+                forward()
+                    .withHost("downstream-service.example.com")
+                    .withPort(443)
+                    .withScheme(HttpForward.Scheme.HTTPS)
+            )
+            .withFallback(
+                response()
+                    .withStatusCode(200)
+                    .withBody("{\"status\": \"cached\", \"data\": []}")
+            )
+            .withFallbackOnStatusCodes(500, 502, 503, 504)
+            .withFallbackOnTimeout(true)
+    );</code></pre>
+
+<h4>JSON Example</h4>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "httpRequest": {
+        "path": "/api/downstream"
+    },
+    "httpForwardWithFallback": {
+        "httpForward": {
+            "host": "downstream-service.example.com",
+            "port": 443,
+            "scheme": "HTTPS"
+        },
+        "fallbackResponse": {
+            "statusCode": 200,
+            "body": "{\"status\": \"cached\", \"data\": []}"
+        },
+        "fallbackOnStatusCodes": [500, 502, 503, 504],
+        "fallbackOnTimeout": true
+    }
+}</code></pre>
+
 <a id="error_action" class="anchor" href="#error_action">&nbsp;</a>
 
 <p>An <strong>error action</strong> can return an invalid response as a <a href="#button_random_bytes_error">sequence of bytes</a> or <a href="#button_drop_connection_error">drop the connection</a> (with an optional <a href="#button_error_with_delay">delay</a>)</p>
@@ -899,7 +1200,7 @@ llmMock("/v1/messages")
 
 <h4>Streaming with Realistic Timing</h4>
 
-<p>When <span class="inline_code">streaming</span> is enabled, MockServer expands the completion into provider-correct SSE events (e.g. <span class="inline_code">message_start</span> through <span class="inline_code">message_stop</span> for Anthropic, <span class="inline_code">chat.completion.chunk</span> deltas for OpenAI) with configurable timing physics.</p>
+<p>When <span class="inline_code">streaming</span> is enabled, MockServer expands the completion into provider-correct streaming events with configurable timing physics. Most providers use SSE (Server-Sent Events with <span class="inline_code">text/event-stream</span>) &mdash; for example, <span class="inline_code">message_start</span> through <span class="inline_code">message_stop</span> for Anthropic, and <span class="inline_code">chat.completion.chunk</span> deltas for OpenAI. Two providers use alternative wire formats: <strong>Ollama</strong> uses native <strong>NDJSON</strong> (newline-delimited JSON with <span class="inline_code">application/x-ndjson</span>), and <strong>Bedrock</strong> uses the AWS <strong>event-stream</strong> binary framing (<span class="inline_code">application/vnd.amazon.eventstream</span>) where each streaming chunk is a binary message containing a base64-wrapped JSON payload &mdash; matching the <span class="inline_code">InvokeModelWithResponseStream</span> wire format. MockServer emits the correct wire format automatically based on the provider.</p>
 
 <pre class="prettyprint lang-java code"><code class="code">import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.mockserver.client.Llm.jitter;
@@ -982,6 +1283,65 @@ llmMock("/v1/messages")
 }</code></pre>
 
 <p>For multi-turn LLM conversations with stateful scenario progression, see the <a href="#llm_conversation_example">LLM Conversation</a> example in the <a href="#stateful_scenarios">Stateful Scenarios</a> section.</p>
+
+<a id="websocket_response_action" class="anchor" href="#websocket_response_action">&nbsp;</a>
+
+<h3>WebSocket Response</h3>
+
+<p>A <strong>WebSocket response action</strong> (<span class="inline_code">httpWebSocketResponse</span>) accepts an HTTP Upgrade request and turns the connection into a WebSocket session. Two modes are available:</p>
+
+<ul>
+    <li><strong>Server-push</strong> — a fixed sequence of messages sent to the client immediately after the handshake, defined in the <span class="inline_code">messages</span> array.</li>
+    <li><strong>Bidirectional</strong> — incoming WebSocket frames are matched against a list of <span class="inline_code">matchers</span>; the first matching entry triggers its own response sequence. Matchers are evaluated in order; first match wins.</li>
+</ul>
+
+<p>Both modes can be combined in a single expectation: MockServer sends any <span class="inline_code">messages</span> immediately after the upgrade, then waits for incoming frames and applies <span class="inline_code">matchers</span> for each one received.</p>
+
+<h4>Bidirectional Frame Matching</h4>
+
+<p>Each entry in the <span class="inline_code">matchers</span> array contains:</p>
+
+<ul>
+    <li><strong>frameType</strong> — the WebSocket frame type to match: <span class="inline_code">TEXT</span>, <span class="inline_code">BINARY</span>, <span class="inline_code">PING</span>, <span class="inline_code">PONG</span>, or <span class="inline_code">ANY</span> (matches any type).</li>
+    <li><strong>textMatcher</strong> — optional substring or exact string the text frame payload must contain. Omit to match all frames of the given <span class="inline_code">frameType</span>.</li>
+    <li><strong>responses</strong> — the sequence of messages to send back when this matcher fires. Each entry has a <span class="inline_code">text</span> field (and an optional <span class="inline_code">delay</span>).</li>
+</ul>
+
+<h4>JSON Definition Format</h4>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/ws/chat"
+    },
+    "httpWebSocketResponse": {
+        "messages": [
+            {"text": "{\"type\": \"connected\"}"}
+        ],
+        "matchers": [
+            {
+                "frameType": "TEXT",
+                "textMatcher": "ping",
+                "responses": [
+                    {"text": "{\"type\": \"pong\"}"}
+                ]
+            },
+            {
+                "frameType": "TEXT",
+                "textMatcher": "subscribe",
+                "responses": [
+                    {"text": "{\"type\": \"ack\"}"},
+                    {"text": "{\"type\": \"data\", \"value\": 42}"}
+                ]
+            }
+        ],
+        "closeConnection": false
+    }
+}</code></pre>
+
+<p>In this example, MockServer sends <span class="inline_code">{"type": "connected"}</span> immediately after the WebSocket upgrade. If the client then sends a frame containing <span class="inline_code">ping</span>, MockServer replies with <span class="inline_code">{"type": "pong"}</span>. A frame containing <span class="inline_code">subscribe</span> triggers a two-message reply sequence. Frames that match no entry are silently ignored.</p>
+
+<p>Bidirectional WebSocket expectations are also autherable in the dashboard Composer — select <strong>WebSocket response</strong> as the action type and use the <strong>Bidirectional frame matchers</strong> panel to add entries.</p>
 
 <a id="crud_simulation" class="anchor" href="#crud_simulation">&nbsp;</a>
 

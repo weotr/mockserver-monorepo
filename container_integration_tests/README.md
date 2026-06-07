@@ -51,6 +51,6 @@ Each `docker_compose_*` test directory contains only:
 - `integration_test.sh` — the test assertions
 - `docker-compose.override.yml` — a small overlay that adds the `client:` sidecar (a `curl`+`nghttp` container the test execs into) and swaps the public `mockserver/mockserver:latest` image for the locally-built `mockserver/mockserver:integration_testing` image
 
-The actual MockServer configuration lives **once** in `mockserver/mockserver-examples/docker_compose_examples/<test-case>/docker-compose.yml`. The test harness merges the two compose files with `docker-compose -f <base> -f <overlay>`. This guarantees the published examples and the CI tests never drift apart — any change to a configuration is visible to both users and CI on the same line.
+The actual MockServer configuration lives **once** in `examples/docker-compose/<test-case>/docker-compose.yml`. The test harness merges the two compose files with `docker-compose -f <base> -f <overlay>`. This guarantees the published examples and the CI tests never drift apart — any change to a configuration is visible to both users and CI on the same line.
 
 Overlays that need to reference paths inside their own test directory (e.g. for read-write volumes the test asserts on, or test-generated certificates) use the `${OVERRIDE_DIR}` env var, which is exported by `docker-compose.sh::start-up`. Relative paths in any compose file are otherwise resolved against the project directory (the first compose file's directory, i.e. the example dir).

@@ -210,11 +210,12 @@ async function callMcpToolOnce(
 }
 
 /**
- * Build the MockServer base URL from connection parameters.
+ * Build the MockServer base URL from connection parameters, including the optional base/context
+ * path so REST calls reach the server when the dashboard is served under a reverse-proxy path.
  */
-export function buildBaseUrl(params: { host: string; port: string; secure: boolean }): string {
+export function buildBaseUrl(params: { host: string; port: string; secure: boolean; basePath?: string }): string {
   const protocol = params.secure ? 'https' : 'http';
-  return `${protocol}://${params.host}:${params.port}`;
+  return `${protocol}://${params.host}:${params.port}${params.basePath ?? ''}`;
 }
 
 /**

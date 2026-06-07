@@ -1,12 +1,33 @@
 package org.mockserver.matchers;
 
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.logging.MockServerLogger;
 
 import static junit.framework.TestCase.*;
 import static org.mockserver.matchers.NotMatcher.notMatcher;
 
 public class JsonRpcMatcherTest {
+
+    @Test
+    public void shouldReturnFalseOnReDoSMethodPatternRatherThanHanging() {
+        long previousTimeout = ConfigurationProperties.regexMatchingTimeoutMillis();
+        try {
+            ConfigurationProperties.regexMatchingTimeoutMillis(200L);
+            String evilMethod = "(a+)+$";
+            String evilInput = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!";
+            String requestBody = "{\"jsonrpc\": \"2.0\", \"method\": \"" + evilInput + "\", \"id\": 1}";
+
+            long startMillis = System.currentTimeMillis();
+            boolean matched = new JsonRpcMatcher(new MockServerLogger(), evilMethod, null).matches(null, requestBody);
+            long elapsedMillis = System.currentTimeMillis() - startMillis;
+
+            assertFalse("ReDoS method pattern must not match the request", matched);
+            assertTrue("regex evaluation should be bounded by the timeout but took " + elapsedMillis + "ms", elapsedMillis < 2_000L);
+        } finally {
+            ConfigurationProperties.regexMatchingTimeoutMillis(previousTimeout);
+        }
+    }
 
     @Test
     public void shouldMatchSimpleJsonRpcRequest() {

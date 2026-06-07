@@ -1,0 +1,36 @@
+<!--
+  JGroups stack for in-JVM embedded testing (Phase 2c).
+
+  Uses SHARED_LOOPBACK transport with SHARED_LOOPBACK_PING discovery —
+  these are JGroups protocols designed specifically for running multiple
+  cluster nodes inside a SINGLE JVM without any network I/O. Discovery
+  is instant (shared in-process data structure), and messages are passed
+  by reference through the JVM heap.
+
+  This stack is the default when clusterTransportConfig is not set. For
+  multi-host production use, set clusterTransportConfig to a JGroups XML
+  with a real transport (TCP/UDP) and a suitable discovery protocol
+  (TCPPING, DNS_PING, S3_PING, etc.).
+-->
+<config xmlns="urn:org:jgroups"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups.xsd">
+
+    <SHARED_LOOPBACK thread_pool.min_threads="0"
+                     thread_pool.max_threads="20"
+                     thread_pool.keep_alive_time="30000" />
+
+    <SHARED_LOOPBACK_PING />
+
+    <MERGE3 max_interval="30000" min_interval="10000" />
+    <FD_ALL3 timeout="40000" interval="5000" />
+    <VERIFY_SUSPECT2 timeout="1500" />
+
+    <pbcast.NAKACK2 use_mcast_xmit="false" />
+    <UNICAST3 />
+    <pbcast.STABLE desired_avg_gossip="50000" max_bytes="4M" />
+    <pbcast.GMS print_local_addr="false" join_timeout="2000" />
+    <UFC max_credits="2M" min_threshold="0.4" />
+    <MFC max_credits="2M" min_threshold="0.4" />
+    <FRAG2 frag_size="60K" />
+</config>

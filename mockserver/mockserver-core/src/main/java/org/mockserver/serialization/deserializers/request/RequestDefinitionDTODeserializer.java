@@ -41,6 +41,7 @@ public class RequestDefinitionDTODeserializer extends StdDeserializer<RequestDef
             Parameters pathParameters = null;
             Parameters queryStringParameters = null;
             BodyDTO body = null;
+            byte[] originalBody = null;
             Cookies cookies = null;
             Headers headers = null;
             Boolean keepAlive = null;
@@ -90,6 +91,11 @@ public class RequestDefinitionDTODeserializer extends StdDeserializer<RequestDef
                         case "body": {
                             jsonParser.nextToken();
                             body = ctxt.readValue(jsonParser, BodyDTO.class);
+                            break;
+                        }
+                        case "originalBody": {
+                            jsonParser.nextToken();
+                            originalBody = ctxt.readValue(jsonParser, byte[].class);
                             break;
                         }
                         case "cookies": {
@@ -240,6 +246,7 @@ public class RequestDefinitionDTODeserializer extends StdDeserializer<RequestDef
                     .setPathParameters(pathParameters)
                     .setQueryStringParameters(queryStringParameters)
                     .setBody(body)
+                    .setOriginalBody(originalBody)
                     .setCookies(cookies)
                     .setHeaders(headers)
                     .setKeepAlive(keepAlive)

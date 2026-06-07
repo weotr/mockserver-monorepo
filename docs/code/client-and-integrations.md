@@ -322,6 +322,38 @@ Example Maven configuration:
 
 When a glob pattern is detected (by checking for glob characters in the path), the plugin expands it and concatenates the contents of all matching files into a single JSON array, which is then passed to `initializationJsonPath`. Non-glob paths are passed through unchanged.
 
+## Testcontainers
+
+The `mockserver-testcontainers` module (`org.mock-server:mockserver-testcontainers`) is the **canonical, MockServer-maintained** Testcontainers integration. It supersedes the thin upstream `org.testcontainers:mockserver` module (which exposes only a single TCP port, pins an ancient default image, and offers no configuration helpers).
+
+`MockServerContainer` extends Testcontainers' `GenericContainer` and adds:
+
+| Capability | Method | Mechanism |
+|------------|--------|-----------|
+| Version-lockstep image | (default constructor) | Image tag derived from `MockServerClient`'s `Implementation-Version` (`mockserver/mockserver:mockserver-<version>`), falling back to `:latest` when run from unpackaged classes |
+| Server port | `withServerPort(int)` | Sets `SERVER_PORT` and *replaces* the exposed port (not append) so `Wait.forListeningPort()` never blocks on a port MockServer is not bound to |
+| Direct client wiring | `getClient()` | `new MockServerClient(getHost(), getServerPort())` |
+| Endpoints | `getEndpoint()` / `getSecureEndpoint()` | HTTP and HTTPS are served on the same unified port |
+| DNS | `withDnsPort(int)` | `MOCKSERVER_DNS_ENABLED` + `MOCKSERVER_DNS_PORT`, UDP port exposed |
+| Transparent proxy | `withTransparentProxy()` | `MOCKSERVER_TRANSPARENT_PROXY_ENABLED` + `NET_ADMIN` capability (iptables/redirect rules remain the operator's responsibility) |
+| HTTP/3 (experimental) | `withHttp3(int)` | `MOCKSERVER_HTTP3_PORT`, UDP port exposed |
+| Initialization JSON | `withInitializationJson(String)` | Copies an initialization JSON into the container and sets `MOCKSERVER_INITIALIZATION_JSON_PATH` (startup loading, distinct from `persistExpectations`) |
+| Broker networking | `withNetwork(Network)` / `withNetworkAliases(String)` (inherited from `GenericContainer`) | For AsyncAPI broker connectivity / inter-container comms |
+| Arbitrary properties | `withProperty(k,v)` / `withProperties(Map)` | Passed through as MockServer env vars |
+| Log level | `withLogLevel(String)` | `MOCKSERVER_LOG_LEVEL` |
+
+The builder helpers configure env vars, exposed ports, and Linux capabilities **before** the container starts, so they are introspectable in unit tests without a running Docker daemon (`MockServerContainerConfigTest`). The Docker-dependent `MockServerContainerIT` is gated on `DockerClientFactory.instance().isDockerAvailable()` and runs in CI.
+
+Typical usage:
+```java
+try (MockServerContainer mockServer = new MockServerContainer()) {
+    mockServer.start();
+    MockServerClient client = mockServer.getClient();
+    client.when(request().withPath("/hello")).respond(response().withBody("world"));
+    // ... point the system under test at mockServer.getEndpoint() ...
+}
+```
+
 ## WebSocket Callback System
 
 For object/closure callbacks, a WebSocket connection between the client JVM and MockServer enables the callback to execute on the client side:

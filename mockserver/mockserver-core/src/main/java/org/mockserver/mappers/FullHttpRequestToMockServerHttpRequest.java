@@ -1,5 +1,6 @@
 package org.mockserver.mappers;
 
+import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.cookie.Cookie;
@@ -18,6 +19,7 @@ import org.slf4j.event.Level;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.cert.Certificate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
@@ -48,6 +50,10 @@ public class FullHttpRequestToMockServerHttpRequest {
     }
 
     public HttpRequest mapFullHttpRequestToMockServerRequest(FullHttpRequest fullHttpRequest, List<Header> preservedHeaders, SocketAddress localAddress, SocketAddress remoteAddress, Protocol protocol) {
+        return mapFullHttpRequestToMockServerRequest(fullHttpRequest, preservedHeaders, null, localAddress, remoteAddress, protocol);
+    }
+
+    public HttpRequest mapFullHttpRequestToMockServerRequest(FullHttpRequest fullHttpRequest, List<Header> preservedHeaders, byte[] originalRawBody, SocketAddress localAddress, SocketAddress remoteAddress, Protocol protocol) {
         HttpRequest httpRequest = new HttpRequest();
         try {
             if (fullHttpRequest != null) {
@@ -60,7 +66,7 @@ public class FullHttpRequestToMockServerHttpRequest {
                     );
                 }
                 populateHeadersAndMetadata(httpRequest, fullHttpRequest, preservedHeaders, localAddress, remoteAddress, protocol);
-                setBody(httpRequest, fullHttpRequest);
+                setBody(httpRequest, fullHttpRequest, originalRawBody);
             }
         } catch (Throwable throwable) {
             mockServerLogger.logEvent(
@@ -142,7 +148,12 @@ public class FullHttpRequestToMockServerHttpRequest {
         }
         if (preservedHeaders != null && !preservedHeaders.isEmpty()) {
             for (Header preservedHeader : preservedHeaders) {
-                httpRequest.withHeader(preservedHeader);
+                // only re-add a preserved header if it was actually removed downstream (i.e. it is no
+                // longer present in the live request headers); otherwise it would be duplicated — e.g.
+                // when request decompression is disabled the Content-Encoding header is never stripped
+                if (!httpHeaders.contains(preservedHeader.getName().getValue())) {
+                    httpRequest.withHeader(preservedHeader);
+                }
             }
         }
         if (Protocol.HTTP_2.equals(httpRequest.getProtocol())) {
@@ -178,7 +189,20 @@ public class FullHttpRequestToMockServerHttpRequest {
         }
     }
 
-    private void setBody(HttpRequest httpRequest, FullHttpRequest fullHttpRequest) {
-        httpRequest.withBody(bodyDecoderEncoder.byteBufToBody(fullHttpRequest.content(), fullHttpRequest.headers().get(CONTENT_TYPE)));
+    private void setBody(HttpRequest httpRequest, FullHttpRequest fullHttpRequest, byte[] originalRawBody) {
+        ByteBuf content = fullHttpRequest.content();
+        byte[] decompressedBytes = null;
+        if (content != null && content.readableBytes() > 0) {
+            decompressedBytes = new byte[content.readableBytes()];
+            // non-destructive read so byteBufToBody can still consume the content below
+            content.getBytes(content.readerIndex(), decompressedBytes);
+        }
+        httpRequest.withBody(bodyDecoderEncoder.byteBufToBody(content, fullHttpRequest.headers().get(CONTENT_TYPE)));
+        // retain the original on-the-wire bytes only when the body was actually compressed (i.e. the
+        // captured bytes differ from the decompressed body), so getBodyAsOriginalRawBytes() returns what
+        // the client sent and a BinaryBody expectation can match the compressed payload
+        if (originalRawBody != null && originalRawBody.length > 0 && !Arrays.equals(originalRawBody, decompressedBytes)) {
+            httpRequest.withOriginalBody(originalRawBody);
+        }
     }
 }

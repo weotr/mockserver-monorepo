@@ -17,6 +17,15 @@ MockServer is an open-source HTTP(S) mock server and proxy for testing, written 
 **Infrastructure:** AWS (Buildkite build agents, documentation site hosting), Docker Hub (container images)
 **Repository:** GitHub (github.com)
 
+### Local Development Environment
+
+**Docker is available locally.** Docker Desktop runs on the developer Mac, so Docker is available to agents in this environment (not only in CI). This means:
+
+- **Docker-gated tests CAN and SHOULD be run locally**, not just in CI. Tests that guard on `Assume.assumeTrue(DockerClientFactory.instance().isDockerAvailable())` (Testcontainers live-broker tests, `NET_ADMIN` transparent-proxy e2e, QUIC/HTTP-3 client tests, etc.) will actually execute here — validate them by running and passing them, not merely by confirming they skip.
+- **Keep the Docker-gating in place anyway.** The `assumeTrue(...isDockerAvailable())` guard is still the correct design so the suite degrades gracefully on any CI agent or machine without Docker. Docker being present locally changes how we *validate*, not how we *write* the tests.
+- `DockerClientFactory.instance().isDockerAvailable()` is the canonical availability probe; Testcontainers is the preferred harness. The probe works correctly with Testcontainers 1.21.4+ (docker-java 3.4.2) on Docker Desktop 4.67 / Engine 29.x / API 1.54. (Earlier versions — Testcontainers 1.20.6 / docker-java 3.4.1 — got a 400 on the info endpoint and the probe returned false even though Docker worked.)
+- `docker` CLI commands (`docker build`, `docker run`) are also available for Dockerfile smoke checks in the commit workflow.
+
 ### Project Documentation
 
 Comprehensive internal documentation is maintained in `docs/`. **Always consult these docs before making changes** to understand architecture, conventions, and dependencies:
@@ -33,6 +42,11 @@ Comprehensive internal documentation is maintained in `docs/`. **Always consult 
 | [docs/code/domain-model.md](docs/code/domain-model.md) | Before modifying domain model, matchers, codecs, or configuration |
 | [docs/code/tls-and-security.md](docs/code/tls-and-security.md) | Before modifying TLS, mTLS, certificates, or authentication |
 | [docs/code/client-and-integrations.md](docs/code/client-and-integrations.md) | Before modifying client library, JUnit rules, or Spring integration |
+| [docs/code/drift-detection.md](docs/code/drift-detection.md) | Before modifying mock drift detection, DriftAnalyzer, DriftStore, or the /drift endpoint |
+| [docs/code/wasm-rules.md](docs/code/wasm-rules.md) | Before modifying WASM custom rule engine, chicory integration, or WASM REST endpoints |
+| [docs/code/telemetry.md](docs/code/telemetry.md) | Before modifying OpenTelemetry integration, OTLP export, GenAI spans, or W3C trace context propagation |
+| [docs/code/async-messaging.md](docs/code/async-messaging.md) | Before modifying the AsyncAPI broker mocking module, AsyncApiParser, MessagePublisher adapters, or AsyncApiMockOrchestrator |
+| [docs/code/http3.md](docs/code/http3.md) | Before modifying experimental HTTP/3 (QUIC) support, Http3Server, or QUIC native dependencies |
 | [docs/operations/build-system.md](docs/operations/build-system.md) | Before changing Maven config, plugins, or build scripts |
 | [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md) | Before modifying Buildkite or GitHub Actions pipelines |
 | [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) | Before investigating AWS, Terraform, or Buildkite agent issues |

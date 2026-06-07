@@ -125,6 +125,59 @@ public class ServiceChaosRegistry {
         return entry.profile;
     }
 
+    /**
+     * Applies JSON Merge Patch semantics to the chaos profile for the given host.
+     * Only non-null fields from {@code partial} are applied to the existing profile;
+     * unset fields in the partial are left unchanged. If no profile exists for the
+     * host, the partial IS registered as a new profile (with no TTL). No-op if
+     * either argument is null.
+     *
+     * @return the updated profile, or null if host/partial is null
+     */
+    public HttpChaosProfile patch(String host, HttpChaosProfile partial) {
+        String key = normalizeHost(host);
+        if (key == null || key.isEmpty() || partial == null) {
+            return null;
+        }
+        byHost.compute(key, (k, existing) -> {
+            if (existing == null || existing.isExpired(clock.getAsLong())) {
+                // no existing profile — treat partial as a new registration (no TTL)
+                return new Entry(partial, 0L);
+            }
+            HttpChaosProfile merged = merge(existing.profile, partial);
+            return new Entry(merged, existing.expiresAtMillis);
+        });
+        Entry updated = byHost.get(key);
+        return updated != null && !updated.isExpired(clock.getAsLong()) ? updated.profile : null;
+    }
+
+    private static HttpChaosProfile merge(HttpChaosProfile base, HttpChaosProfile patch) {
+        return HttpChaosProfile.httpChaosProfile()
+            .withErrorStatus(patch.getErrorStatus() != null ? patch.getErrorStatus() : base.getErrorStatus())
+            .withRetryAfter(patch.getRetryAfter() != null ? patch.getRetryAfter() : base.getRetryAfter())
+            .withErrorProbability(patch.getErrorProbability() != null ? patch.getErrorProbability() : base.getErrorProbability())
+            .withDropConnectionProbability(patch.getDropConnectionProbability() != null ? patch.getDropConnectionProbability() : base.getDropConnectionProbability())
+            .withLatency(patch.getLatency() != null ? patch.getLatency() : base.getLatency())
+            .withSeed(patch.getSeed() != null ? patch.getSeed() : base.getSeed())
+            .withSucceedFirst(patch.getSucceedFirst() != null ? patch.getSucceedFirst() : base.getSucceedFirst())
+            .withFailRequestCount(patch.getFailRequestCount() != null ? patch.getFailRequestCount() : base.getFailRequestCount())
+            .withOutageAfterMillis(patch.getOutageAfterMillis() != null ? patch.getOutageAfterMillis() : base.getOutageAfterMillis())
+            .withOutageDurationMillis(patch.getOutageDurationMillis() != null ? patch.getOutageDurationMillis() : base.getOutageDurationMillis())
+            .withTruncateBodyAtFraction(patch.getTruncateBodyAtFraction() != null ? patch.getTruncateBodyAtFraction() : base.getTruncateBodyAtFraction())
+            .withMalformedBody(patch.getMalformedBody() != null ? patch.getMalformedBody() : base.getMalformedBody())
+            .withSlowResponseChunkSize(patch.getSlowResponseChunkSize() != null ? patch.getSlowResponseChunkSize() : base.getSlowResponseChunkSize())
+            .withSlowResponseChunkDelay(patch.getSlowResponseChunkDelay() != null ? patch.getSlowResponseChunkDelay() : base.getSlowResponseChunkDelay())
+            .withQuotaName(patch.getQuotaName() != null ? patch.getQuotaName() : base.getQuotaName())
+            .withQuotaLimit(patch.getQuotaLimit() != null ? patch.getQuotaLimit() : base.getQuotaLimit())
+            .withQuotaWindowMillis(patch.getQuotaWindowMillis() != null ? patch.getQuotaWindowMillis() : base.getQuotaWindowMillis())
+            .withQuotaErrorStatus(patch.getQuotaErrorStatus() != null ? patch.getQuotaErrorStatus() : base.getQuotaErrorStatus())
+            .withDegradationRampMillis(patch.getDegradationRampMillis() != null ? patch.getDegradationRampMillis() : base.getDegradationRampMillis())
+            .withGraphqlErrors(patch.getGraphqlErrors() != null ? patch.getGraphqlErrors() : base.getGraphqlErrors())
+            .withGraphqlErrorMessage(patch.getGraphqlErrorMessage() != null ? patch.getGraphqlErrorMessage() : base.getGraphqlErrorMessage())
+            .withGraphqlErrorCode(patch.getGraphqlErrorCode() != null ? patch.getGraphqlErrorCode() : base.getGraphqlErrorCode())
+            .withGraphqlNullifyData(patch.getGraphqlNullifyData() != null ? patch.getGraphqlNullifyData() : base.getGraphqlNullifyData());
+    }
+
     /** Removes the chaos profile for the given host (no-op if absent). */
     public void remove(String host) {
         String key = normalizeHost(host);
@@ -163,25 +216,67 @@ public class ServiceChaosRegistry {
     }
 
     /**
-     * Number of hosts with a currently-active (non-expired) service-scoped chaos
-     * profile. Backs the {@code mock_server_active_service_chaos} gauge so an
-     * operator can alert on "chaos is still live" — the value drops to 0 as
-     * profiles are cleared or their TTLs lapse. Counts without allocating a
-     * snapshot map.
+     * The HTTP chaos fault types reported by {@link #activeCountByFaultType()},
+     * matching the {@code fault_type} label values of the
+     * {@code mock_server_http_chaos_injected} counter.
+     */
+    public static final java.util.List<String> FAULT_TYPES =
+        java.util.List.of("drop", "error", "latency", "truncate", "malformed", "slow", "quota", "graphql");
+
+    /**
+     * For each fault type, the number of currently-active (non-expired)
+     * service-scoped registrations whose profile includes that fault. A profile
+     * carrying several faults (e.g. error + latency) is counted under each, so the
+     * per-type counts may sum to more than the number of registered hosts. Every
+     * fault type in {@link #FAULT_TYPES} is always present in the returned map (0
+     * when none), giving a stable, complete set of series for the
+     * {@code mock_server_active_service_chaos} gauge so an operator can see — and
+     * alert on — which kinds of chaos are live, dropping to 0 as profiles are
+     * cleared or their TTLs lapse.
      *
      * <p>Iterates the {@link ConcurrentHashMap} weakly-consistently, so under
-     * concurrent registration/removal the count may transiently reflect a mix of
+     * concurrent registration/removal the counts may transiently reflect a mix of
      * pre- and post-mutation state — acceptable for a gauge metric.
      */
-    public int activeCount() {
+    public Map<String, Integer> activeCountByFaultType() {
         long now = clock.getAsLong();
-        int count = 0;
+        Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        for (String faultType : FAULT_TYPES) {
+            counts.put(faultType, 0);
+        }
         for (Entry entry : byHost.values()) {
-            if (!entry.isExpired(now)) {
-                count++;
+            if (entry.isExpired(now)) {
+                continue;
+            }
+            HttpChaosProfile profile = entry.profile;
+            if (profile.getDropConnectionProbability() != null) {
+                counts.merge("drop", 1, Integer::sum);
+            }
+            if (profile.getErrorStatus() != null) {
+                counts.merge("error", 1, Integer::sum);
+            }
+            if (profile.getLatency() != null) {
+                counts.merge("latency", 1, Integer::sum);
+            }
+            if (profile.getTruncateBodyAtFraction() != null) {
+                counts.merge("truncate", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getMalformedBody())) {
+                counts.merge("malformed", 1, Integer::sum);
+            }
+            // slow and quota only fire with their companion fields present, so an
+            // incomplete (no-op) config is not counted — matching HttpActionHandler.
+            if (profile.getSlowResponseChunkSize() != null && profile.getSlowResponseChunkDelay() != null) {
+                counts.merge("slow", 1, Integer::sum);
+            }
+            if (profile.getQuotaName() != null && profile.getQuotaLimit() != null && profile.getQuotaWindowMillis() != null) {
+                counts.merge("quota", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getGraphqlErrors())) {
+                counts.merge("graphql", 1, Integer::sum);
             }
         }
-        return count;
+        return counts;
     }
 
     /** Clear all service-scoped chaos. Called on server reset and for test isolation. */

@@ -73,8 +73,8 @@ public class StreamingResponseRelayHandler extends ChannelInboundHandlerAdapter 
                 // Map cookies from Set-Cookie headers
                 setCookies(mockResponse);
 
-                // Attach a streaming body
-                streamingBody = new StreamingBody(configuration.maxStreamingCaptureBytes());
+                // Attach a streaming body with per-chunk timestamp capture for replay timing
+                streamingBody = new StreamingBody(configuration.maxStreamingCaptureBytes(), true);
                 mockResponse.withStreamingBody(streamingBody);
 
                 // Give the body a reference to the upstream event loop so that subscribe()

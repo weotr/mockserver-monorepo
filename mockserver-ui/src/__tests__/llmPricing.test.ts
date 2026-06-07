@@ -122,3 +122,20 @@ describe('estimateCostUsd', () => {
     expect(cost).toBeCloseTo(0.00105, 6);
   });
 });
+
+describe('estimateCostUsd — Bedrock-prefixed Claude model ids', () => {
+  it('resolves anthropic.<model> to the matching Claude pricing', () => {
+    const cost = estimateCostUsd('anthropic', 'anthropic.claude-sonnet-4-20250514-v1:0', 1_000_000, 1_000_000);
+    expect(cost).toBeCloseTo(18.0, 2);
+  });
+
+  it('resolves a region inference-profile prefix (us.anthropic.<model>)', () => {
+    const cost = estimateCostUsd('anthropic', 'us.anthropic.claude-opus-4-v1:0', 1_000_000, 1_000_000);
+    expect(cost).toBeCloseTo(90.0, 2);
+  });
+
+  it('still resolves a bare claude-* id unchanged', () => {
+    const cost = estimateCostUsd('anthropic', 'claude-haiku-4-20250514', 1_000_000, 1_000_000);
+    expect(cost).toBeCloseTo(4.8, 2);
+  });
+});

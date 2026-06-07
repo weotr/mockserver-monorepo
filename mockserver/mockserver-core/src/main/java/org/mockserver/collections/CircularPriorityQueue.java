@@ -60,6 +60,50 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
         }
     }
 
+    /**
+     * Replaces the value associated with the given key in place, preserving
+     * the element's position in {@code insertionOrderQueue} (and therefore
+     * its eviction order). The old value is swapped out of the insertion
+     * queue and byKey map and the new value takes its slot. Priority-sort
+     * keys are updated (old removed, new added).
+     *
+     * @param key      the key that identifies the existing element
+     * @param newValue the replacement value
+     * @return {@code true} if the key was found and the value replaced
+     */
+    public boolean replaceValue(K key, V newValue) {
+        V existing = byKey.get(key);
+        if (existing == null) {
+            return false;
+        }
+        // Swap in the insertion-order queue: replace the old element with
+        // the new one at the same logical position.  ConcurrentLinkedQueue
+        // does not offer an index-based replace, so we copy into a list,
+        // swap, and rebuild.  This is O(n) but executions are serialized
+        // by the caller (single-writer contract) and n == maxExpectations
+        // which is typically small (hundreds).
+        List<V> snapshot = new ArrayList<>(insertionOrderQueue);
+        int idx = snapshot.indexOf(existing);
+        if (idx < 0) {
+            // Element not in insertion queue — shouldn't happen, but fall
+            // back to a safe add-at-end to avoid data loss.
+            insertionOrderQueue.offer(newValue);
+        } else {
+            snapshot.set(idx, newValue);
+            insertionOrderQueue.clear();
+            for (V v : snapshot) {
+                insertionOrderQueue.offer(v);
+            }
+        }
+        // Update byKey
+        byKey.put(key, newValue);
+        // Update priority sort: remove old, add new
+        sortOrderSkipList.remove(skipListKeyFunction.apply(existing));
+        sortOrderSkipList.add(skipListKeyFunction.apply(newValue));
+        sortedCache = null;
+        return true;
+    }
+
     public boolean remove(V element) {
         if (element != null) {
             insertionOrderQueue.remove(element);
@@ -96,6 +140,16 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
         return insertionOrderQueue.isEmpty();
     }
 
+    /**
+     * Returns a cached, unmodifiable sorted snapshot of this queue's elements.
+     * The snapshot is rebuilt lazily when any mutation nulls the cache.
+     * <p>
+     * <b>Eventually-consistent under concurrent mutation:</b> a call to
+     * this method concurrent with a control-plane mutation (add/remove/
+     * reconcileFromBackend) may return a snapshot that does not yet reflect
+     * the in-flight mutation. This is the existing control-plane / data-plane
+     * concurrency contract — no lock is held on the matching hot path.
+     */
     public List<V> toSortedList() {
         List<V> cached = sortedCache;
         if (cached == null) {

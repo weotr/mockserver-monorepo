@@ -1,0 +1,52 @@
+{
+  "title": "expectationStep",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "httpRequest": {
+      "$ref": "#/definitions/httpRequest"
+    },
+    "httpClassCallback": {
+      "$ref": "#/definitions/httpClassCallback"
+    },
+    "httpObjectCallback": {
+      "$ref": "#/definitions/httpObjectCallback"
+    },
+    "httpForward": {
+      "$ref": "#/definitions/httpForward"
+    },
+    "httpOverrideForwardedRequest": {
+      "$ref": "#/definitions/httpOverrideForwardedRequest"
+    },
+    "httpResponse": {
+      "$ref": "#/definitions/httpResponse"
+    },
+    "httpError": {
+      "$ref": "#/definitions/httpError"
+    },
+    "responder": {
+      "type": "boolean"
+    },
+    "delay": {
+      "$ref": "#/definitions/delay"
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "$ref": "#/definitions/delay"
+    },
+    "failurePolicy": {
+      "enum": [ "FAIL_FAST", "BEST_EFFORT" ]
+    }
+  },
+  "oneOf": [
+    { "required": ["httpRequest"] },
+    { "required": ["httpClassCallback"] },
+    { "required": ["httpObjectCallback"] },
+    { "required": ["httpForward"] },
+    { "required": ["httpOverrideForwardedRequest"] },
+    { "required": ["httpResponse"] },
+    { "required": ["httpError"] }
+  ]
+}

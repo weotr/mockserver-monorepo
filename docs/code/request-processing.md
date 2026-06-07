@@ -42,6 +42,7 @@ required?"}
     DISPATCH --> OBJ_F[HttpForwardObjectCallbackActionHandler]
     DISPATCH --> OVERRIDE[HttpOverrideForwardedRequestActionHandler]
     DISPATCH --> FWDVAL[HttpForwardValidateActionHandler]
+    DISPATCH --> FWDFB[HttpForwardWithFallbackActionHandler]
     DISPATCH --> GRPC[GrpcStreamResponseActionHandler]
     DISPATCH --> LLM[HttpLlmResponseActionHandler]
     DISPATCH --> ERR[HttpErrorActionHandler]
@@ -73,7 +74,11 @@ required?"}
 | Endpoint | Action |
 |----------|--------|
 | `PUT /mockserver/expectation` | Deserialize + add/update expectations |
-| `PUT /mockserver/openapi` | Convert OpenAPI spec to expectations |
+| `PUT /mockserver/openapi` | Convert OpenAPI spec to expectations (idempotent/incremental sync) |
+| `PUT /mockserver/wsdl` | Convert a WSDL 1.1 document (SOAP 1.1/1.2) to expectations |
+| `PUT /mockserver/pact` | Export active response expectations as a Pact v3 consumer contract (`?consumer=&provider=`) |
+| `PUT /mockserver/pact/verify` | Verify that active expectations satisfy a Pact v3 contract (202 all-pass / 406 failures) |
+| `PUT/GET /mockserver/mode` | Get/set the operating mode (`?mode=SIMULATE\|SPY\|CAPTURE`) — toggles proxy-on-no-match for record/spy workflows |
 | `PUT /mockserver/clear` | Clear expectations and/or logs by request matcher |
 | `PUT /mockserver/reset` | Reset all state (expectations, logs, WebSocket registry) |
 | `PUT /mockserver/retrieve` | Retrieve requests, responses, logs, or active expectations |
@@ -90,6 +95,26 @@ required?"}
 | `PUT /mockserver/explainUnmatched` | Retrieve recent unmatched requests with ranked closest-expectation diagnostics and remediation hints |
 
 All control-plane requests go through `controlPlaneRequestAuthenticated()` which enforces mTLS and/or JWT authentication if configured.
+
+#### WSDL Expectation Generation
+
+`PUT /mockserver/wsdl` accepts a raw WSDL 1.1 XML document and generates one `Expectation` per SOAP operation found across all service/port bindings. Implementation is in `WsdlExpectationGenerator` (`mockserver-core/.../mock/wsdl/`). For each operation it builds a `POST` request matcher targeting the path from `soap:address` (or `soap12:address`) and matches on the `SOAPAction` header (SOAP 1.1), the `content-type` `action` parameter (SOAP 1.2), or an XPath body check when no SOAP action is declared. The response is a skeleton SOAP envelope with a `<{Operation}Response/>` element in the WSDL target namespace. The WSDL is parsed through `StringToXmlDocumentParser` with DOCTYPE and external entity resolution disabled (XXE-safe). Returns 201 with the generated expectations as JSON.
+
+#### Pact Contract Export
+
+`PUT /mockserver/pact` (with optional `?consumer=NAME&provider=NAME` query parameters) exports the currently active response expectations as a Pact v3 consumer contract JSON. Implementation is in `PactExporter` (`mockserver-core/.../mock/pact/`). Only expectations with a concrete `HttpRequest` matcher and an `HttpResponse` (or `HttpResponses`) action are included; expectations with notted method/path matchers are skipped; notted header and query-parameter values are dropped from the exported interaction. JSON bodies are embedded as structured nodes. The `consumer` and `provider` parameters default to `"consumer"` and `"provider"` when not supplied. Returns 200 with the Pact JSON.
+
+#### Pact Contract Verification
+
+`PUT /mockserver/pact/verify` takes a Pact v3 contract JSON as the request body and verifies that MockServer's currently-active expectations satisfy each interaction. Implementation is in `PactVerifier` (`mockserver-core/.../mock/pact/`). For each interaction, the verifier builds an `HttpRequest` from the interaction's request fields, finds matching expectations via `RequestMatchers.retrieveExpectationsMatchingRequest()` (read-only forward matching — no side effects on times/scenarios), and compares the matched expectation's response against the interaction's expected response: status code must be equal, headers use subset matching (each Pact header must be present but extra MockServer headers are allowed), and bodies are compared structurally as JSON when both parse as JSON, otherwise as strings. Only expectations with a static `HttpResponse` (or first of `HttpResponses`) action are verifiable; forward/callback/template actions fail with reason "unverifiable (non-static action)". Returns 202 with `{"verified":true,...}` when all interactions pass, 406 with `{"verified":false,...}` when any fail, or 400 on malformed/empty input.
+
+#### Operating Mode (SIMULATE / SPY / CAPTURE)
+
+`PUT /mockserver/mode?mode=SIMULATE|SPY|CAPTURE` switches the server's operating mode at runtime. `GET /mockserver/mode` returns the current mode as `{"mode":"...","proxyUnmatchedRequests":true|false}`. Implementation is in `MockMode` (`mockserver-core/.../mock/MockMode.java`). The three modes are: **SIMULATE** (default) — match expectations, return 404 on no match; **SPY** — match expectations, forward unmatched requests to the real upstream and record; **CAPTURE** — forward and record all traffic (useful with no expectations defined). SPY and CAPTURE both enable `attemptToProxyIfNoMatchingExpectation`. Recorded interactions are retrieved via the existing `PUT /mockserver/retrieve?type=RECORDED_EXPECTATIONS` endpoint.
+
+#### MCP list_mock_tools
+
+The `list_mock_tools` MCP tool (registered in `McpToolRegistry.registerListMockTools()`, `mockserver-netty/.../mcp/`) generates MCP tool definitions from the currently active response expectations by delegating to `McpToolSchemaGenerator` (`mockserver-core/.../mock/mcp/`). It takes no parameters and returns `{"tools":[...],"count":N}`. Each expectation with a concrete (non-notted) method and path and a response action becomes one tool: the name is derived from `METHOD_path` in lower snake_case (deduplicated and capped at 64 characters), the `inputSchema` exposes query parameters and an optional `body` property, and a `_mockserver` annotation records the target method, path, and expectation ID.
 
 ### Retrieve, Clear & Format Enums
 
@@ -132,11 +157,25 @@ Before a request reaches `HttpRequestHandler`, the Netty pipeline may intercept 
 | `/mockserver/mcp` | `McpStreamableHttpHandler` | MCP (Model Context Protocol) server endpoint (Streamable HTTP transport with JSON-RPC 2.0). Intercepted in the pipeline before `MockServerHttpServerCodec`. Only active when `mcpEnabled=true`. |
 | `/_mockserver_callback_websocket` | `CallbackWebSocketServerHandler` | WebSocket upgrade for object/closure callbacks |
 
+### gRPC Built-in Services (in GrpcToHttpRequestHandler)
+
+`GrpcToHttpRequestHandler` intercepts gRPC requests before they reach the normal expectation-matching pipeline. The following built-in gRPC services are handled directly without user-defined expectations:
+
+| Path | Handler | Description |
+|------|---------|-------------|
+| `/grpc.health.v1.Health/Check` | `GrpcHealthCheckHandler` | Health check (returns serving status from `GrpcHealthRegistry`) |
+| `/grpc.reflection.v1.ServerReflection/ServerReflectionInfo` | `GrpcServerReflectionHandler` | Server Reflection v1 (lists services, resolves symbols/files from loaded descriptors) |
+| `/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo` | `GrpcServerReflectionHandler` | Server Reflection v1alpha (same behaviour as v1) |
+
+**Server Reflection** enables tools like `grpcurl list` and `grpcurl describe` to introspect the gRPC services loaded into MockServer without a local proto file. The handler decodes `ServerReflectionRequest` messages and responds with service listings, file descriptors by symbol, or file descriptors by filename. It uses `CodedInputStream`/`CodedOutputStream` for manual protobuf encoding (no generated reflection stubs).
+
+**Limitation:** The current gRPC path in MockServer is buffered-unary -- each HTTP/2 request carries exactly one gRPC message. Server Reflection therefore handles a single `ServerReflectionRequest` per HTTP/2 request, which is sufficient for `grpcurl list`, single symbol lookups, and file lookups. Fully-interactive bidi-streaming reflection (a long-lived stream with multiple back-and-forth messages) is not supported by the buffered pipeline.
+
 ### Non-Control-Plane Routes (in HttpRequestHandler)
 
 | Route | Method | Handler |
 |-------|--------|---------|
-| `/mockserver/status` | PUT | Returns port binding JSON |
+| `/mockserver/status` | PUT | Returns port binding JSON (bound ports, version, group/artifact id, and `gitHash` when built from a git checkout) |
 | Liveness path | GET | Returns port binding JSON |
 | `/mockserver/bind` | PUT | Dynamically bind additional ports |
 | `/mockserver/stop` | PUT | Graceful shutdown |
@@ -152,6 +191,8 @@ Before a request reaches `HttpRequestHandler`, the Netty pipeline may intercept 
 Expectations are stored in a `CircularPriorityQueue` sorted by priority (highest first), then creation time (earliest first). The `firstMatchingExpectation()` method accepts an `HttpRequest` and iterates in sort order, returning the first match.
 
 When no expectation matches, the method logs a **closest match summary** identifying the expectation with the fewest field differences, along with a match score (e.g., "matched 8/12 fields"). This helps users quickly identify which expectation was closest to matching.
+
+`HttpState` obtains its `RequestMatchers` through `ExpectationStoreFactory` (a small SPI/registry) rather than constructing it directly. By default the factory returns the standard in-memory `RequestMatchers` (zero behaviour change). This is the **clustered-state seam (G10 phase 1)**: an optional backend can register a factory returning a clustering-aware `RequestMatchers` so a fleet of MockServer instances shares expectations. Phase 2 (deferred) adds the chosen embedded **Infinispan** data-grid backend and makes the `CircularPriorityQueue` storage overridable so a distributed map can back it.
 
 A `MatchDifference` context is always created for each comparison (regardless of log level), so detailed field-level difference information is always available in the `EXPECTATION_NOT_MATCHED` log entries. The `MatchFailureHints` utility adds actionable suggestions for common mistakes (trailing slashes, Content-Type charset mismatches, unescaped regex metacharacters).
 
@@ -272,7 +313,7 @@ Each `Expectation` binds a request matcher to exactly one action. There are 14 a
 | `RESPONSE_CLASS_CALLBACK` | `HttpResponseClassCallbackActionHandler` | Loads a Java class implementing `ExpectationResponseCallback`, invokes `handle(request)` |
 | `RESPONSE_OBJECT_CALLBACK` | `HttpResponseObjectCallbackActionHandler` | Sends request to a WebSocket-connected client, awaits response callback |
 | `SSE_RESPONSE` | `HttpSseResponseActionHandler` | Streams Server-Sent Events with per-event delays, optional `closeConnection` flag |
-| `WEBSOCKET_RESPONSE` | `HttpWebSocketResponseActionHandler` | Upgrades to WebSocket and sends a sequence of `WebSocketMessage` frames with per-message delays |
+| `WEBSOCKET_RESPONSE` | `HttpWebSocketResponseActionHandler` | Upgrades to WebSocket and sends a sequence of `WebSocketMessage` frames with per-message delays. When subprotocol is `graphql-transport-ws`/`graphql-ws` with a `graphqlSubscriptionFilter`, installs `GraphQLSubscriptionHandler` for the graphql-transport-ws protocol state machine |
 | `GRPC_STREAM_RESPONSE` | `GrpcStreamResponseActionHandler` | Streams gRPC-framed protobuf messages with per-message delays and grpc-status trailers (Netty only; returns 501 in WAR) |
 | `BINARY_RESPONSE` | (inline in `BinaryRequestProxyingHandler`) | Returns raw binary bytes when a `BinaryRequestDefinition` matches |
 | `DNS_RESPONSE` | (inline in `DnsRequestHandler`) | Returns DNS response records when a `DnsRequestDefinition` matches a UDP DNS query |
@@ -286,6 +327,23 @@ Each `Expectation` binds a request matcher to exactly one action. There are 14 a
 | `FORWARD_OBJECT_CALLBACK` | `HttpForwardObjectCallbackActionHandler` | WebSocket client modifies request before forwarding |
 | `FORWARD_REPLACE` | `HttpOverrideForwardedRequestActionHandler` | Applies request/response overrides and modifiers |
 | `FORWARD_VALIDATE` | `HttpForwardValidateActionHandler` | Forwards and validates request/response against an OpenAPI spec |
+| `FORWARD_WITH_FALLBACK` | `HttpForwardWithFallbackActionHandler` | Forwards to upstream; returns a fallback mock response on 5xx or timeout |
+
+### Forward with Fallback
+
+The `FORWARD_WITH_FALLBACK` action combines MockServer's proxy and mock capabilities: it
+forwards the request to a real upstream service, but if the upstream returns a status code
+matching the fallback criteria (default: 500-599) or the connection fails/times out, a
+pre-configured fallback response is returned instead of the error.
+
+This is useful for resilience testing and development against partially-available services:
+the mock provides a reliable baseline while the upstream is flaky or under development.
+
+Configuration via `HttpForwardWithFallback`:
+- `httpForward` -- the upstream target (host, port, scheme)
+- `fallbackResponse` -- the mock response to return when fallback triggers
+- `fallbackOnStatusCodes` -- list of status codes that trigger fallback (default: 500-599)
+- `fallbackOnTimeout` -- whether to fall back on connection errors/timeouts (default: true)
 
 ### Host Header Auto-Adjustment
 
@@ -347,9 +405,30 @@ When an expectation is configured with `httpResponses` (a list of `HttpResponse`
 
 The cycling logic is in `Expectation.getPrimaryAction()`. The `matchCount` is tracked per-expectation via an `AtomicInteger` and is runtime-only state (`@JsonIgnore`).
 
-### After-Actions
+### Before & After Actions
 
-An expectation can specify `afterActions` — a list of `AfterAction` objects executed after the primary response is sent. Each `AfterAction` can fire an `HttpRequest`, invoke an `HttpClassCallback`, or trigger an `HttpObjectCallback`, with an optional `Delay`. After-actions are dispatched in `HttpActionHandler` as secondary actions following the primary response. Only one target (request, class callback, or object callback) is active per after-action.
+An expectation can carry two optional ordered lists of side-effect actions, both using the same `AfterAction` type (exactly one of `httpRequest`, `httpClassCallback`, or `httpObjectCallback`, plus an optional `Delay`):
+
+- **`afterActions`** — executed *after* the primary response is sent. Dispatched fire-and-forget via `HttpActionHandler.dispatchSideAction(...)` from `expectationPostProcessor` (which also runs `HttpState.postProcess`). Responses are discarded and failures are only logged, so they never alter or delay the client response.
+- **`beforeActions`** — executed *before* the primary response and able to gate it. When an expectation has `beforeActions`, `processAction` wraps `runBeforeActions(...)` plus `dispatchPrimaryAction(...)` in `scheduler.submit(runnable, synchronous)` so any blocking wait runs off the event loop (async) or inline (synchronous), mirroring forward-action threading.
+
+`runBeforeActions` iterates the list applying three optional per-action controls that are meaningful only here (after-actions ignore them):
+
+- `blocking` (default `true` when null) — whether the response waits for the action.
+- `timeout` (a `Delay`; falls back to `configuration.maxSocketTimeoutInMillis()`) — max wait for a blocking action.
+- `failurePolicy` (`FAIL_FAST` or `BEST_EFFORT`, default `BEST_EFFORT`) — outcome when a blocking action fails or times out.
+
+Only `httpRequest` (webhook) before-actions can actually block: they are sent via the synchronous `httpClient.sendRequest(req, timeoutMillis, MILLISECONDS)` (throws on error/timeout). On failure, `FAIL_FAST` writes a `502` (`badGatewayResponse().withBody("before-action failed: ...")`) and `runBeforeActions` returns `false` so the primary action is skipped; `BEST_EFFORT` logs and continues. Non-blocking before-actions and callback before-actions are dispatched fire-and-forget via `dispatchSideAction` (a WARN is logged if `blocking=true` is set on a callback). When `runBeforeActions` returns `false`, `expectationPostProcessor.run()` is still invoked (it is idempotent via `compareAndSet`) so matcher state — `responseInProgress`, `times` exhaustion — is cleaned up and after-actions still fire after the `502`. Webhook fields support `{$request.*}` runtime expressions, resolved against the triggering request via `OpenApiRuntimeExpressionResolver`.
+
+#### Unified Ordered Steps
+
+When an expectation has `steps` (a `List<ExpectationStep>`), the dispatch pipeline is:
+
+1. **Pre-responder steps** — extracted by `Expectation.getPreResponderSteps()`, dispatched by `HttpActionHandler.runStepsPreResponder()`. Each step follows the same blocking/timeout/failurePolicy semantics as before-actions. Webhook steps can block; callback and forward side-effect steps are fire-and-forget.
+2. **Responder step** — the single step with `responder = true`. Its action is resolved via `Expectation.resolveStepAction()` and dispatched through the existing `dispatchPrimaryAction()` path (the normal action-type switch).
+3. **Post-responder steps** — extracted by `Expectation.getPostResponderSteps()`, dispatched by `HttpActionHandler.dispatchPostResponderSteps()` as fire-and-forget side-effects via `dispatchStepSideEffect()`.
+
+Steps and `beforeActions`/`afterActions` are independent: when `steps` is present it determines the pre/post pipeline ordering. Any existing `afterActions` still fire after the steps pipeline completes (from `expectationPostProcessor`). Validation is enforced at upsert time in `HttpState.add()` via `Expectation.validateSteps()`.
 
 ### Template Engines
 
@@ -600,14 +679,46 @@ For each callback in the OpenAPI spec, `OpenAPIConverter.buildAfterActions()`:
 3. Extracts the request body schema and generates an example body
 4. Creates an `AfterAction` with a `HttpForward`-style webhook that fires after the main response
 
-The callback URL is resolved by `resolveCallbackUrl()`:
-- Runtime expressions like `{$request.body#/...}` are stripped of the expression wrapper in v1 (passed as literal strings)
-- Static URLs are used as-is
+Runtime expressions in callback URLs (e.g., `{$request.body#/callbackUrl}`) are preserved verbatim at spec-conversion time and resolved at callback fire-time by `OpenApiRuntimeExpressionResolver.resolve()`. The resolver is called in `HttpActionHandler.dispatchAfterAction()` and supports:
 
-Limitations in v1:
-- Runtime expression placeholders are not dynamically resolved — they are passed through as literal text
+- `{$request.body#/<json-pointer>}` — JSON Pointer into the triggering request body (via Jackson `JsonNode.at()`)
+- `{$request.query.<name>}` — query parameter value from the triggering request
+- `{$request.header.<name>}` — header value from the triggering request
+- `{$request.path.<name>}` — path parameter (best-effort; requires path parameters to be populated)
+- `{$request.method}` — HTTP method of the triggering request
+- `{$url}` — reconstructed URL of the triggering request
+
+Unresolvable expressions (unknown format, missing values) are replaced with empty string. Response-based expressions (`{$response.body#/...}`, `{$response.header.*}`) are out of scope because the response object is not available at after-action dispatch time — these are also replaced with empty string.
+
+The resolver guarantees a **strict no-op** when the after-action request contains no `{$...}` expressions: the original instance is returned without cloning or allocation. This ensures zero overhead for the vast majority of after-actions (plain webhooks).
+
+Static callback URLs are used as-is (parsed into path + Host header at conversion time).
+
+Remaining limitations:
 - Only `post`, `put`, `patch`, `get`, and `delete` callback methods are supported
 - Callback request bodies use the first available media type schema
+- Response-based expressions are not resolved (response not available at dispatch time)
+
+## Incremental OpenAPI Sync
+
+The `PUT /mockserver/openapi` endpoint performs **idempotent, incremental synchronization** when re-importing an OpenAPI specification. Each generated expectation receives a stable, deterministic id of the form `openapi:<specKey>:<operationId>` (with `:<n>` appended only to disambiguate multiple expectations for the same operation, e.g. different response codes).
+
+The `specKey` is derived from the parsed `info.title` field of the OpenAPI spec (lowercased, non-alphanumeric characters replaced with `_`). If the title is blank, a short hex hash of the raw spec payload/URL is used instead.
+
+When the endpoint processes an import:
+
+1. `OpenAPIConverter.buildExpectations()` generates expectations with stable ids
+2. `HttpState.add(OpenAPIExpectation)` identifies the namespace prefixes (e.g. `openapi:swagger_petstore:`) covered by the new expectations
+3. Existing expectations whose id starts with a covered prefix but is **not** in the new id set are **pruned** (removed)
+4. The new expectations are upserted (added or updated in place by id)
+
+This means:
+- **Re-importing the same spec** is a no-op (same ids, same content)
+- **Adding an operation** to the spec creates a new expectation without affecting existing ones
+- **Removing an operation** from the spec prunes the corresponding expectation
+- **Other specs and manually created expectations** are never affected (different namespace or no `openapi:` prefix)
+
+The prune logic is encapsulated in `OpenApiSyncPlanner.idsToPrune()` for testability.
 
 ## Detailed Verification Failures (Diff Mode)
 

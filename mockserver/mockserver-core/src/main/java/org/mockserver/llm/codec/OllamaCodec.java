@@ -8,6 +8,7 @@ import org.mockserver.llm.JsonEscape;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.llm.ProviderCodec;
+import org.mockserver.llm.StreamingFormat;
 import org.mockserver.llm.StreamingPhysicsExpander;
 import org.mockserver.model.*;
 
@@ -28,11 +29,14 @@ import static org.mockserver.model.SseEvent.sseEvent;
  * (not an array of choices). Token counts are exposed as {@code prompt_eval_count}
  * and {@code eval_count}.
  * <p>
- * <strong>Streaming limitation:</strong> Ollama's native wire format is NDJSON
- * (newline-delimited JSON), not SSE. This codec represents each chunk as an
- * {@link SseEvent} with the JSON line as the {@code data} field. When MockServer
- * sends them, the SSE handler emits {@code data: <json>\n\n} which is close
- * enough for most SDK clients to parse. Strict NDJSON support is out of scope.
+ * <strong>Streaming format:</strong> Ollama's native wire format is NDJSON
+ * (newline-delimited JSON, {@code application/x-ndjson}), not SSE. Each
+ * streaming chunk is a single JSON object followed by a newline character
+ * ({@code <json>\n}). This codec internally represents chunks as
+ * {@link SseEvent} objects (reusing the existing data/delay model), but
+ * declares {@link StreamingFormat#NDJSON} via {@link #streamingFormat()} so
+ * that the downstream write handler emits raw NDJSON framing instead of SSE
+ * {@code data:} prefixes.
  * <p>
  * Tool calls use Ollama 0.3+ format where {@code arguments} is a JSON object
  * (not a JSON-as-string like OpenAI).
@@ -49,6 +53,11 @@ public class OllamaCodec implements ProviderCodec {
     @Override
     public String apiVersion() {
         return "ollama-2025";
+    }
+
+    @Override
+    public StreamingFormat streamingFormat() {
+        return StreamingFormat.NDJSON;
     }
 
     @Override

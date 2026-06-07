@@ -5,8 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
+import org.mockserver.llm.StreamingFormat;
 import org.mockserver.model.*;
 
+import java.io.BufferedReader;
+import java.io.StringReader;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -353,5 +357,119 @@ public class OllamaCodecTest {
         JsonNode args = finalChunk.path("message").path("tool_calls").path(0).path("function").path("arguments");
         assertThat(args.isObject(), is(true));
         assertThat(args.path("value").asText(), is("raw_string_args"));
+    }
+
+    // --- NDJSON Streaming Format ---
+
+    @Test
+    public void shouldDeclareNdjsonStreamingFormat() {
+        assertThat(codec.streamingFormat(), is(StreamingFormat.NDJSON));
+    }
+
+    @Test
+    public void shouldProduceValidNdjsonWhenFormattedAsLines() throws Exception {
+        // Verifies that each SseEvent's data field is valid JSON that can be
+        // assembled into a valid NDJSON stream (one JSON object per line).
+        Completion completion = completion()
+            .withText("Hello world")
+            .withUsage(Usage.usage().withInputTokens(10).withOutputTokens(5));
+
+        List<SseEvent> events = codec.encodeStreaming(completion, "llama3.1", null);
+
+        // Simulate NDJSON wire format: each event.getData() + "\n"
+        StringBuilder ndjsonStream = new StringBuilder();
+        for (SseEvent event : events) {
+            ndjsonStream.append(event.getData()).append("\n");
+        }
+
+        // Parse the assembled NDJSON: every line must be valid JSON
+        String ndjson = ndjsonStream.toString();
+        BufferedReader reader = new BufferedReader(new StringReader(ndjson));
+        List<JsonNode> parsedLines = new ArrayList<>();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (!line.trim().isEmpty()) {
+                parsedLines.add(OBJECT_MAPPER.readTree(line));
+            }
+        }
+
+        assertThat("each line should parse as JSON", parsedLines.size(), is(events.size()));
+
+        // No SSE framing should be present in the data
+        assertThat("NDJSON must not contain SSE data: prefix",
+            ndjson, not(containsString("data: ")));
+        assertThat("NDJSON must not contain SSE event: prefix",
+            ndjson, not(containsString("event: ")));
+    }
+
+    @Test
+    public void shouldHaveDoneTrueInFinalNdjsonLine() throws Exception {
+        Completion completion = completion()
+            .withText("test")
+            .withUsage(Usage.usage().withInputTokens(5).withOutputTokens(2));
+
+        List<SseEvent> events = codec.encodeStreaming(completion, "llama3.1", null);
+
+        // Simulate NDJSON: parse each line
+        List<JsonNode> lines = new ArrayList<>();
+        for (SseEvent event : events) {
+            lines.add(OBJECT_MAPPER.readTree(event.getData()));
+        }
+
+        // Final line must have done:true
+        JsonNode lastLine = lines.get(lines.size() - 1);
+        assertThat(lastLine.get("done").asBoolean(), is(true));
+        assertThat(lastLine.get("prompt_eval_count").asInt(), is(5));
+        assertThat(lastLine.get("eval_count").asInt(), is(2));
+
+        // All preceding lines must have done:false
+        for (int i = 0; i < lines.size() - 1; i++) {
+            assertThat("line " + i + " should have done:false",
+                lines.get(i).get("done").asBoolean(), is(false));
+        }
+    }
+
+    @Test
+    public void shouldNotContainSseFramingInStreamingData() throws Exception {
+        // Ensures that the raw data in each SseEvent does not accidentally
+        // include SSE framing characters that would corrupt NDJSON output.
+        Completion completion = completion().withText("Hello world test");
+
+        List<SseEvent> events = codec.encodeStreaming(completion, "llama3.1", null);
+
+        for (int i = 0; i < events.size(); i++) {
+            String data = events.get(i).getData();
+            assertThat("event " + i + " data should not start with 'data:'",
+                data, not(startsWith("data:")));
+            // Each data value should be parseable as standalone JSON
+            JsonNode parsed = OBJECT_MAPPER.readTree(data);
+            assertThat("event " + i + " should be a JSON object",
+                parsed.isObject(), is(true));
+        }
+    }
+
+    @Test
+    public void shouldProduceNdjsonWithToolCallsInFinalChunk() throws Exception {
+        // Verifies that tool calls appear in the final NDJSON line
+        Completion completion = Completion.completion()
+            .withText("checking")
+            .withToolCall(ToolUse.toolUse("search").withArguments("{\"q\":\"test\"}"))
+            .withUsage(Usage.usage().withInputTokens(3).withOutputTokens(2));
+
+        List<SseEvent> events = codec.encodeStreaming(completion, "llama3.1", null);
+
+        // Assemble NDJSON stream and parse each line
+        List<JsonNode> lines = new ArrayList<>();
+        for (SseEvent event : events) {
+            lines.add(OBJECT_MAPPER.readTree(event.getData()));
+        }
+
+        // Final line should have done:true and tool_calls
+        JsonNode finalLine = lines.get(lines.size() - 1);
+        assertThat(finalLine.get("done").asBoolean(), is(true));
+        assertThat(finalLine.path("message").path("tool_calls").isArray(), is(true));
+        assertThat(finalLine.path("message").path("tool_calls").size(), is(1));
+        assertThat(finalLine.path("message").path("tool_calls").path(0)
+            .path("function").path("name").asText(), is("search"));
     }
 }

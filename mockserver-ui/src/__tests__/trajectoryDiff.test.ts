@@ -501,3 +501,64 @@ describe('extractTrajectory + compareTrajectories integration', () => {
     expect(report.verdict).toBe('identical');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Provider coverage for tool-call / token extraction (openai_responses, gemini, ollama)
+// ---------------------------------------------------------------------------
+
+function makeRequest(parsed: unknown, path: string): SessionRequest {
+  return {
+    item: makeItem(`req-${Math.random()}`),
+    parsed: parsed as SessionRequest['parsed'],
+    path,
+    method: 'POST',
+    statusCode: 200,
+    timestamp: 0,
+  };
+}
+
+describe('extractTrajectory — provider coverage', () => {
+  it('extracts tool calls + tokens from OpenAI Responses (output / input_tokens)', () => {
+    const parsed = {
+      kind: 'openai_responses',
+      output: [
+        { type: 'function_call', name: 'search', call_id: 'fc_1', arguments: '{}' },
+        { type: 'message', content: [{ type: 'output_text', text: 'hi' }] },
+      ],
+      usage: { input_tokens: 11, output_tokens: 7 },
+    };
+    const traj = extractTrajectory(makeSession([makeRequest(parsed, '/v1/responses')]));
+    expect(traj.turns[0]!.toolCalls).toEqual(['search']);
+    expect(traj.turns[0]!.hasToolResults).toEqual([true]);
+    expect(traj.turns[0]!.inputTokens).toBe(11);
+    expect(traj.turns[0]!.outputTokens).toBe(7);
+  });
+
+  it('extracts tool calls + stop reason + tokens from Gemini', () => {
+    const parsed = {
+      kind: 'gemini',
+      candidates: [{
+        content: { parts: [{ functionCall: { name: 'get_weather', args: {} } }] },
+        finishReason: 'STOP',
+      }],
+      usage: { promptTokenCount: 20, candidatesTokenCount: 9 },
+    };
+    const traj = extractTrajectory(makeSession([makeRequest(parsed, '/v1beta/models/x:generateContent')]));
+    expect(traj.turns[0]!.toolCalls).toEqual(['get_weather']);
+    expect(traj.turns[0]!.stopReason).toBe('STOP');
+    expect(traj.turns[0]!.inputTokens).toBe(20);
+    expect(traj.turns[0]!.outputTokens).toBe(9);
+  });
+
+  it('extracts tool calls from Ollama (responseMessage.tool_calls)', () => {
+    const parsed = {
+      kind: 'ollama',
+      responseMessage: { content: '', tool_calls: [{ function: { name: 'lookup', arguments: {} } }] },
+      usage: { prompt_eval_count: 5, eval_count: 2 },
+    };
+    const traj = extractTrajectory(makeSession([makeRequest(parsed, '/api/chat')]));
+    expect(traj.turns[0]!.toolCalls).toEqual(['lookup']);
+    expect(traj.turns[0]!.inputTokens).toBe(5);
+    expect(traj.turns[0]!.outputTokens).toBe(2);
+  });
+});

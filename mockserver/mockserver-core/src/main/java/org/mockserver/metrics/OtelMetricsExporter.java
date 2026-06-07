@@ -199,9 +199,11 @@ public class OtelMetricsExporter {
 
     private static void registerActiveServiceChaosGauge(Meter meter) {
         meter.gaugeBuilder("mock_server_active_service_chaos")
-            .setDescription("Number of hosts with a currently-active service-scoped chaos profile (mirrors Prometheus gauge)")
+            .setDescription("Number of active service-scoped chaos profiles configured with each fault type (mirrors Prometheus gauge)")
             .ofLongs()
-            .buildWithCallback(m -> m.record(Metrics.getActiveServiceChaosCount()));
+            .buildWithCallback(m ->
+                Metrics.getActiveServiceChaosCountByFaultType().forEach((faultType, count) ->
+                    m.record(count, Attributes.of(AttributeKey.stringKey("fault_type"), faultType))));
     }
 
     private static void registerRequestDurationHistogram(Meter meter) {

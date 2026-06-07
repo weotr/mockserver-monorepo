@@ -1,0 +1,16 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/catalog"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"products\": [\"item-1\"]}"
+  },
+  "chaos": {
+    "errorStatus": 503,
+    "errorProbability": 1.0,
+    "outageAfterMillis": 5000,
+    "outageDurationMillis": 10000
+  }
+}

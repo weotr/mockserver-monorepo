@@ -217,6 +217,37 @@ public class SseAwareExpectationConverterTest {
     }
 
     @Test
+    public void shouldStripChunkDelaysHeaderFromTruncatedFallback() {
+        // given — a truncated SSE capture that also has the chunk-delays header
+        Expectation original = new Expectation(
+            request().withMethod("POST").withPath("/v1/messages"),
+            Times.once(),
+            TimeToLive.unlimited(),
+            0
+        ).thenRespond(
+            response()
+                .withStatusCode(200)
+                .withHeader("Content-Type", "text/event-stream")
+                .withHeader("x-mockserver-streamed", "true")
+                .withHeader("x-mockserver-stream-truncated", "true")
+                .withHeader("x-mockserver-chunk-delays-ms", "0,42,15")
+                .withBody("event: partial\ndata: {\"incomplete\":")
+        );
+
+        // when
+        Expectation[] converted = converter.convert(new Expectation[]{original});
+
+        // then — all internal headers should be removed
+        assertThat(converted[0].getHttpResponse(), notNullValue());
+        assertThat(converted[0].getHttpResponse().getFirstHeader("x-mockserver-streamed"), is(""));
+        assertThat(converted[0].getHttpResponse().getFirstHeader("x-mockserver-stream-truncated"), is(""));
+        assertThat(converted[0].getHttpResponse().getFirstHeader("x-mockserver-chunk-delays-ms"), is(""));
+        // warning header should be present
+        assertThat(converted[0].getHttpResponse().getFirstHeader("x-mockserver-fixture-warning"),
+            containsString("truncated"));
+    }
+
+    @Test
     public void shouldStripInternalHeadersFromSseResponse() {
         // given
         String sseBody = "data: test\n\n";

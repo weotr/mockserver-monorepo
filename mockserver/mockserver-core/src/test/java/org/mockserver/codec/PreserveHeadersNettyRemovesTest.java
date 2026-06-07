@@ -65,6 +65,29 @@ public class PreserveHeadersNettyRemovesTest {
     }
 
     @Test
+    public void shouldNotLeakPreservedHeadersToLaterRequestOnSameChannel() {
+        // given - a channel reused for two requests (e.g. a pooled connection)
+        PreserveHeadersNettyRemoves preserveHeadersNettyRemoves = new PreserveHeadersNettyRemoves();
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(preserveHeadersNettyRemoves);
+
+        DefaultFullHttpRequest compressedRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/uri");
+        compressedRequest.headers().add(HttpHeaderNames.CONTENT_ENCODING, "gzip");
+
+        DefaultFullHttpRequest plainRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/uri");
+
+        // when - the first request is compressed and the second is not
+        embeddedChannel.writeInbound(compressedRequest);
+        assertThat(PreserveHeadersNettyRemoves.preservedHeaders(embeddedChannel), equalTo(Collections.singletonList(
+            new Header(HttpHeaderNames.CONTENT_ENCODING.toString(), "gzip")
+        )));
+
+        embeddedChannel.writeInbound(plainRequest);
+
+        // then - the second request must not inherit the first request's Content-Encoding
+        assertThat(PreserveHeadersNettyRemoves.preservedHeaders(embeddedChannel), equalTo(Collections.emptyList()));
+    }
+
+    @Test
     public void shouldPreserveBothContentEncodingAndTransferEncoding() {
         // given
         PreserveHeadersNettyRemoves preserveHeadersNettyRemoves = new PreserveHeadersNettyRemoves();

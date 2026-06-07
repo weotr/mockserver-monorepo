@@ -1,0 +1,35 @@
+[
+  {
+    "httpRequest": {
+      "path": "/somePathOne"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": {
+        "value": "one"
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "path": "/somePathTwo"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": {
+        "value": "two"
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "path": "/somePathThree"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": {
+        "value": "three"
+      }
+    }
+  }
+]

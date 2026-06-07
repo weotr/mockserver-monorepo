@@ -10,6 +10,8 @@ import org.mockserver.cors.CORSHeaders;
 import org.mockserver.file.FileStore;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcProtoFileCompiler;
+import org.mockserver.llm.ParsedConversation;
+import org.mockserver.llm.ParsedMessage;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.mock.crud.CrudActionHandler;
 import org.mockserver.mock.crud.CrudDataStore;
@@ -24,6 +26,7 @@ import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.listeners.MockServerMatcherNotifier.Cause;
 import org.mockserver.model.*;
 import org.mockserver.openapi.OpenAPIConverter;
+import org.mockserver.openapi.OpenApiSyncPlanner;
 import org.mockserver.persistence.ExpectationFileSystemPersistence;
 import org.mockserver.persistence.ExpectationFileWatcher;
 import org.mockserver.responsewriter.ResponseWriter;
@@ -33,6 +36,9 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.java.ExpectationToJavaSerializer;
 import org.mockserver.serialization.YamlToJsonConverter;
 import org.mockserver.server.initialize.ExpectationInitializerLoader;
+import org.mockserver.state.InvalidationListener;
+import org.mockserver.state.StateBackend;
+import org.mockserver.state.StateBackendFactory;
 import org.mockserver.time.TimeService;
 import org.mockserver.uuid.UUIDService;
 import org.mockserver.verify.Verification;
@@ -43,6 +49,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -82,6 +89,8 @@ public class HttpState {
     private ExpectationFileWatcher expectationFileWatcher;
     // mockserver
     private final RequestMatchers requestMatchers;
+    // G10 phase 2a: pluggable state backend (default in-memory, clustered in 2b+)
+    private final StateBackend stateBackend;
     private final Configuration configuration;
     // Adds CORS headers to dashboard-facing control-plane responses (e.g. service
     // chaos) so the dashboard works when served from another origin (a dev server),
@@ -109,6 +118,12 @@ public class HttpState {
     private GrpcProtoDescriptorStore grpcDescriptorStore;
     private final FileStore fileStore = new FileStore();
     private final CrudDispatcher crudDispatcher = new CrudDispatcher();
+    // last operating mode explicitly set via PUT /mockserver/mode (so GET round-trips CAPTURE,
+    // which shares the proxy-on-no-match flag with SPY); reconciled against the live flag on read
+    private volatile MockMode mockMode;
+    // optional — set by LifeCycle when a runtime LLM backend is configured
+    private volatile org.mockserver.llm.client.LlmCompletionService llmCompletionService;
+    private volatile org.mockserver.llm.client.LlmBackend llmBackend;
 
     public static void setPort(final HttpRequest request) {
         if (request != null && request.getSocketAddress() != null) {
@@ -145,12 +160,33 @@ public class HttpState {
         this.webSocketClientRegistry = new WebSocketClientRegistry(configuration, mockServerLogger);
         LocalCallbackRegistry.setMaxWebSocketExpectations(configuration.maxWebSocketExpectations());
         this.mockServerLog = new MockServerEventLog(configuration, mockServerLogger, scheduler, true);
-        this.requestMatchers = new RequestMatchers(configuration, mockServerLogger, scheduler, webSocketClientRegistry);
+        // G10 phase 2a: create the pluggable state backend (default in-memory, clustered in 2b+).
+        this.stateBackend = StateBackendFactory.create(configuration);
+        // G10 phase 1: obtain the expectation store via the pluggable factory (default = standard
+        // in-memory RequestMatchers; an optional clustered backend can register an alternative).
+        this.requestMatchers = ExpectationStoreFactory.create(configuration, mockServerLogger, scheduler, webSocketClientRegistry);
+        this.requestMatchers.setStateBackend(stateBackend);
+        // G10 phase 2c: wire invalidation listener so remote cluster writes
+        // trigger a node-local view rebuild (reconcileFromBackend). For
+        // single-node/LOCAL backends the listener fires locally only (no-op
+        // because the node-local CPQ is already in sync from the local put).
+        stateBackend.addInvalidationListener(new InvalidationListener() {
+            @Override
+            public void onChanged(String key) {
+                requestMatchers.reconcileFromBackend();
+            }
+
+            @Override
+            public void onCleared() {
+                requestMatchers.reconcileFromBackend();
+            }
+        });
+        Metrics.setActiveExpectationsSupplier(() -> requestMatchers.retrieveActiveExpectations(null));
         if (configuration.persistExpectations()) {
-            this.expectationFileSystemPersistence = new ExpectationFileSystemPersistence(configuration, mockServerLogger, requestMatchers);
+            this.expectationFileSystemPersistence = new ExpectationFileSystemPersistence(configuration, mockServerLogger, requestMatchers, stateBackend.blobs());
         }
         if (configuration.persistRecordedExpectations()) {
-            this.recordedExpectationFileSystemPersistence = new org.mockserver.persistence.RecordedExpectationFileSystemPersistence(configuration, mockServerLogger, mockServerLog);
+            this.recordedExpectationFileSystemPersistence = new org.mockserver.persistence.RecordedExpectationFileSystemPersistence(configuration, mockServerLogger, mockServerLog, stateBackend.blobs());
         }
         if (isNotBlank(configuration.initializationJsonPath()) || isNotBlank(configuration.initializationOpenAPIPath()) || isNotBlank(configuration.initializationClass())) {
             ExpectationInitializerLoader expectationInitializerLoader = new ExpectationInitializerLoader(configuration, mockServerLogger, requestMatchers);
@@ -158,6 +194,7 @@ public class HttpState {
                 this.expectationFileWatcher = new ExpectationFileWatcher(configuration, mockServerLogger, requestMatchers, expectationInitializerLoader);
             }
         }
+        CrossProtocolEventBus.getInstance().setScenarioManager(requestMatchers.getScenarioManager());
         this.memoryMonitoring = new MemoryMonitoring(configuration, this.mockServerLog, this.requestMatchers);
         if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
             mockServerLogger.logEvent(
@@ -205,6 +242,18 @@ public class HttpState {
 
     public Configuration getConfiguration() {
         return configuration;
+    }
+
+    /**
+     * Install the LLM completion service and default backend for runtime features
+     * that call out to an LLM (e.g. AI stub generation). Called by LifeCycle when
+     * a backend is configured; null-safe — when not called the stub generation
+     * endpoint falls back to template-based stubs.
+     */
+    public void setLlmCompletionService(org.mockserver.llm.client.LlmCompletionService llmCompletionService,
+                                        org.mockserver.llm.client.LlmBackend llmBackend) {
+        this.llmCompletionService = llmCompletionService;
+        this.llmBackend = llmBackend;
     }
 
     public MockServerLogger getMockServerLogger() {
@@ -280,6 +329,8 @@ public class HttpState {
 
     public void reset() {
         requestMatchers.reset();
+        requestMatchers.getScenarioManager().cancelAllPendingTransitions();
+        CrossProtocolEventBus.getInstance().reset();
         mockServerLog.reset();
         webSocketClientRegistry.reset();
         crudDispatcher.reset();
@@ -287,6 +338,14 @@ public class HttpState {
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reset();
+        org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
+        org.mockserver.wasm.WasmStore.getInstance().reset();
+        org.mockserver.mock.drift.DriftStore.getInstance().clear();
+        CassetteRegistry.getInstance().reset();
+        org.mockserver.mock.dns.DnsIntentRegistry.getInstance().clear();
+        org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance().reset();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -314,12 +373,51 @@ public class HttpState {
     }
 
     public List<Expectation> add(OpenAPIExpectation openAPIExpectation) {
-        return getOpenAPIConverter().buildExpectations(openAPIExpectation.getSpecUrlOrPayload(), openAPIExpectation.getOperationsAndResponses(), openAPIExpectation.getContextPathPrefix()).stream().map(this::add).flatMap(List::stream).collect(Collectors.toList());
+        List<Expectation> newExpectations = getOpenAPIConverter().buildExpectations(
+            openAPIExpectation.getSpecUrlOrPayload(),
+            openAPIExpectation.getOperationsAndResponses(),
+            openAPIExpectation.getContextPathPrefix()
+        );
+
+        // Incremental sync: determine the namespace prefixes covered by this
+        // import, find stale expectations in those namespaces, and prune them.
+        Set<String> newIds = newExpectations.stream()
+            .map(Expectation::getId)
+            .collect(Collectors.toSet());
+        Set<String> namespacePrefixes = newIds.stream()
+            .filter(id -> id.startsWith(OpenApiSyncPlanner.OPENAPI_ID_PREFIX))
+            .map(id -> {
+                // Extract "openapi:<specKey>:" prefix — everything up to and including the second ':'
+                int secondColon = id.indexOf(':', OpenApiSyncPlanner.OPENAPI_ID_PREFIX.length());
+                return secondColon >= 0 ? id.substring(0, secondColon + 1) : id + ":";
+            })
+            .collect(Collectors.toSet());
+        if (!namespacePrefixes.isEmpty()) {
+            List<String> existingIds = requestMatchers.retrieveActiveExpectations(null).stream()
+                .map(Expectation::getId)
+                .collect(Collectors.toList());
+            Set<String> toPrune = OpenApiSyncPlanner.idsToPrune(existingIds, newIds, namespacePrefixes);
+            String logCorrelationId = UUIDService.getUUID();
+            for (String pruneId : toPrune) {
+                requestMatchers.clear(ExpectationId.expectationId(pruneId), logCorrelationId);
+            }
+        }
+
+        // Upsert the new expectations (add() does upsert-by-id)
+        return newExpectations.stream()
+            .map(this::add)
+            .flatMap(List::stream)
+            .collect(Collectors.toList());
     }
 
     public List<Expectation> add(Expectation... expectations) {
         List<Expectation> upsertedExpectations = new ArrayList<>();
         for (Expectation expectation : expectations) {
+            // validate steps if present
+            String stepsError = expectation.validateSteps();
+            if (stepsError != null) {
+                throw new IllegalArgumentException("invalid expectation steps: " + stepsError);
+            }
             RequestDefinition requestDefinition = expectation.getHttpRequest();
             if (requestDefinition instanceof HttpRequest) {
                 final String hostHeader = ((HttpRequest) requestDefinition).getFirstHeader(HOST.toString());
@@ -341,6 +439,21 @@ public class HttpState {
     }
 
     /**
+     * Side-effect-free probe: returns the first matching expectation WITHOUT consuming the
+     * match (no Times decrement, no scenario transition, no responseInProgress, no metrics).
+     * Note: the underlying matcher evaluation may still emit INFO-level EXPECTATION_MATCHED /
+     * EXPECTATION_NOT_MATCHED diagnostic logs; this method avoids the consuming side-effects
+     * only. Used by the gRPC bidi router to inspect the action type before committing
+     * to a handler — the real consuming match happens separately on the committed path.
+     */
+    public Expectation peekFirstMatchingExpectation(RequestDefinition request) {
+        if (requestMatchers.isEmpty()) {
+            return null;
+        }
+        return requestMatchers.peekFirstMatchingExpectation(request);
+    }
+
+    /**
      * Returns the first expectation whose matcher has respondBeforeBody=true, has no body matcher,
      * and matches the supplied headers-only request. Used by the early-response path that runs
      * before the request body is aggregated.
@@ -357,7 +470,11 @@ public class HttpState {
         if (requestMatchers.isEmpty()) {
             return Collections.emptyList();
         } else {
-            return requestMatchers.retrieveActiveExpectations(request);
+            // Forward matching ("does each expectation match this concrete request?"),
+            // NOT the filter/reverse semantics of retrieveActiveExpectations — the
+            // incoming request carries headers/cookies bare stubs lack, so reverse
+            // matching would return nothing (this is what silently broke drift analysis).
+            return requestMatchers.retrieveExpectationsMatchingRequest(request);
         }
     }
 
@@ -1276,6 +1393,205 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/wsdl", "/wsdl")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        List<Expectation> upsertedExpectations = add(
+                            new org.mockserver.mock.wsdl.WsdlExpectationGenerator()
+                                .generate(request.getBodyAsJsonOrXmlString())
+                                .toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for wsdl expectation:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/oidc", "/oidc")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        org.mockserver.oidc.OidcProviderConfiguration oidcConfig;
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            oidcConfig = new org.mockserver.oidc.OidcProviderConfiguration();
+                        } else {
+                            oidcConfig = ObjectMapperFactory.createObjectMapper()
+                                .readValue(requestBody, org.mockserver.oidc.OidcProviderConfiguration.class);
+                        }
+                        List<Expectation> upsertedExpectations = add(
+                            new org.mockserver.oidc.OidcProviderGenerator()
+                                .generate(oidcConfig)
+                                .toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for oidc provider:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for oidc provider:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/import", "/import")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            throw new IllegalArgumentException("import request body is required — must be a HAR or Postman collection JSON document");
+                        }
+                        String formatParam = request.getFirstQueryStringParameter("format");
+                        List<Expectation> importedExpectations;
+                        if ("har".equalsIgnoreCase(formatParam)) {
+                            importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody);
+                        } else if ("postman".equalsIgnoreCase(formatParam)) {
+                            importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody);
+                        } else if (formatParam != null && !formatParam.isEmpty()) {
+                            throw new IllegalArgumentException("unsupported import format: " + formatParam + " (supported formats: har, postman)");
+                        } else {
+                            // Auto-detect format from JSON structure
+                            com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(requestBody);
+                            if (!rootNode.path("log").path("entries").isMissingNode()) {
+                                importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody);
+                            } else if (!rootNode.path("info").isMissingNode() && !rootNode.path("item").isMissingNode()) {
+                                importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody);
+                            } else {
+                                throw new IllegalArgumentException("unable to auto-detect import format — use ?format=har or ?format=postman query parameter");
+                            }
+                        }
+                        List<Expectation> upsertedExpectations = add(
+                            importedExpectations.toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for import:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for import:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/pact/verify", "/pact/verify")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, handlePactVerify(request), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/pact", "/pact")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String consumer = request.getFirstQueryStringParameter("consumer");
+                        String provider = request.getFirstQueryStringParameter("provider");
+                        String pact = new org.mockserver.mock.pact.PactExporter()
+                            .export(requestMatchers.retrieveActiveExpectations(null), consumer, provider);
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody(pact, MediaType.JSON_UTF_8), true);
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for pact export:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/mode", "/mode")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        MockMode mode = MockMode.parse(request.getFirstQueryStringParameter("mode"));
+                        mockMode = mode;
+                        configuration.attemptToProxyIfNoMatchingExpectation(mode.proxyUnmatchedRequests());
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody("{\"mode\":\"" + mode + "\",\"proxyUnmatchedRequests\":" + mode.proxyUnmatchedRequests() + "}", MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, iae.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/clear", "/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1299,10 +1615,45 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/cassettes", "/cassettes")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesPut(request)), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/asyncapi/verify", "/asyncapi/verify")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleAsyncApiVerify(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/asyncapi", "/asyncapi")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleAsyncApiPut(request)), true);
                 }
                 canHandle.complete(true);
 
@@ -1445,11 +1796,42 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcHealthPut(request)), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/grpc/clear", "/grpc/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     grpcDescriptorStore.reset();
                     responseWriter.writeResponse(request, OK);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String moduleName = request.getFirstQueryStringParameter("name");
+                        if (isBlank(moduleName)) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                        } else {
+                            byte[] bodyBytes = request.getBodyAsRawBytes();
+                            if (bodyBytes != null && bodyBytes.length > 0) {
+                                org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
+                                responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                                    .withStatusCode(CREATED.code())
+                                    .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8)), true);
+                            } else {
+                                responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                            }
+                        }
+                    } catch (Exception e) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
+                    }
                 }
                 canHandle.complete(true);
 
@@ -1547,6 +1929,40 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/generateExpectation", "/generateExpectation")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGenerateExpectation(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT") && request.getPath() != null
+                && request.getPath().getValue() != null
+                && (request.getPath().getValue().startsWith(PATH_PREFIX + "/scenario/")
+                    || request.getPath().getValue().startsWith("/scenario/"))) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleScenarioPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/diff", "/diff")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleDiff(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/drift/clear", "/drift/clear")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    org.mockserver.mock.drift.DriftStore.getInstance().clear();
+                    responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                        .withStatusCode(OK.code())
+                        .withBody("{\"status\":\"cleared\"}", MediaType.JSON_UTF_8)), true);
+                }
+                canHandle.complete(true);
+
             } else {
 
                 canHandle.complete(false);
@@ -1574,9 +1990,133 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/cassettes", "/cassettes")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesGet()), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/mode", "/mode")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    boolean proxyFlag = configuration.attemptToProxyIfNoMatchingExpectation();
+                    // report the last explicitly-set mode when it still agrees with the live flag
+                    // (so CAPTURE round-trips), otherwise derive the mode from the flag
+                    MockMode mode = (mockMode != null && mockMode.proxyUnmatchedRequests() == proxyFlag)
+                        ? mockMode
+                        : MockMode.fromProxyFlag(proxyFlag);
+                    responseWriter.writeResponse(request, response()
+                        .withStatusCode(OK.code())
+                        .withBody("{\"mode\":\"" + mode + "\",\"proxyUnmatchedRequests\":" + mode.proxyUnmatchedRequests() + "}", MediaType.JSON_UTF_8), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                        com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
+                        for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
+                            modulesArray.add(name);
+                        }
+                        responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8)), true);
+                    } catch (Exception e) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/asyncapi", "/asyncapi")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleAsyncApiGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/drift", "/drift")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleDriftGet(request)), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcHealthGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET") && request.getPath() != null
+                && request.getPath().getValue() != null
+                && (request.getPath().getValue().startsWith(PATH_PREFIX + "/scenario/")
+                    || request.getPath().getValue().startsWith("/scenario/")
+                    || request.getPath().getValue().equals(PATH_PREFIX + "/scenario")
+                    || request.getPath().getValue().equals("/scenario"))) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleScenarioGet(request)), true);
+                }
+                return true;
+            }
+            return false;
+
+        } else if (request.matches("PATCH")) {
+
+            if (request.matches("PATCH", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosPatch(request)), true);
+                }
+                return true;
+            }
+            if (request.matches("PATCH", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosPatch(request)), true);
+                }
+                return true;
+            }
+            if (request.matches("PATCH", PATH_PREFIX + "/grpcChaos", "/grpcChaos")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcChaosPatch(request)), true);
+                }
+                return true;
+            }
+            return false;
+
+        } else if (request.matches("DELETE")) {
+
+            if (request.matches("DELETE", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    String moduleName = request.getFirstQueryStringParameter("name");
+                    if (isBlank(moduleName)) {
+                        responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                    } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
+                        org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
+                        responseWriter.writeResponse(request, withDashboardCORS(request, response().withStatusCode(OK.code())), true);
+                    } else {
+                        responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                    }
+                }
+                return true;
+            }
+            if (request.matches("DELETE", PATH_PREFIX + "/cassettes", "/cassettes")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesDelete(request)), true);
                 }
                 return true;
             }
@@ -1770,6 +2310,42 @@ public class HttpState {
         }
     }
 
+    private HttpResponse handleServiceChaosPatch(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return serviceChaosError(objectMapper, "request body is required with 'host' and 'chaos' fields");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String host = node.path("host").asText(null);
+            if (isBlank(host)) {
+                return serviceChaosError(objectMapper, "'host' field is required");
+            }
+            if (!node.hasNonNull("chaos")) {
+                return serviceChaosError(objectMapper, "'chaos' field is required with at least one field to patch");
+            }
+            org.mockserver.serialization.model.HttpChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.HttpChaosProfileDTO.class);
+            org.mockserver.model.HttpChaosProfile partial = dto.buildObject();
+            org.mockserver.mock.action.http.ServiceChaosRegistry registry = org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance();
+            org.mockserver.model.HttpChaosProfile updated = registry.patch(host, partial);
+            logServiceChaos(request, "patched service-scoped chaos for host:{}", host);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "patched");
+            result.put("host", host);
+            if (updated != null) {
+                result.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(updated)));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return serviceChaosError(objectMapper, "invalid chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return serviceChaosError(objectMapper, "failed to process service chaos patch: " + e.getMessage());
+        }
+    }
+
     /**
      * Add CORS headers to a dashboard-facing control-plane response unconditionally,
      * so the dashboard works when served from a different origin (e.g. the UI dev
@@ -1828,6 +2404,897 @@ public class HttpState {
         } catch (Exception jsonError) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to process service chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- TCP Chaos endpoint helpers ---
+
+    private HttpResponse handleTcpChaosPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return tcpChaosError(objectMapper, "request body is required with a 'host' field (and a 'chaos' object), or 'clear':true to clear all");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            boolean clearAll = node.path("clear").asBoolean(false);
+            String host = node.path("host").asText(null);
+            org.mockserver.mock.action.http.TcpChaosRegistry registry = org.mockserver.mock.action.http.TcpChaosRegistry.getInstance();
+            if (clearAll && !isBlank(host)) {
+                return tcpChaosError(objectMapper, "cannot specify both 'clear' and 'host'");
+            }
+            if (clearAll) {
+                registry.reset();
+                logTcpChaos(request, "cleared all TCP-layer chaos", null);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "cleared");
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            if (isBlank(host)) {
+                return tcpChaosError(objectMapper, "'host' field is required");
+            }
+            if (node.path("remove").asBoolean(false) || !node.hasNonNull("chaos")) {
+                registry.remove(host);
+                logTcpChaos(request, "removed TCP-layer chaos for host:{}", host);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "removed");
+                result.put("host", host);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            long ttlMillis = 0L;
+            if (node.hasNonNull("ttlMillis")) {
+                ttlMillis = node.path("ttlMillis").asLong(0L);
+                if (ttlMillis < 1) {
+                    return tcpChaosError(objectMapper, "'ttlMillis' must be >= 1 when supplied");
+                }
+            }
+            org.mockserver.serialization.model.TcpChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.TcpChaosProfileDTO.class);
+            org.mockserver.model.TcpChaosProfile profile = dto.buildObject();
+            registry.put(host, profile, ttlMillis);
+            logTcpChaos(request, ttlMillis > 0
+                ? "registered TCP-layer chaos (ttl " + ttlMillis + "ms) for host:{}"
+                : "registered TCP-layer chaos for host:{}", host);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("host", host);
+            if (ttlMillis > 0) {
+                result.put("ttlMillis", ttlMillis);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return tcpChaosError(objectMapper, "invalid TCP chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return tcpChaosError(objectMapper, "failed to process TCP chaos request: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleTcpChaosPatch(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return tcpChaosError(objectMapper, "request body is required with 'host' and 'chaos' fields");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String host = node.path("host").asText(null);
+            if (isBlank(host)) {
+                return tcpChaosError(objectMapper, "'host' field is required");
+            }
+            if (!node.hasNonNull("chaos")) {
+                return tcpChaosError(objectMapper, "'chaos' field is required with at least one field to patch");
+            }
+            org.mockserver.serialization.model.TcpChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.TcpChaosProfileDTO.class);
+            org.mockserver.model.TcpChaosProfile partial = dto.buildObject();
+            org.mockserver.mock.action.http.TcpChaosRegistry registry = org.mockserver.mock.action.http.TcpChaosRegistry.getInstance();
+            org.mockserver.model.TcpChaosProfile updated = registry.patch(host, partial);
+            logTcpChaos(request, "patched TCP-layer chaos for host:{}", host);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "patched");
+            result.put("host", host);
+            if (updated != null) {
+                result.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.TcpChaosProfileDTO(updated)));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return tcpChaosError(objectMapper, "invalid TCP chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return tcpChaosError(objectMapper, "failed to process TCP chaos patch: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleTcpChaosGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.TcpChaosRegistry registry = org.mockserver.mock.action.http.TcpChaosRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode hosts = result.putObject("hosts");
+            registry.entries().forEach((host, profile) ->
+                hosts.set(host, objectMapper.valueToTree(new org.mockserver.serialization.model.TcpChaosProfileDTO(profile))));
+            java.util.Map<String, Long> ttlRemaining = registry.ttlRemainingMillis();
+            if (!ttlRemaining.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ObjectNode ttlNode = result.putObject("ttlRemainingMillis");
+                ttlRemaining.forEach((h, ms) -> ttlNode.put(h, ms.longValue()));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get TCP chaos\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private void logTcpChaos(HttpRequest request, String messageFormat, String host) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            LogEntry entry = new LogEntry()
+                .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request)
+                .setMessageFormat(messageFormat);
+            if (host != null) {
+                entry.setArguments(host);
+            }
+            mockServerLogger.logEvent(entry);
+        }
+    }
+
+    private HttpResponse tcpChaosError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process TCP chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- gRPC Chaos endpoint helpers ---
+
+    private HttpResponse handleGrpcChaosPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return grpcChaosError(objectMapper, "request body is required with a 'service' field (and a 'chaos' object), or 'clear':true to clear all");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            boolean clearAll = node.path("clear").asBoolean(false);
+            String service = node.has("service") ? node.path("service").asText("") : null;
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            if (clearAll && service != null) {
+                return grpcChaosError(objectMapper, "cannot specify both 'clear' and 'service'");
+            }
+            if (clearAll) {
+                registry.reset();
+                logGrpcChaos(request, "cleared all gRPC chaos", null);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "cleared");
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            if (service == null) {
+                return grpcChaosError(objectMapper, "'service' field is required");
+            }
+            if (node.path("remove").asBoolean(false) || !node.hasNonNull("chaos")) {
+                registry.remove(service);
+                logGrpcChaos(request, "removed gRPC chaos for service:{}", service);
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "removed");
+                result.put("service", service);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            long ttlMillis = 0L;
+            if (node.hasNonNull("ttlMillis")) {
+                ttlMillis = node.path("ttlMillis").asLong(0L);
+                if (ttlMillis < 1) {
+                    return grpcChaosError(objectMapper, "'ttlMillis' must be >= 1 when supplied");
+                }
+            }
+            org.mockserver.serialization.model.GrpcChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.GrpcChaosProfileDTO.class);
+            org.mockserver.model.GrpcChaosProfile profile = dto.buildObject();
+            registry.put(service, profile, ttlMillis);
+            logGrpcChaos(request, ttlMillis > 0
+                ? "registered gRPC chaos (ttl " + ttlMillis + "ms) for service:{}"
+                : "registered gRPC chaos for service:{}", service);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("service", service);
+            if (ttlMillis > 0) {
+                result.put("ttlMillis", ttlMillis);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return grpcChaosError(objectMapper, "invalid gRPC chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return grpcChaosError(objectMapper, "failed to process gRPC chaos request: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleGrpcChaosPatch(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return grpcChaosError(objectMapper, "request body is required with 'service' and 'chaos' fields");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String service = node.has("service") ? node.path("service").asText("") : null;
+            if (service == null) {
+                return grpcChaosError(objectMapper, "'service' field is required");
+            }
+            if (!node.hasNonNull("chaos")) {
+                return grpcChaosError(objectMapper, "'chaos' field is required with at least one field to patch");
+            }
+            org.mockserver.serialization.model.GrpcChaosProfileDTO dto =
+                objectMapper.treeToValue(node.get("chaos"), org.mockserver.serialization.model.GrpcChaosProfileDTO.class);
+            org.mockserver.model.GrpcChaosProfile partial = dto.buildObject();
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            org.mockserver.model.GrpcChaosProfile updated = registry.patch(service, partial);
+            logGrpcChaos(request, "patched gRPC chaos for service:{}", service);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "patched");
+            result.put("service", service);
+            if (updated != null) {
+                result.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.GrpcChaosProfileDTO(updated)));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return grpcChaosError(objectMapper, "invalid gRPC chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return grpcChaosError(objectMapper, "failed to process gRPC chaos patch: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleGrpcChaosGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.GrpcChaosRegistry registry = org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode services = result.putObject("services");
+            registry.entries().forEach((service, profile) ->
+                services.set(service, objectMapper.valueToTree(new org.mockserver.serialization.model.GrpcChaosProfileDTO(profile))));
+            java.util.Map<String, Long> ttlRemaining = registry.ttlRemainingMillis();
+            if (!ttlRemaining.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ObjectNode ttlNode = result.putObject("ttlRemainingMillis");
+                ttlRemaining.forEach((s, ms) -> ttlNode.put(s, ms.longValue()));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get gRPC chaos\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private void logGrpcChaos(HttpRequest request, String messageFormat, String service) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            LogEntry entry = new LogEntry()
+                .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request)
+                .setMessageFormat(messageFormat);
+            if (service != null) {
+                entry.setArguments(service);
+            }
+            mockServerLogger.logEvent(entry);
+        }
+    }
+
+    private HttpResponse grpcChaosError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process gRPC chaos request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- Scenario endpoint helpers ---
+
+    /**
+     * Extracts the scenario name from a request path.
+     * Handles both {@code /mockserver/scenario/{name}} and {@code /scenario/{name}} prefixes.
+     * Returns the full remaining path after the prefix (which may include "/trigger" suffix).
+     */
+    private String extractScenarioPath(HttpRequest request) {
+        String path = request.getPath().getValue();
+        String prefixFull = PATH_PREFIX + "/scenario/";
+        String prefixShort = "/scenario/";
+        if (path.startsWith(prefixFull)) {
+            return path.substring(prefixFull.length());
+        } else if (path.startsWith(prefixShort)) {
+            return path.substring(prefixShort.length());
+        }
+        return null;
+    }
+
+    /**
+     * Handles PUT /mockserver/scenario/{name} and PUT /mockserver/scenario/{name}/trigger.
+     * <p>
+     * PUT /mockserver/scenario/{name}:
+     *   Body: {"state": "Running"} — set state immediately
+     *   Body: {"state": "Running", "transitionAfterMs": 5000, "nextState": "Finished"} — set state and schedule timed transition
+     * <p>
+     * PUT /mockserver/scenario/{name}/trigger:
+     *   Body: {"newState": "Step3"} — set state to newState immediately
+     */
+    private HttpResponse handleScenarioPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String scenarioPath = extractScenarioPath(request);
+            if (isBlank(scenarioPath)) {
+                return scenarioError(objectMapper, "scenario name is required in the path");
+            }
+
+            boolean isTrigger = scenarioPath.endsWith("/trigger");
+            String scenarioName = isTrigger ? scenarioPath.substring(0, scenarioPath.length() - "/trigger".length()) : scenarioPath;
+
+            if (isBlank(scenarioName)) {
+                return scenarioError(objectMapper, "scenario name is required in the path");
+            }
+
+            ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+            String body = request.getBodyAsJsonOrXmlString();
+
+            if (isTrigger) {
+                // PUT /mockserver/scenario/{name}/trigger — external trigger to set state
+                if (isBlank(body)) {
+                    return scenarioError(objectMapper, "request body is required with 'newState' field");
+                }
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+                String newState = node.path("newState").asText(null);
+                if (isBlank(newState)) {
+                    return scenarioError(objectMapper, "'newState' field is required");
+                }
+                scenarioManager.setState(scenarioName, newState);
+                logScenario(request, "triggered scenario state transition for scenario:{} to state:{}", scenarioName, newState);
+
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("scenarioName", scenarioName);
+                result.put("currentState", newState);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            } else {
+                // PUT /mockserver/scenario/{name} — set state, optionally schedule transition
+                if (isBlank(body)) {
+                    return scenarioError(objectMapper, "request body is required with 'state' field");
+                }
+                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+                String state = node.path("state").asText(null);
+                if (isBlank(state)) {
+                    return scenarioError(objectMapper, "'state' field is required");
+                }
+                scenarioManager.setState(scenarioName, state);
+                logScenario(request, "set scenario state for scenario:{} to state:{}", scenarioName, state);
+
+                // optional timed transition
+                Long transitionAfterMs = node.hasNonNull("transitionAfterMs") ? node.get("transitionAfterMs").asLong() : null;
+                String nextState = node.path("nextState").asText(null);
+
+                if (transitionAfterMs != null && transitionAfterMs > 0 && isNotBlank(nextState)) {
+                    TimedScenarioTransition transition = new TimedScenarioTransition()
+                        .withScenarioName(scenarioName)
+                        .withCurrentState(state)
+                        .withNextState(nextState)
+                        .withTransitionAfterMs(transitionAfterMs);
+                    scenarioManager.scheduleTransition(transition, scheduler);
+                    logScenario(request, "scheduled timed transition for scenario:{} from state:{} to state:{} after {}ms",
+                        scenarioName, state, nextState, String.valueOf(transitionAfterMs));
+                }
+
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("scenarioName", scenarioName);
+                result.put("currentState", state);
+                if (transitionAfterMs != null && transitionAfterMs > 0 && isNotBlank(nextState)) {
+                    result.put("nextState", nextState);
+                    result.put("transitionAfterMs", transitionAfterMs);
+                }
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+        } catch (Exception e) {
+            return scenarioError(objectMapper, "failed to process scenario request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles GET /mockserver/scenario/{name} — returns the current state of a scenario.
+     * When no name is supplied (GET /mockserver/scenario), returns the list of all known
+     * scenarios and their current states (see {@link #handleScenarioList()}).
+     */
+    private HttpResponse handleScenarioGet(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String scenarioPath = extractScenarioPath(request);
+            if (isBlank(scenarioPath)) {
+                return handleScenarioList();
+            }
+
+            ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+            String currentState = scenarioManager.getState(scenarioPath);
+
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("scenarioName", scenarioPath);
+            result.put("currentState", currentState);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return scenarioError(objectMapper, "failed to get scenario state: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles GET /mockserver/scenario — returns every known scenario and its current state
+     * as {@code { "scenarios": [ { "scenarioName", "currentState" }, ... ] }} so the dashboard
+     * can list existing scenarios without the caller having to know their names in advance.
+     */
+    private HttpResponse handleScenarioList() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode scenarios = result.putArray("scenarios");
+            for (java.util.Map.Entry<String, String> entry : scenarioManager.getAllStates().entrySet()) {
+                com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+                node.put("scenarioName", entry.getKey());
+                node.put("currentState", entry.getValue());
+                scenarios.add(node);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return scenarioError(objectMapper, "failed to list scenarios: " + e.getMessage());
+        }
+    }
+
+    // --- Cassette registry endpoint helpers ---
+
+    /**
+     * Handles GET /mockserver/cassettes — lists every cassette tracked server-side as
+     * {@code { "cassettes": [ { "path", "filename", "expectationCount", "origin", "lastUsed" } ] }},
+     * most-recently-used first. The dashboard merges this with its per-browser list so cassettes
+     * recorded/loaded anywhere (or seeded by automation) are visible across reloads and browsers.
+     */
+    private HttpResponse handleCassettesGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode cassettes = result.putArray("cassettes");
+            for (CassetteRegistry.Entry entry : CassetteRegistry.getInstance().list()) {
+                com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+                node.put("path", entry.path);
+                node.put("filename", entry.filename);
+                node.put("expectationCount", entry.expectationCount);
+                node.put("origin", entry.origin);
+                node.put("lastUsed", entry.lastUsedEpochMillis);
+                cassettes.add(node);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return cassetteError(objectMapper, "failed to list cassettes: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles PUT /mockserver/cassettes — registers (or updates) a cassette from a JSON body
+     * {@code { "path", "filename"?, "expectationCount"?, "origin"? }}. {@code path} is required.
+     */
+    private HttpResponse handleCassettesPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return cassetteError(objectMapper, "request body is required with a 'path' field");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String path = node.path("path").asText(null);
+            if (isBlank(path)) {
+                return cassetteError(objectMapper, "'path' field is required");
+            }
+            String filename = node.path("filename").asText(null);
+            int expectationCount = node.path("expectationCount").asInt(-1);
+            String origin = node.path("origin").asText(null);
+            CassetteRegistry.Entry entry = CassetteRegistry.getInstance().register(path, filename, expectationCount, origin);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("path", entry.path);
+            result.put("filename", entry.filename);
+            result.put("expectationCount", entry.expectationCount);
+            result.put("origin", entry.origin);
+            result.put("lastUsed", entry.lastUsedEpochMillis);
+            return response().withStatusCode(CREATED.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return cassetteError(objectMapper, "failed to register cassette: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles DELETE /mockserver/cassettes — removes a cassette by path, supplied either as the
+     * {@code path} query parameter or a JSON body {@code { "path": "..." }}.
+     */
+    private HttpResponse handleCassettesDelete(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String path = request.getFirstQueryStringParameter("path");
+            if (isBlank(path)) {
+                String body = request.getBodyAsJsonOrXmlString();
+                if (!isBlank(body)) {
+                    path = objectMapper.readTree(body).path("path").asText(null);
+                }
+            }
+            if (isBlank(path)) {
+                return cassetteError(objectMapper, "'path' is required (query parameter or body field)");
+            }
+            boolean removed = CassetteRegistry.getInstance().remove(path);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("removed", removed);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return cassetteError(objectMapper, "failed to remove cassette: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse cassetteError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writeValueAsString(objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process cassette request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private void logScenario(HttpRequest request, String messageFormat, String... args) {
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                    .setLogLevel(Level.INFO)
+                    .setHttpRequest(request)
+                    .setMessageFormat(messageFormat)
+                    .setArguments((Object[]) args)
+            );
+        }
+    }
+
+    private HttpResponse scenarioError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process scenario request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGenerateExpectation(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return generateExpectationError(objectMapper, "request body is required with 'request' field");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            if (!node.hasNonNull("request")) {
+                return generateExpectationError(objectMapper, "'request' field is required (the unmatched HttpRequest)");
+            }
+            boolean preview = node.path("preview").asBoolean(true);
+            int limit = node.path("limit").asInt(1);
+            if (limit < 1) {
+                limit = 1;
+            }
+            if (limit > 5) {
+                limit = 5;
+            }
+
+            // Deserialize the unmatched request
+            HttpRequest unmatchedRequest;
+            try {
+                RequestDefinition rd = getRequestDefinitionSerializer().deserialize(
+                    objectMapper.writeValueAsString(node.get("request")));
+                if (rd instanceof HttpRequest) {
+                    unmatchedRequest = (HttpRequest) rd;
+                } else {
+                    unmatchedRequest = request().withPath("/");
+                }
+            } catch (Exception deserializeEx) {
+                return generateExpectationError(objectMapper, "failed to parse 'request' field: " + deserializeEx.getMessage());
+            }
+
+            // Retrieve context: up to 10 active expectations
+            List<Expectation> contextExpectations = requestMatchers.retrieveActiveExpectations(null);
+            if (contextExpectations.size() > 10) {
+                contextExpectations = contextExpectations.subList(0, 10);
+            }
+
+            // Check if LLM is available
+            org.mockserver.llm.client.LlmCompletionService service = this.llmCompletionService;
+            org.mockserver.llm.client.LlmBackend backend = this.llmBackend;
+            if (service == null || backend == null) {
+                // Fallback: generate a simple template-based stub without LLM
+                Expectation suggestion = generateSimpleStub(unmatchedRequest);
+                List<Expectation> suggestions = Collections.singletonList(suggestion);
+                if (!preview) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+                return buildGenerateExpectationResponse(objectMapper, suggestions, 0.5, preview,
+                    "Generated from request pattern (no LLM backend configured)");
+            }
+
+            // Build prompt and call LLM
+            org.mockserver.llm.StubGenerationPromptBuilder promptBuilder = new org.mockserver.llm.StubGenerationPromptBuilder();
+            String prompt = promptBuilder.build(unmatchedRequest, contextExpectations);
+
+            ParsedConversation conversation = ParsedConversation.of(Collections.singletonList(
+                new ParsedMessage(ParsedMessage.Role.USER, prompt, null, null)));
+            java.util.Optional<org.mockserver.model.Completion> completionOpt = service.complete(backend, conversation);
+
+            if (!completionOpt.isPresent() || isBlank(completionOpt.get().getText())) {
+                // LLM call failed or returned empty — fall back to template
+                Expectation suggestion = generateSimpleStub(unmatchedRequest);
+                List<Expectation> suggestions = Collections.singletonList(suggestion);
+                if (!preview) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+                return buildGenerateExpectationResponse(objectMapper, suggestions, 0.3, preview,
+                    "LLM call returned no result, falling back to template");
+            }
+
+            String llmResponse = completionOpt.get().getText();
+
+            // Parse LLM response as Expectation JSON
+            List<Expectation> suggestions = new ArrayList<>();
+            try {
+                String jsonStr = extractJsonFromLlmResponse(llmResponse);
+                Expectation[] parsed = getExpectationSerializer().deserializeArray(jsonStr, true);
+                for (int i = 0; i < Math.min(parsed.length, limit); i++) {
+                    suggestions.add(parsed[i]);
+                }
+            } catch (Exception parseEx) {
+                // fallback to simple stub if LLM response unparseable
+                suggestions.add(generateSimpleStub(unmatchedRequest));
+            }
+
+            if (!preview && !suggestions.isEmpty()) {
+                for (Expectation suggestion : suggestions) {
+                    requestMatchers.add(suggestion, Cause.API);
+                }
+            }
+
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("generated {} expectation suggestion(s) via LLM for path:{}")
+                        .setArguments(suggestions.size(),
+                            unmatchedRequest.getPath() != null ? unmatchedRequest.getPath().getValue() : "/")
+                );
+            }
+
+            return buildGenerateExpectationResponse(objectMapper, suggestions, suggestions.isEmpty() ? 0.0 : 0.75, preview, null);
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("failed to generate expectation:{}").setArguments(e.getMessage())
+                    .setThrowable(e)
+            );
+            return generateExpectationError(objectMapper, "failed to generate expectation");
+        }
+    }
+
+    private HttpResponse buildGenerateExpectationResponse(com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                                                          List<Expectation> suggestions, double confidence,
+                                                          boolean preview, String explanation) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode suggestionsArray = result.putArray("suggestions");
+            for (Expectation suggestion : suggestions) {
+                suggestionsArray.add(objectMapper.readTree(getExpectationSerializer().serialize(suggestion)));
+            }
+            result.put("confidence", confidence);
+            result.put("preview", preview);
+            if (explanation != null) {
+                result.put("explanation", explanation);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to serialize response\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private Expectation generateSimpleStub(HttpRequest unmatchedRequest) {
+        String method = unmatchedRequest.getMethod() != null ? unmatchedRequest.getMethod().getValue() : "GET";
+        int statusCode = "POST".equalsIgnoreCase(method) ? 201 : "DELETE".equalsIgnoreCase(method) ? 204 : 200;
+        return new Expectation(
+            HttpRequest.request()
+                .withMethod(method)
+                .withPath(unmatchedRequest.getPath() != null ? unmatchedRequest.getPath().getValue() : "/")
+        ).thenRespond(
+            HttpResponse.response()
+                .withStatusCode(statusCode)
+                .withBody("{\"status\":\"ok\"}", MediaType.JSON_UTF_8)
+        );
+    }
+
+    private static String extractJsonFromLlmResponse(String text) {
+        if (text == null) {
+            return "{}";
+        }
+        String stripped = text.trim();
+        // Strip markdown code fences if present
+        if (stripped.startsWith("```")) {
+            int start = stripped.indexOf('\n');
+            int end = stripped.lastIndexOf("```");
+            if (start > 0 && end > start) {
+                stripped = stripped.substring(start + 1, end).trim();
+            }
+        }
+        return stripped;
+    }
+
+    private HttpResponse generateExpectationError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to generate expectation\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGrpcHealthPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with 'service' and 'status' fields\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String service = node.path("service").asText("");
+            // The GET response exposes the default (empty-name) override under the "_default"
+            // sentinel; map it back so removing/resetting the default row works.
+            if ("_default".equals(service)) {
+                service = "";
+            }
+            // A { service, remove: true } request clears that service's override (reverting it to
+            // the default; an empty service resets the default itself) — used by the UI Reset button.
+            if (node.path("remove").asBoolean(false)) {
+                org.mockserver.grpc.GrpcHealthRegistry.getInstance().removeStatus(service);
+                com.fasterxml.jackson.databind.node.ObjectNode removed = objectMapper.createObjectNode();
+                removed.put("status", "removed");
+                removed.put("service", service);
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(removed), MediaType.JSON_UTF_8);
+            }
+            String statusStr = node.path("status").asText(null);
+            if (isBlank(statusStr)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'status' field is required (UNKNOWN, SERVING, NOT_SERVING, SERVICE_UNKNOWN)\"}", MediaType.JSON_UTF_8);
+            }
+            org.mockserver.grpc.ServingStatus status;
+            try {
+                status = org.mockserver.grpc.ServingStatus.valueOf(statusStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"invalid status value, must be one of: UNKNOWN, SERVING, NOT_SERVING, SERVICE_UNKNOWN\"}", MediaType.JSON_UTF_8);
+            }
+            org.mockserver.grpc.GrpcHealthRegistry.getInstance().setStatus(service, status);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "registered");
+            result.put("service", service);
+            result.put("servingStatus", status.name());
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to set gRPC health status: " + e.getMessage() + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleGrpcHealthGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.grpc.GrpcHealthRegistry registry = org.mockserver.grpc.GrpcHealthRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            registry.entries().forEach((service, status) ->
+                result.put(service.isEmpty() ? "_default" : service, status.name()));
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get gRPC health status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleDriftGet(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String expectationId = request.getFirstQueryStringParameter("expectationId");
+            int limit = 50;
+            String limitParam = request.getFirstQueryStringParameter("limit");
+            if (limitParam != null && !limitParam.isEmpty()) {
+                try {
+                    limit = Math.min(500, Integer.parseInt(limitParam));
+                } catch (NumberFormatException ignored) {
+                    // use default
+                }
+            }
+            org.mockserver.mock.drift.DriftStore store = org.mockserver.mock.drift.DriftStore.getInstance();
+            List<org.mockserver.mock.drift.DriftRecord> records = (expectationId != null && !expectationId.isEmpty())
+                ? store.getByExpectationId(expectationId)
+                : store.getRecent(limit);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("count", records.size());
+            result.set("drifts", objectMapper.valueToTree(records));
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to retrieve drift records\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleDiff(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body required with 'expected' and 'actual' fields\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            if (!node.hasNonNull("expected") || !node.hasNonNull("actual")) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"both 'expected' and 'actual' HttpRequest fields are required\"}", MediaType.JSON_UTF_8);
+            }
+            RequestDefinition expectedDef = getRequestDefinitionSerializer().deserialize(
+                objectMapper.writeValueAsString(node.get("expected")));
+            RequestDefinition actualDef = getRequestDefinitionSerializer().deserialize(
+                objectMapper.writeValueAsString(node.get("actual")));
+
+            if (!(expectedDef instanceof HttpRequest) || !(actualDef instanceof HttpRequest)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"both 'expected' and 'actual' must be HttpRequest objects\"}", MediaType.JSON_UTF_8);
+            }
+
+            org.mockserver.mock.diff.TrafficDiffEngine diffEngine = new org.mockserver.mock.diff.TrafficDiffEngine();
+            java.util.List<org.mockserver.mock.diff.FieldDiff> diffs = diffEngine.diff(
+                (HttpRequest) expectedDef, (HttpRequest) actualDef);
+
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("diffCount", diffs.size());
+            result.put("identical", diffs.isEmpty());
+            com.fasterxml.jackson.databind.node.ArrayNode diffsArray = result.putArray("diffs");
+            for (org.mockserver.mock.diff.FieldDiff diff : diffs) {
+                diffsArray.add(objectMapper.valueToTree(diff));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to diff requests: " + e.getMessage() + "\"}", MediaType.JSON_UTF_8);
         }
     }
 
@@ -1896,7 +3363,23 @@ public class HttpState {
         if (expectationFileWatcher != null) {
             expectationFileWatcher.stop();
         }
+        // Stop any active AsyncAPI broker connections (Kafka consumers, MQTT clients)
+        // so they are not leaked on shutdown; no-op when the async module is absent
+        // or nothing is loaded.
+        org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance().reset();
         getMockServerLog().stop();
+        // G10 phase 2a: close the state backend (no-op for in-memory)
+        if (stateBackend != null) {
+            stateBackend.close();
+        }
+    }
+
+    /**
+     * Returns the pluggable state backend (G10 phase 2a). The default
+     * implementation is in-memory with zero behaviour change.
+     */
+    public StateBackend getStateBackend() {
+        return stateBackend;
     }
 
     private ExpectationIdSerializer getExpectationIdSerializer() {
@@ -2036,5 +3519,103 @@ public class HttpState {
         }
         builder.append(NEW_LINE);
         return builder.toString();
+    }
+
+    // ---- AsyncAPI control-plane ----
+
+    private HttpResponse handleAsyncApiPut(HttpRequest request) {
+        try {
+            org.mockserver.async.AsyncApiControlPlaneRegistry registry = org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance();
+            if (!registry.isAvailable()) {
+                return response().withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"AsyncAPI messaging module is not available — mockserver-async is not on the classpath\"}", MediaType.JSON_UTF_8);
+            }
+            String body = request.getBodyAsString();
+            if (body == null || body.isBlank()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain an AsyncAPI spec (JSON/YAML) or {spec, brokerConfig}\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode result = registry.load(body);
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            return response().withStatusCode(CREATED.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to load AsyncAPI spec: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleAsyncApiGet() {
+        try {
+            org.mockserver.async.AsyncApiControlPlaneRegistry registry = org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance();
+            if (!registry.isAvailable()) {
+                return response().withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"AsyncAPI messaging module is not available — mockserver-async is not on the classpath\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode result = registry.status();
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get AsyncAPI status: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handlePactVerify(HttpRequest request) {
+        try {
+            String body = request.getBodyAsString();
+            if (body == null || body.isBlank()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"Pact contract JSON must not be empty\"}", MediaType.JSON_UTF_8);
+            }
+            org.mockserver.mock.pact.PactVerifier verifier = new org.mockserver.mock.pact.PactVerifier();
+            org.mockserver.mock.pact.PactVerifier.PactVerificationResult result = verifier.verify(body, requestMatchers);
+            if (result.isVerified()) {
+                return response().withStatusCode(ACCEPTED.code())
+                    .withBody(result.toJson(), MediaType.JSON_UTF_8);
+            } else {
+                return response().withStatusCode(NOT_ACCEPTABLE.code())
+                    .withBody(result.toJson(), MediaType.JSON_UTF_8);
+            }
+        } catch (IllegalArgumentException e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to verify Pact contract: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleAsyncApiVerify(HttpRequest request) {
+        try {
+            org.mockserver.async.AsyncApiControlPlaneRegistry registry = org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance();
+            if (!registry.isAvailable()) {
+                return response().withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"AsyncAPI messaging module is not available — mockserver-async is not on the classpath\"}", MediaType.JSON_UTF_8);
+            }
+            String body = request.getBodyAsString();
+            if (body == null || body.isBlank()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"verification request body must not be empty\"}", MediaType.JSON_UTF_8);
+            }
+            String result = registry.verify(body);
+            if (isEmpty(result)) {
+                return response().withStatusCode(ACCEPTED.code());
+            } else {
+                return response().withStatusCode(NOT_ACCEPTABLE.code())
+                    .withBody(result, MediaType.create("text", "plain"));
+            }
+        } catch (IllegalArgumentException e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            String message = String.valueOf(e.getMessage());
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to verify async messages: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        }
     }
 }

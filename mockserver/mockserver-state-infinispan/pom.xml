@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <groupId>org.mock-server</groupId>
+        <artifactId>mockserver</artifactId>
+        <version>6.1.1-SNAPSHOT</version>
+    </parent>
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>mockserver-state-infinispan</artifactId>
+
+    <name>MockServer State Backend - Infinispan</name>
+    <description>Embedded Infinispan state backend for MockServer clustered state (Phase 2b: single-node LOCAL caches)</description>
+    <url>https://www.mock-server.com</url>
+
+    <properties>
+        <module.name>org.mockserver.state.infinispan</module.name>
+        <!-- Infinispan 14.0.x is the last line guaranteed to run on Java 17.
+             15.x targets Java 21+. Pin to 14.0.x and add a Dependabot ceiling. -->
+        <infinispan.version>14.0.35.Final</infinispan.version>
+    </properties>
+
+    <!-- Pin transitive dependency versions to satisfy the enforcer dependency-convergence rule -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.jboss.logging</groupId>
+                <artifactId>jboss-logging</artifactId>
+                <version>3.5.3.Final</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- mockserver core SPI (compile scope — same as sibling modules) -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>mockserver-core</artifactId>
+        </dependency>
+
+        <!-- Infinispan embedded (NO server) — lives ONLY in this module -->
+        <dependency>
+            <groupId>org.infinispan</groupId>
+            <artifactId>infinispan-core</artifactId>
+            <version>${infinispan.version}</version>
+        </dependency>
+
+        <!-- logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- test -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

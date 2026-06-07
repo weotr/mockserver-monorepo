@@ -144,6 +144,7 @@ public class HttpProxyUnificationInitializerSOCKSErrorTest {
                 "DashboardWebSocketHandler#0",
                 "McpStreamableHttpHandler#0",
                 "MockServerHttpServerCodec#0",
+                "TraceContextHandler#0",
                 "HttpRequestHandler#0",
                 "DefaultChannelPipeline$TailContext#0"
             ));
@@ -158,6 +159,7 @@ public class HttpProxyUnificationInitializerSOCKSErrorTest {
                 "DashboardWebSocketHandler#0",
                 "McpStreamableHttpHandler#0",
                 "MockServerHttpServerCodec#0",
+                "TraceContextHandler#0",
                 "HttpRequestHandler#0",
                 "DefaultChannelPipeline$TailContext#0"
             ));

@@ -85,7 +85,7 @@ function getToolCallNames(parsed: Record<string, unknown>): string[] {
       });
   }
 
-  if (kind === 'openai' || kind === 'openai_responses') {
+  if (kind === 'openai') {
     const choices = parsed['choices'];
     if (!Array.isArray(choices)) return [];
     const names: string[] = [];
@@ -103,6 +103,49 @@ function getToolCallNames(parsed: Record<string, unknown>): string[] {
           names.push(typeof name === 'string' ? name : 'unknown');
         }
       }
+    }
+    return names;
+  }
+
+  if (kind === 'openai_responses') {
+    // Responses API: output[] items with type 'function_call' carry the tool name.
+    const output = parsed['output'];
+    if (!Array.isArray(output)) return [];
+    const names: string[] = [];
+    for (const item of output) {
+      if (typeof item !== 'object' || item === null) continue;
+      const obj = item as Record<string, unknown>;
+      if (obj['type'] === 'function_call') {
+        names.push(typeof obj['name'] === 'string' ? (obj['name'] as string) : 'unknown');
+      }
+    }
+    return names;
+  }
+
+  if (kind === 'gemini') {
+    // candidates[].content.parts[].functionCall.name
+    const candidates = parsed['candidates'];
+    if (!Array.isArray(candidates)) return [];
+    const names: string[] = [];
+    for (const candidate of candidates) {
+      const content = (candidate as Record<string, unknown>)?.['content'] as Record<string, unknown> | undefined;
+      if (!content || !Array.isArray(content['parts'])) continue;
+      for (const part of content['parts'] as Record<string, unknown>[]) {
+        const fn = part['functionCall'] as Record<string, unknown> | undefined;
+        if (fn && typeof fn['name'] === 'string') names.push(fn['name']);
+      }
+    }
+    return names;
+  }
+
+  if (kind === 'ollama') {
+    // responseMessage.tool_calls[].function.name
+    const msg = parsed['responseMessage'] as Record<string, unknown> | undefined;
+    if (!msg || !Array.isArray(msg['tool_calls'])) return [];
+    const names: string[] = [];
+    for (const tc of msg['tool_calls'] as Record<string, unknown>[]) {
+      const fn = tc['function'] as Record<string, unknown> | undefined;
+      if (fn && typeof fn['name'] === 'string') names.push(fn['name']);
     }
     return names;
   }
@@ -133,7 +176,7 @@ function getHasToolResults(parsed: Record<string, unknown>): boolean[] {
     });
   }
 
-  if (kind === 'openai' || kind === 'openai_responses') {
+  if (kind === 'openai') {
     const choices = parsed['choices'];
     if (!Array.isArray(choices)) return toolNames.map(() => false);
     const results: boolean[] = [];
@@ -155,6 +198,25 @@ function getHasToolResults(parsed: Record<string, unknown>): boolean[] {
     return results;
   }
 
+  if (kind === 'openai_responses') {
+    const output = parsed['output'];
+    if (!Array.isArray(output)) return toolNames.map(() => false);
+    const results: boolean[] = [];
+    for (const item of output) {
+      if (typeof item !== 'object' || item === null) continue;
+      const obj = item as Record<string, unknown>;
+      if (obj['type'] !== 'function_call') continue;
+      const id = obj['call_id'] ?? obj['id'];
+      results.push(id !== undefined && id !== null);
+    }
+    return results;
+  }
+
+  // Gemini / Ollama function calls carry no call id; treat each emitted call as present.
+  if (kind === 'gemini' || kind === 'ollama') {
+    return toolNames.map(() => true);
+  }
+
   return toolNames.map(() => false);
 }
 
@@ -166,7 +228,7 @@ function getStopReason(parsed: Record<string, unknown>): string | null {
     return typeof reason === 'string' ? reason : null;
   }
 
-  if (kind === 'openai' || kind === 'openai_responses') {
+  if (kind === 'openai') {
     const choices = parsed['choices'];
     if (!Array.isArray(choices) || choices.length === 0) return null;
     const first = choices[0];
@@ -175,6 +237,14 @@ function getStopReason(parsed: Record<string, unknown>): string | null {
     return typeof reason === 'string' ? reason : null;
   }
 
+  if (kind === 'gemini') {
+    const candidates = parsed['candidates'];
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    const reason = (candidates[0] as Record<string, unknown>)?.['finishReason'];
+    return typeof reason === 'string' ? reason : null;
+  }
+
+  // openai_responses / ollama do not surface a stop reason in the captured shape.
   return null;
 }
 
@@ -194,9 +264,16 @@ function getTokens(parsed: Record<string, unknown>): { input: number | null; out
     return { input, output };
   }
 
-  if (kind === 'openai' || kind === 'openai_responses') {
+  if (kind === 'openai') {
     const input = typeof u['prompt_tokens'] === 'number' ? u['prompt_tokens'] : null;
     const output = typeof u['completion_tokens'] === 'number' ? u['completion_tokens'] : null;
+    return { input, output };
+  }
+
+  if (kind === 'openai_responses') {
+    // Responses API uses input_tokens / output_tokens.
+    const input = typeof u['input_tokens'] === 'number' ? u['input_tokens'] : null;
+    const output = typeof u['output_tokens'] === 'number' ? u['output_tokens'] : null;
     return { input, output };
   }
 

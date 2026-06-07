@@ -1,6 +1,11 @@
 package org.mockserver.matchers;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.mockserver.configuration.ConfigurationProperties;
+import org.mockserver.log.model.LogEntry;
+import org.mockserver.logging.MockServerLogger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -9,6 +14,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
+
+import static org.slf4j.event.Level.WARN;
 
 /**
  * Shared daemon-thread executor used by request matchers (regex, XPath) to
@@ -21,6 +29,8 @@ import java.util.concurrent.TimeoutException;
  * and daemon-flagged so it never blocks JVM shutdown.
  */
 public final class MatchingTimeoutExecutor {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MatchingTimeoutExecutor.class);
 
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(
         new ThreadFactoryBuilder()
@@ -79,6 +89,42 @@ public final class MatchingTimeoutExecutor {
                 throw (Error) cause;
             }
             throw ee;
+        }
+    }
+
+    /**
+     * Evaluate a user-supplied regular expression under the shared
+     * {@code mockserver.regexMatchingTimeoutMillis} timeout, so a pathological (ReDoS) pattern cannot
+     * pin a worker thread. A timeout or any error is treated as a non-match (returns {@code false}) and,
+     * when a timeout fires and a logger is supplied, logs a WARN naming the pattern.
+     *
+     * @param mockServerLogger logger for the timeout warning (may be null)
+     * @param description       short label for the log (e.g. "graphql operationName")
+     * @param pattern           the compiled user regex (used only for the log message)
+     * @param matchOperation    the actual match call (e.g. {@code () -> pattern.matcher(input).matches()})
+     * @return the match result, or {@code false} on timeout/error
+     */
+    public static boolean matchesWithRegexTimeout(MockServerLogger mockServerLogger, String description, Pattern pattern, Callable<Boolean> matchOperation) {
+        try {
+            return callWithTimeout(
+                matchOperation,
+                ConfigurationProperties.regexMatchingTimeoutMillis(),
+                Boolean.FALSE,
+                fired -> {
+                    if (mockServerLogger != null) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(WARN)
+                                .setMessageFormat(description + " regex evaluation timed out after {}ms for pattern:{}— treating as non-match (raise mockserver.regexMatchingTimeoutMillis or simplify the pattern to suppress this)")
+                                .setArguments(fired, pattern.pattern())
+                        );
+                    } else {
+                        // callers without a MockServerLogger still get an observable trace of the timeout
+                        LOGGER.warn("{} regex evaluation timed out after {}ms for pattern:{} — treating as non-match (raise mockserver.regexMatchingTimeoutMillis or simplify the pattern to suppress this)", description, fired, pattern.pattern());
+                    }
+                });
+        } catch (Exception e) {
+            return false;
         }
     }
 

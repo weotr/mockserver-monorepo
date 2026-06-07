@@ -22,6 +22,7 @@ import static org.hamcrest.core.Is.is;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.configuration.Configuration.configuration;
+import org.mockserver.configuration.ConfigurationProperties;
 import static org.mockserver.configuration.ConfigurationProperties.enableCORSForAllResponses;
 import static org.mockserver.model.ConnectionOptions.connectionOptions;
 import static org.mockserver.model.HttpRequest.request;
@@ -112,6 +113,53 @@ public class NettyResponseWriterTest {
                     .withHeader("connection", "close")
             );
             verify(mockChannelFuture).addListener(any(GenericFutureListener.class));
+        } finally {
+            enableCORSForAllResponses(enableCORSForAllResponses);
+        }
+    }
+
+    @Test
+    public void shouldAddCORSHeadersForControlPlaneResponsesWithoutAnyCORSConfig() {
+        // Control-plane / dashboard responses (apiResponse == true) always carry CORS headers so
+        // the dashboard works cross-origin, independent of enableCORSForAPI / enableCORSForAllResponses.
+        boolean enableCORSForAllResponses = enableCORSForAllResponses();
+        boolean enableCORSForAPI = ConfigurationProperties.enableCORSForAPI();
+        try {
+            // given — both CORS switches off (defaults)
+            enableCORSForAllResponses(false);
+            ConfigurationProperties.enableCORSForAPI(false);
+
+            // when — written as a control-plane (api) response
+            new NettyResponseWriter(configuration(), new MockServerLogger(), mockChannelHandlerContext, scheduler)
+                .writeResponse(request("some_request"), response("some_response"), true);
+
+            // then — CORS headers are present anyway (assert on the CORS header specifically rather
+            // than the whole response, which also carries volatile version / deprecated headers)
+            ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
+            verify(mockChannelHandlerContext).writeAndFlush(responseCaptor.capture());
+            assertThat(responseCaptor.getValue().getFirstHeader("access-control-allow-origin"), is("*"));
+            assertThat(responseCaptor.getValue().getFirstHeader("access-control-allow-methods"),
+                is("CONNECT, DELETE, GET, HEAD, OPTIONS, POST, PUT, PATCH, TRACE"));
+        } finally {
+            enableCORSForAllResponses(enableCORSForAllResponses);
+            ConfigurationProperties.enableCORSForAPI(enableCORSForAPI);
+        }
+    }
+
+    @Test
+    public void shouldNotAddCORSHeadersForMockResponsesWithoutCORSConfig() {
+        // Mock/proxy responses (apiResponse == false) stay governed by enableCORSForAllResponses only,
+        // so they get no CORS headers by default — control-plane CORS must not leak to mocked APIs.
+        boolean enableCORSForAllResponses = enableCORSForAllResponses();
+        try {
+            enableCORSForAllResponses(false);
+
+            new NettyResponseWriter(configuration(), new MockServerLogger(), mockChannelHandlerContext, scheduler)
+                .writeResponse(request("some_request"), response("some_response"), false);
+
+            ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
+            verify(mockChannelHandlerContext).writeAndFlush(responseCaptor.capture());
+            assertThat(responseCaptor.getValue().getFirstHeader("access-control-allow-origin"), is(""));
         } finally {
             enableCORSForAllResponses(enableCORSForAllResponses);
         }

@@ -127,3 +127,81 @@ process.on('SIGTERM', function () {
 
 <pre class="prettyprint code"><code class="code">npm i
 node server.js</code></pre>
+
+<a id="mock_mode" class="anchor" href="#mock_mode">&nbsp;</a>
+
+<h2>Operating Mode (SIMULATE / SPY / CAPTURE)</h2>
+
+<p>MockServer supports three operating modes that control how unmatched requests are handled. Switch between them at runtime without restarting the server.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>Matched requests</th>
+            <th>Unmatched requests</th>
+            <th>Use case</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">SIMULATE</span></td>
+            <td>Return mock response</td>
+            <td>Return 404 (default)</td>
+            <td>Pure mock — test against a fully controlled set of expectations</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">SPY</span></td>
+            <td>Return mock response</td>
+            <td>Forward to real upstream &amp; record</td>
+            <td>Selective mocking — stub specific calls, pass the rest through to a real service</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">CAPTURE</span></td>
+            <td>Return mock response</td>
+            <td>Forward to real upstream &amp; record</td>
+            <td>Traffic capture — no expectations needed; record all real traffic for later replay</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>SIMULATE</strong> is the default. <strong>SPY</strong> and <strong>CAPTURE</strong> both enable MockServer's proxy-on-no-match behaviour — unmatched requests are forwarded to the real upstream and the interaction is recorded. The practical difference is intent: SPY is used when you have expectations for some calls and want to pass the rest through; CAPTURE is used when you want to record all traffic first (typically with no expectations defined).</p>
+
+<p>Recorded interactions are retrieved via the existing retrieve endpoints — for example <span class="inline_code">PUT /mockserver/retrieve?type=RECORDED_EXPECTATIONS</span> returns the recorded traffic as expectations ready for replay. See <a href="/mock_server/debugging_issues.html#retrieving_recorded_expectations">Retrieving Recorded Expectations</a> for details.</p>
+
+<a id="mock_mode_set" class="anchor" href="#mock_mode_set">&nbsp;</a>
+
+<h3>Setting the Mode</h3>
+
+<button id="button_set_mode" class="accordion">set operating mode</button>
+<div class="panel">
+    <button class="accordion inner">REST API &mdash; set SPY mode</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/mode?mode=SPY"</code></pre>
+    </div>
+    <button class="accordion inner">REST API &mdash; set CAPTURE mode</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/mode?mode=CAPTURE"</code></pre>
+    </div>
+    <button class="accordion inner">REST API &mdash; reset to SIMULATE (default)</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/mode?mode=SIMULATE"</code></pre>
+    </div>
+</div>
+
+<a id="mock_mode_get" class="anchor" href="#mock_mode_get">&nbsp;</a>
+
+<h3>Reading the Current Mode</h3>
+
+<p>Query the current mode at any time:</p>
+
+<pre class="prettyprint code"><code class="code">curl -s "http://localhost:1080/mockserver/mode"</code></pre>
+
+<p>Response:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "mode": "SPY",
+  "proxyUnmatchedRequests": true
+}</code></pre>
+
+<p>The <span class="inline_code">proxyUnmatchedRequests</span> field reflects whether unmatched requests will be forwarded (<span class="inline_code">true</span> for SPY and CAPTURE, <span class="inline_code">false</span> for SIMULATE).</p>

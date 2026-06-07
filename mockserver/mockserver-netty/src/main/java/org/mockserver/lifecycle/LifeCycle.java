@@ -2,8 +2,8 @@ package org.mockserver.lifecycle;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.socket.NettyTransport;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -55,13 +55,17 @@ public abstract class LifeCycle implements Stoppable {
         if (this.configuration.logEventListener() != null) {
             MockServerLogger.setGlobalLogEventListener(this.configuration.logEventListener());
         }
-        this.bossGroup = new NioEventLoopGroup(5, new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-bossEventLoop"));
-        this.workerGroup = new NioEventLoopGroup(this.configuration.nioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-workerEventLoop"));
+        boolean nativeTransport = this.configuration.useNativeTransport();
+        this.bossGroup = NettyTransport.newEventLoopGroup(5, new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-bossEventLoop"), nativeTransport);
+        this.workerGroup = NettyTransport.newEventLoopGroup(this.configuration.nioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-workerEventLoop"), nativeTransport);
         this.scheduler = new Scheduler(this.configuration, this.mockServerLogger);
         this.httpState = new HttpState(this.configuration, this.mockServerLogger, this.scheduler);
         this.otelMetricsExporter = org.mockserver.metrics.OtelMetricsExporter.startIfEnabled();
         this.genAiSpanExporter = org.mockserver.telemetry.GenAiSpanExporter.startIfEnabled();
         installSemanticMatchingIfEnabled(this.workerGroup);
+        installLlmCompletionServiceIfAvailable(this.workerGroup);
+        installSemanticDriftIfEnabled(this.workerGroup);
+        installPerformanceDriftThreshold();
     }
 
     /**
@@ -91,6 +95,78 @@ public abstract class LifeCycle implements Stoppable {
             // fail-soft — semantic matching stays off
             org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
                 .warn("failed to enable semantic prompt matching ({}); continuing without it", e.getMessage());
+        }
+    }
+
+    /**
+     * Wire a shared {@link org.mockserver.llm.client.LlmCompletionService} into
+     * {@link org.mockserver.mock.HttpState} so the {@code /generateExpectation}
+     * endpoint can call the configured LLM backend. When no backend is available
+     * the endpoint falls back to template-based stubs. Fail-soft.
+     */
+    private void installLlmCompletionServiceIfAvailable(EventLoopGroup eventLoopGroup) {
+        try {
+            java.util.Optional<org.mockserver.llm.client.LlmBackend> backend =
+                new org.mockserver.llm.client.LlmBackendResolver().resolveDefault();
+            if (!backend.isPresent()) {
+                return;
+            }
+            org.mockserver.httpclient.NettyHttpClient httpClient =
+                new org.mockserver.httpclient.NettyHttpClient(configuration, mockServerLogger, eventLoopGroup, null, false);
+            org.mockserver.llm.client.LlmCompletionService service =
+                new org.mockserver.llm.client.LlmCompletionService(new org.mockserver.llm.client.NettyHttpClientLlmTransport(httpClient));
+            httpState.setLlmCompletionService(service, backend.get());
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .info("LLM completion service installed for stub generation (backend: {})", backend.get().provider());
+        } catch (Exception e) {
+            // fail-soft — stub generation endpoint will use template fallback
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .warn("failed to install LLM completion service ({}); stub generation will use template fallback", e.getMessage());
+        }
+    }
+
+    /**
+     * When semantic drift analysis is enabled and a runtime LLM backend resolves,
+     * create a {@link org.mockserver.mock.drift.SemanticDriftExtension} and install
+     * it on the global {@link org.mockserver.mock.drift.DriftAnalyzer}. Fail-soft.
+     */
+    private void installSemanticDriftIfEnabled(EventLoopGroup eventLoopGroup) {
+        if (!configuration.driftSemanticAnalysisEnabled()) {
+            return;
+        }
+        try {
+            java.util.Optional<org.mockserver.llm.client.LlmBackend> backend =
+                new org.mockserver.llm.client.LlmBackendResolver().resolveDefault();
+            if (!backend.isPresent()) {
+                org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                    .info("semantic drift analysis enabled but no LLM backend available; feature disabled");
+                return;
+            }
+            org.mockserver.httpclient.NettyHttpClient httpClient =
+                new org.mockserver.httpclient.NettyHttpClient(configuration, mockServerLogger, eventLoopGroup, null, false);
+            org.mockserver.llm.client.LlmCompletionService service =
+                new org.mockserver.llm.client.LlmCompletionService(new org.mockserver.llm.client.NettyHttpClientLlmTransport(httpClient));
+            org.mockserver.mock.drift.SemanticDriftExtension extension =
+                new org.mockserver.mock.drift.SemanticDriftExtension(service, backend.get());
+            org.mockserver.mock.drift.DriftAnalyzer.getInstance().setSemanticExtension(extension);
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .info("semantic drift analysis enabled (backend: {})", backend.get().provider());
+        } catch (Exception e) {
+            // fail-soft — semantic drift analysis stays off
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .warn("failed to enable semantic drift analysis ({}); continuing without it", e.getMessage());
+        }
+    }
+
+    /**
+     * Apply the configured p95 response time threshold for performance drift detection.
+     */
+    private void installPerformanceDriftThreshold() {
+        long threshold = configuration.driftResponseTimeThresholdMs();
+        if (threshold > 0) {
+            org.mockserver.mock.drift.DriftAnalyzer.getInstance().setResponseTimeThresholdMs(threshold);
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .info("performance drift detection enabled (p95 threshold: {} ms)", threshold);
         }
     }
 

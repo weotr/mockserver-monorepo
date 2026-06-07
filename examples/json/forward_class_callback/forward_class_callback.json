@@ -1,0 +1,8 @@
+{
+  "httpRequest": {
+    "path": "/api/proxy"
+  },
+  "httpForwardClassCallback": {
+    "callbackClass": "org.mockserver.examples.mockserver.ForwardCallbackExample$TestForwardCallback"
+  }
+}

@@ -135,6 +135,40 @@ public class CrudDispatcherTest {
         assertThat(body.get("name").asText(), is("Alice Updated"));
     }
 
+    // PATCH dispatch
+
+    @Test
+    public void shouldDispatchPatch() throws Exception {
+        // given
+        HttpRequest request = request("/api/users/1")
+            .withMethod("PATCH")
+            .withBody("{\"name\":\"Alice Patched\"}");
+
+        // when
+        HttpResponse response = dispatcher.dispatch(request);
+
+        // then
+        assertThat(response, is(notNullValue()));
+        assertThat(response.getStatusCode(), is(200));
+        ObjectNode body = (ObjectNode) objectMapper.readTree(response.getBodyAsString());
+        assertThat(body.get("name").asText(), is("Alice Patched"));
+    }
+
+    @Test
+    public void shouldReturn404ForPatchingNonExistentItem() {
+        // given
+        HttpRequest request = request("/api/users/999")
+            .withMethod("PATCH")
+            .withBody("{\"name\":\"Ghost\"}");
+
+        // when
+        HttpResponse response = dispatcher.dispatch(request);
+
+        // then
+        assertThat(response, is(notNullValue()));
+        assertThat(response.getStatusCode(), is(404));
+    }
+
     // DELETE dispatch
 
     @Test
@@ -180,6 +214,18 @@ public class CrudDispatcherTest {
     public void shouldReturnNullForUnsupportedMethodOnBasePath() {
         // given
         HttpRequest request = request("/api/users").withMethod("DELETE");
+
+        // when
+        HttpResponse response = dispatcher.dispatch(request);
+
+        // then
+        assertThat(response, is(nullValue()));
+    }
+
+    @Test
+    public void shouldReturnNullForPatchOnBasePath() {
+        // given
+        HttpRequest request = request("/api/users").withMethod("PATCH");
 
         // when
         HttpResponse response = dispatcher.dispatch(request);
@@ -305,6 +351,16 @@ public class CrudDispatcherTest {
         assertThat(updateResponse.getStatusCode(), is(200));
         ObjectNode updated = (ObjectNode) objectMapper.readTree(updateResponse.getBodyAsString());
         assertThat(updated.get("name").asText(), is("Updated Widget"));
+
+        // patch
+        HttpRequest patchRequest = request("/api/items/" + id)
+            .withMethod("PATCH")
+            .withBody("{\"color\":\"red\"}");
+        HttpResponse patchResponse = lifecycle.dispatch(patchRequest);
+        assertThat(patchResponse.getStatusCode(), is(200));
+        ObjectNode patched = (ObjectNode) objectMapper.readTree(patchResponse.getBodyAsString());
+        assertThat(patched.get("name").asText(), is("Updated Widget"));
+        assertThat(patched.get("color").asText(), is("red"));
 
         // delete
         HttpResponse deleteResponse = lifecycle.dispatch(request("/api/items/" + id).withMethod("DELETE"));

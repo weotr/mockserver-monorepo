@@ -168,7 +168,8 @@ describe('SessionInspector', () => {
 
     const tabs = screen.getAllByRole('tab');
     expect(tabs[0]).toHaveTextContent('Sessions');
-    expect(tabs[1]).toHaveTextContent('Compare');
+    expect(tabs[1]).toHaveTextContent('Scenarios');
+    expect(tabs[2]).toHaveTextContent('Compare');
 
     await user.click(screen.getByRole('tab', { name: 'Compare' }));
 

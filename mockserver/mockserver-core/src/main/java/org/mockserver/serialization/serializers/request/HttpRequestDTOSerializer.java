@@ -71,6 +71,9 @@ public class HttpRequestDTOSerializer extends StdSerializer<HttpRequestDTO> {
         if (httpRequest.getBody() != null) {
             jgen.writeObjectField("body", httpRequest.getBody());
         }
+        if (httpRequest.getOriginalBody() != null && httpRequest.getOriginalBody().length > 0) {
+            jgen.writeBinaryField("originalBody", httpRequest.getOriginalBody());
+        }
         jgen.writeEndObject();
     }
 }

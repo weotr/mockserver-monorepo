@@ -1,0 +1,17 @@
+[package]
+name = "mockserver-wasm-example"
+version = "0.1.0"
+edition = "2021"
+description = "Example MockServer WASM body-matcher rule, written in Rust"
+
+[lib]
+# cdylib produces a freestanding .wasm with no WASI imports when built for
+# the wasm32-unknown-unknown target — exactly what MockServer's WasmRuntime expects.
+crate-type = ["cdylib"]
+
+[profile.release]
+# Small, dependency-free module: optimise for size and strip noise.
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

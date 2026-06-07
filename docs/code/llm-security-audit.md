@@ -6,7 +6,7 @@
 
 ## Summary
 
-No vulnerabilities found. One known limitation documented (Ollama NDJSON). All checked categories passed.
+No vulnerabilities found. Previously known limitations (Ollama NDJSON, Bedrock binary framing) have been resolved. All checked categories passed.
 
 ## What was checked
 
@@ -72,33 +72,29 @@ The embedding `deterministicFromInput()` deliberately uses `java.util.Random` se
 
 ## Known limitations
 
-### Ollama NDJSON wire format
+### Ollama NDJSON wire format (RESOLVED)
 
-**Compatibility bug — actionable.**
+**Resolved.** `OllamaCodec` now declares `StreamingFormat.NDJSON` and the `HttpSseResponseActionHandler` emits raw `<json>\n` lines (no SSE `data:` prefix) for Ollama streaming responses.
 
-The `OllamaCodec` streaming path emits SSE events (`data: <json>\n\n`) instead of Ollama's native NDJSON format (`<json>\n`). Real Ollama clients that strictly parse newline-delimited JSON (not SSE) will silently receive no tokens or raise a parse error when the mock response is consumed.
-
-To fix: implement an NDJSON write path in `OllamaCodec.encodeStreaming()` that writes each chunk as `<json>\n` without the `data:` prefix, and select the path based on the inbound request's `Accept` header or a codec configuration flag. Non-streaming Ollama responses are already in the correct format; only the streaming path is affected.
-
-The limitation is documented in the `OllamaCodec` javadoc. Not a security issue.
-
-### BedrockCodec binary framing
+### BedrockCodec binary framing (RESOLVED)
 
 **Compatibility limitation — actionable for raw HTTP clients.**
 
-The `BedrockCodec` does not implement Bedrock's `InvokeModelWithResponseStream` binary chunk-wrapping envelope (`{"chunk":{"bytes":"<base64>"}}`), emitting plain Anthropic SSE events instead. Applications that use the AWS SDK for streaming invocations will work correctly because the SDK handles the envelope at the HTTP client layer. Raw HTTP clients that directly parse the binary frame protocol will not work.
-
-To fix: implement the `aws-chunked` / event stream encoding described in the Bedrock Streaming API reference. The binary envelope is straightforward: base64-encode each Anthropic SSE chunk, wrap it in `{"chunk":{"bytes":"..."}}`, and write with the correct content-type (`application/vnd.amazon.eventstream`). This is a non-trivial change requiring a new codec subclass or a framing wrapper.
+**Resolved** in G14. `BedrockCodec` now declares `StreamingFormat.AWS_EVENT_STREAM` and the `HttpSseResponseActionHandler` encodes each streaming chunk as a binary AWS event-stream message via `BedrockEventStreamEncoder`. Each message carries headers (`:event-type=chunk`, `:content-type=application/json`, `:message-type=event`), CRC32 integrity checks (prelude and message), and a payload of `{"bytes":"<base64(chunkJson)>"}` matching the `InvokeModelWithResponseStream` wire format. Raw (non-SDK) Bedrock streaming clients now work against MockServer.
 
 The limitation is documented in the `BedrockCodec` javadoc. Not a security concern.
 
-### Runtime LLM client — Bedrock SigV4 signing
+### Runtime LLM client — Bedrock SigV4 signing (RESOLVED)
 
-**Compatibility limitation — actionable for direct Bedrock use.**
+**Resolved.** `BedrockLlmClient` now implements automatic AWS Signature Version 4 request signing via `AwsSigV4Signer`, a pure, stateless signer using only JDK crypto (SHA-256, HmacSHA256 -- no third-party dependencies).
 
-The runtime-LLM client `BedrockLlmClient` (`org.mockserver.llm.client`) builds the Anthropic-on-Bedrock request body and parses the Anthropic-shaped response, but does **not** implement AWS SigV4 request signing. Callers must supply auth out of band: via the `LlmBackend.headers()` escape hatch (a pre-signed `Authorization` header) or by pointing `baseUrl` at a local signing proxy / sidecar. Without valid auth the request fails closed (Bedrock returns 403 and `LlmCompletionService` returns no completion) — there is no security exposure, but a user attempting direct Bedrock integration receives no completion until signing is provided.
+**Credential sourcing:** AWS credentials are parsed from `LlmBackend.apiKey()` in the format `accessKeyId:secretAccessKey` (or `accessKeyId:secretAccessKey:sessionToken` for STS temporary credentials). When `apiKey` is null, blank, or does not contain a `:` separator, signing is skipped and the original escape-hatch behaviour is preserved (backward compatible).
 
-To fix: implement an AWS SigV4 v4 signer (deterministic; verifiable offline against AWS's published canonical-request test vectors) and apply it in `BedrockLlmClient.buildCompletionRequest`. Tracked here per the `BedrockLlmClient` javadoc.
+**Region extraction:** The region is parsed from the `baseUrl` host (`bedrock-runtime.<region>.amazonaws.com`); defaults to `us-east-1` if the host does not match. The AWS service is `bedrock`.
+
+**Authorization precedence:** When SigV4 credentials are present, the auto-generated `Authorization` header takes precedence over any `Authorization` supplied via the `LlmBackend.headers()` escape hatch. The escape hatch remains fully supported for pre-signed / signing-proxy setups when no credentials are provided.
+
+**Test verification:** The signing-key derivation is verified against the AWS-published test vector (secret `wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY`, date `20120215`, region `us-east-1`, service `iam` -- expected signing key hex `f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d`). Full end-to-end signing is tested for structural correctness, determinism, session-token inclusion, and body-sensitivity. The signing timestamp is injectable for offline test determinism.
 
 ### Gemini API key in query string (runtime client)
 

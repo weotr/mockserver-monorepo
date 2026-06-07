@@ -81,6 +81,8 @@ public class GrpcStatusMapper {
     }
 
     public static boolean isGrpcContentType(String contentType) {
-        return contentType != null && contentType.startsWith(GRPC_CONTENT_TYPE);
+        return contentType != null
+            && contentType.startsWith(GRPC_CONTENT_TYPE)
+            && !contentType.startsWith(GRPC_CONTENT_TYPE + "-");
     }
 }

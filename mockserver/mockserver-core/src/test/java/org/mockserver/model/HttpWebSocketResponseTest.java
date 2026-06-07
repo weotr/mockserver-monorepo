@@ -16,6 +16,7 @@ import static org.hamcrest.core.IsNot.not;
 import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockserver.model.HttpWebSocketResponse.webSocketResponse;
 import static org.mockserver.model.WebSocketMessage.webSocketMessage;
+import static org.mockserver.model.WebSocketMessageMatcher.webSocketMessageMatcher;
 
 public class HttpWebSocketResponseTest {
 
@@ -187,5 +188,97 @@ public class HttpWebSocketResponseTest {
             .withDelay(Delay.milliseconds(500));
 
         assertThat(response.getDelay(), is(new Delay(TimeUnit.MILLISECONDS, 500)));
+    }
+
+    @Test
+    public void shouldHaveNullDefaultMatchers() {
+        HttpWebSocketResponse response = webSocketResponse();
+        assertThat(response.getMatchers(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldAddSingleMatcher() {
+        WebSocketMessageMatcher matcher = webSocketMessageMatcher().withText("ping");
+        HttpWebSocketResponse response = webSocketResponse()
+            .withMatcher(matcher);
+
+        assertThat(response.getMatchers(), hasSize(1));
+        assertThat(response.getMatchers().get(0), is(matcher));
+    }
+
+    @Test
+    public void shouldAddMultipleMatchersViaVarargs() {
+        WebSocketMessageMatcher matcher1 = webSocketMessageMatcher().withText("ping");
+        WebSocketMessageMatcher matcher2 = webSocketMessageMatcher().withText("hello");
+
+        HttpWebSocketResponse response = webSocketResponse()
+            .withMatchers(matcher1, matcher2);
+
+        assertThat(response.getMatchers(), hasSize(2));
+        assertThat(response.getMatchers(), containsInAnyOrder(matcher1, matcher2));
+    }
+
+    @Test
+    public void shouldAddMultipleMatchersViaList() {
+        WebSocketMessageMatcher matcher1 = webSocketMessageMatcher().withText("ping");
+        WebSocketMessageMatcher matcher2 = webSocketMessageMatcher().withText("hello");
+        List<WebSocketMessageMatcher> matchers = Arrays.asList(matcher1, matcher2);
+
+        HttpWebSocketResponse response = webSocketResponse()
+            .withMatchers(matchers);
+
+        assertThat(response.getMatchers(), hasSize(2));
+        assertThat(response.getMatchers(), containsInAnyOrder(matcher1, matcher2));
+    }
+
+    @Test
+    public void shouldAddMatcherIncrementally() {
+        WebSocketMessageMatcher matcher1 = webSocketMessageMatcher().withText("ping");
+        WebSocketMessageMatcher matcher2 = webSocketMessageMatcher().withText("hello");
+
+        HttpWebSocketResponse response = webSocketResponse()
+            .withMatcher(matcher1)
+            .withMatcher(matcher2);
+
+        assertThat(response.getMatchers(), hasSize(2));
+    }
+
+    @Test
+    public void shouldBeEqualWhenSameMatchers() {
+        WebSocketMessageMatcher matcher = webSocketMessageMatcher()
+            .withText("ping")
+            .withResponses(webSocketMessage("pong"));
+
+        HttpWebSocketResponse responseOne = webSocketResponse()
+            .withMatcher(matcher);
+        HttpWebSocketResponse responseTwo = webSocketResponse()
+            .withMatcher(matcher);
+
+        assertThat(responseOne, is(responseTwo));
+    }
+
+    @Test
+    public void shouldNotBeEqualWhenDifferentMatchers() {
+        assertThat(
+            webSocketResponse().withMatcher(webSocketMessageMatcher().withText("ping")),
+            is(not(webSocketResponse().withMatcher(webSocketMessageMatcher().withText("hello"))))
+        );
+    }
+
+    @Test
+    public void shouldBuildWithMatchersAndMessages() {
+        WebSocketMessage message = webSocketMessage("initial");
+        WebSocketMessageMatcher matcher = webSocketMessageMatcher()
+            .withText("ping")
+            .withResponses(webSocketMessage("pong"));
+
+        HttpWebSocketResponse response = webSocketResponse()
+            .withMessage(message)
+            .withMatcher(matcher)
+            .withCloseConnection(false);
+
+        assertThat(response.getMessages(), hasSize(1));
+        assertThat(response.getMatchers(), hasSize(1));
+        assertThat(response.getCloseConnection(), is(false));
     }
 }

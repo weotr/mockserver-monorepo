@@ -14,11 +14,13 @@ public class PortBinding extends ObjectWithJsonToString {
     private static final String VERSION = Version.getVersion();
     private static final String ARTIFACT_ID = Version.getArtifactId();
     private static final String GROUP_ID = Version.getGroupId();
+    private static final String GIT_HASH = Version.getGitHash();
 
     private List<Integer> ports = new ArrayList<>();
     private final String version = VERSION;
     private final String artifactId = ARTIFACT_ID;
     private final String groupId = GROUP_ID;
+    private final String gitHash = GIT_HASH;
 
     public static PortBinding portBinding(Integer... ports) {
         return portBinding(Arrays.asList(ports));
@@ -47,5 +49,9 @@ public class PortBinding extends ObjectWithJsonToString {
 
     public String getGroupId() {
         return groupId;
+    }
+
+    public String getGitHash() {
+        return gitHash;
     }
 }

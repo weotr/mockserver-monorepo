@@ -11,19 +11,16 @@ import org.mockserver.mock.listeners.MockServerMatcherListener;
 import org.mockserver.mock.listeners.MockServerMatcherNotifier;
 import org.mockserver.serialization.model.ExpectationDTO;
 import org.mockserver.serialization.serializers.response.TimeToLiveDTOPersistenceSerializer;
+import org.mockserver.state.BlobStore;
 import org.slf4j.event.Level;
 
-import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.mockserver.serialization.ObjectMapperFactory.createObjectMapper;
@@ -36,16 +33,31 @@ public class ExpectationFileSystemPersistence implements MockServerMatcherListen
     private final RequestMatchers requestMatchers;
     private final ObjectWriter objectWriter;
     private final Path filePath;
+    private final String blobKey;
     private final boolean initializationPathMatchesPersistencePath;
-    private final ReentrantLock fileWriteLock = new ReentrantLock();
+    private final BlobStore blobStore;
+    private final java.util.concurrent.locks.ReentrantLock writeOrderLock = new java.util.concurrent.locks.ReentrantLock();
 
-    public ExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, RequestMatchers requestMatchers) {
+    /**
+     * Creates persistence backed by the given {@link BlobStore}. The blob key
+     * is the absolute path of {@code configuration.persistedExpectationsPath()}
+     * so that the {@link org.mockserver.state.FilesystemBlobStore} writes to
+     * the exact same file as the previous direct-I/O implementation.
+     *
+     * @param configuration    the MockServer configuration
+     * @param mockServerLogger logger for diagnostics
+     * @param requestMatchers  the request matchers to observe for changes
+     * @param blobStore        the blob store to delegate writes to
+     */
+    public ExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, RequestMatchers requestMatchers, BlobStore blobStore) {
         this.configuration = configuration;
         if (configuration.persistExpectations()) {
             this.mockServerLogger = mockServerLogger;
             this.requestMatchers = requestMatchers;
             this.objectWriter = createObjectMapper(true, false, new TimeToLiveDTOPersistenceSerializer());
             this.filePath = Paths.get(configuration.persistedExpectationsPath());
+            this.blobKey = filePath.toAbsolutePath().toString();
+            this.blobStore = blobStore;
             try {
                 Files.createFile(filePath);
             } catch (FileAlreadyExistsException ignore) {
@@ -72,48 +84,52 @@ public class ExpectationFileSystemPersistence implements MockServerMatcherListen
             this.requestMatchers = null;
             this.objectWriter = null;
             this.filePath = null;
+            this.blobKey = null;
             this.initializationPathMatchesPersistencePath = true;
+            this.blobStore = null;
         }
+    }
+
+    /**
+     * Backwards-compatible constructor that creates a
+     * {@link org.mockserver.state.FilesystemBlobStore} internally, preserving
+     * the original direct-file-I/O behaviour for callers that do not supply
+     * a BlobStore (e.g. existing tests).
+     */
+    public ExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, RequestMatchers requestMatchers) {
+        this(configuration, mockServerLogger, requestMatchers, new org.mockserver.state.FilesystemBlobStore(mockServerLogger));
     }
 
     @Override
     public void updated(RequestMatchers requestMatchers, MockServerMatcherNotifier.Cause cause) {
         // ignore non-API changes from the same file
         if (cause == MockServerMatcherNotifier.Cause.API || cause.getType() == MockServerMatcherNotifier.Cause.Type.CLASS_INITIALISER || !initializationPathMatchesPersistencePath) {
-            fileWriteLock.lock();
+            // The lock serialises read-from-matchers + serialize + write-to-blob
+            // as one atomic unit, matching the original fileWriteLock semantics.
+            // This is necessary because listener callbacks are dispatched async
+            // (via Scheduler.submit), so without the lock a later callback could
+            // serialize first but write second, overwriting correct data.
+            writeOrderLock.lock();
             try {
                 try {
-                    try (
-                        FileOutputStream fileOutputStream = new FileOutputStream(filePath.toFile());
-                        FileChannel fileChannel = fileOutputStream.getChannel();
-                        FileLock fileLock = fileChannel.lock()
-                    ) {
-                        if (fileLock != null) {
-                            List<Expectation> expectations = requestMatchers.retrieveActiveExpectations(null);
-                            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setLogLevel(TRACE)
-                                        .setMessageFormat("persisting expectations{}to{}")
-                                        .setArguments(expectations, configuration.persistedExpectationsPath())
-                                );
-                            } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setLogLevel(DEBUG)
-                                        .setMessageFormat("persisting expectations to{}")
-                                        .setArguments(configuration.persistedExpectationsPath())
-                                );
-                            }
-                            byte[] data = serialize(expectations).getBytes(UTF_8);
-                            ByteBuffer buffer = ByteBuffer.wrap(data);
-                            buffer.put(data);
-                            buffer.rewind();
-                            while (buffer.hasRemaining()) {
-                                fileChannel.write(buffer);
-                            }
-                        }
+                    List<Expectation> expectations = requestMatchers.retrieveActiveExpectations(null);
+                    if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(TRACE)
+                                .setMessageFormat("persisting expectations{}to{}")
+                                .setArguments(expectations, configuration.persistedExpectationsPath())
+                        );
+                    } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(DEBUG)
+                                .setMessageFormat("persisting expectations to{}")
+                                .setArguments(configuration.persistedExpectationsPath())
+                        );
                     }
+                    byte[] data = serialize(expectations).getBytes(UTF_8);
+                    blobStore.put(blobKey, data, Collections.emptyMap());
                 } catch (Throwable throwable) {
                     mockServerLogger.logEvent(
                         new LogEntry()
@@ -123,7 +139,7 @@ public class ExpectationFileSystemPersistence implements MockServerMatcherListen
                     );
                 }
             } finally {
-                fileWriteLock.unlock();
+                writeOrderLock.unlock();
             }
         }
     }

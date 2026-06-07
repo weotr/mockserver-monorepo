@@ -71,6 +71,22 @@ describe('summarizeChaosProfile', () => {
     ).toEqual(['error 503 @ 100%', 'drop @ 20%', '+100ms latency']);
   });
 
+  it('summarises graphql error with code', () => {
+    expect(
+      summarizeChaosProfile({ graphqlErrors: true, graphqlErrorCode: 'INTERNAL_SERVER_ERROR' }),
+    ).toEqual(['GraphQL error (INTERNAL_SERVER_ERROR)']);
+  });
+
+  it('shows nullify data chip only when graphqlErrors is also true', () => {
+    expect(
+      summarizeChaosProfile({ graphqlErrors: true, graphqlNullifyData: true }),
+    ).toEqual(['GraphQL error', 'nullify data']);
+    // nullifyData alone (without graphqlErrors) should NOT produce a chip
+    expect(
+      summarizeChaosProfile({ graphqlNullifyData: true }),
+    ).toEqual([]);
+  });
+
   it('returns an empty list for an empty profile', () => {
     expect(summarizeChaosProfile({})).toEqual([]);
   });

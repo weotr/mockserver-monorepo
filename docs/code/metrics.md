@@ -74,6 +74,7 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 | `major_minor_version` | Major.minor version (e.g. `5.15`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
+| `git_hash` | Abbreviated git commit hash the build was produced from, or `unknown` when no git metadata is available |
 
 ### JVM Runtime Metrics
 
@@ -121,7 +122,7 @@ rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 
 ### Active Service-Scoped Chaos Gauge
 
-`mock_server_active_service_chaos` is a Prometheus `GaugeWithCallback` reporting the number of hosts with a currently-active service-scoped chaos profile (`ServiceChaosRegistry`). It is a *callback* gauge — the callback reads `Metrics.getActiveServiceChaosCount()` → `ServiceChaosRegistry.getInstance().activeCount()` at scrape time rather than tracking the value imperatively, so TTL auto-revert (which removes a profile without any `put`/`remove` call) is reflected without extra plumbing. It is registered once when `metricsEnabled` is `true`; the count drops to 0 as profiles are cleared or their TTLs lapse, which makes `mock_server_active_service_chaos > 0` a natural "chaos still live" alert.
+`mock_server_active_service_chaos` is a Prometheus `GaugeWithCallback` with a `fault_type` label (values: `drop`, `error`, `latency`, `truncate`, `malformed`, `slow`, `quota`) reporting, per fault type, the number of currently-active service-scoped chaos profiles (`ServiceChaosRegistry`) configured with that fault. A profile carrying several faults counts under each, so the per-type series can be charted by type. (`slow` and `quota` require their companion fields — chunk-delay, and limit + window — to be counted, matching when they actually fire.) It is a *callback* gauge — the callback reads `Metrics.getActiveServiceChaosCountByFaultType()` → `ServiceChaosRegistry.getInstance().activeCountByFaultType()` at scrape time rather than tracking the value imperatively, so TTL auto-revert (which removes a profile without any `put`/`remove` call) is reflected without extra plumbing. Every fault type is always present (0 when none), giving a stable, complete set of series. It is registered once when `metricsEnabled` is `true`; the counts drop to 0 as profiles are cleared or their TTLs lapse, which makes `sum(mock_server_active_service_chaos) > 0` a natural "chaos still live" alert.
 
 Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`registerChaosCounter` / `registerActiveServiceChaosGauge`) so OTLP-only consumers can observe them without a Prometheus scrape.
 

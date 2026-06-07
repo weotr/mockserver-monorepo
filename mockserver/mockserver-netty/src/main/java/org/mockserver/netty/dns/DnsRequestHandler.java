@@ -14,6 +14,7 @@ import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
+import org.mockserver.mock.dns.DnsIntentRegistry;
 import org.mockserver.model.DnsRecord;
 import org.mockserver.model.DnsRecordClass;
 import org.mockserver.model.DnsRecordType;
@@ -23,6 +24,7 @@ import org.mockserver.model.DnsResponseCode;
 import org.mockserver.uuid.UUIDService;
 import org.slf4j.event.Level;
 
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 
 import static org.mockserver.log.model.LogEntry.LogMessageType.RECEIVED_REQUEST;
@@ -114,6 +116,10 @@ public class DnsRequestHandler extends SimpleChannelInboundHandler<DatagramDnsQu
             }
         }
 
+        // Record A/AAAA answer IPs in the DNS intent registry so the transparent-proxy
+        // resolver can recover the intended hostname for by-IP connections.
+        recordDnsIntentMappings(query, dnsResponse);
+
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -125,6 +131,40 @@ public class DnsRequestHandler extends SimpleChannelInboundHandler<DatagramDnsQu
         }
 
         ctx.writeAndFlush(response);
+    }
+
+    private void recordDnsIntentMappings(DatagramDnsQuery query, DnsResponse dnsResponse) {
+        try {
+            if (dnsResponse.getAnswerRecords() == null) {
+                return;
+            }
+            DnsQuestion question = query.recordAt(DnsSection.QUESTION);
+            if (question == null) {
+                return;
+            }
+            String qName = question.name();
+            for (DnsRecord record : dnsResponse.getAnswerRecords()) {
+                if (record == null || record.getValue() == null) {
+                    continue;
+                }
+                if (record.getType() == DnsRecordType.A || record.getType() == DnsRecordType.AAAA) {
+                    byte[] addrBytes = NetUtil.createByteArrayFromIpAddressString(record.getValue());
+                    if (addrBytes != null) {
+                        InetAddress inetAddress = InetAddress.getByAddress(addrBytes);
+                        DnsIntentRegistry.getInstance().record(inetAddress, qName);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.DEBUG)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.DEBUG)
+                        .setMessageFormat("failed to record DNS intent mapping: {}")
+                        .setArguments(e.getMessage())
+                );
+            }
+        }
     }
 
     private void sendErrorResponse(ChannelHandlerContext ctx, DatagramDnsQuery query, DnsResponseCode code) {

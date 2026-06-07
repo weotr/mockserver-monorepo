@@ -20,7 +20,7 @@ describe('TrafficInspector — ScriptedTurnsPanel wiring', () => {
       proxiedRequests: [],
       activeExpectations: [],
       trafficSearch: '',
-      selectedTrafficIndex: null,
+      selectedTrafficKey: null,
     });
   });
 
@@ -63,12 +63,13 @@ describe('TrafficInspector — ScriptedTurnsPanel wiring', () => {
         {
           key: 'exp-turn0',
           value: {
+            // scenarioName/scenarioState/newScenarioState are top-level Expectation fields
+            scenarioName: 'weather_conversation',
+            scenarioState: 'Started',
+            newScenarioState: 'turn_1',
             httpLlmResponse: {
               provider: 'ANTHROPIC',
               model: 'claude-sonnet-4-20250514',
-              scenarioName: 'weather_conversation',
-              scenarioState: 'Started',
-              newScenarioState: 'turn_1',
               conversationPredicates: {
                 turnIndex: 0,
               },
@@ -83,12 +84,12 @@ describe('TrafficInspector — ScriptedTurnsPanel wiring', () => {
         {
           key: 'exp-turn1',
           value: {
+            scenarioName: 'weather_conversation',
+            scenarioState: 'turn_1',
+            newScenarioState: '__done',
             httpLlmResponse: {
               provider: 'ANTHROPIC',
               model: 'claude-sonnet-4-20250514',
-              scenarioName: 'weather_conversation',
-              scenarioState: 'turn_1',
-              newScenarioState: '__done',
               conversationPredicates: {
                 turnIndex: 1,
                 containsToolResultFor: 'get_weather',
@@ -176,7 +177,7 @@ describe('TrafficInspector — per-request timing display', () => {
       recordedRequests: [],
       activeExpectations: [],
       trafficSearch: '',
-      selectedTrafficIndex: null,
+      selectedTrafficKey: null,
     });
   });
 

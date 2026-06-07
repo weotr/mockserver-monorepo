@@ -50,6 +50,9 @@
     "httpForwardValidateAction": {
       "$ref": "#/definitions/httpForwardValidateAction"
     },
+    "httpForwardWithFallback": {
+      "$ref": "#/definitions/httpForwardWithFallback"
+    },
     "httpError": {
       "$ref": "#/definitions/httpError"
     },
@@ -65,11 +68,20 @@
     "grpcStreamResponse": {
       "$ref": "#/definitions/grpcStreamResponse"
     },
+    "grpcBidiResponse": {
+      "$ref": "#/definitions/grpcBidiResponse"
+    },
     "binaryResponse": {
       "$ref": "#/definitions/binaryResponse"
     },
     "dnsResponse": {
       "$ref": "#/definitions/dnsResponse"
+    },
+    "beforeActions": {
+      "oneOf": [
+        { "$ref": "#/definitions/afterAction" },
+        { "type": "array", "items": { "$ref": "#/definitions/afterAction" }, "minItems": 1 }
+      ]
     },
     "afterActions": {
       "oneOf": [
@@ -104,6 +116,13 @@
     },
     "timeToLive": {
       "$ref": "#/definitions/timeToLive"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/expectationStep"
+      },
+      "minItems": 1
     },
     "timestamp": {
       "description": "added to allow request and response log output to be used to create expectations",
@@ -163,6 +182,11 @@
     },
     {
       "required": [
+        "httpForwardWithFallback"
+      ]
+    },
+    {
+      "required": [
         "httpError"
       ]
     },
@@ -188,6 +212,11 @@
     },
     {
       "required": [
+        "grpcBidiResponse"
+      ]
+    },
+    {
+      "required": [
         "binaryResponse"
       ]
     },
@@ -199,6 +228,11 @@
     {
       "required": [
         "httpResponses"
+      ]
+    },
+    {
+      "required": [
+        "steps"
       ]
     }
   ],

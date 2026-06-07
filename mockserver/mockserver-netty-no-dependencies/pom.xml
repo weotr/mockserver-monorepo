@@ -30,6 +30,14 @@
             <artifactId>mockserver-netty</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- AsyncAPI messaging module — declared optional in mockserver-netty,
+             so not transitive. Explicitly included here so the shade plugin
+             bundles it into the standalone jar and the Docker image. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>mockserver-async</artifactId>
+            <optional>true</optional>
+        </dependency>
 
         <!-- This shaded jar is a standalone runnable artifact — the CLI and the
              Docker image both run it directly — so unlike the mockserver-netty

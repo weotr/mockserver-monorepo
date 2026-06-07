@@ -54,6 +54,17 @@ describe('buildBaseUrl', () => {
       'https://myhost:443',
     );
   });
+
+  it('appends the base/context path when present', () => {
+    expect(buildBaseUrl({ host: 'h', port: '443', secure: true, basePath: '/proxy/ms' })).toBe(
+      'https://h:443/proxy/ms',
+    );
+  });
+
+  it('omits the base path when empty or absent', () => {
+    expect(buildBaseUrl({ host: 'h', port: '1080', secure: false, basePath: '' })).toBe('http://h:1080');
+    expect(buildBaseUrl({ host: 'h', port: '1080', secure: false })).toBe('http://h:1080');
+  });
 });
 
 describe('callMcpTool', () => {

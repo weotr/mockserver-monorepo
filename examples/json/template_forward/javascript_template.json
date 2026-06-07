@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpForwardTemplate": {
+    "template": "return {'path' : \"/somePath\", 'queryStringParameters' : {'userId' : request.queryStringParameters && request.queryStringParameters['userId']},'headers' : {'Host' : [ \"localhost:1081\" ]}, 'body': {'name': 'value'}};",
+    "templateType": "JAVASCRIPT"
+  }
+}

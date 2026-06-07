@@ -2,12 +2,17 @@ package org.mockserver.serialization.model;
 
 import org.mockserver.model.Body;
 import org.mockserver.model.GraphQLBody;
+import org.mockserver.model.SelectionSetMatchType;
+
+import java.util.List;
 
 public class GraphQLBodyDTO extends BodyDTO {
 
     private final String query;
     private final String operationName;
     private final String variablesSchema;
+    private final SelectionSetMatchType selectionSetMatchType;
+    private final List<String> fields;
 
     public GraphQLBodyDTO(GraphQLBody graphQLBody) {
         this(graphQLBody, null);
@@ -18,6 +23,8 @@ public class GraphQLBodyDTO extends BodyDTO {
         this.query = graphQLBody.getQuery();
         this.operationName = graphQLBody.getOperationName();
         this.variablesSchema = graphQLBody.getVariablesSchema();
+        this.selectionSetMatchType = graphQLBody.getSelectionSetMatchType();
+        this.fields = graphQLBody.getFields();
         withOptional(graphQLBody.getOptional());
     }
 
@@ -33,7 +40,23 @@ public class GraphQLBodyDTO extends BodyDTO {
         return variablesSchema;
     }
 
+    public SelectionSetMatchType getSelectionSetMatchType() {
+        return selectionSetMatchType;
+    }
+
+    public List<String> getFields() {
+        return fields;
+    }
+
     public GraphQLBody buildObject() {
-        return (GraphQLBody) new GraphQLBody(getQuery(), getOperationName(), getVariablesSchema()).withOptional(getOptional());
+        GraphQLBody body = new GraphQLBody(getQuery(), getOperationName(), getVariablesSchema());
+        if (selectionSetMatchType != null) {
+            body.withSelectionSetMatchType(selectionSetMatchType);
+        }
+        if (fields != null) {
+            body.withFields(fields);
+        }
+        body.withOptional(getOptional());
+        return body;
     }
 }

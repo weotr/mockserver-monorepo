@@ -75,6 +75,14 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative-boringssl-static</artifactId>
         </dependency>
+        <!-- Epoll API classes (pure Java, no native classifier) — needed at compile
+             time for NettyTransport to reference EpollEventLoopGroup, EpollSocketChannel,
+             EpollServerSocketChannel, and Epoll.isAvailable(). The native .so is only
+             required at runtime on Linux (bundled in mockserver-netty). -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+        </dependency>
 
         <!-- protobuf (gRPC support) -->
         <dependency>
@@ -141,6 +149,13 @@
         <dependency>
             <groupId>net.datafaker</groupId>
             <artifactId>datafaker</artifactId>
+        </dependency>
+
+        <!-- WASM (chicory pure-Java interpreter) -->
+        <dependency>
+            <groupId>com.dylibso.chicory</groupId>
+            <artifactId>runtime</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- javascript (GraalVM polyglot) -->
@@ -357,6 +372,43 @@
     <build>
         <plugins>
             <!--
+                Capture the abbreviated git commit hash at build time and expose it as the
+                ${git.commit.id.abbrev} Maven property, which the templating-maven-plugin (inherited
+                from the parent pom) substitutes into the generated Version class so it can be surfaced
+                on the /mockserver/status endpoint and the Prometheus build_info metric. Runs in the
+                initialize phase, before generate-sources where the Version class is filtered.
+                failOnNoGitDirectory / failOnUnableToExtractRepoInfo are false so builds without git
+                metadata (e.g. a source tarball) degrade to an empty hash instead of failing.
+            -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.1</version>
+                <executions>
+                    <execution>
+                        <id>resolve-git-commit-hash</id>
+                        <goals>
+                            <goal>revision</goal>
+                        </goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                    <abbrevLength>8</abbrevLength>
+                    <includeOnlyProperties>
+                        <includeOnlyProperty>^git\.commit\.id\.abbrev$</includeOnlyProperty>
+                    </includeOnlyProperties>
+                    <!--
+                        NOTE: inside a linked git worktree the resolved hash is that of the shared
+                        repository HEAD, not the worktree's own HEAD. Single-working-tree clones
+                        (Buildkite CI and the release pipeline, which is what ships) resolve correctly.
+                    -->
+                </configuration>
+            </plugin>
+            <!--
                 Two-phase unit-test execution (see docs/operations/performance-tuning.md):
                   1. default-test     - parallel=classes (threadCount 4) for the bulk of the suite.
                   2. sequential-tests - parallel=none, ONLY the classes listed below, which mutate
@@ -394,10 +446,20 @@
                         <exclude>**/HttpActionHandlerChaosTest.java</exclude>
                         <exclude>**/HttpActionHandlerForwardChaosTest.java</exclude>
                         <exclude>**/ServiceChaosRegistryTest.java</exclude>
+                        <exclude>**/TcpChaosRegistryTest.java</exclude>
                         <exclude>**/MetricsTest.java</exclude>
                         <exclude>**/MetricsHandlerTest.java</exclude>
                         <exclude>**/HttpRequestsPropertiesMatcherTest.java</exclude>
                         <exclude>**/HttpRequestPropertiesMatcherLogTest.java</exclude>
+                        <exclude>**/GenAiSpansTest.java</exclude>
+                        <exclude>**/RequestSpansTest.java</exclude>
+                        <!-- Run sequentially: these render templates that evaluate several XPath
+                             expressions, each bounded by xpathMatchingTimeoutMillis via the shared
+                             MatchingTimeoutExecutor. Under heavy parallel CPU contention an eval can
+                             miss its wall-clock timeout and fall back to "" (flaky). Running them
+                             single-threaded removes the contention without weakening the prod timeout. -->
+                        <exclude>**/MustacheTemplateEngineTest.java</exclude>
+                        <exclude>**/VelocityTemplateEngineTest.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -429,16 +491,23 @@
                                 <include>**/HttpActionHandlerChaosTest.java</include>
                                 <include>**/HttpActionHandlerForwardChaosTest.java</include>
                                 <include>**/ServiceChaosRegistryTest.java</include>
+                                <include>**/TcpChaosRegistryTest.java</include>
                                 <include>**/MetricsTest.java</include>
                                 <include>**/MetricsHandlerTest.java</include>
                                 <include>**/HttpRequestsPropertiesMatcherTest.java</include>
                                 <include>**/HttpRequestPropertiesMatcherLogTest.java</include>
+                                <include>**/GenAiSpansTest.java</include>
+                                <include>**/RequestSpansTest.java</include>
+                                <!-- XPath-in-template tests: sequential to avoid flaky timeout under contention -->
+                                <include>**/MustacheTemplateEngineTest.java</include>
+                                <include>**/VelocityTemplateEngineTest.java</include>
                             </includes>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
-            <!-- jacoco:check minimum set ~3 points below the measured unit-test floor of 0.6858 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation. -->
+            <!-- jacoco:check minimum set ~3 points below the measured unit-test floor of 0.6858 (M6 ratchet, 2026-05-28). Tighter threshold catches genuine coverage regressions without flaking on small natural variation.
+                 BRANCH bundle minimum (0.40) ensures branch coverage doesn't regress. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -459,8 +528,17 @@
                                             <value>COVEREDRATIO</value>
                                             <minimum>0.65</minimum>
                                         </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.40</minimum>
+                                        </limit>
                                     </limits>
                                 </rule>
+                                <!-- NOTE: a per-CLASS LINE floor was tried but is not enforceable on this
+                                     codebase — ~80 existing classes have <30% unit-line coverage (many 0%).
+                                     Enforcing "new/changed code must be covered" needs a diff-coverage gate,
+                                     not a JaCoCo per-class rule; tracked as a follow-up. BUNDLE LINE+BRANCH kept. -->
                             </rules>
                         </configuration>
                     </execution>

@@ -17,6 +17,7 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
     private String path = "";
     private final Map<String, List<String>> queryStringParameters = new HashMap<>();
     private BodyDTO body = null;
+    private byte[] originalBody = null;
     private final Map<String, String> cookies = new HashMap<>();
     private final Map<String, List<String>> headers = new HashMap<>();
     private Boolean keepAlive = null;
@@ -36,6 +37,7 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
                 queryStringParameters.put(parameter.getName().getValue(), parameter.getValues().stream().map(NottableString::getValue).collect(Collectors.toList()));
             }
             body = BodyDTO.createDTO(httpRequest.getBody());
+            originalBody = httpRequest.getOriginalBody();
             keepAlive = httpRequest.isKeepAlive();
             secure = httpRequest.isSecure();
             setNot(httpRequest.getNot());
@@ -56,6 +58,10 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
 
     public BodyDTO getBody() {
         return body;
+    }
+
+    public byte[] getOriginalBody() {
+        return originalBody;
     }
 
     public Map<String, List<String>> getHeaders() {

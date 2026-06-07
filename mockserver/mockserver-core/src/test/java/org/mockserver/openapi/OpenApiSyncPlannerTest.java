@@ -1,0 +1,227 @@
+package org.mockserver.openapi;
+
+import org.junit.Test;
+
+import java.util.*;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.*;
+import static org.hamcrest.core.Is.is;
+import static org.mockserver.openapi.OpenApiSyncPlanner.*;
+
+public class OpenApiSyncPlannerTest {
+
+    // ---- idsToPrune tests ----
+
+    @Test
+    public void shouldPruneRemovedOperationInSameNamespace() {
+        // existing has listPets and deletePets; new import only has listPets
+        Set<String> existing = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:petstore:deletePets"
+        );
+        Set<String> newIds = Set.of("openapi:petstore:listPets");
+        Set<String> prefixes = Set.of("openapi:petstore:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, is(Set.of("openapi:petstore:deletePets")));
+    }
+
+    @Test
+    public void shouldNotPruneExpectationsInDifferentNamespace() {
+        Set<String> existing = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:billing:getInvoice",
+            "some-manual-uuid-id"
+        );
+        Set<String> newIds = Set.of("openapi:petstore:listPets");
+        Set<String> prefixes = Set.of("openapi:petstore:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldNotPruneManualExpectations() {
+        Set<String> existing = Set.of(
+            "openapi:petstore:listPets",
+            "custom-id-123"
+        );
+        // re-import with same operations
+        Set<String> newIds = Set.of("openapi:petstore:listPets");
+        Set<String> prefixes = Set.of("openapi:petstore:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldPruneFromMultipleNamespacesAtOnce() {
+        Set<String> existing = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:petstore:deletePets",
+            "openapi:billing:getInvoice",
+            "openapi:billing:deleteInvoice"
+        );
+        Set<String> newIds = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:billing:getInvoice"
+        );
+        Set<String> prefixes = Set.of("openapi:petstore:", "openapi:billing:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, containsInAnyOrder(
+            "openapi:petstore:deletePets",
+            "openapi:billing:deleteInvoice"
+        ));
+    }
+
+    @Test
+    public void shouldReturnEmptyWhenExistingIdsAreEmpty() {
+        Set<String> pruned = idsToPrune(
+            Collections.emptySet(),
+            Set.of("openapi:petstore:listPets"),
+            Set.of("openapi:petstore:")
+        );
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldReturnEmptyWhenExistingIdsAreNull() {
+        Set<String> pruned = idsToPrune(
+            null,
+            Set.of("openapi:petstore:listPets"),
+            Set.of("openapi:petstore:")
+        );
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldReturnEmptyWhenNamespacePrefixesAreEmpty() {
+        Set<String> pruned = idsToPrune(
+            Set.of("openapi:petstore:deletePets"),
+            Set.of("openapi:petstore:listPets"),
+            Collections.emptySet()
+        );
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldReturnEmptyWhenNamespacePrefixesAreNull() {
+        Set<String> pruned = idsToPrune(
+            Set.of("openapi:petstore:deletePets"),
+            Set.of("openapi:petstore:listPets"),
+            null
+        );
+
+        assertThat(pruned, is(empty()));
+    }
+
+    @Test
+    public void shouldHandleNewIdsBeingNull() {
+        // All existing ids in the namespace should be pruned
+        Set<String> pruned = idsToPrune(
+            Set.of("openapi:petstore:listPets"),
+            null,
+            Set.of("openapi:petstore:")
+        );
+
+        assertThat(pruned, is(Set.of("openapi:petstore:listPets")));
+    }
+
+    @Test
+    public void shouldHandleDisambiguatedIds() {
+        // When the same operationId is used for multiple responses, ids get ":2", ":3" etc.
+        Set<String> existing = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:petstore:listPets:2",
+            "openapi:petstore:listPets:3"
+        );
+        // New import only has listPets (single) and listPets:2
+        Set<String> newIds = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:petstore:listPets:2"
+        );
+        Set<String> prefixes = Set.of("openapi:petstore:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, is(Set.of("openapi:petstore:listPets:3")));
+    }
+
+    @Test
+    public void shouldAddNewOperationWithoutPruning() {
+        Set<String> existing = Set.of("openapi:petstore:listPets");
+        Set<String> newIds = Set.of(
+            "openapi:petstore:listPets",
+            "openapi:petstore:createPets"
+        );
+        Set<String> prefixes = Set.of("openapi:petstore:");
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        assertThat(pruned, is(empty()));
+    }
+
+    // ---- specKeyFromTitle tests ----
+
+    @Test
+    public void shouldSanitizeTitleToSpecKey() {
+        assertThat(specKeyFromTitle("Swagger Petstore"), is("swagger_petstore"));
+    }
+
+    @Test
+    public void shouldHandleTitleWithSpecialCharacters() {
+        assertThat(specKeyFromTitle("My API (v2.1)"), is("my_api__v2_1_"));
+    }
+
+    @Test
+    public void shouldReturnNullForBlankTitle() {
+        assertThat(specKeyFromTitle(""), is(nullValue()));
+        assertThat(specKeyFromTitle(null), is(nullValue()));
+        assertThat(specKeyFromTitle("   "), is(nullValue()));
+    }
+
+    @Test
+    public void shouldLowercaseTitle() {
+        assertThat(specKeyFromTitle("ABC"), is("abc"));
+    }
+
+    // ---- specKeyFromHash tests ----
+
+    @Test
+    public void shouldReturnEightCharHexHash() {
+        String hash = specKeyFromHash("some-payload");
+        assertThat(hash.length(), is(8));
+        assertThat(hash, matchesPattern("[0-9a-f]{8}"));
+    }
+
+    @Test
+    public void shouldReturnSameHashForSameInput() {
+        assertThat(specKeyFromHash("hello"), is(specKeyFromHash("hello")));
+    }
+
+    @Test
+    public void shouldReturnDifferentHashForDifferentInput() {
+        assertThat(specKeyFromHash("hello"), is(not(specKeyFromHash("world"))));
+    }
+
+    @Test
+    public void shouldHandleNullPayload() {
+        assertThat(specKeyFromHash(null), is("00000000"));
+    }
+
+    // ---- namespacePrefix tests ----
+
+    @Test
+    public void shouldBuildNamespacePrefix() {
+        assertThat(namespacePrefix("petstore"), is("openapi:petstore:"));
+    }
+}

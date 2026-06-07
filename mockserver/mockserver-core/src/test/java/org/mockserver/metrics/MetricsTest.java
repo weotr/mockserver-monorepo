@@ -8,13 +8,21 @@ import io.prometheus.metrics.model.snapshots.MetricSnapshots;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockserver.mock.Expectation;
 import org.mockserver.mock.action.http.ServiceChaosRegistry;
 import org.mockserver.model.HttpChaosProfile;
+import org.mockserver.model.HttpError;
+import org.mockserver.model.HttpResponse;
+
+import java.util.Arrays;
+import java.util.Map;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.mock.Expectation.when;
 import static org.mockserver.model.HttpChaosProfile.httpChaosProfile;
+import static org.mockserver.model.HttpRequest.request;
 
 public class MetricsTest {
 
@@ -29,6 +37,7 @@ public class MetricsTest {
     @After
     public void clearServiceChaos() {
         ServiceChaosRegistry.getInstance().reset();
+        Metrics.setActiveExpectationsSupplier(null);
     }
 
     @Test
@@ -113,27 +122,142 @@ public class MetricsTest {
     }
 
     @Test
-    public void activeServiceChaosGaugeReflectsLiveRegistry() {
+    public void activeServiceChaosGaugeReflectsLiveRegistryByFaultType() {
         new Metrics(configuration().metricsEnabled(true));
-        HttpChaosProfile profile = httpChaosProfile().withErrorStatus(503);
+        String metric = "mock_server_active_service_chaos";
 
-        assertThat("no chaos registered", scrapeGaugeValue("mock_server_active_service_chaos"), is(0.0));
+        assertThat("no chaos registered", scrapeGaugeValueByLabel(metric, "fault_type", "error"), is(0.0));
 
-        ServiceChaosRegistry.getInstance().put("upstream-a.svc", profile);
-        ServiceChaosRegistry.getInstance().put("upstream-b.svc", profile);
-        assertThat("scrape reads the live registry", scrapeGaugeValue("mock_server_active_service_chaos"), is(2.0));
+        // a.svc injects error + drop; b.svc injects error only
+        ServiceChaosRegistry.getInstance().put("a.svc", httpChaosProfile().withErrorStatus(503).withDropConnectionProbability(0.5));
+        ServiceChaosRegistry.getInstance().put("b.svc", httpChaosProfile().withErrorStatus(500));
+        assertThat("two profiles inject error", scrapeGaugeValueByLabel(metric, "fault_type", "error"), is(2.0));
+        assertThat("one profile injects drop", scrapeGaugeValueByLabel(metric, "fault_type", "drop"), is(1.0));
+        assertThat("no profile injects latency", scrapeGaugeValueByLabel(metric, "fault_type", "latency"), is(0.0));
 
-        ServiceChaosRegistry.getInstance().remove("upstream-a.svc");
-        assertThat("gauge follows removals", scrapeGaugeValue("mock_server_active_service_chaos"), is(1.0));
+        ServiceChaosRegistry.getInstance().remove("a.svc");
+        assertThat("error follows removals", scrapeGaugeValueByLabel(metric, "fault_type", "error"), is(1.0));
+        assertThat("drop follows removals", scrapeGaugeValueByLabel(metric, "fault_type", "drop"), is(0.0));
 
         ServiceChaosRegistry.getInstance().reset();
-        assertThat("gauge drops to zero when cleared", scrapeGaugeValue("mock_server_active_service_chaos"), is(0.0));
+        assertThat("drops to zero when cleared", scrapeGaugeValueByLabel(metric, "fault_type", "error"), is(0.0));
     }
 
     @Test
-    public void getActiveServiceChaosCountDoesNotThrowWhenDisabled() {
+    public void getActiveServiceChaosCountByFaultTypeDoesNotThrowWhenDisabled() {
         // safe to call regardless of whether metrics are enabled (reads the registry directly)
-        assertThat(Metrics.getActiveServiceChaosCount(), is(0L));
+        assertThat(Metrics.getActiveServiceChaosCountByFaultType().get("error"), is(0));
+    }
+
+    // --- MCP tool call counter tests ---
+
+    @Test
+    public void registersMcpToolCallsCounter() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementMcpToolCall("create_expectation");
+
+        assertThat(scrapeContains("mock_server_mcp_tool_calls"), is(true));
+    }
+
+    @Test
+    public void mcpToolCallsCounterIncrementsPerToolName() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementMcpToolCall("create_expectation");
+        Metrics.incrementMcpToolCall("create_expectation");
+        Metrics.incrementMcpToolCall("verify_request");
+        Metrics.incrementMcpToolCall("list_mock_tools");
+        Metrics.incrementMcpToolCall("list_mock_tools");
+        Metrics.incrementMcpToolCall("list_mock_tools");
+
+        assertThat(scrapeCounterValue("mock_server_mcp_tool_calls", "tool", "create_expectation"), is(2.0));
+        assertThat(scrapeCounterValue("mock_server_mcp_tool_calls", "tool", "verify_request"), is(1.0));
+        assertThat(scrapeCounterValue("mock_server_mcp_tool_calls", "tool", "list_mock_tools"), is(3.0));
+    }
+
+    @Test
+    public void getMcpToolCallCountReturnsPerToolCount() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.incrementMcpToolCall("reset");
+        Metrics.incrementMcpToolCall("reset");
+
+        assertThat(Metrics.getMcpToolCallCount("reset"), is(2L));
+        assertThat(Metrics.getMcpToolCallCount("nonexistent"), is(0L));
+    }
+
+    @Test
+    public void incrementMcpToolCallDoesNotThrowWhenDisabled() {
+        // safe to call when counter not registered (no-op)
+        Metrics.incrementMcpToolCall("create_expectation");
+    }
+
+    @Test
+    public void incrementMcpToolCallDoesNotThrowWhenToolNameIsNull() {
+        new Metrics(configuration().metricsEnabled(true));
+        // should not throw
+        Metrics.incrementMcpToolCall(null);
+    }
+
+    // --- expectations by type gauge tests ---
+
+    @Test
+    public void registersExpectationsByTypeGauge() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        assertThat(scrapeContains("mock_server_expectations_by_type"), is(true));
+    }
+
+    @Test
+    public void expectationsByTypeGaugeReflectsActiveExpectations() {
+        new Metrics(configuration().metricsEnabled(true));
+        String metric = "mock_server_expectations_by_type";
+
+        // no supplier set yet -> empty
+        assertThat("no supplier", scrapeGaugeValueByLabel(metric, "action_type", "RESPONSE"), is(0.0));
+
+        // set supplier with a mix of action types
+        Metrics.setActiveExpectationsSupplier(() -> Arrays.asList(
+            when(request().withPath("/a")).thenRespond(HttpResponse.response().withStatusCode(200)),
+            when(request().withPath("/b")).thenRespond(HttpResponse.response().withStatusCode(201)),
+            when(request().withPath("/c")).thenError(HttpError.error().withDropConnection(true))
+        ));
+
+        assertThat("two RESPONSE expectations",
+            scrapeGaugeValueByLabel(metric, "action_type", "RESPONSE"), is(2.0));
+        assertThat("one ERROR expectation",
+            scrapeGaugeValueByLabel(metric, "action_type", "ERROR"), is(1.0));
+        assertThat("no FORWARD expectations",
+            scrapeGaugeValueByLabel(metric, "action_type", "FORWARD"), is(0.0));
+
+        // update the supplier (simulates adding/removing expectations)
+        Metrics.setActiveExpectationsSupplier(() -> Arrays.asList(
+            when(request().withPath("/a")).thenRespond(HttpResponse.response().withStatusCode(200))
+        ));
+
+        assertThat("follows updates: one RESPONSE",
+            scrapeGaugeValueByLabel(metric, "action_type", "RESPONSE"), is(1.0));
+        assertThat("follows updates: zero ERROR",
+            scrapeGaugeValueByLabel(metric, "action_type", "ERROR"), is(0.0));
+    }
+
+    @Test
+    public void expectationsByTypeGaugeHandlesNullAction() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        // An expectation with no action set
+        Metrics.setActiveExpectationsSupplier(() -> Arrays.asList(
+            new Expectation(request().withPath("/no-action"))
+        ));
+
+        // should not throw; no action_type labels emitted
+        Map<String, Integer> counts = Metrics.getActiveExpectationCountByType();
+        assertThat("empty map for null-action expectations", counts.isEmpty(), is(true));
+    }
+
+    @Test
+    public void getActiveExpectationCountByTypeDoesNotThrowWhenNoSupplier() {
+        // safe to call regardless of whether supplier is set
+        Map<String, Integer> counts = Metrics.getActiveExpectationCountByType();
+        assertThat("empty map when no supplier", counts.isEmpty(), is(true));
     }
 
     private static boolean scrapeContains(String name) {
@@ -146,12 +270,14 @@ public class MetricsTest {
         return false;
     }
 
-    private static double scrapeGaugeValue(String name) {
+    private static double scrapeGaugeValueByLabel(String name, String labelName, String labelValue) {
         MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
         for (MetricSnapshot snapshot : snapshots) {
             if (snapshot.getMetadata().getName().equals(name) && snapshot instanceof GaugeSnapshot gaugeSnapshot) {
                 for (GaugeSnapshot.GaugeDataPointSnapshot dataPoint : gaugeSnapshot.getDataPoints()) {
-                    return dataPoint.getValue();
+                    if (labelValue.equals(dataPoint.getLabels().get(labelName))) {
+                        return dataPoint.getValue();
+                    }
                 }
             }
         }

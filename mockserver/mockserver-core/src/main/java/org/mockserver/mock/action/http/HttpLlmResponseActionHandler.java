@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mockserver.llm.LlmQuotaRegistry;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.ProviderCodecRegistry;
+import org.mockserver.llm.StreamingFormat;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
@@ -193,6 +194,19 @@ public class HttpLlmResponseActionHandler {
      */
     private static String compactHeaderValue(String message) {
         return message.replaceAll("[\\r\\n]+", "; ").trim();
+    }
+
+    /**
+     * Returns the streaming wire format for the given provider. Used by the
+     * action handler dispatch to choose between SSE and NDJSON framing.
+     *
+     * @param provider the LLM provider
+     * @return the streaming format (defaults to {@link StreamingFormat#SSE})
+     */
+    public StreamingFormat streamingFormatFor(Provider provider) {
+        return ProviderCodecRegistry.getInstance().lookup(provider)
+            .map(ProviderCodec::streamingFormat)
+            .orElse(StreamingFormat.SSE);
     }
 
     /**

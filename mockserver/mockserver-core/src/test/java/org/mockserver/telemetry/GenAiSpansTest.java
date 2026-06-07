@@ -23,8 +23,10 @@ public class GenAiSpansTest {
 
     @After
     public void resetTracer() {
-        // guarantee isolation regardless of test order or shared JVM state
+        // guarantee isolation regardless of test order or shared JVM state;
+        // startWithProcessor now installs both tracers so reset both
         GenAiSpans.setTracer(null);
+        RequestSpans.setTracer(null);
     }
 
     @Test

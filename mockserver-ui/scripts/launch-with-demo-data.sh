@@ -61,8 +61,27 @@ find_jar() {
 }
 
 if [ "$REBUILD" = true ] || ! find_jar >/dev/null; then
-  echo "→ Building MockServer JAR (this can take a few minutes)..."
-  (cd "$REPO_ROOT/mockserver" && ./mvnw -q clean install -DskipTests -pl mockserver-netty-no-dependencies -am)
+  BUILD_LOG="$UI_DIR/mockserver-build.log"
+  echo "→ Building MockServer JAR (this can take a few minutes)"
+  echo "  cmd: (cd mockserver && ./mvnw clean install -DskipTests -pl mockserver-netty-no-dependencies -am)"
+  echo "  full log: $BUILD_LOG"
+  echo "  progress (Maven reactor — one line per module + result):"
+  # Stream the full build to a log, but surface only the reactor "Building <module>
+  # [N/M]" progress lines, the BUILD result, and any errors so it is clear the build
+  # is advancing rather than hung — without flooding the terminal with full output.
+  # PIPESTATUS captures the real Maven exit code (grep/tee would otherwise mask it).
+  set +e
+  ( cd "$REPO_ROOT/mockserver" && ./mvnw clean install -DskipTests -pl mockserver-netty-no-dependencies -am ) 2>&1 \
+    | tee "$BUILD_LOG" \
+    | grep --line-buffered -E '\[INFO\] Building |\[INFO\] BUILD (SUCCESS|FAILURE)|\[ERROR\]'
+  build_rc=${PIPESTATUS[0]}
+  set -e
+  if [ "$build_rc" -ne 0 ]; then
+    echo "ERROR: MockServer build failed (exit $build_rc) — last 40 log lines:"
+    tail -40 "$BUILD_LOG"
+    exit 1
+  fi
+  echo "✓ Build complete"
 fi
 MOCKSERVER_JAR="$(find_jar)" || { echo "ERROR: MockServer JAR not found after build"; exit 1; }
 echo "✓ MockServer JAR: $(basename "$MOCKSERVER_JAR")"
@@ -76,7 +95,7 @@ fi
 # --- start MockServer ------------------------------------------------------
 MOCKSERVER_LOG="$UI_DIR/mockserver-demo.log"
 echo "→ Starting MockServer on port $MOCKSERVER_PORT (log: $MOCKSERVER_LOG)..."
-java -Dmockserver.metricsEnabled=true -jar "$MOCKSERVER_JAR" -serverPort "$MOCKSERVER_PORT" -logLevel INFO > "$MOCKSERVER_LOG" 2>&1 &
+java -Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=true -jar "$MOCKSERVER_JAR" -serverPort "$MOCKSERVER_PORT" -logLevel INFO > "$MOCKSERVER_LOG" 2>&1 &
 MOCKSERVER_PID=$!
 
 UI_PID=""
@@ -93,12 +112,14 @@ trap cleanup INT TERM EXIT
 wait_for() {
   # MockServer's control plane answers /mockserver/status only to PUT, so the
   # HTTP method is a parameter (default GET for plain pages like the dashboard).
-  local url="$1" name="$2" method="${3:-GET}" timeout=60 elapsed=0
+  local url="$1" name="$2" method="${3:-GET}" timeout=120 elapsed=0 rc
   echo "  Waiting for $name..."
-  until curl -sf -X "$method" "$url" >/dev/null 2>&1; do
+  until rc=$(curl -sf --connect-timeout 2 --max-time 5 -X "$method" "$url" 2>&1); do
+    echo "    [${elapsed}s] curl failed"
     [ "$elapsed" -ge "$timeout" ] && { echo "ERROR: $name did not start within ${timeout}s"; return 1; }
     sleep 1; elapsed=$((elapsed + 1))
   done
+  echo "  ✓ $name is ready"
 }
 
 wait_for "http://localhost:$MOCKSERVER_PORT/mockserver/status" "MockServer" PUT
@@ -113,6 +134,11 @@ echo "→ Starting UI dev server on port $UI_PORT..."
 (cd "$UI_DIR" && MOCKSERVER_URL="http://localhost:$MOCKSERVER_PORT" npm run dev -- --port "$UI_PORT" >/dev/null 2>&1) &
 UI_PID=$!
 
+# Open the dashboard on the dev-server origin but pointed at MockServer via ?port: the UI
+# then calls http://localhost:$MOCKSERVER_PORT directly (cross-origin from the :$UI_PORT dev
+# server). MockServer's control plane returns CORS headers on every /mockserver/* response and
+# answers the OPTIONS preflight, so this cross-origin path works without the dev proxy — the
+# same way the bundled dashboard works when pointed at a different MockServer via host/port.
 UI_URL="http://localhost:$UI_PORT/mockserver/dashboard/?port=$MOCKSERVER_PORT"
 wait_for "http://localhost:$UI_PORT/mockserver/dashboard/" "UI dev server"
 echo "✓ UI dev server ready (PID $UI_PID)"

@@ -705,13 +705,41 @@ mockServerClient("localhost", 1080).openAPIExpectation({
     </div>
 </div>
 
+<a id="openapi_incremental_sync" class="anchor" href="#openapi_incremental_sync">&nbsp;</a>
+
+<h2>Incremental / Idempotent Re-import</h2>
+
+<p>Calling <span class="inline_code">PUT /mockserver/openapi</span> with a spec you have already imported is safe and idempotent. MockServer performs an <strong>incremental sync</strong> rather than duplicating expectations:</p>
+
+<ul>
+    <li><strong>Updated in place</strong> &mdash; operations that already exist are replaced with the latest generated response.</li>
+    <li><strong>New operations added</strong> &mdash; operations added to the spec since the last import are created.</li>
+    <li><strong>Removed operations pruned</strong> &mdash; expectations for operations that are no longer present in the spec are automatically deleted.</li>
+    <li><strong>Other expectations untouched</strong> &mdash; manually created expectations and expectations from other specs are never affected.</li>
+</ul>
+
+<p>Incremental sync is scoped by <strong>spec identity</strong>. MockServer assigns each OpenAPI-generated expectation a stable id of the form <span class="inline_code">openapi:&lt;specKey&gt;:&lt;operationId&gt;</span>, where <span class="inline_code">specKey</span> is derived from the spec title (lowercased, non-alphanumeric characters replaced with <span class="inline_code">_</span>) or, when no title is present, from an 8-character hash of the spec URL or payload. Re-importing a spec with the same title updates exactly those expectations; importing a differently titled spec creates a separate namespace of expectations and does not affect the first.</p>
+
+<p>This means you can safely call <span class="inline_code">PUT /mockserver/openapi</span> on every test run or CI build &mdash; you will always end up with a consistent set of mock expectations matching the current spec, with no stale duplicates.</p>
+
 <a id="openapi_callbacks" class="anchor" href="#openapi_callbacks">&nbsp;</a>
 
 <h2>OpenAPI Callbacks (Webhooks)</h2>
 
 <p>When an OpenAPI specification includes <a target="_blank" href="https://swagger.io/docs/specification/callbacks/" rel="noopener noreferrer"><strong>callbacks</strong></a> on an operation, MockServer automatically generates webhook expectations that send HTTP requests to the callback URLs after the main response is returned. This allows you to simulate webhook-style interactions where an API notifies the client asynchronously after processing a request.</p>
 
-<p>The callback URL, method, and request body are derived from the OpenAPI callback definition. Runtime expression placeholders (such as <code class="inline code">{$request.body#/callbackUrl}</code>) are currently passed through as literal strings.</p>
+<p>The callback URL, method, and request body are derived from the OpenAPI callback definition. OpenAPI <strong>runtime expressions</strong> (such as <code class="inline code">{$request.body#/callbackUrl}</code>) are resolved at callback fire-time using values from the triggering request. Supported expressions:</p>
+
+<ul>
+    <li><code class="inline code">{$request.body#/&lt;json-pointer&gt;}</code> — extracts a value from the triggering request body using a JSON Pointer</li>
+    <li><code class="inline code">{$request.query.&lt;name&gt;}</code> — query parameter value from the triggering request</li>
+    <li><code class="inline code">{$request.header.&lt;name&gt;}</code> — header value from the triggering request</li>
+    <li><code class="inline code">{$request.path.&lt;name&gt;}</code> — path parameter value (best-effort)</li>
+    <li><code class="inline code">{$request.method}</code> — HTTP method of the triggering request</li>
+    <li><code class="inline code">{$url}</code> — reconstructed URL of the triggering request</li>
+</ul>
+
+<p>Expressions that cannot be resolved (unknown format, missing values) are replaced with an empty string. Response-based expressions (<code class="inline code">{$response.body#/...}</code>) are not currently supported because the response is not available at after-action dispatch time.</p>
 
 <p>For example, given the following OpenAPI specification with a callback:</p>
 
@@ -763,3 +791,38 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 </ol>
 
 <p>This feature works automatically when loading OpenAPI specifications via any method (REST API, Java client, initializer file, or classpath). No additional configuration is required.</p>
+
+<a id="generate_expectations_from_wsdl" class="anchor" href="#generate_expectations_from_wsdl">&nbsp;</a>
+
+<h2>Generate Expectations From WSDL (SOAP)</h2>
+
+<p>MockServer supports <strong>WSDL 1.1</strong> documents as an alternative to OpenAPI for generating mock expectations. Submitting a WSDL causes MockServer to create one expectation per SOAP operation found across all service/port bindings in the document.</p>
+
+<p>Both <strong>SOAP 1.1</strong> and <strong>SOAP 1.2</strong> bindings are supported. Each generated expectation:</p>
+<ul>
+    <li><strong>Matches</strong> <span class="inline_code">POST</span> requests to the path taken from the <span class="inline_code">soap:address</span> (or <span class="inline_code">soap12:address</span>) <span class="inline_code">location</span> attribute, plus one of:
+        <ul>
+            <li>the <span class="inline_code">SOAPAction</span> header (SOAP 1.1), when a <span class="inline_code">soapAction</span> is declared on the binding operation;</li>
+            <li>the <span class="inline_code">action</span> parameter of the <span class="inline_code">content-type</span> header (SOAP 1.2), when a <span class="inline_code">soapAction</span> is declared;</li>
+            <li>or an XPath body check on the operation element local-name (fallback when no SOAP action is declared in the WSDL).</li>
+        </ul>
+    </li>
+    <li><strong>Responds</strong> with HTTP 200 and a skeleton SOAP envelope containing a <span class="inline_code">&lt;{Operation}Response/&gt;</span> element in the WSDL target namespace.</li>
+</ul>
+
+<p>The WSDL document is parsed with XXE protections (DOCTYPE and external entity resolution disabled) so that importing an untrusted WSDL cannot trigger an XML External Entity attack.</p>
+
+<p>MockServer returns HTTP 201 with the created expectations as JSON.</p>
+
+<a id="generate_expectations_from_wsdl_example" class="anchor" href="#generate_expectations_from_wsdl_example">&nbsp;</a>
+
+<button id="button_wsdl_rest" class="accordion">generate expectations from a WSDL document</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/wsdl" \
+  -H "content-type: text/xml" \
+  --data-binary @my-service.wsdl</code></pre>
+        <p>The request body must be a raw WSDL 1.1 XML document. MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>

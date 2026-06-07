@@ -17,6 +17,8 @@ import { useDashboardStore } from '../store';
 import type { DebugMismatchExpectationResult } from '../types';
 
 function scoreColor(matched: number, total: number): 'success' | 'warning' | 'error' {
+  // Guard divide-by-zero: a matcher with no fields hasn't "failed" anything, so don't paint it red.
+  if (total <= 0) return 'success';
   const ratio = matched / total;
   if (ratio >= 0.8) return 'success';
   if (ratio >= 0.5) return 'warning';

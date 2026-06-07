@@ -1,12 +1,14 @@
 package org.mockserver.model;
 
 import org.junit.Test;
+import org.mockserver.version.Version;
 
 import java.util.Arrays;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.equalTo;
 import static org.mockserver.model.PortBinding.portBinding;
 
 public class PortBindingTest {
@@ -36,5 +38,11 @@ public class PortBindingTest {
 
         // then
         assertThat(portBinding.getPorts(), contains(1, 2, 3));
+    }
+
+    @Test
+    public void shouldExposeBuildTimeGitHash() {
+        // the git hash is captured at build time from the Version class
+        assertThat(new PortBinding().getGitHash(), equalTo(Version.getGitHash()));
     }
 }

@@ -101,6 +101,23 @@ public class CrudDataStore {
         }
     }
 
+    public ObjectNode patch(String id, ObjectNode partial) {
+        synchronized (writeLock) {
+            ObjectNode existing = items.get(id);
+            if (existing == null) {
+                return null;
+            }
+            ObjectNode merged = existing.deepCopy();
+            partial.fieldNames().forEachRemaining(field -> {
+                if (!field.equals(idField)) {
+                    merged.set(field, partial.get(field).deepCopy());
+                }
+            });
+            items.put(id, merged);
+            return merged;
+        }
+    }
+
     public boolean delete(String id) {
         synchronized (writeLock) {
             ObjectNode removed = items.remove(id);
@@ -109,6 +126,14 @@ public class CrudDataStore {
                 return true;
             }
             return false;
+        }
+    }
+
+    public void clear() {
+        synchronized (writeLock) {
+            items.clear();
+            insertionOrder.clear();
+            autoIncrementCounter.set(0);
         }
     }
 

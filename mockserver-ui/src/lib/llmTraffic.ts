@@ -57,6 +57,16 @@ export interface OpenAiUsage {
   total_tokens?: number;
 }
 
+/**
+ * The OpenAI Responses API reports token usage with input_tokens / output_tokens
+ * (like Anthropic), NOT the Chat Completions prompt_tokens / completion_tokens.
+ */
+export interface OpenAiResponsesUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface OpenAiChoice {
   message?: {
     role?: string;
@@ -104,7 +114,7 @@ export interface OpenAiResponsesParsed {
   input: unknown[];
   tools: unknown[] | null;
   output: unknown[];
-  usage: OpenAiUsage | null;
+  usage: OpenAiResponsesUsage | null;
   sseEvents: SseEvent[] | null;
   streamed: boolean;
   streamTruncated: boolean;
@@ -717,10 +727,20 @@ function parseOpenAiResponsesRequest(
     streamTruncated: truncated,
   };
 
+  if (isStreamResponse(responseHeaders, responseBody) && typeof responseBody === 'string') {
+    const events = parseSseStream(responseBody);
+    result.sseEvents = events;
+    const reassembled = reassembleResponsesSse(events);
+    result.output = reassembled.output;
+    result.usage = reassembled.usage;
+    if (reassembled.model && !result.model) result.model = reassembled.model;
+    return result;
+  }
+
   const res = safeParseJson(responseBody) as Record<string, unknown> | undefined;
   if (res) {
     result.output = getArray(res, 'output') ?? [];
-    result.usage = getObject(res, 'usage') as OpenAiUsage | null;
+    result.usage = getObject(res, 'usage') as OpenAiResponsesUsage | null;
     if (!result.model) {
       result.model = getString(res, 'model');
     }
@@ -729,9 +749,85 @@ function parseOpenAiResponsesRequest(
   return result;
 }
 
+/**
+ * Reassemble a streamed OpenAI Responses reply. Text comes from response.output_text.delta
+ * events; function calls from response.output_item.done items; usage/model from the
+ * response.completed (or earlier response.*) event.
+ */
+function reassembleResponsesSse(events: SseEvent[]): { output: unknown[]; usage: OpenAiResponsesUsage | null; model: string | null } {
+  const functionCalls: unknown[] = [];
+  let text = '';
+  let usage: OpenAiResponsesUsage | null = null;
+  let model: string | null = null;
+  for (const ev of events) {
+    const data = safeParseJson(ev.data) as Record<string, unknown> | undefined;
+    if (!data) continue;
+    const type = data['type'];
+    if (type === 'response.output_text.delta' && typeof data['delta'] === 'string') {
+      text += data['delta'];
+    } else if (type === 'response.output_item.done') {
+      const item = data['item'] as Record<string, unknown> | undefined;
+      if (item && item['type'] === 'function_call') functionCalls.push(item);
+    } else if (typeof type === 'string' && type.startsWith('response.')) {
+      const resp = data['response'] as Record<string, unknown> | undefined;
+      if (resp) {
+        if (!model && typeof resp['model'] === 'string') model = resp['model'] as string;
+        const u = resp['usage'] as Record<string, unknown> | undefined;
+        if (u) {
+          usage = {
+            input_tokens: getNumber(u, 'input_tokens') ?? undefined,
+            output_tokens: getNumber(u, 'output_tokens') ?? undefined,
+            total_tokens: getNumber(u, 'total_tokens') ?? undefined,
+          };
+        }
+      }
+    }
+  }
+  const output: unknown[] = [];
+  if (text) output.push({ type: 'message', content: [{ type: 'output_text', text }] });
+  output.push(...functionCalls);
+  return { output, usage, model };
+}
+
 // ---------------------------------------------------------------------------
 // Gemini parser
 // ---------------------------------------------------------------------------
+
+/**
+ * Reassemble a streamed Gemini response (SSE of partial `candidates` chunks) into a single
+ * candidate with the concatenated parts plus the final usageMetadata / finishReason.
+ */
+function reassembleGeminiSse(events: SseEvent[]): { candidates: unknown[]; usage: GeminiParsed['usage']; model: string | null } {
+  const parts: unknown[] = [];
+  let finishReason: string | undefined;
+  let usage: GeminiParsed['usage'] = null;
+  let model: string | null = null;
+  for (const ev of events) {
+    const data = safeParseJson(ev.data) as Record<string, unknown> | undefined;
+    if (!data) continue;
+    const candidates = getArray(data, 'candidates');
+    if (candidates && candidates.length > 0) {
+      const c0 = candidates[0] as Record<string, unknown>;
+      const content = c0['content'] as Record<string, unknown> | undefined;
+      if (content && Array.isArray(content['parts'])) {
+        for (const p of content['parts'] as unknown[]) parts.push(p);
+      }
+      if (typeof c0['finishReason'] === 'string') finishReason = c0['finishReason'];
+    }
+    const usageMeta = getObject(data, 'usageMetadata');
+    if (usageMeta) {
+      usage = {
+        promptTokenCount: getNumber(usageMeta, 'promptTokenCount') ?? undefined,
+        candidatesTokenCount: getNumber(usageMeta, 'candidatesTokenCount') ?? undefined,
+      };
+    }
+    if (!model) model = getString(data, 'modelVersion') ?? getString(data, 'model');
+  }
+  const candidates = parts.length > 0 || finishReason
+    ? [{ content: { parts, role: 'model' }, ...(finishReason ? { finishReason } : {}) }]
+    : [];
+  return { candidates, usage, model };
+}
 
 function parseGeminiRequest(
   requestBody: unknown,
@@ -753,6 +849,16 @@ function parseGeminiRequest(
     streamed,
     streamTruncated: truncated,
   };
+
+  if (isStreamResponse(responseHeaders, responseBody) && typeof responseBody === 'string') {
+    const events = parseSseStream(responseBody);
+    result.sseEvents = events;
+    const reassembled = reassembleGeminiSse(events);
+    result.candidates = reassembled.candidates;
+    result.usage = reassembled.usage;
+    if (reassembled.model && !result.model) result.model = reassembled.model;
+    return result;
+  }
 
   const res = safeParseJson(responseBody) as Record<string, unknown> | undefined;
   if (res) {
@@ -1009,10 +1115,17 @@ export function getTokenSummary(parsed: ParsedTraffic): string | null {
     if (parsed.usage.output_tokens != null) parts.push(`${parsed.usage.output_tokens} out`);
     return parts.length > 0 ? parts.join(' / ') : null;
   }
-  if ((parsed.kind === 'openai' || parsed.kind === 'openai_responses') && parsed.usage) {
+  if (parsed.kind === 'openai' && parsed.usage) {
     const parts: string[] = [];
     if (parsed.usage.prompt_tokens != null) parts.push(`${parsed.usage.prompt_tokens} in`);
     if (parsed.usage.completion_tokens != null) parts.push(`${parsed.usage.completion_tokens} out`);
+    return parts.length > 0 ? parts.join(' / ') : null;
+  }
+  if (parsed.kind === 'openai_responses' && parsed.usage) {
+    // Responses API uses input_tokens / output_tokens.
+    const parts: string[] = [];
+    if (parsed.usage.input_tokens != null) parts.push(`${parsed.usage.input_tokens} in`);
+    if (parsed.usage.output_tokens != null) parts.push(`${parsed.usage.output_tokens} out`);
     return parts.length > 0 ? parts.join(' / ') : null;
   }
   if (parsed.kind === 'gemini' && parsed.usage) {

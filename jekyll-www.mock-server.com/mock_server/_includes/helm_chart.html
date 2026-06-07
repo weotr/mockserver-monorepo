@@ -30,6 +30,16 @@
 <pre class="prettyprint code"><code class="code">helm pull oci://ghcr.io/mock-server/charts/mockserver --version {{ site.mockserver_version }}
 helm push mockserver-{{ site.mockserver_version }}.tgz oci://&lt;your-private-registry&gt;/&lt;namespace&gt;</code></pre>
 
+<a id="verify_chart_signature" class="anchor" href="#verify_chart_signature">&nbsp</a>
+
+<h3>Verifying The Chart Signature</h3>
+
+<p>Recent chart releases are signed with <a target="_blank" href="https://docs.sigstore.dev/cosign/overview/" rel="noopener noreferrer">Sigstore cosign</a>. You can verify a chart against the published MockServer public key before installing it:</p>
+
+<pre class="prettyprint code"><code class="code">cosign verify --key https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/helm/mockserver/cosign.pub oci://ghcr.io/mock-server/charts/mockserver:{{ site.mockserver_version }}</code></pre>
+
+<p>A successful verification prints the signed payload and exits with status <span class="keyword">0</span>. Older chart versions predate signing, so verification will report no matching signatures for them.</p>
+
 <a id="deploy_via_chart_repository" class="anchor" href="#helm_extend_classpath">&nbsp</a>
 
 <h3>Deploy Via Chart Repository</h3>
@@ -269,6 +279,17 @@ For example:
     <li><span class="keyword">app.persistence.mountPath</span> (default: <span class="this_value">/persistence</span>) &mdash; mount path inside the container</li>
     <li><span class="keyword">app.persistence.annotations</span> (default: <span class="this_value">{}</span>) &mdash; annotations for the PVC (only used when creating a new PVC)</li>
 </ul>
+
+<h3>Pod securityContext (PVC write permissions)</h3>
+
+<p>On clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level <span class="keyword">fsGroup</span> so the volume is group-owned and writable. The chart exposes a top-level <span class="keyword">podSecurityContext</span> value that is rendered verbatim into the Deployment's <span class="keyword">spec.template.spec.securityContext</span>, so any pod-level field is supported:</p>
+
+<pre class="prettyprint code"><code class="code">helm upgrade --install --namespace mockserver \
+  --set app.persistence.enabled=true \
+  --set podSecurityContext.fsGroup=2000 \
+  mockserver helm/mockserver</code></pre>
+
+<p><span class="keyword">podSecurityContext</span> defaults to <span class="this_value">{}</span> (no pod-level <span class="keyword">securityContext</span> is emitted). It accepts any pod-level fields such as <span class="keyword">fsGroup</span>, <span class="keyword">fsGroupChangePolicy</span>, <span class="keyword">runAsGroup</span>, or <span class="keyword">seccompProfile</span>.</p>
 
 <h3>Example: Chart-Managed PVC</h3>
 

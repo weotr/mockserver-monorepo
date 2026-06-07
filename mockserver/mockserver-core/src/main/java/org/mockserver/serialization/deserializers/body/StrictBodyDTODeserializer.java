@@ -53,6 +53,7 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("xpath".toLowerCase(), Body.Type.XPATH);
         fieldNameToType.put("jsonRpc".toLowerCase(), Body.Type.JSON_RPC);
         fieldNameToType.put("graphql".toLowerCase(), Body.Type.GRAPHQL);
+        fieldNameToType.put("moduleName".toLowerCase(), Body.Type.WASM);
     }
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(StrictBodyDTODeserializer.class);
@@ -84,9 +85,15 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         String graphQLQuery = null;
         String graphQLOperationName = null;
         String graphQLVariablesSchema = null;
+        SelectionSetMatchType graphQLSelectionSetMatchType = null;
+        @SuppressWarnings("unchecked")
+        java.util.List<String> graphQLFields = null;
         String queryFieldValue = null;
         String operationNameFieldValue = null;
         String variablesSchemaFieldValue = null;
+        SelectionSetMatchType selectionSetMatchTypeFieldValue = null;
+        @SuppressWarnings("unchecked")
+        java.util.List<String> fieldsFieldValue = null;
         if (currentToken == JsonToken.START_OBJECT) {
             @SuppressWarnings("unchecked") Map<Object, Object> body = (Map<Object, Object>) ctxt.readValue(jsonParser, Map.class);
             for (Map.Entry<Object, Object> entry : body.entrySet()) {
@@ -144,8 +151,19 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 graphQLVariablesSchema = String.valueOf(graphQLMap.get("variablesSchema"));
                             }
                         }
+                        if (graphQLMap.containsKey("selectionSetMatchType")) {
+                            try {
+                                graphQLSelectionSetMatchType = SelectionSetMatchType.valueOf(String.valueOf(graphQLMap.get("selectionSetMatchType")));
+                            } catch (IllegalArgumentException ignored) {
+                            }
+                        }
+                        if (graphQLMap.containsKey("fields") && graphQLMap.get("fields") instanceof java.util.List) {
+                            graphQLFields = ((java.util.List<?>) graphQLMap.get("fields")).stream()
+                                .map(String::valueOf)
+                                .collect(java.util.stream.Collectors.toList());
+                        }
                     }
-                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes") && type != Body.Type.PARAMETERS) {
+                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "moduleName") && type != Body.Type.PARAMETERS) {
                         String fieldName = String.valueOf(entry.getKey()).toLowerCase();
                         if (fieldNameToType.containsKey(fieldName)) {
                             type = fieldNameToType.get(fieldName);
@@ -293,6 +311,17 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             }
                         }
                     }
+                    if (key.equalsIgnoreCase("selectionSetMatchType") && entry.getValue() instanceof String) {
+                        try {
+                            selectionSetMatchTypeFieldValue = SelectionSetMatchType.valueOf(String.valueOf(entry.getValue()));
+                        } catch (IllegalArgumentException ignored) {
+                        }
+                    }
+                    if (key.equalsIgnoreCase("fields") && entry.getValue() instanceof java.util.List) {
+                        fieldsFieldValue = ((java.util.List<?>) entry.getValue()).stream()
+                            .map(String::valueOf)
+                            .collect(java.util.stream.Collectors.toList());
+                    }
                     if (key.equalsIgnoreCase("parameters")) {
                         if (objectMapper == null) {
                             objectMapper = ObjectMapperFactory.createObjectMapper();
@@ -382,11 +411,23 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         ), not);
                         break;
                     case GRAPHQL:
-                        result = new GraphQLBodyDTO(new GraphQLBody(
+                        GraphQLBody graphQLBody = new GraphQLBody(
                             graphQLQuery != null ? graphQLQuery : queryFieldValue,
                             graphQLOperationName != null ? graphQLOperationName : operationNameFieldValue,
                             graphQLVariablesSchema != null ? graphQLVariablesSchema : variablesSchemaFieldValue
-                        ), not);
+                        );
+                        SelectionSetMatchType resolvedMatchType = graphQLSelectionSetMatchType != null ? graphQLSelectionSetMatchType : selectionSetMatchTypeFieldValue;
+                        if (resolvedMatchType != null) {
+                            graphQLBody.withSelectionSetMatchType(resolvedMatchType);
+                        }
+                        java.util.List<String> resolvedFields = graphQLFields != null ? graphQLFields : fieldsFieldValue;
+                        if (resolvedFields != null) {
+                            graphQLBody.withFields(resolvedFields);
+                        }
+                        result = new GraphQLBodyDTO(graphQLBody, not);
+                        break;
+                    case WASM:
+                        result = new WasmBodyDTO(new WasmBody(valueJsonValue), not);
                         break;
                 }
             }

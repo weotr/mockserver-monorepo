@@ -1,26 +1,41 @@
-# LLM Codec Fixture Files
+# LLM Codec Golden-File Fixtures
 
-This directory holds golden-file fixtures for LLM provider codec testing.
-Each provider has its own subdirectory containing captured real API responses
-that are diffed against the codec's encode output.
+This directory holds codec-generated golden files for automated LLM provider
+codec drift detection. Each provider has its own subdirectory containing
+normalized encode output that is asserted on every test run by
+`LlmCodecGoldenFileTest`.
 
 See [docs/code/llm-codec-fixtures.md](../../../../../../../docs/code/llm-codec-fixtures.md)
-for the full golden-file refresh process.
+for the full golden-file process, normalization rules, and refresh instructions.
 
 ## Directory layout
 
 ```
 fixtures/
-  anthropic/          Anthropic Messages API responses
-  openai/             OpenAI Chat Completions API responses
-  openai-responses/   OpenAI Responses API responses
-  gemini/             Google Gemini generateContent API responses
-  bedrock/            AWS Bedrock (Anthropic-on-Bedrock) responses
-  azure-openai/       Azure OpenAI Chat Completions responses
-  ollama/             Ollama /api/chat responses
+  anthropic/          Anthropic Messages API codec output
+  openai/             OpenAI Chat Completions API codec output
+  openai-responses/   OpenAI Responses API codec output
+  gemini/             Google Gemini generateContent API codec output
+  bedrock/            AWS Bedrock (Anthropic-on-Bedrock) codec output
+  azure-openai/       Azure OpenAI Chat Completions codec output
+  ollama/             Ollama /api/chat codec output
 ```
 
-## Status
+Each directory contains:
 
-Fixture directories are currently empty (`.gitkeep` only). Capturing live
-responses requires provider API keys and is tracked as a follow-up task.
+- `text-completion.json` -- normalized non-streaming text completion
+- `tool-call.json` -- normalized non-streaming tool-call completion
+- `streaming-text.jsonl` -- normalized streaming text completion (one event per line)
+- `streaming-tool-call.jsonl` -- normalized streaming tool-call completion
+
+## Refresh
+
+To regenerate golden files after intentional codec changes:
+
+```bash
+mvn -pl mockserver/mockserver-core test \
+  -Dtest=LlmCodecGoldenFileTest \
+  -Dmockserver.updateLlmGoldens=true
+```
+
+Review the diff and commit alongside codec changes.

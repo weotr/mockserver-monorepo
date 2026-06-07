@@ -27,6 +27,9 @@
     "body": {
       "$ref": "#/definitions/body"
     },
+    "originalBody": {
+      "type": "string"
+    },
     "headers": {
       "$ref": "#/definitions/keyToMultiValue"
     },

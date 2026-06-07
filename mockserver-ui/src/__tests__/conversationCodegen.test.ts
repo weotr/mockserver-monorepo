@@ -121,14 +121,18 @@ describe('conversationToJson', () => {
     expect(parsed).toHaveLength(2);
   });
 
-  it('includes scenario state transitions', () => {
+  it('includes scenario state transitions as top-level expectation fields', () => {
     const json = conversationToJson(baseDraft());
     const parsed = JSON.parse(json);
 
-    expect(parsed[0].httpLlmResponse.scenarioState).toBe('Started');
-    expect(parsed[0].httpLlmResponse.newScenarioState).toBe('turn_1');
-    expect(parsed[1].httpLlmResponse.scenarioState).toBe('turn_1');
-    expect(parsed[1].httpLlmResponse.newScenarioState).toBe('__done');
+    // scenarioName/scenarioState/newScenarioState are top-level Expectation fields, not
+    // nested inside httpLlmResponse (the server rejects unknown httpLlmResponse properties).
+    expect(parsed[0].httpLlmResponse).not.toHaveProperty('scenarioState');
+    expect(parsed[0].scenarioState).toBe('Started');
+    expect(parsed[0].newScenarioState).toBe('turn_1');
+    expect(parsed[1].scenarioState).toBe('turn_1');
+    expect(parsed[1].newScenarioState).toBe('__done');
+    expect(typeof parsed[0].scenarioName).toBe('string');
   });
 
   it('includes conversation predicates', () => {

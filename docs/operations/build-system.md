@@ -23,6 +23,8 @@ CI builds are orchestrated by `.buildkite/scripts/generate-pipeline.sh` which se
 
 MockServer uses Maven 3.9.0 via the Maven Wrapper (`mvnw`). The project targets Java 17 source/target compatibility — produced bytecode runs on Java 17+, and building from source requires JDK 17+.
 
+`mockserver/.mvn/maven.config` sets `-T 1C` so the reactor builds with the parallel (one-thread-per-core) `MultiThreadedBuilder` by default, matching CI (`./mvnw -T 1C clean install`). This is a free speed-up on the multi-module compile/package phases and composes with the within-module parallel unit tests (see [performance-tuning.md](performance-tuning.md)). Pass `-T 1` on the command line to force a single-threaded build when debugging reactor ordering or interleaved log output.
+
 ### Modules
 
 The project comprises 11 Maven modules:
@@ -39,7 +41,7 @@ The project comprises 11 Maven modules:
 | `mockserver-spring-test-listener` | jar (+shaded) | Spring Test integration |
 | `mockserver-testing` | jar | Shared test utilities |
 | `mockserver-integration-testing` | jar (+shaded) | Integration test base classes |
-| `mockserver-examples` | jar | Usage examples |
+| `mockserver-examples` (at repo-root `examples/java`) | jar | Usage examples |
 
 ### Quick Reference
 
@@ -122,7 +124,8 @@ Manual activation"]
 | Plugin | Version | Phase | Purpose |
 |--------|---------|-------|---------|
 | `maven-compiler-plugin` | 3.15.0 | compile | Java 17 compilation with `-Xlint:all` |
-| `templating-maven-plugin` | 3.1.0 | generate-sources | Generates version class from templates |
+| `git-commit-id-maven-plugin` | 9.0.1 | initialize | Resolves the abbreviated git commit hash into `${git.commit.id.abbrev}` for the version class (mockserver-core only); degrades to an empty hash when no git metadata is present |
+| `templating-maven-plugin` | 3.1.0 | generate-sources | Generates version class from templates (version, group/artifact id, git hash) |
 | `maven-jar-plugin` | 3.5.0 | package | JAR packaging with MANIFEST.MF metadata |
 | `maven-clean-plugin` | 3.5.0 | clean | Removes `.log`, keystore, and temp files |
 | `maven-surefire-plugin` | 3.5.5 | test | Unit tests (`*Test.java`, excludes `*IntegrationTest.java`) |

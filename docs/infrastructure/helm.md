@@ -73,6 +73,7 @@ app:
     size: 256Mi
     mountPath: /persistence
     annotations: {}
+podSecurityContext: {}   # pod-level securityContext, e.g. {fsGroup: 2000}
 image:
   repository: mockserver
   snapshot: false
@@ -161,8 +162,11 @@ When `app.persistence.enabled=true`, the chart:
 | `app.persistence.size` | string | `256Mi` | PVC size |
 | `app.persistence.mountPath` | string | `/persistence` | Container mount path |
 | `app.persistence.annotations` | map | `{}` | PVC annotations |
+| `podSecurityContext` | map | `{}` | Pod-level securityContext, rendered verbatim into `spec.template.spec.securityContext`. Accepts any pod-level field (`fsGroup`, `fsGroupChangePolicy`, `runAsGroup`, `seccompProfile`, …). Empty ⇒ nothing emitted. |
 
-**Backward compatibility:** Disabled by default. When disabled, no PVC, volumes, volumeMounts, or env vars are added — the chart behaves identically to before this feature was added.
+**Backward compatibility:** Disabled by default. When disabled, no PVC, volumes, volumeMounts, or env vars are added — the chart behaves identically to before this feature was added. `podSecurityContext` likewise defaults to `{}`, so no pod-level `securityContext` is emitted unless set.
+
+**Pod securityContext / PVC permissions:** on clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level `fsGroup` so the volume is group-owned and writable, e.g. `--set podSecurityContext.fsGroup=2000`. `podSecurityContext` is the general-purpose hook for any pod-level securityContext field (the container-level `securityContext` continues to carry `runAsUser` / `readOnlyRootFilesystem` / `allowPrivilegeEscalation`).
 
 **PVC retention:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data: `kubectl delete pvc <release-name> -n <namespace>`.
 
@@ -281,6 +285,89 @@ The chart is published to two locations on every release. Both are kept in lock-
 - **Bucket:** Main website S3 bucket (see `~/mockserver-aws-ids.md`)
 - **Index:** `helm/charts/index.yaml`
 - **Charts:** `helm/charts/mockserver-*.tgz` (every released version)
+
+### Artifact Hub
+
+[Artifact Hub](https://artifacthub.io) is the de-facto discovery site for Helm charts. Publishing
+the OCI chart there makes it findable without users knowing the `oci://` path in advance. The
+listing reads `Chart.yaml` natively (`name`, `description`, `keywords`, `home`, `sources`,
+`maintainers`, `icon`) plus the `annotations` block (`artifacthub.io/license`, `artifacthub.io/links`).
+
+Repository metadata lives in [`helm/artifacthub-repo.yml`](../../helm/artifacthub-repo.yml). One-time
+bootstrap (manual — needs an Artifact Hub account):
+
+1. Artifact Hub → Control Panel → Repositories → Add → kind **Helm charts**, OCI based, URL
+   `oci://ghcr.io/mock-server/charts`.
+2. Copy the generated **Repository ID** into `repositoryID` in `helm/artifacthub-repo.yml`.
+3. Publish the metadata file to the registry root so Artifact Hub can verify ownership:
+   ```bash
+   oras push ghcr.io/mock-server/charts:artifacthub.io \
+     helm/artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+   ```
+
+After that, Artifact Hub auto-indexes each new chart version pushed to GHCR by the release pipeline —
+no per-release step. (Optional follow-up: add the `oras push` of the metadata file to
+`scripts/release/components/helm.sh` once `oras` is available on the `release` agents.)
+
+### Signing the chart (Artifact Hub "Signed" badge)
+
+Artifact Hub shows a **Signed** badge when the OCI chart carries a [cosign](https://docs.sigstore.dev/)
+signature (it detects them automatically for OCI repositories — no annotation needed). The release
+pipeline has a **guarded, opt-in** signing step in `scripts/release/components/helm.sh`: it is a
+**no-op until a signing key exists**, so it never affects unsigned releases.
+
+To enable signing:
+
+1. **Generate a cosign key pair** (once): `cosign generate-key-pair` → `cosign.key` (encrypted with a
+   password) + `cosign.pub`. Publish `cosign.pub` somewhere users can verify against (e.g. the repo
+   or the website).
+2. **Store it** in the build account's Secrets Manager as `mockserver-release/cosign-key`, a JSON
+   secret with keys `key` (the PEM contents of `cosign.key`) and `password` (the key password).
+3. **Validate with the test harness** — run `scripts/release/test-cosign-signing.sh`. It sources the
+   release library and calls the same `load_secret` + `in_docker` helpers, downloading a pinned cosign
+   binary into the `alpine/helm` image, `cosign login ghcr.io` with the existing GHCR token, and
+   `cosign sign --key <key> ghcr.io/mock-server/charts/mockserver:<version>` — the identical code path
+   to the release step. Default run is a non-mutating preflight (loads the secret, proves the
+   key+password decrypt, logs in to GHCR); `--sign` then signs the real published tags and verifies
+   them. A `--dry-run` *release* does **not** test this — the release skips signing in dry-run — so use
+   the harness. Signing is non-fatal regardless, so a real release won't break if it fails (it just
+   publishes unsigned).
+
+Once a signed version is on GHCR, Artifact Hub shows the Signed badge on its next scan. The public
+key is published in the repo at `helm/mockserver/cosign.pub`, so users can verify a chart with:
+
+```bash
+cosign verify \
+  --key https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/helm/mockserver/cosign.pub \
+  ghcr.io/mock-server/charts/mockserver:<version>
+```
+
+(The private half lives only in the `mockserver-release/cosign-key` Secrets Manager secret.)
+
+> Hardening notes: the step fetches a SHA256-pinned cosign binary (v2.4.3) at release time and the
+> private key is mounted as a `0600` file rather than passed via the container's environment, so it
+> never appears in the host process table. Keyless (OIDC) signing is a further alternative if
+> Buildkite OIDC is set up, avoiding a stored key altogether.
+
+### Requesting "Official" status (Artifact Hub)
+
+The Artifact Hub **Official** badge marks a package as published by the project that owns the
+software. It is a curated status granted by the Artifact Hub maintainers (not a file you add), and
+requires the repository to already be a **Verified Publisher** (it is). Request it by opening an
+issue on [`github.com/artifacthub/hub`](https://github.com/artifacthub/hub/issues) using the
+*"Request official status"* template, e.g.:
+
+> **Title:** Request official status for the MockServer Helm chart
+>
+> **Repository:** `mockserver` (kind: Helm) — `oci://ghcr.io/mock-server/charts/mockserver`
+> **Artifact Hub URL:** _<the chart's artifacthub.io URL>_
+>
+> MockServer is an open-source HTTP(S) mock server & proxy (https://www.mock-server.com, source at
+> https://github.com/mock-server/mockserver-monorepo). This repository is the official publisher of
+> MockServer — the chart is built and released from the same monorepo. It is already a Verified
+> Publisher (repository ID `a6ca1874-16c1-43c8-9924-9bf9c3a5a9ea`). Please grant Official status.
+
+Once granted, the Official badge appears alongside Verified Publisher.
 
 ### Release pipeline (automated)
 

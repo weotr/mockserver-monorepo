@@ -9,7 +9,6 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.WriteBufferWaterMark;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.AttributeKey;
 import org.apache.commons.lang3.StringUtils;
 import org.mockserver.configuration.Configuration;
@@ -20,6 +19,7 @@ import org.mockserver.metrics.Metrics;
 import org.mockserver.model.*;
 import org.mockserver.proxyconfiguration.NoProxyHostsUtils;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
+import org.mockserver.socket.NettyTransport;
 import org.mockserver.socket.tls.NettySslContextFactory;
 import org.slf4j.event.Level;
 
@@ -112,7 +112,7 @@ public class NettyHttpClient {
 
             Bootstrap bootstrap = new Bootstrap()
                 .group(eventLoopGroup)
-                .channel(NioSocketChannel.class)
+                .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                 .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))
@@ -205,7 +205,7 @@ public class NettyHttpClient {
 
             new Bootstrap()
                 .group(eventLoopGroup)
-                .channel(NioSocketChannel.class)
+                .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                 .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))

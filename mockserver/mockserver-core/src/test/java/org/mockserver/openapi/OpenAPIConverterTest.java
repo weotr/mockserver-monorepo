@@ -966,7 +966,7 @@ public class OpenAPIConverterTest {
             ImmutableMap.<String, Object>of("createSubscriptionWithRuntimeCallback", "201")
         );
 
-        // then
+        // then - runtime expression is preserved verbatim for fire-time resolution
         assertThat(actualExpectations.size(), is(1));
         Expectation expectation = actualExpectations.get(0);
         assertThat(expectation.getAfterActions(), is(notNullValue()));
@@ -974,7 +974,7 @@ public class OpenAPIConverterTest {
         AfterAction afterAction = expectation.getAfterActions().get(0);
         HttpRequest callbackRequest = afterAction.getHttpRequest();
         assertThat(callbackRequest.getMethod().getValue(), is("POST"));
-        assertThat(callbackRequest.getPath().getValue(), is("/events"));
+        assertThat(callbackRequest.getPath().getValue(), is("{$request.body#/callbackUrl}/events"));
     }
 
     @Test
@@ -1179,6 +1179,98 @@ public class OpenAPIConverterTest {
                             "}"))
                 )
         ));
+    }
+
+    // ---- stable id generation tests ----
+
+    @Test
+    public void shouldGenerateStableIdsFromSpecTitle() {
+        // given - petstore spec has title "Swagger Petstore"
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example.json";
+
+        // when
+        List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        // then - ids should be openapi:swagger_petstore:<operationId>
+        assertThat(expectations.get(0).getId(), is("openapi:swagger_petstore:listPets"));
+        assertThat(expectations.get(1).getId(), is("openapi:swagger_petstore:createPets"));
+        assertThat(expectations.get(2).getId(), is("openapi:swagger_petstore:showPetById"));
+        assertThat(expectations.get(3).getId(), is("openapi:swagger_petstore:somePath"));
+    }
+
+    @Test
+    public void shouldGenerateIdempotentIdsOnReImport() {
+        // given
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example.json";
+        OpenAPIConverter converter = new OpenAPIConverter(mockServerLogger);
+
+        // when - build expectations twice from the same spec
+        List<Expectation> first = converter.buildExpectations(specUrlOrPayload, null);
+        List<Expectation> second = converter.buildExpectations(specUrlOrPayload, null);
+
+        // then - ids should be identical across both invocations
+        assertThat(first.size(), is(second.size()));
+        for (int i = 0; i < first.size(); i++) {
+            assertThat("id at index " + i, second.get(i).getId(), is(first.get(i).getId()));
+        }
+    }
+
+    @Test
+    public void shouldGenerateStableIdsForSimpleSpec() {
+        // given - simple spec has title "Simple OpenAPI"
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_simple_example.json";
+
+        // when
+        List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        // then
+        assertThat(expectations.size(), is(1));
+        assertThat(expectations.get(0).getId(), is("openapi:simple_openapi:listPets"));
+    }
+
+    @Test
+    public void shouldGenerateStableIdsWithSpecificResponses() {
+        // given
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example.json";
+
+        // when
+        List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(
+            specUrlOrPayload,
+            ImmutableMap.<String, Object>of(
+                "listPets", "500",
+                "createPets", "default",
+                "showPetById", "200"
+            )
+        );
+
+        // then - ids should be based on spec title + operationId, regardless of response selection
+        assertThat(expectations.get(0).getId(), is("openapi:swagger_petstore:listPets"));
+        assertThat(expectations.get(1).getId(), is("openapi:swagger_petstore:createPets"));
+        assertThat(expectations.get(2).getId(), is("openapi:swagger_petstore:showPetById"));
+    }
+
+    @Test
+    public void shouldGenerateStableIdsFromInlineSpecWithTitle() {
+        // given - inline YAML spec with a title
+        String specUrlOrPayload =
+            "openapi: 3.0.0\n" +
+            "info:\n" +
+            "  title: My Inline API\n" +
+            "  version: 1.0.0\n" +
+            "paths:\n" +
+            "  /hello:\n" +
+            "    get:\n" +
+            "      operationId: sayHello\n" +
+            "      responses:\n" +
+            "        '200':\n" +
+            "          description: OK\n";
+
+        // when
+        List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        // then
+        assertThat(expectations.size(), is(1));
+        assertThat(expectations.get(0).getId(), is("openapi:my_inline_api:sayHello"));
     }
 
     private void shouldBuildPetStoreExpectationsWithExamplesAndSpecificResponses(String specUrlOrPayload, List<Expectation> actualExpectations) {

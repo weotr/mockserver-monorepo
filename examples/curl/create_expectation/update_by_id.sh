@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Update an existing expectation by its ID.
+# Assumes MOCKSERVER_URL is set (defaults to http://localhost:1080).
+
+curl -X PUT "${MOCKSERVER_URL:-http://localhost:1080}/mockserver/expectation" \
+-d '{
+  "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
+  "priority": 0,
+  "httpRequest": {
+    "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+    "operationId": "showPetById"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "some_response_body"
+  },
+  "times": {
+    "unlimited": true
+  },
+  "timeToLive": {
+    "unlimited": true
+  }
+}'

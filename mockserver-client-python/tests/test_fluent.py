@@ -7,8 +7,16 @@ import pytest
 
 from mockserver.fluent import ForwardChainExpectation
 from mockserver.models import (
+    BinaryResponse,
     Delay,
+    DnsRecord,
+    DnsResponse,
     Expectation,
+    GrpcBidiResponse,
+    GrpcBidiRule,
+    GrpcStreamMessage,
+    GrpcStreamResponse,
+    HttpClassCallback,
     HttpError,
     HttpForward,
     HttpObjectCallback,
@@ -216,6 +224,154 @@ class TestRespondWithWebSocket:
     async def test_with_dict_raises(self, chain):
         with pytest.raises(TypeError, match="Expected HttpWebSocketResponse"):
             await chain.respond_with_websocket({"subprotocol": "test"})
+
+
+class TestRespondWithGrpcStream:
+    @pytest.mark.asyncio
+    async def test_with_grpc_stream_response(self, chain, mock_client):
+        grpc_resp = GrpcStreamResponse(
+            status_name="OK",
+            messages=[GrpcStreamMessage(json='{"id": 1}')],
+        )
+        result = await chain.respond_with_grpc_stream(grpc_resp)
+        assert chain._expectation.grpc_stream_response is grpc_resp
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected GrpcStreamResponse"):
+            await chain.respond_with_grpc_stream("not a grpc response")
+
+    @pytest.mark.asyncio
+    async def test_with_dict_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected GrpcStreamResponse"):
+            await chain.respond_with_grpc_stream({"statusName": "OK"})
+
+
+class TestRespondWithGrpcBidi:
+    @pytest.mark.asyncio
+    async def test_with_grpc_bidi_response(self, chain, mock_client):
+        bidi_resp = GrpcBidiResponse(
+            status_name="OK",
+            messages=[GrpcStreamMessage(json='{"id": 1}')],
+            rules=[GrpcBidiRule(match_json='{"name": "test"}', responses=[GrpcStreamMessage(json='{"reply": "ok"}')])],
+        )
+        result = await chain.respond_with_grpc_bidi(bidi_resp)
+        assert chain._expectation.grpc_bidi_response is bidi_resp
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected GrpcBidiResponse"):
+            await chain.respond_with_grpc_bidi("not a grpc bidi response")
+
+    @pytest.mark.asyncio
+    async def test_with_dict_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected GrpcBidiResponse"):
+            await chain.respond_with_grpc_bidi({"statusName": "OK"})
+
+
+class TestRespondWithBinary:
+    @pytest.mark.asyncio
+    async def test_with_binary_response(self, chain, mock_client):
+        bin_resp = BinaryResponse(binary_data="AQID")
+        result = await chain.respond_with_binary(bin_resp)
+        assert chain._expectation.binary_response is bin_resp
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected BinaryResponse"):
+            await chain.respond_with_binary("not a binary response")
+
+    @pytest.mark.asyncio
+    async def test_with_dict_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected BinaryResponse"):
+            await chain.respond_with_binary({"binaryData": "AQID"})
+
+
+class TestRespondWithDns:
+    @pytest.mark.asyncio
+    async def test_with_dns_response(self, chain, mock_client):
+        dns_resp = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+        )
+        result = await chain.respond_with_dns(dns_resp)
+        assert chain._expectation.dns_response is dns_resp
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected DnsResponse"):
+            await chain.respond_with_dns("not a dns response")
+
+    @pytest.mark.asyncio
+    async def test_with_dict_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected DnsResponse"):
+            await chain.respond_with_dns({"responseCode": "NOERROR"})
+
+
+class TestForwardWithTemplate:
+    @pytest.mark.asyncio
+    async def test_with_http_template(self, chain, mock_client):
+        template = HttpTemplate(template_type="VELOCITY", template="$req.path")
+        result = await chain.forward_with_template(template)
+        assert chain._expectation.http_forward_template is template
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected HttpTemplate"):
+            await chain.forward_with_template("not a template")
+
+
+class TestForwardWithClassCallback:
+    @pytest.mark.asyncio
+    async def test_with_class_callback(self, chain, mock_client):
+        callback = HttpClassCallback(callback_class="com.example.MyForwardCallback")
+        result = await chain.forward_with_class_callback(callback)
+        assert chain._expectation.http_forward_class_callback is callback
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected HttpClassCallback"):
+            await chain.forward_with_class_callback("not a callback")
+
+
+class TestWithSteps:
+    @pytest.mark.asyncio
+    async def test_with_steps(self, chain, mock_client):
+        from mockserver.models import ExpectationStep
+        steps = [
+            ExpectationStep(
+                http_request=HttpRequest(method="POST", path="/webhook"),
+                blocking=True,
+                timeout=Delay(time_unit="SECONDS", value=5),
+                failure_policy="FAIL_FAST",
+            ),
+            ExpectationStep(
+                http_response=HttpResponse(status_code=200, body="ok"),
+                responder=True,
+            ),
+        ]
+        result = await chain.with_steps(steps)
+        assert chain._expectation.steps is steps
+        assert len(chain._expectation.steps) == 2
+        assert chain._expectation.steps[0].http_request.path == "/webhook"
+        assert chain._expectation.steps[1].responder is True
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_steps_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected a list of ExpectationStep"):
+            await chain.with_steps("not a list")
+
+    @pytest.mark.asyncio
+    async def test_with_steps_invalid_items_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected a list of ExpectationStep"):
+            await chain.with_steps([{"httpResponse": {"statusCode": 200}}])
 
 
 class TestChaining:

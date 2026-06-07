@@ -57,6 +57,11 @@ public class GrpcStatusMapperTest {
         assertThat(isGrpcContentType("application/grpc+json"), is(true));
         assertThat(isGrpcContentType("application/json"), is(false));
         assertThat(isGrpcContentType(null), is(false));
+        // gRPC-Web content types must NOT match standard gRPC
+        assertThat(isGrpcContentType("application/grpc-web"), is(false));
+        assertThat(isGrpcContentType("application/grpc-web+proto"), is(false));
+        assertThat(isGrpcContentType("application/grpc-web-text"), is(false));
+        assertThat(isGrpcContentType("application/grpc-web-text+proto"), is(false));
     }
 
     @Test

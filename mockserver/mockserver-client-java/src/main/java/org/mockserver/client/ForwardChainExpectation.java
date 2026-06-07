@@ -132,8 +132,51 @@ public class ForwardChainExpectation {
         return this;
     }
 
+    public ForwardChainExpectation withBeforeActions(AfterAction... beforeActions) {
+        expectation.withBeforeActions(beforeActions);
+        return this;
+    }
+
+    /**
+     * Set a single before-action to execute before the primary action. Blocking before-actions
+     * (the default) can gate the response via their failure policy and timeout.
+     *
+     * @param beforeAction the before-action to set
+     */
+    public ForwardChainExpectation withBeforeAction(AfterAction beforeAction) {
+        return withBeforeActions(beforeAction);
+    }
+
     public ForwardChainExpectation withAfterActions(AfterAction... afterActions) {
         expectation.withAfterActions(afterActions);
+        return this;
+    }
+
+    /**
+     * Set an ordered list of steps for this expectation. Steps provide a unified way to
+     * declare an ordered pipeline of side-effects and a single designated responder.
+     * Exactly one step must have {@code responder = true}. Steps that precede the
+     * responder run before the response; steps that follow run after.
+     *
+     * <p>When steps are set, they supersede {@code beforeActions} + the primary response
+     * action for dispatch ordering. The primary action is still determined by the
+     * responder step's action type.</p>
+     *
+     * @param steps the ordered steps
+     */
+    public ForwardChainExpectation withSteps(ExpectationStep... steps) {
+        expectation.withSteps(steps);
+        return this;
+    }
+
+    /**
+     * Set an ordered list of steps for this expectation.
+     *
+     * @param steps the ordered steps
+     * @see #withSteps(ExpectationStep...)
+     */
+    public ForwardChainExpectation withSteps(java.util.List<ExpectationStep> steps) {
+        expectation.withSteps(steps);
         return this;
     }
 
@@ -350,6 +393,18 @@ public class ForwardChainExpectation {
     }
 
     /**
+     * Forward request to the upstream host and return a fallback response when
+     * the upstream returns a configured status code (default 5xx) or times out.
+     *
+     * @param httpForwardWithFallback the forward-with-fallback action
+     * @return added or updated expectations
+     */
+    public Expectation[] forwardWithFallback(final HttpForwardWithFallback httpForwardWithFallback) {
+        expectation.thenForwardWithFallback(httpForwardWithFallback);
+        return mockServerClient.upsert(expectation);
+    }
+
+    /**
      * Return error when expectation is matched
      *
      * @param httpError error to return
@@ -377,6 +432,11 @@ public class ForwardChainExpectation {
 
     public Expectation[] respondWithGrpcStream(final GrpcStreamResponse grpcStreamResponse) {
         expectation.thenRespondWithGrpcStream(grpcStreamResponse);
+        return mockServerClient.upsert(expectation);
+    }
+
+    public Expectation[] respondWithGrpcBidi(final GrpcBidiResponse grpcBidiResponse) {
+        expectation.thenRespondWithGrpcBidi(grpcBidiResponse);
         return mockServerClient.upsert(expectation);
     }
 
@@ -417,6 +477,19 @@ public class ForwardChainExpectation {
                 throw new ClientException("Unable to retrieve client registration id", e);
             }
         }
+    }
+
+    /**
+     * Submit the expectation to MockServer without setting any additional primary action.
+     * This is the correct terminal call when the expectation's action is already fully
+     * defined by its {@code steps} (the responder step defines the action). Using
+     * {@code .respond()} or {@code .forward()} would set a redundant top-level action
+     * that conflicts with the steps pipeline.
+     *
+     * @return added or updated expectations
+     */
+    public Expectation[] upsert() {
+        return mockServerClient.upsert(expectation);
     }
 
     @VisibleForTesting

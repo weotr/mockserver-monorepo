@@ -1,0 +1,617 @@
+---
+title: Transparent Interception Recipes
+shortTitle: Interception Recipes
+description: A catalogue of every mechanism for delivering traffic to MockServer for transparent interception — Kubernetes sidecars, OS firewall rules, DNS steering, cloud route tables, browser proxy, and CI networks — with a capability matrix to help you choose the right approach.
+layout: page
+pageOrder: 3.5
+section: 'Chaos Testing'
+subsection: true
+sitemap:
+  priority: 0.7
+  changefreq: 'monthly'
+  lastmod: 2026-06-03T08:00:00+00:00
+keywords: transparent interception, iptables redirect, tproxy, dns steering, http proxy env, pac file, mockserver sidecar, cloud route table, aws nlb proxy protocol v2, network interception, mockserver transparent proxy
+---
+
+<p>MockServer's L7 mock and chaos engine can be reached through many different delivery mechanisms. Two things must be true for transparent interception to work:</p>
+
+<ol>
+    <li><strong>Traffic must reach MockServer</strong> — covered by this page. Mechanisms range from OS firewall rules to cloud route tables.</li>
+    <li><strong>MockServer must recover the original destination</strong> — covered by <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a>, which explains the resolver chain (PROXY protocol v1/v2, Linux conntrack, DNS-intent, Host header fallback).</li>
+</ol>
+
+<p>This page catalogues the delivery mechanisms — (1) above. For each mechanism, the relevant resolver strategy from (2) is noted so you can check whether it is implemented or future work.</p>
+
+<p><strong>One prerequisite applies to all mechanisms:</strong> <code class="inline code">transparentProxyEnabled</code> must be set to <code class="inline code">true</code> (environment variable <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true</code>). Without this flag, MockServer does not treat incoming connections as transparent-proxy requests.</p>
+
+<a id="resolver_chain_summary" class="anchor" href="#resolver_chain_summary">&nbsp;</a>
+
+<h2>Resolver Chain Summary</h2>
+
+<p>When a connection arrives, MockServer resolves the original destination through an ordered chain. The first strategy that succeeds wins; if none succeed, MockServer falls back to the <code class="inline code">Host</code> header. See <a href="/mock_server/service_mesh.html#original_destination_resolution">Original Destination Resolution</a> for full details.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Strategy</th>
+            <th>Status</th>
+            <th>When it applies</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>PROXY protocol v1 / v2</td>
+            <td>Implemented</td>
+            <td>Load balancer (AWS NLB, HAProxy, nginx) prepends a PROXY header to the TCP connection</td>
+        </tr>
+        <tr>
+            <td>Linux conntrack</td>
+            <td>Implemented</td>
+            <td>iptables/nftables REDIRECT on Linux with <code class="inline code">nf_conntrack</code> loaded</td>
+        </tr>
+        <tr>
+            <td>DNS-intent</td>
+            <td>Implemented</td>
+            <td>Client resolved via MockServer's DNS server (<code class="inline code">dnsEnabled=true</code>) and connected to the returned IP</td>
+        </tr>
+        <tr>
+            <td>Host header fallback</td>
+            <td>Implemented</td>
+            <td>Always available — requires a valid <code class="inline code">Host</code> header in the HTTP request</td>
+        </tr>
+        <tr>
+            <td>SO_ORIGINAL_DST getsockopt</td>
+            <td>Implemented</td>
+            <td>Linux with the native (epoll) transport; O(1) alternative to conntrack</td>
+        </tr>
+        <tr>
+            <td>TPROXY (IP_TRANSPARENT)</td>
+            <td>Implemented</td>
+            <td>Linux TPROXY iptables target; enable with <code class="inline code">transparentProxyTproxy=true</code> (needs the native epoll transport and <code class="inline code">CAP_NET_ADMIN</code>)</td>
+        </tr>
+        <tr>
+            <td>eBPF socket metadata</td>
+            <td>Not yet implemented (requires JNI + eBPF program)</td>
+            <td>eBPF cgroup program keyed by socket cookie</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="kubernetes_containers" class="anchor" href="#kubernetes_containers">&nbsp;</a>
+
+<h2>Kubernetes and Containers</h2>
+
+<h3>Kubernetes sidecar with iptables REDIRECT (recommended)</h3>
+
+<p>This is the primary Kubernetes interception pattern. An init container writes iptables REDIRECT rules in the Pod's network namespace; MockServer resolves the original destination via the Linux conntrack table. The <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a> page covers this pattern in full, including the Helm chart values (<code class="inline code">sidecar.enabled</code>, <code class="inline code">sidecar.transparentProxy</code>, <code class="inline code">sidecar.iptables.enabled</code>) and the UID-exclusion loop-avoidance rule. Do not duplicate that setup here; refer to it instead.</p>
+
+<p><strong>Resolver used:</strong> Linux conntrack, then Host header fallback.</p>
+
+<h3>DaemonSet node-level interception</h3>
+
+<p>A DaemonSet runs MockServer on every node and the host-network iptables rules redirect all traffic from selected Pods. The node-level rules use <code class="inline code">iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 1080</code> applied in the host network namespace. This is more invasive than the sidecar pattern — it affects all Pods on the node unless tightly scoped by <code class="inline code">-m set --match-set</code> or an equivalent cgroup filter.</p>
+
+<p><strong>Resolver used:</strong> Linux conntrack, then Host header fallback.</p>
+
+<p><strong>Limitation:</strong> requires <code class="inline code">hostNetwork: true</code> and <code class="inline code">NET_ADMIN</code> capability on the DaemonSet Pod. Platform security policies (PSA/PSP) may block this.</p>
+
+<h3>Istio / Envoy VirtualService routing</h3>
+
+<p>In a service mesh that already runs Envoy sidecars (Istio, AWS App Mesh), you do not need iptables rules or transparent proxy mode at all. Deploy MockServer as a normal Kubernetes Deployment and Service, then use an Istio <code class="inline code">VirtualService</code> to route specific hostnames or paths to MockServer's Service instead of the real backend. MockServer receives explicit HTTP requests with a valid Host header; no transparent interception is involved.</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: route-to-mockserver
+spec:
+  hosts:
+    - payments.internal
+  http:
+    - route:
+        - destination:
+            host: mockserver
+            port:
+              number: 1080</code></pre>
+
+<p><strong>Resolver used:</strong> Host header (the mesh passes the original Host through). <code class="inline code">transparentProxyEnabled</code> is <strong>not</strong> needed for this pattern — MockServer operates as a normal HTTP service.</p>
+
+<h3>Docker Compose and Testcontainers (CI network)</h3>
+
+<p>In a Docker Compose network or a Testcontainers network, set MockServer as the default gateway for one or more services. Containers in the network send their default-route traffic through MockServer.</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">services:
+  mockserver:
+    image: mockserver/mockserver:latest
+    environment:
+      MOCKSERVER_TRANSPARENT_PROXY_ENABLED: "true"
+    networks:
+      test-net:
+        ipv4_address: 192.168.100.1
+
+  app-under-test:
+    image: myapp:latest
+    networks:
+      test-net:
+    # Add a default route through MockServer:
+    # gateway option is Docker-compose-network-level, set below.
+
+networks:
+  test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
+          gateway: 192.168.100.1</code></pre>
+
+<p>When the application connects to an external host, the container's TCP SYN exits through MockServer. MockServer must run iptables rules on the host or inside the container to REDIRECT traffic to its own listener port. The Linux conntrack table then provides the original destination.</p>
+
+<p><strong>Resolver used:</strong> Linux conntrack (if iptables REDIRECT is applied), otherwise Host header fallback. DNS-intent applies if <code class="inline code">dnsEnabled=true</code> and the app resolves through MockServer's DNS port.</p>
+
+<p><strong>Note:</strong> Automatic iptables injection into Docker bridges requires running Docker with sufficient host privileges. In standard Testcontainers usage, the simpler approach is to configure the application's <code class="inline code">HTTP_PROXY</code>/<code class="inline code">HTTPS_PROXY</code> to point at MockServer — see the <a href="#os_host">OS / host</a> section below.</p>
+
+<h3>eBPF-based interception and admission-webhook auto-injection</h3>
+
+<p><strong>Not yet available.</strong> eBPF interception (cgroup-level socket redirection without iptables) and automatic init-container injection via a Kubernetes admission webhook both require native code components that are not yet implemented in MockServer. These are noted as future strategies in the resolver chain.</p>
+
+<a id="os_host" class="anchor" href="#os_host">&nbsp;</a>
+
+<h2>OS / Host</h2>
+
+<h3>System proxy environment variables (simplest)</h3>
+
+<p>MockServer is a standards-compliant HTTP/HTTPS proxy. If the application honours <code class="inline code">HTTP_PROXY</code>, <code class="inline code">HTTPS_PROXY</code>, and <code class="inline code">NO_PROXY</code>, no firewall rules are needed — just point those variables at MockServer. No <code class="inline code">transparentProxyEnabled</code> is required; this is explicit proxy mode, not transparent mode.</p>
+
+<pre class="prettyprint code"><code class="code">export HTTP_PROXY=http://localhost:1080
+export HTTPS_PROXY=http://localhost:1080
+export NO_PROXY=localhost,127.0.0.1</code></pre>
+
+<p>For JVM applications:</p>
+
+<pre class="prettyprint code"><code class="code">java -Dhttp.proxyHost=localhost -Dhttp.proxyPort=1080 \
+     -Dhttps.proxyHost=localhost -Dhttps.proxyPort=1080 \
+     -jar myapp.jar</code></pre>
+
+<p>For Node.js applications that use the <code class="inline code">global-agent</code> package:</p>
+
+<pre class="prettyprint code"><code class="code">GLOBAL_AGENT_HTTP_PROXY=http://localhost:1080 node -r global-agent/bootstrap myapp.js</code></pre>
+
+<p><strong>Resolver used:</strong> not applicable — MockServer receives explicit CONNECT or proxy requests with the target in the request line. No transparent-proxy resolver is needed.</p>
+
+<h3>PAC file</h3>
+
+<p>A Proxy Auto-Configuration (PAC) file returned by MockServer (or a static file server) tells browsers and applications which proxy to use for which URLs. Set the system or browser proxy settings to use <code class="inline code">http://your-host/proxy.pac</code>. This is useful when you want to selectively route only certain hostnames through MockServer.</p>
+
+<pre class="prettyprint lang-js code"><code class="code">function FindProxyForURL(url, host) {
+  if (shExpMatch(host, "*.example.com")) {
+    return "PROXY localhost:1080";
+  }
+  return "DIRECT";
+}</code></pre>
+
+<p><strong>Resolver used:</strong> not applicable — explicit proxy mode.</p>
+
+<h3>Local DNS redirection with MockServer's DNS server</h3>
+
+<p>MockServer includes a built-in DNS server. When enabled, it answers A/AAAA queries and records the hostname-to-IP mapping in the DNS-intent registry. If the client then connects to the IP that MockServer returned, the DNS-intent resolver recovers the original hostname for matching and forwarding — without any iptables rules.</p>
+
+<p>Enable the DNS server:</p>
+
+<pre class="prettyprint code"><code class="code">MOCKSERVER_DNS_ENABLED=true
+MOCKSERVER_DNS_PORT=53   # or a non-privileged port such as 5053</code></pre>
+
+<p>Point the host (or container) at MockServer's DNS port:</p>
+
+<pre class="prettyprint code"><code class="code"># /etc/resolv.conf
+nameserver 127.0.0.1</code></pre>
+
+<p>Or with <code class="inline code">dnsmasq</code>, forward a specific domain:</p>
+
+<pre class="prettyprint code"><code class="code">server=/example.com/127.0.0.1#5053</code></pre>
+
+<p><strong>Resolver used:</strong> DNS-intent (primary), then Host header fallback. This works on Linux, macOS, and Windows — no iptables required.</p>
+
+<p><strong>Requirement:</strong> <code class="inline code">dnsEnabled=true</code> must be set so MockServer's DNS server starts. System property: <code class="inline code">mockserver.dnsEnabled</code>. Environment variable: <code class="inline code">MOCKSERVER_DNS_ENABLED</code>. Port: <code class="inline code">MOCKSERVER_DNS_PORT</code>. The default of <code class="inline code">0</code> binds an OS-assigned ephemeral port, which is unusable for DNS-client configuration — always set a fixed port (e.g. <code class="inline code">53</code> with the needed privileges, or a non-privileged port like <code class="inline code">5053</code> fronted by dnsmasq).</p>
+
+<h3>Linux iptables / nftables REDIRECT</h3>
+
+<p>On Linux, redirect outbound traffic on the host to MockServer's port. This is the host-level equivalent of the Kubernetes sidecar pattern.</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Exclude MockServer's own egress to avoid a redirect loop. The UID must match
+# the user MockServer runs as (the Docker image / Helm chart default is 65534).
+iptables -t nat -I OUTPUT -m owner --uid-owner 65534 -j RETURN
+# Redirect HTTP and HTTPS to MockServer
+iptables -t nat -A OUTPUT -p tcp --dport 80  -j REDIRECT --to-port 1080
+iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 1080</code></pre>
+
+<p>With nftables:</p>
+
+<pre class="prettyprint code"><code class="code">table ip nat {
+  chain output {
+    type nat hook output priority -100;
+    meta skuid 65534 return
+    tcp dport { 80, 443 } redirect to :1080
+  }
+}</code></pre>
+
+<p><strong>Resolver used:</strong> Linux conntrack (reads <code class="inline code">/proc/net/nf_conntrack</code> — requires <code class="inline code">nf_conntrack</code> module loaded), then Host header fallback.</p>
+
+<p><strong>Loop avoidance:</strong> always exclude MockServer's egress UID before adding REDIRECT rules. See <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a> for the full explanation.</p>
+
+<p><strong>TPROXY (IP_TRANSPARENT):</strong> the TPROXY iptables target (<code class="inline code">-j TPROXY</code>) is a more efficient alternative to REDIRECT because it preserves the original destination as the socket's local address, eliminating the conntrack lookup. MockServer supports it: set <code class="inline code">transparentProxyTproxy=true</code> (environment variable <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_TPROXY=true</code>) in addition to <code class="inline code">transparentProxyEnabled=true</code>. It requires the native epoll transport on Linux and the <code class="inline code">CAP_NET_ADMIN</code> capability, plus TPROXY rules in the mangle table and a policy-routing rule, for example:</p>
+<pre class="prettyprint code"><code class="code">ip route add local 0.0.0.0/0 dev lo table 100
+ip rule add fwmark 1 lookup 100
+iptables -t mangle -A PREROUTING -p tcp --dport 80 \
+  -j TPROXY --tproxy-mark 0x1/0x1 --on-port 1080</code></pre>
+<p>If TPROXY is not enabled, MockServer falls back to SO_ORIGINAL_DST then conntrack then Host header, so REDIRECT-based setups continue to work unchanged.</p>
+
+<h3>macOS / BSD pf rdr</h3>
+
+<p>On macOS and other BSDs, use <code class="inline code">pf</code> packet filter redirect rules. The conntrack resolver is Linux-only; on macOS, MockServer falls back to the Host header resolver.</p>
+
+<pre class="prettyprint code"><code class="code"># /etc/pf.anchors/mockserver
+rdr pass on lo0 proto tcp from any to any port 80  -> 127.0.0.1 port 1080
+rdr pass on lo0 proto tcp from any to any port 443 -> 127.0.0.1 port 1080</code></pre>
+
+<pre class="prettyprint lang-sh code"><code class="code">sudo pfctl -f /etc/pf.anchors/mockserver -e</code></pre>
+
+<p><strong>Note:</strong> loading the anchor file directly (as above) replaces the entire active pf ruleset — fine for a dev machine, but for shared/production hosts include the anchor in <code class="inline code">/etc/pf.conf</code> (<code class="inline code">anchor "mockserver"</code> + <code class="inline code">load anchor "mockserver" from "/etc/pf.anchors/mockserver"</code>) and reload with <code class="inline code">pfctl -f /etc/pf.conf</code> to preserve your other rules.</p>
+
+<p><strong>Resolver used:</strong> Host header fallback (conntrack is Linux-only; no SO_ORIGINAL_DST via JNI yet).</p>
+
+<p><strong>Limitation:</strong> without a conntrack equivalent, the original IP destination is not available — only the Host header. For HTTPS this means MockServer must perform SNI-based TLS termination (which it does via <code class="inline code">SniHandler</code>) and trust the SNI hostname as the forwarding target. This works correctly for modern HTTPS clients that send SNI.</p>
+
+<h3>Windows netsh portproxy</h3>
+
+<p>On Windows, <code class="inline code">netsh interface portproxy</code> redirects TCP connections on a local port to MockServer.</p>
+
+<pre class="prettyprint code"><code class="code">netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=80  connectaddress=127.0.0.1 connectport=1080
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=443 connectaddress=127.0.0.1 connectport=1080</code></pre>
+
+<p><strong>Resolver used:</strong> Host header fallback (conntrack is Linux-only; no JNI-based resolver yet on Windows).</p>
+
+<p><strong>Alternative:</strong> <code class="inline code">WinDivert</code> or similar user-space packet capture tools can intercept connections and rewrite destination addresses, but they require native drivers not included in MockServer. Using <code class="inline code">HTTP_PROXY</code> / <code class="inline code">HTTPS_PROXY</code> environment variables is the simpler, cross-platform alternative on Windows.</p>
+
+<h3>connect() interposition (LD_PRELOAD / proxychains)</h3>
+
+<p>Tools such as <code class="inline code">proxychains-ng</code> or a custom <code class="inline code">LD_PRELOAD</code> library intercept the <code class="inline code">connect()</code> system call and redirect connections through a proxy without changing application code or environment variables. MockServer accepts connections from these tools in its standard HTTP proxy mode — no transparent proxy flag needed.</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># proxychains4 config (/etc/proxychains4.conf or ~/.proxychains/proxychains4.conf)
+[ProxyList]
+http 127.0.0.1 1080
+
+# Run the application through proxychains
+proxychains4 curl https://api.example.com/data</code></pre>
+
+<p><strong>Resolver used:</strong> not applicable — explicit proxy mode. MockServer receives a CONNECT request with the target address.</p>
+
+<a id="network_cloud" class="anchor" href="#network_cloud">&nbsp;</a>
+
+<h2>Network / Cloud (Subnet-Level Interception)</h2>
+
+<p>The following patterns intercept traffic for entire subnets or VPCs without per-host configuration. They all rely on the resolver chain for original-destination recovery — typically PROXY protocol (when the load balancer prepends it) or Host header fallback (when it does not).</p>
+
+<h3>AWS — NLB with PROXY protocol v2</h3>
+
+<p>An AWS Network Load Balancer (NLB) target group can prepend a PROXY protocol v2 header to each connection by setting the target-group attribute <code class="inline code">proxy_protocol_v2.enabled=true</code>. The header carries the original source and destination IP and port.</p>
+
+<p>Register MockServer (EC2 instance or ECS task) in such a target group. MockServer automatically detects and parses the PROXY protocol v2 header — no additional configuration is needed beyond <code class="inline code">transparentProxyEnabled=true</code>.</p>
+
+<p><strong>Resolver used:</strong> PROXY protocol v2 (implemented, automatic detection).</p>
+
+<p><strong>Not supported — AWS Gateway Load Balancer (GWLB):</strong> GWLB delivers traffic via GENEVE encapsulation (UDP 6081), not as a TCP stream with a PROXY header. MockServer does not implement GENEVE decapsulation, so the GWLB appliance pattern is not currently usable. Use an NLB with PROXY protocol v2, or the VPC route-table pattern below.</p>
+
+<h3>AWS — VPC route table with source/dest check disabled</h3>
+
+<p>For HTTP/HTTPS traffic without a GWLB, deploy MockServer on an EC2 instance with source/dest check disabled (so it accepts packets not addressed to its own IP). Add a route table entry sending the target CIDR to MockServer's ENI as the next hop. MockServer receives the original TCP connections; the original destination is available from the <code class="inline code">Host</code> header (or from conntrack if running Linux iptables NAT in the appliance itself).</p>
+
+<p><strong>Resolver used:</strong> conntrack (if NAT rules are set up on the MockServer instance) or Host header fallback.</p>
+
+<h3>GCP — custom static route</h3>
+
+<p>In Google Cloud, create a custom static route with <code class="inline code">--next-hop-instance</code> pointing at a MockServer VM (or with <code class="inline code">--next-hop-ilb</code> for an Internal Load Balancer fronting a MockServer managed instance group). Traffic from selected source ranges is forwarded to MockServer.</p>
+
+<pre class="prettyprint lang-sh code"><code class="code">gcloud compute routes create intercept-to-mockserver \
+  --network=my-vpc \
+  --destination-range=0.0.0.0/0 \
+  --next-hop-instance=mockserver-vm \
+  --next-hop-instance-zone=us-central1-a \
+  --priority=900</code></pre>
+
+<p><strong>Resolver used:</strong> PROXY protocol v2 (if an ILB or HAProxy fronts MockServer and is configured to send it), otherwise Host header fallback.</p>
+
+<p><strong>Note:</strong> with <code class="inline code">--next-hop-instance</code>, the MockServer VM must enable IP forwarding (<code class="inline code">sysctl -w net.ipv4.ip_forward=1</code>) and have iptables/nftables REDIRECT rules steering the forwarded packets to MockServer's listener port — otherwise routed traffic is forwarded onward and never reaches MockServer. The same applies to the AWS ENI and Azure UDR virtual-appliance patterns.</p>
+
+<h3>Azure — User-Defined Route (virtual appliance)</h3>
+
+<p>In Azure, create a User-Defined Route (UDR) in a route table with next-hop type <code class="inline code">VirtualAppliance</code> and the next-hop IP address set to MockServer's private IP. Attach the route table to the subnet. IP forwarding must be enabled on MockServer's NIC.</p>
+
+<p><strong>Resolver used:</strong> PROXY protocol v2 (if a load balancer in front of MockServer is configured to emit it), otherwise Host header fallback.</p>
+
+<h3>Generic default gateway / NAT instance</h3>
+
+<p>On any network, you can place MockServer as the default gateway for a test subnet. All traffic from clients in that subnet egresses through MockServer. This is the generic pattern for physical labs, private cloud, and on-premises environments.</p>
+
+<p><strong>Resolver used:</strong> conntrack (if the MockServer host applies iptables NAT REDIRECT to steer traffic to its own listener port) or Host header fallback.</p>
+
+<h3>Network DNS returning MockServer's IP</h3>
+
+<p>Configure the network's recursive resolver to return MockServer's IP address for specific domains (split-horizon DNS or DNS override). Clients resolve the target hostname, receive MockServer's IP, and connect directly. If MockServer's own DNS server (<code class="inline code">dnsEnabled=true</code>) is the authoritative source that clients query, the DNS-intent resolver recovers the hostname. If an external resolver is substituted, MockServer relies on the Host header.</p>
+
+<p><strong>Resolver used:</strong> DNS-intent (when clients resolve through MockServer's DNS server) or Host header fallback (when an upstream resolver substitutes the IP).</p>
+
+<a id="browser_ci" class="anchor" href="#browser_ci">&nbsp;</a>
+
+<h2>Browser and CI</h2>
+
+<h3>Browser proxy / PAC</h3>
+
+<p>Set the browser's proxy configuration to route traffic through MockServer. All major browsers support manual proxy settings and PAC files. For automated browser testing (Selenium, Playwright, Puppeteer), pass the proxy via launch options:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Chromium / Chrome
+chromium --proxy-server="http://localhost:1080"
+
+# Firefox via geckodriver
+--proxy-type=manual --proxy-http=localhost:1080 --proxy-ssl=localhost:1080</code></pre>
+
+<p><strong>Resolver used:</strong> not applicable — explicit proxy mode (CONNECT requests for HTTPS, proxied GET for HTTP).</p>
+
+<h3>CI network alias / gateway</h3>
+
+<p>In CI pipelines (GitHub Actions, Buildkite, GitLab CI), start MockServer as a service container. Configure the application or test runner to use <code class="inline code">HTTP_PROXY=http://mockserver:1080</code> or set MockServer as the network gateway for the job's Docker network. The service container approach (explicit proxy env) requires no firewall rules and works on any CI platform.</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code"># GitHub Actions: service container approach
+services:
+  mockserver:
+    image: mockserver/mockserver:latest
+    ports:
+      - 1080:1080
+
+steps:
+  - name: Run tests
+    env:
+      HTTP_PROXY: http://localhost:1080
+      HTTPS_PROXY: http://localhost:1080
+    run: mvn test</code></pre>
+
+<p><strong>Resolver used:</strong> not applicable — explicit proxy mode.</p>
+
+<a id="cross_cutting_prerequisites" class="anchor" href="#cross_cutting_prerequisites">&nbsp;</a>
+
+<h2>Cross-Cutting Prerequisites</h2>
+
+<h3>TLS trust (universal prerequisite for HTTPS)</h3>
+
+<p>Transparent HTTPS interception requires the client to trust MockServer's Certificate Authority (CA). MockServer dynamically generates leaf certificates signed by its CA. The CA's public certificate must be added to the client's trust store before any HTTPS connection is intercepted.</p>
+
+<p>Obtain MockServer's CA certificate one of these ways (see <a href="/mock_server/HTTPS_TLS.html">HTTPS &amp; TLS</a> for the full story):</p>
+
+<ul>
+    <li><strong>Default CA</strong> — the bundled CA public certificate ships in the jar at <code class="inline code">org/mockserver/socket/CertificateAuthorityCertificate.pem</code> (also in the source repo under <code class="inline code">mockserver-core/src/main/resources/</code>).</li>
+    <li><strong>Dynamically-generated CA</strong> — when <code class="inline code">dynamicallyCreateCertificateAuthorityCertificate=true</code>, MockServer writes the generated CA certificate to the directory given by <code class="inline code">directoryToSaveDynamicSSLCertificate</code>; read it from there.</li>
+    <li><strong>Custom CA</strong> — if you supplied your own via <code class="inline code">certificateAuthorityCertificate</code>, use that file.</li>
+</ul>
+
+<p>Add the CA certificate to a JVM trust store:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code">keytool -import -alias mockserver-ca \
+  -file mockserver-ca.pem \
+  -keystore $JAVA_HOME/lib/security/cacerts \
+  -storepass changeit -noprompt</code></pre>
+
+<p>Add it to the system trust store on Debian/Ubuntu:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code">cp mockserver-ca.pem /usr/local/share/ca-certificates/mockserver-ca.crt
+update-ca-certificates</code></pre>
+
+<p>This prerequisite applies to every mechanism that intercepts HTTPS — whether sidecar iptables, OS pf redirect, cloud route table, or browser proxy. It is the one change that cannot be avoided for HTTPS interception.</p>
+
+<h3>Redirect-loop avoidance (all firewall-based mechanisms)</h3>
+
+<p>When iptables or pf rules redirect outbound traffic to MockServer, MockServer's own egress traffic must be excluded from the rules. Otherwise MockServer's forwarding connections loop back into itself. The standard approach on Linux is a UID-based RETURN rule:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Add BEFORE the REDIRECT rules. Replace 65534 with MockServer's actual run UID.
+iptables -t nat -I OUTPUT -m owner --uid-owner 65534 -j RETURN</code></pre>
+
+<p>See <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a> for the full iptables init container example and the Helm chart <code class="inline code">sidecar.iptables.excludeUid</code> value.</p>
+
+<a id="capability_matrix" class="anchor" href="#capability_matrix">&nbsp;</a>
+
+<h2>Capability Matrix</h2>
+
+<p>One row per delivery mechanism. "Original-dst strategy" shows which resolver strategy the mechanism relies on.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Mechanism</th>
+            <th>Platform</th>
+            <th>Traffic reaches MockServer via</th>
+            <th>Original-dst strategy</th>
+            <th>Root / privilege</th>
+            <th>TLS-trust required</th>
+            <th>Infra-change scope</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>HTTP_PROXY / HTTPS_PROXY env</td>
+            <td>Any</td>
+            <td>Explicit HTTP proxy (CONNECT for HTTPS)</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per process / container</td>
+        </tr>
+        <tr>
+            <td>JVM -Dhttp.proxyHost</td>
+            <td>Any</td>
+            <td>Explicit HTTP proxy</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per JVM process</td>
+        </tr>
+        <tr>
+            <td>PAC file</td>
+            <td>Any</td>
+            <td>Explicit HTTP proxy</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per browser / system proxy setting</td>
+        </tr>
+        <tr>
+            <td>proxychains / LD_PRELOAD</td>
+            <td>Linux / macOS</td>
+            <td>Explicit SOCKS / HTTP proxy (CONNECT)</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None (LD_PRELOAD) or install step</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per process invocation</td>
+        </tr>
+        <tr>
+            <td>Local DNS steering (MockServer DNS server)</td>
+            <td>Any (DNS-capable)</td>
+            <td>Direct TCP to MockServer's IP (as returned by its DNS)</td>
+            <td>DNS-intent (implemented)</td>
+            <td>Privileged port 53 or non-privileged alternative port</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per host DNS config</td>
+        </tr>
+        <tr>
+            <td>Kubernetes sidecar + iptables REDIRECT</td>
+            <td>Linux (Kubernetes)</td>
+            <td>iptables NAT REDIRECT in Pod netns</td>
+            <td>Linux conntrack (implemented)</td>
+            <td>NET_ADMIN in init container</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per Pod</td>
+        </tr>
+        <tr>
+            <td>Kubernetes DaemonSet node-level</td>
+            <td>Linux (Kubernetes)</td>
+            <td>iptables NAT REDIRECT in host netns</td>
+            <td>Linux conntrack (implemented)</td>
+            <td>NET_ADMIN + hostNetwork</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per node (all Pods unless scoped)</td>
+        </tr>
+        <tr>
+            <td>Istio / Envoy VirtualService</td>
+            <td>Kubernetes with Istio</td>
+            <td>Service mesh routing (Envoy proxy)</td>
+            <td>Host header (explicit, no transparent proxy needed)</td>
+            <td>None (mesh control plane)</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per VirtualService / namespace</td>
+        </tr>
+        <tr>
+            <td>Docker Compose default gateway</td>
+            <td>Linux (Docker)</td>
+            <td>Docker bridge default route</td>
+            <td>Linux conntrack (if iptables REDIRECT applied) or Host header</td>
+            <td>Host privilege for bridge + iptables</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per Compose network</td>
+        </tr>
+        <tr>
+            <td>Linux iptables / nftables REDIRECT (host)</td>
+            <td>Linux</td>
+            <td>NAT REDIRECT to MockServer port</td>
+            <td>Linux conntrack (implemented)</td>
+            <td>root / CAP_NET_ADMIN</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per host</td>
+        </tr>
+        <tr>
+            <td>macOS / BSD pf rdr</td>
+            <td>macOS / BSD</td>
+            <td>pf redirect rule</td>
+            <td>Host header fallback (conntrack Linux-only; no JNI yet)</td>
+            <td>root (pfctl)</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per host</td>
+        </tr>
+        <tr>
+            <td>Windows netsh portproxy</td>
+            <td>Windows</td>
+            <td>netsh TCP redirect</td>
+            <td>Host header fallback (no JNI yet on Windows)</td>
+            <td>Administrator</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per host</td>
+        </tr>
+        <tr>
+            <td>AWS NLB (PROXY protocol v2)</td>
+            <td>AWS</td>
+            <td>NLB target group with proxy_protocol_v2.enabled</td>
+            <td>PROXY protocol v2 (implemented, automatic)</td>
+            <td>AWS network admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per target group / subnet</td>
+        </tr>
+        <tr>
+            <td>AWS VPC route table (ENI next-hop)</td>
+            <td>AWS</td>
+            <td>VPC route → MockServer ENI</td>
+            <td>Host header fallback (or conntrack if iptables applied on MockServer EC2)</td>
+            <td>AWS network admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per VPC / subnet</td>
+        </tr>
+        <tr>
+            <td>GCP custom static route</td>
+            <td>GCP</td>
+            <td>VPC route → MockServer VM / ILB</td>
+            <td>PROXY protocol v2 (if ILB/HAProxy configured) or Host header</td>
+            <td>GCP network admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per VPC / subnet</td>
+        </tr>
+        <tr>
+            <td>Azure UDR (Virtual Appliance)</td>
+            <td>Azure</td>
+            <td>Route table → MockServer NIC</td>
+            <td>PROXY protocol v2 (if load balancer configured) or Host header</td>
+            <td>Azure network admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per VNet subnet</td>
+        </tr>
+        <tr>
+            <td>Generic default gateway / NAT instance</td>
+            <td>Any network</td>
+            <td>Default route via MockServer host</td>
+            <td>Conntrack (if iptables REDIRECT on MockServer host) or Host header</td>
+            <td>Network admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per subnet</td>
+        </tr>
+        <tr>
+            <td>Network DNS override (split-horizon)</td>
+            <td>Any</td>
+            <td>Direct TCP (DNS returns MockServer IP)</td>
+            <td>DNS-intent (if MockServer DNS server) or Host header</td>
+            <td>DNS admin</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per DNS zone / domain</td>
+        </tr>
+        <tr>
+            <td>Browser proxy / launch flag</td>
+            <td>Any</td>
+            <td>Explicit HTTP proxy (CONNECT for HTTPS)</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per browser instance</td>
+        </tr>
+        <tr>
+            <td>CI service container + HTTP_PROXY</td>
+            <td>Any (CI)</td>
+            <td>Explicit HTTP proxy</td>
+            <td>Not applicable — explicit proxy mode</td>
+            <td>None</td>
+            <td>Yes (for HTTPS)</td>
+            <td>Per CI job</td>
+        </tr>
+    </tbody>
+</table>

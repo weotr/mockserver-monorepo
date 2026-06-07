@@ -1,0 +1,27 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/view/cart",
+    "queryStringParameters": {
+      "cartId": [
+        {
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ]
+    },
+    "cookies": {
+      "session": {
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

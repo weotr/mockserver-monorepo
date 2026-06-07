@@ -195,4 +195,4 @@ See [AWS Infrastructure](../infrastructure/aws-infrastructure.md) and [Release P
 The website navigation includes links to:
 
 - **SwaggerHub API Reference:** https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi
-- **GitHub Examples:** https://github.com/mock-server/mockserver-monorepo/tree/master/mockserver/mockserver-examples
+- **GitHub Examples:** https://github.com/mock-server/mockserver-monorepo/tree/master/examples

@@ -11,16 +11,17 @@ sitemap:
   lastmod: 2026-05-27T00:00:00+01:00
 ---
 
-<p>MockServer has a real-time dashboard that gives you full visibility into what MockServer is doing. Seven views are available from the navigation bar at the top of the page:</p>
+<p>MockServer has a real-time dashboard that gives you full visibility into what MockServer is doing. Eight views are available from the navigation bar at the top of the page:</p>
 
 <ul>
     <li><strong><a href="#ui_dashboard_section">Dashboard</a></strong> — four panels showing log messages, active expectations, received requests, and proxied requests</li>
     <li><strong><a href="#ui_traffic_section">Traffic</a></strong> — every captured request in a master list, with a rich detail pane on the right for LLM and MCP traffic</li>
     <li><strong><a href="#ui_sessions_section">Sessions</a></strong> — isolated LLM conversation sessions grouped into swim-lanes, plus a <strong>Compare</strong> tab for diffing two captured runs side-by-side</li>
-    <li><strong><a href="#ui_composer_section">Composer</a></strong> — create or edit expectations without writing any code</li>
-    <li><strong><a href="#ui_library_section">Library</a></strong> — manage cassette files and export traffic</li>
-    <li><strong>Metrics</strong> — JVM, request-latency, and chaos metrics charts (shown when metrics are enabled)</li>
-    <li><strong>Chaos</strong> — configure and inject service-wide HTTP faults (added latency, error responses, dropped connections) that apply to all matched requests, with a TTL so chaos auto-expires</li>
+    <li><strong><a href="#ui_composer_section">Mocks</a></strong> — create or edit expectations of every kind (HTTP, gRPC, DNS, MCP, LLM) and import them (OpenAPI, WSDL, HAR, Postman) without writing any code</li>
+    <li><strong><a href="#ui_library_section">Library</a></strong> — manage cassette files, WASM modules, and export traffic</li>
+    <li><strong><a href="#ui_chaos_section">Chaos</a></strong> — configure and inject HTTP, gRPC, and TCP faults (added latency, error responses, dropped connections) that apply to all forwarded requests to a given upstream host or service, with a TTL so chaos auto-expires</li>
+    <li><strong><a href="#ui_drift_section">Drift</a></strong> — review mock drift records where stubbed responses diverge from the real upstream</li>
+    <li><strong><a href="#ui_metrics_section">Metrics</a></strong> — JVM, request-latency, chaos, expectations-by-type, and MCP-tool-call charts (shown when metrics are enabled)</li>
 </ul>
 
 <p>The dashboard connects to MockServer via WebSocket and updates in real time — any changes to expectations, new requests, or log events appear automatically without refreshing the page.</p>
@@ -326,7 +327,7 @@ sitemap:
 
 <h3>Export</h3>
 
-<p>The Export sub-tab lets you download captured content from the running MockServer instance. Pick the export to perform from the dropdown and click <strong>Download</strong>. Each option crosses one of two scopes &mdash; the currently <strong>registered expectations</strong> or the <strong>recorded requests</strong> MockServer has handled &mdash; with one of five file formats:</p>
+<p>The Export sub-tab lets you download captured content from the running MockServer instance. Pick the export to perform from the dropdown and click <strong>Download</strong>. Each option crosses one of two scopes &mdash; the currently <strong>registered expectations</strong> or the <strong>recorded requests</strong> MockServer has handled &mdash; with one of eight file formats. A few formats apply to only one scope (the dropdown filters itself to the scope you pick):</p>
 
 <table class="table">
     <thead>
@@ -334,14 +335,65 @@ sitemap:
     </thead>
     <tbody>
         <tr><td><strong>MockServer JSON</strong></td><td>Round-trippable JSON in MockServer's own expectation format.</td><td>MockServer (<code>PUT /mockserver/expectation</code> or <code>load_expectations_from_file</code>).</td></tr>
+        <tr><td><strong>MockServer Java DSL</strong> <em>(expectations only)</em></td><td>Java code using the MockServer DSL that recreates each expectation.</td><td>A JUnit test or MockServer Java client &mdash; paste the code in directly.</td></tr>
         <tr><td><strong>HAR (HTTP Archive)</strong></td><td>Each item as a request/response pair, in the standard HAR format.</td><td>Browser DevTools, HAR analysis tools, performance analysers.</td></tr>
         <tr><td><strong>OpenAPI 3 spec</strong></td><td>One operation per (method, path) with the response body as an example.</td><td>Swagger UI, Redoc, code generators, API gateways.</td></tr>
         <tr><td><strong>Postman collection v2.1</strong></td><td>Each item as a Postman request with its example response.</td><td>Postman, Newman, Insomnia (via import).</td></tr>
         <tr><td><strong>Bruno collection (.zip)</strong></td><td>One <code>.bru</code> file per request, plus a <code>bruno.json</code> manifest, packaged as a zip.</td><td><a href="https://www.usebruno.com/">Bruno</a> &mdash; unzip and open the folder as a collection.</td></tr>
+        <tr><td><strong>Log entries (JSON)</strong> <em>(requests only)</em></td><td>Raw MockServer log events for the captured request/response pairs (verbose JSON, mainly for debugging).</td><td>MockServer log tooling or manual inspection.</td></tr>
+        <tr><td><strong>cURL commands</strong> <em>(requests only)</em></td><td>One cURL command per captured request.</td><td>Any shell &mdash; paste in to replay the captured traffic.</td></tr>
     </tbody>
 </table>
 
 <p>OpenAPI, Postman, and Bruno exports are <em>best-effort</em>: positive-string matchers round-trip cleanly, but MockServer's NottableString negation, regex bodies, and dynamic actions (forward / template / callback / error / LLM) appear as placeholder text since those formats describe client requests + example responses rather than full mock-server expectation graphs. Use MockServer JSON when you need a lossless round-trip.</p>
+
+<a id="ui_chaos_section" class="anchor" href="#ui_chaos_section">&nbsp;</a>
+
+<h2>Chaos</h2>
+
+<img class="ui_image" src="/images/MockServerChaos.png" alt="MockServer Service Chaos">
+
+<p>The Chaos view groups service-scoped chaos into three collapsible sections — <strong>HTTP Service Chaos</strong>, <strong>gRPC Chaos</strong> (health status + fault injection), and <strong>TCP-Layer Chaos</strong> — each with its own <strong>Clear</strong> button (Clear HTTP / Clear gRPC / Clear TCP) in its header.</p>
+
+<p>It lets you inject <strong>service-scoped chaos</strong> — faults that MockServer applies to <em>every</em> request it forwards to a given upstream host or service, rather than to a single expectation. This is useful for resilience and SRE testing, where you want all proxied traffic to a dependency to fail or slow down for a while without editing individual mocks.</p>
+
+<p>Under <strong>Register chaos for a host</strong>, enter the upstream <strong>Host</strong> and any combination of the following faults, then click <strong>Register</strong>:</p>
+
+<ul>
+    <li><strong>Error status</strong> — an HTTP error status code (e.g. <code>503</code>) returned instead of forwarding, optionally with an <strong>Error prob</strong> (0&ndash;1) so only a fraction of requests fail.</li>
+    <li><strong>Drop prob</strong> — a probability (0&ndash;1) that MockServer drops the connection instead of responding.</li>
+    <li><strong>Latency ms</strong> — milliseconds of delay added to every matched forward.</li>
+    <li><strong>TTL ms</strong> — how long the chaos stays active, in milliseconds. When the TTL elapses MockServer automatically reverts the fault (a dead-man's switch), so a forgotten chaos run cannot break later tests.</li>
+</ul>
+
+<p>The <strong>Active registrations</strong> panel lists each host with chaos in force and its remaining auto-revert countdown (or shows <em>No service-scoped chaos registered</em> when none is set). Remove a single host's chaos with its remove icon (trash), or use the section's <strong>Clear HTTP</strong> / <strong>Clear gRPC</strong> / <strong>Clear TCP</strong> button to remove everything in that section at once. Injected faults are also counted in the <a href="#ui_metrics_section">Metrics</a> view under <strong>HTTP Chaos Faults</strong>.</p>
+
+<a id="ui_drift_section" class="anchor" href="#ui_drift_section">&nbsp;</a>
+
+<h2>Drift</h2>
+
+<img class="ui_image" src="/images/MockServerDrift.png" alt="MockServer Drift Detection">
+
+<p>The Drift view surfaces <strong>mock drift</strong> — where a stubbed response no longer matches what the real upstream returns. When MockServer proxies a request that also has a matching response expectation, it compares the two and records any differences. Each row shows the affected <strong>expectation</strong>, the <strong>drift type</strong> (status, schema field added/removed, schema type changed, or header added/removed/changed), the <strong>field</strong>, the <strong>expected</strong> vs <strong>actual</strong> values, a <strong>confidence</strong> score, and the time. Filter by expectation, or use <strong>Clear</strong> to reset the recorded drift. This makes it easy to spot stubs that have silently fallen out of sync with the services they stand in for.</p>
+
+<a id="ui_metrics_section" class="anchor" href="#ui_metrics_section">&nbsp;</a>
+
+<h2>Metrics</h2>
+
+<img class="ui_image" src="/images/MockServerMetrics.png" alt="MockServer Metrics">
+
+<p>The Metrics view charts MockServer's own runtime metrics. It is only populated when metrics collection is enabled (<a href="/mock_server/configuration_properties.html">configuration property</a> <code>metricsEnabled</code> / <code>MOCKSERVER_METRICS_ENABLED</code>); otherwise the view shows <em>Metrics are disabled</em> with the flag and environment variable needed to turn them on.</p>
+
+<p>When enabled, the view shows:</p>
+
+<ul>
+    <li><strong>Throughput</strong> — a derived requests-per-second figure with a trend chart.</li>
+    <li><strong>Request latency</strong> — p50, p95, and p99 response-time percentiles, derived from MockServer's request-duration histogram.</li>
+    <li><strong>HTTP Chaos Faults</strong> — injected faults broken down by type, plus the currently active service-scoped chaos (see the <a href="#ui_chaos_section">Chaos</a> view).</li>
+    <li><strong>Request activity</strong> and <strong>Actions executed</strong> — cumulative request and action counters over time.</li>
+    <li><strong>Expectations by type</strong> — the number of active expectations broken down by action type (one line per type), and <strong>MCP tool calls</strong> per tool.</li>
+    <li><strong>JVM heap memory</strong> and <strong>Threads &amp; GC</strong> — heap used/committed, thread counts, garbage-collection totals, and related JVM runtime figures.</li>
+</ul>
 
 <a id="ui_real_time_updates" class="anchor" href="#ui_real_time_updates">&nbsp;</a>
 

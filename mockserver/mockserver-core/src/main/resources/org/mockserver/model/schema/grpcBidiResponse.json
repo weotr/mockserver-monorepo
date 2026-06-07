@@ -1,0 +1,69 @@
+{
+  "title": "gRPC bidi response for bidirectional streaming",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "delay": {
+      "$ref": "#/definitions/delay"
+    },
+    "headers": {
+      "$ref": "#/definitions/keyToMultiValue"
+    },
+    "statusName": {
+      "type": "string"
+    },
+    "statusMessage": {
+      "type": "string"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "json": {
+            "type": "string"
+          },
+          "delay": {
+            "$ref": "#/definitions/delay"
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matchJson": {
+            "type": "string"
+          },
+          "responses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "json": {
+                  "type": "string"
+                },
+                "delay": {
+                  "$ref": "#/definitions/delay"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "closeConnection": {
+      "type": "boolean"
+    },
+    "primary": {
+      "type": "boolean"
+    }
+  },
+  "definitions": {
+  }
+}

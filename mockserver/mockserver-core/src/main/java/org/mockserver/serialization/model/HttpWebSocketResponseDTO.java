@@ -1,6 +1,7 @@
 package org.mockserver.serialization.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import org.mockserver.model.GraphQLBody;
 import org.mockserver.model.HttpWebSocketResponse;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 
@@ -11,7 +12,9 @@ public class HttpWebSocketResponseDTO extends ObjectWithReflectiveEqualsHashCode
     private DelayDTO delay;
     private String subprotocol;
     private List<WebSocketMessageModelDTO> messages;
+    private List<WebSocketMessageMatcherDTO> matchers;
     private Boolean closeConnection;
+    private GraphQLBodyDTO graphqlSubscriptionFilter;
     @JsonInclude(JsonInclude.Include.NON_DEFAULT)
     private boolean primary;
 
@@ -25,6 +28,13 @@ public class HttpWebSocketResponseDTO extends ObjectWithReflectiveEqualsHashCode
             if (httpWebSocketResponse.getMessages() != null) {
                 messages = new ArrayList<>();
                 httpWebSocketResponse.getMessages().forEach(message -> messages.add(new WebSocketMessageModelDTO(message)));
+            }
+            if (httpWebSocketResponse.getMatchers() != null) {
+                matchers = new ArrayList<>();
+                httpWebSocketResponse.getMatchers().forEach(matcher -> matchers.add(new WebSocketMessageMatcherDTO(matcher)));
+            }
+            if (httpWebSocketResponse.getGraphqlSubscriptionFilter() != null) {
+                graphqlSubscriptionFilter = new GraphQLBodyDTO(httpWebSocketResponse.getGraphqlSubscriptionFilter());
             }
             primary = httpWebSocketResponse.isPrimary();
         }
@@ -41,6 +51,12 @@ public class HttpWebSocketResponseDTO extends ObjectWithReflectiveEqualsHashCode
             .withPrimary(primary);
         if (messages != null) {
             messages.forEach(messageDTO -> httpWebSocketResponse.withMessage(messageDTO.buildObject()));
+        }
+        if (matchers != null) {
+            matchers.forEach(matcherDTO -> httpWebSocketResponse.withMatcher(matcherDTO.buildObject()));
+        }
+        if (graphqlSubscriptionFilter != null) {
+            httpWebSocketResponse.withGraphqlSubscriptionFilter(graphqlSubscriptionFilter.buildObject());
         }
         return httpWebSocketResponse;
     }
@@ -72,12 +88,30 @@ public class HttpWebSocketResponseDTO extends ObjectWithReflectiveEqualsHashCode
         return this;
     }
 
+    public List<WebSocketMessageMatcherDTO> getMatchers() {
+        return matchers;
+    }
+
+    public HttpWebSocketResponseDTO setMatchers(List<WebSocketMessageMatcherDTO> matchers) {
+        this.matchers = matchers;
+        return this;
+    }
+
     public Boolean getCloseConnection() {
         return closeConnection;
     }
 
     public HttpWebSocketResponseDTO setCloseConnection(Boolean closeConnection) {
         this.closeConnection = closeConnection;
+        return this;
+    }
+
+    public GraphQLBodyDTO getGraphqlSubscriptionFilter() {
+        return graphqlSubscriptionFilter;
+    }
+
+    public HttpWebSocketResponseDTO setGraphqlSubscriptionFilter(GraphQLBodyDTO graphqlSubscriptionFilter) {
+        this.graphqlSubscriptionFilter = graphqlSubscriptionFilter;
         return this;
     }
 

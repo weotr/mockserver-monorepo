@@ -13,12 +13,11 @@ import org.slf4j.LoggerFactory;
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
 
 /**
- * Optional exporter that publishes the explicit GenAI spans emitted by
- * {@link GenAiSpans} via OpenTelemetry OTLP. Off unless
- * {@code mockserver.otelTracesEnabled} is set. Self-configures the OTel trace
- * SDK (OTLP HTTP/protobuf, JDK sender) and installs the tracer into
- * {@link GenAiSpans}. Fail-soft: a startup failure logs one line and leaves
- * span emission disabled.
+ * Optional exporter that publishes explicit OpenTelemetry spans via OTLP.
+ * Off unless {@code mockserver.otelTracesEnabled} is set. Self-configures
+ * the OTel trace SDK (OTLP HTTP/protobuf, JDK sender) and installs the
+ * tracer into both {@link GenAiSpans} and {@link RequestSpans}. Fail-soft:
+ * a startup failure logs one line and leaves span emission disabled.
  */
 public class GenAiSpanExporter {
 
@@ -51,8 +50,8 @@ public class GenAiSpanExporter {
 
     /**
      * Build a tracer provider with the given span processor and install its
-     * tracer into {@link GenAiSpans}. Visible for testing (a test can pass a
-     * processor over an in-memory span exporter).
+     * tracer into both {@link GenAiSpans} and {@link RequestSpans}. Visible
+     * for testing (a test can pass a processor over an in-memory span exporter).
      */
     public static GenAiSpanExporter startWithProcessor(SpanProcessor processor) {
         SdkTracerProvider provider = SdkTracerProvider.builder()
@@ -61,11 +60,13 @@ public class GenAiSpanExporter {
             .addSpanProcessor(processor)
             .build();
         GenAiSpans.setTracer(provider.get("org.mockserver"));
+        RequestSpans.setTracer(provider.get("org.mockserver"));
         return new GenAiSpanExporter(provider);
     }
 
     public void stop() {
         GenAiSpans.setTracer(null);
+        RequestSpans.setTracer(null);
         try {
             tracerProvider.shutdown().join(2, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception e) {

@@ -9,12 +9,18 @@ sequenceDiagram
     participant CLI as Main.java / ClientAndServer
     participant MS as MockServer
     participant LC as LifeCycle
-    participant NIO as Netty NIO
+    participant NT as NettyTransport
+    participant NIO as Netty NIO / Epoll
 
     CLI->>MS: new MockServer(ports)
+    MS->>LC: super(configuration)
+    LC->>NT: newEventLoopGroup(useNativeTransport)
+    NT-->>LC: EpollEventLoopGroup (Linux) or NioEventLoopGroup (other)
     MS->>MS: createServerBootstrap()
+    MS->>NT: serverSocketChannelClass(useNativeTransport)
+    NT-->>MS: EpollServerSocketChannel or NioServerSocketChannel
     MS->>NIO: ServerBootstrap.group(bossGroup, workerGroup)
-    MS->>NIO: .channel(NioServerSocketChannel)
+    MS->>NIO: .channel(selected channel class)
     MS->>NIO: .childHandler(MockServerUnificationInitializer)
     MS->>LC: bindServerPorts(ports)
     LC->>NIO: serverBootstrap.bind(port) [per port, on dedicated thread]
@@ -22,13 +28,39 @@ sequenceDiagram
     LC->>MS: startedServer(boundPorts)
 ```
 
+### Transport Selection
+
+`NettyTransport` (`mockserver-core`, `org.mockserver.socket`) selects the highest-performance transport available at startup. On Linux with the native epoll library present and `useNativeTransport=true` (the default), it creates `EpollEventLoopGroup` and uses `EpollServerSocketChannel` / `EpollSocketChannel`. On all other platforms (macOS, Windows) or when the opt-out flag is set, it falls back to NIO transparently.
+
+The transport selection is consistent across the entire data path: server bootstrap (boss + worker groups), outbound HTTP client (`NettyHttpClient`), and relay connect handler (`RelayConnectHandler`). This ensures the EventLoopGroup type always matches the channel type (epoll group with epoll channels, NIO group with NIO channels).
+
+Epoll transport is required for transparent-proxy `SO_ORIGINAL_DST` resolution, which needs `EpollSocketChannel` children to extract the raw file descriptor.
+
+**Intentionally left on NIO:** `Http3Server` (QUIC/datagram, separate experimental transport with its own `NioEventLoopGroup`), `McpToolRegistry`'s internal client, and `EchoServer` (test infrastructure).
+
+| Property | Default | Env var | System property |
+|----------|---------|---------|-----------------|
+| `useNativeTransport` | `true` | `MOCKSERVER_USE_NATIVE_TRANSPORT` | `-Dmockserver.useNativeTransport` |
+
+#### CI Test Coverage
+
+On Linux CI the **full existing integration-test suite** exercises the epoll transport automatically because:
+
+1. `useNativeTransport` defaults to `true`
+2. The `netty-transport-native-epoll` JARs (linux-x86_64, linux-aarch_64) are declared as `runtime`-scoped dependencies in `mockserver-netty/pom.xml`, which Maven includes on the test classpath
+3. On Linux the native `.so` loads successfully, so `Epoll.isAvailable()` returns `true`
+
+To force NIO on Linux for comparison testing, set `useNativeTransport=false` via system property (`-Dmockserver.useNativeTransport=false`) or environment variable (`MOCKSERVER_USE_NATIVE_TRANSPORT=false`).
+
+Dedicated activation tests in `EpollTransportIntegrationTest` (`mockserver-netty`) verify the channel and event-loop-group types at runtime. These tests are gated by `Assume.assumeTrue(Epoll.isAvailable())` and skip cleanly on macOS/Windows.
+
 ### Key Bootstrap Configuration
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
-| Boss group | `NioEventLoopGroup(5)` | Accept connections |
-| Worker group | `NioEventLoopGroup(configurable)` | Handle I/O |
-| Channel | `NioServerSocketChannel` | Non-blocking server socket |
+| Boss group | `EpollEventLoopGroup(5)` or `NioEventLoopGroup(5)` | Accept connections |
+| Worker group | `EpollEventLoopGroup(configurable)` or `NioEventLoopGroup(configurable)` | Handle I/O |
+| Channel | `EpollServerSocketChannel` or `NioServerSocketChannel` | Server socket (transport-matched) |
 | SO_BACKLOG | 1024 | Connection queue depth |
 | AUTO_READ | true | Automatic read on new channels |
 | ALLOCATOR | `PooledByteBufAllocator.DEFAULT` | Memory-efficient buffer allocation |
@@ -44,11 +76,33 @@ sequenceDiagram
 | `TLS_ENABLED_DOWNSTREAM` | `Boolean` | TLS needed for upstream connections |
 | `HTTP_ENABLED` | `Boolean` | HTTP pipeline configured |
 | `HTTP2_ENABLED` | `Boolean` | HTTP/2 pipeline configured |
+| `TRANSPARENT_ORIGINAL_DST_RESOLVED` | `Boolean` | Whether original-dst was resolved (conntrack/PROXY protocol) |
 | `NETTY_SSL_CONTEXT_FACTORY` | `NettySslContextFactory` | SSL context for this channel |
 
 ## Channel Initializer
 
 `MockServerUnificationInitializer` is a `@Sharable` `ChannelHandlerAdapter` that replaces itself with a `PortUnificationHandler` on `handlerAdded()`. This thin adapter ensures each new channel gets its own `PortUnificationHandler` instance (since the decoder maintains per-channel state).
+
+When `transparentProxyEnabled` is true, the initializer adds two handlers before the port unification handler:
+
+1. **`ProxyProtocolOriginalDestinationHandler`** (`"proxy-protocol"`) — inspects the first inbound bytes for a PROXY protocol header, dispatching on the first byte: `0x0D` → v2 (binary), `'P'` → v1 (text). If a recognised header is found, sets `REMOTE_SOCKET` + `PROXYING` + `TRANSPARENT_ORIGINAL_DST_RESOLVED` (v2: for the PROXY command on INET/INET6; LOCAL/UNIX defer to downstream resolution), consumes the header bytes, and removes itself. If not found, removes itself and passes bytes through unchanged.
+2. **`TransparentProxyHandler`** (`"transparent-proxy"`) — fires at `channelActive` and runs the pluggable `CompositeOriginalDestinationResolver` chain (default: [conntrack]). Skips resolution if `TRANSPARENT_ORIGINAL_DST_RESOLVED` is already set (e.g., by the PROXY protocol handler).
+
+### Original Destination Resolver Chain
+
+The `CompositeOriginalDestinationResolver` tries strategies in order (first non-null wins):
+
+| Order | Strategy | Class | Status |
+|-------|----------|-------|--------|
+| 1 | Linux conntrack table | `ConntrackOriginalDestinationResolver` | Implemented |
+| 2 | DNS-intent (recover hostname MockServer's DNS answered) | `DnsIntentOriginalDestinationResolver` | Implemented |
+| 3 | SO_ORIGINAL_DST getsockopt | `SoOriginalDstResolver` | Implemented (JNA; requires epoll transport) |
+| 4 | TPROXY (IP_TRANSPARENT) | (future) | Requires JNI + TPROXY rules |
+| 5 | eBPF socket metadata | (future) | Requires JNI + eBPF program |
+
+The DNS-intent resolver consults `DnsIntentRegistry` (`mockserver-core`, `org.mockserver.mock.dns`), which records the `answeredIP → hostname` mappings MockServer's own DNS server hands out (A/AAAA answers). When a connection arrives at such an IP and conntrack returns nothing, the resolver returns an *unresolved* `InetSocketAddress` carrying the recovered hostname, so downstream forwarding/matching works by name (loop-prevention guards against a DNS-to-self loop). The registry is cleared by `HttpState.reset()`.
+
+Note: PROXY protocol is handled separately in the pipeline (it reads bytes, not channel metadata).
 
 ## Port Unification Handler
 
@@ -108,13 +162,40 @@ Configuration: `ConfigurationProperties.connectionDelayMillis(long millis)`, sys
 
 **Warning:** The delay blocks the Netty I/O thread. For large delays or high connection rates, this may impact server throughput.
 
+### TCP Chaos Handler
+
+When TCP-layer chaos is active (at least one host registered in `TcpChaosRegistry`), a `TcpChaosHandler` is inserted at the front of the pipeline before HTTP codecs. This handler operates on raw `ByteBuf` data and can inject transport-layer faults that mirror Toxiproxy's named toxics:
+
+| Fault Type | Field | Behaviour |
+|-----------|-------|-----------|
+| latency | `latencyMs` | Delays all inbound data by the configured milliseconds |
+| down | `down` | Silently drops all inbound data (service appears down) |
+| bandwidth | `bandwidthBytesPerSec` | Throttles inbound data to the configured bytes/sec |
+| slow_close | `slowClose` | Delays the TCP FIN by 2 seconds on close |
+| timeout | `timeout` | Never sends FIN; connection hangs on close |
+| reset_peer | `resetPeer` | Sends TCP RST and closes immediately |
+| slicer | `slicerChunkSize` | Fragments inbound data into chunks of the configured size |
+| limit_data | `limitDataBytes` | Closes the connection after the configured bytes received |
+
+The handler is **not sharable** (each channel gets its own instance) because it maintains per-connection state (`bytesConsumed` for `limitData`).
+
+Profiles are managed via the REST API:
+
+- `PUT /mockserver/tcpChaos` -- register, remove, or clear TCP chaos profiles
+- `GET /mockserver/tcpChaos` -- list all active TCP chaos profiles
+- `PATCH /mockserver/tcpChaos` -- merge-patch an existing profile
+
+Profiles support optional TTL-based auto-expiry (dead-man's switch), identical to the `ServiceChaosRegistry` pattern.
+
 ### Protocol-Specific Pipelines
 
 #### HTTP/1.1 Pipeline
 
 ```mermaid
 graph LR
-    A[HttpServerCodec] --> B[PreserveHeadersNettyRemoves]
+    TCH["TcpChaosHandler
+(conditional)"] --> A[HttpServerCodec]
+    A --> B[PreserveHeadersNettyRemoves]
     B --> C[HttpContentDecompressor]
     C --> D[HttpContentLengthRemover]
     D --> EMH[EarlyMatchingHandler]
@@ -129,9 +210,10 @@ graph LR
 
 | Handler | Class | Purpose |
 |---------|-------|---------|
+| TcpChaosHandler | `o.m.netty.unification` | (Conditional) Injects TCP-layer faults (latency, down, bandwidth, slicer, etc.) on raw bytes before HTTP decoding. Only added when `TcpChaosRegistry` has active entries |
 | HttpServerCodec | Netty built-in | HTTP/1.1 request decoding / response encoding |
-| PreserveHeadersNettyRemoves | `o.m.codec` | Preserves `Host`, `Content-Length`, and `Transfer-Encoding` headers that Netty's HTTP codec would otherwise strip or modify during decode/encode |
-| HttpContentDecompressor | Netty built-in | Decompresses gzipped request bodies |
+| PreserveHeadersNettyRemoves | `o.m.codec` | Preserves `Content-Encoding`/`Transfer-Encoding` headers that the downstream `HttpContentDecompressor`/`HttpObjectAggregator` strip (reset per request so they cannot leak across a pooled connection — issue #2322). Also captures the original (still compressed) request body bytes before decompression onto a channel attribute, so the decompressed body and the original on-the-wire bytes are both available (issue #2326) |
+| HttpContentDecompressor | Netty built-in | Decompresses gzipped request bodies. The original compressed bytes are still preserved by `PreserveHeadersNettyRemoves` above and exposed via `HttpRequest#getBodyAsOriginalRawBytes()` |
 | HttpContentLengthRemover | `o.m.netty.unification` | Strips empty Content-Length headers |
 | EarlyMatchingHandler | `o.m.netty.unification` | On the first `HttpRequest` (headers only), checks for an expectation with `respondBeforeBody=true` whose matcher has no body component. If found, dispatches the response (and any close) and discards remaining `HttpContent`, so the response can be sent before the body is read. Reproduces scenarios like okhttp/okhttp#1001 (issue #1831). Skipped for `CONNECT` and HTTP/2 |
 | HttpObjectAggregator | Netty built-in | Aggregates HTTP chunks into `FullHttpRequest` |
@@ -145,7 +227,9 @@ graph LR
 
 ```mermaid
 graph LR
-    SSL[SslHandler] --> H2C["HttpToHttp2ConnectionHandler
+    SSL[SslHandler] --> TCH["TcpChaosHandler
+(conditional)"]
+    TCH --> H2C["HttpToHttp2ConnectionHandler
 with InboundHttp2ToHttpAdapter"]
     H2C --> F[CallbackWebSocketServerHandler]
     F --> G[DashboardWebSocketHandler]
@@ -174,12 +258,42 @@ graph LR
 
 | Handler | Class | Purpose |
 |---------|-------|---------|
-| GrpcToHttpResponseHandler | `o.m.netty.grpc` | Outbound encoder — intercepts responses with `x-grpc-service` header, encodes JSON body back to gRPC-framed protobuf, appends `grpc-status` trailers |
-| GrpcToHttpRequestHandler | `o.m.netty.grpc` | Inbound handler — intercepts `application/grpc` requests, decodes protobuf body to JSON using descriptors, rewrites as `POST /<service>/<method>` with `x-grpc-*` headers |
+| GrpcToHttpResponseHandler | `o.m.netty.grpc` | Outbound encoder — intercepts responses with `x-grpc-service` header, encodes JSON body back to gRPC-framed protobuf, appends `grpc-status` trailers; also converts gRPC-Web responses (trailers-in-body) when `x-grpc-web-content-type` header is present |
+| GrpcToHttpRequestHandler | `o.m.netty.grpc` | Inbound handler — intercepts `application/grpc` requests, decodes protobuf body to JSON using descriptors, rewrites as `POST /<service>/<method>` with `x-grpc-*` headers; also translates `application/grpc-web*` requests to standard gRPC before processing |
 
 The handlers are placed after `MockServerHttpServerCodec` so they operate on MockServer model objects (`HttpRequest`/`HttpResponse`), not raw Netty HTTP objects.
 
-h2c (HTTP/2 cleartext) is detected by `isH2cPreface()` in `PortUnificationHandler`, which checks for the HTTP/2 connection preface (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`). Both `switchToH2c()` and `switchToHttp2()` conditionally wire gRPC handlers when descriptors are loaded.
+h2c (HTTP/2 cleartext) is detected by `isH2cPreface()` in `PortUnificationHandler`, which checks for the HTTP/2 connection preface (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`). Both `switchToH2c()` and `switchToHttp2()` conditionally wire gRPC handlers when descriptors are loaded. The `switchToHttp()` method also adds gRPC handlers to the HTTP/1.1 pipeline to support gRPC-Web over HTTP/1.1.
+
+##### Multiplex Pipeline (default OFF)
+
+When `grpcBidiStreamingEnabled` is `true` **and** gRPC descriptors are loaded, `switchToHttp2()` / `switchToH2c()` use an alternate HTTP/2 pipeline based on `Http2FrameCodec` + `Http2MultiplexHandler` instead of the connection-level `HttpToHttp2ConnectionHandler` + `InboundHttp2ToHttpAdapter`. Each HTTP/2 stream gets its own child channel initialized by `GrpcMultiplexChildInitializer`:
+
+```mermaid
+graph LR
+    FC[Http2FrameCodec] --> MUX[Http2MultiplexHandler]
+    MUX -->|per-stream child| SF["Http2StreamFrameToHttpObjectCodec\n(server=true)"]
+    SF --> AGG[HttpObjectAggregator]
+    AGG --> CB[CallbackWebSocketServerHandler]
+    CB --> DASH[DashboardWebSocketHandler]
+    DASH --> MCP["McpStreamableHttpHandler\n(conditional)"]
+    MCP --> CODEC[MockServerHttpServerCodec]
+    CODEC --> GRPC_RESP[GrpcToHttpResponseHandler]
+    GRPC_RESP --> GRPC_REQ[GrpcToHttpRequestHandler]
+    GRPC_REQ --> HANDLER[HttpRequestHandler]
+```
+
+`Http2StreamFrameToHttpObjectCodec` + `HttpObjectAggregator` re-aggregate inbound stream frames into `FullHttpRequest` objects, so the downstream handler chain sees the same objects as the connection-level adapter produces. This means inbound behaviour is byte-for-byte equivalent to the default pipeline for unary RPCs. The flag defaults to `false`; when off, the existing connection-level adapter path is used unchanged.
+
+**Server-streaming:** `GrpcStreamResponseActionHandler` writes raw Netty HTTP objects (`DefaultHttpResponse`, per-message `DefaultHttpContent`, `DefaultLastHttpContent` with grpc-status/grpc-message trailers) directly to the `ChannelHandlerContext`. On the multiplex path, `Http2StreamFrameToHttpObjectCodec` is bidirectional and converts these outbound objects to HTTP/2 stream frames: initial HEADERS (with `Transfer-Encoding: chunked` automatically stripped by `HttpConversionUtil`), per-message DATA frames (byte-for-byte identical gRPC framing), and a trailing HEADERS frame with `grpc-status`/`grpc-message` and `endStream=true`. The `MockServerHttpServerCodec` encoder and `GrpcToHttpResponseHandler` do not intercept raw Netty objects (they only match `org.mockserver.model.HttpResponse`), so the objects pass through cleanly. No production code changes were needed -- the codec handles everything correctly.
+
+| Property | Default | Env var | System property |
+|----------|---------|---------|-----------------|
+| `grpcBidiStreamingEnabled` | `false` | `MOCKSERVER_GRPC_BIDI_STREAMING_ENABLED` | `mockserver.grpcBidiStreamingEnabled` |
+
+**Client-streaming (collect-then-respond):** For client-streaming RPCs, a client sends HEADERS followed by N DATA frames (each containing a gRPC length-prefixed message) then END_STREAM. On the multiplex path, `Http2StreamFrameToHttpObjectCodec` + `HttpObjectAggregator` re-aggregate all DATA frame bytes into a single `FullHttpRequest` body (byte-for-byte concatenation). `GrpcToHttpRequestHandler.convertGrpcRequest()` then decodes the concatenated body via `GrpcFrameCodec.decode()` into N messages, producing a JSON array body with the `x-grpc-client-streaming: true` header. This is identical to how the connection-level adapter handles client-streaming. Single-message requests (unary) decode as a single JSON object with no client-streaming header, preserving the distinction. No production code changes were needed -- the existing re-aggregation + decode pipeline handles this correctly.
+
+Phase 3 will add true interleaved/reactive bidirectional streaming by removing the inbound re-aggregation and handling individual DATA frames with per-inbound-message reactive responses.
 
 #### TLS Pipeline
 
@@ -441,8 +555,9 @@ stateDiagram-v2
 | `SniHandler` | `mockserver-core/.../socket/tls/SniHandler.java` | TLS SNI extraction, dynamic cert generation |
 | `HttpContentLengthRemover` | `mockserver-netty/.../netty/unification/HttpContentLengthRemover.java` | Strips empty Content-Length |
 | `MockServerHttpServerCodec` | `mockserver-core/.../codec/MockServerHttpServerCodec.java` | Netty HTTP ↔ MockServer model codec |
-| `GrpcToHttpRequestHandler` | `mockserver-netty/.../netty/grpc/GrpcToHttpRequestHandler.java` | gRPC request decode (protobuf→JSON) |
-| `GrpcToHttpResponseHandler` | `mockserver-netty/.../netty/grpc/GrpcToHttpResponseHandler.java` | gRPC response encode (JSON→protobuf) |
+| `GrpcToHttpRequestHandler` | `mockserver-netty/.../netty/grpc/GrpcToHttpRequestHandler.java` | gRPC request decode (protobuf→JSON); gRPC-Web translation |
+| `GrpcToHttpResponseHandler` | `mockserver-netty/.../netty/grpc/GrpcToHttpResponseHandler.java` | gRPC response encode (JSON→protobuf); gRPC-Web re-framing |
+| `GrpcWebTranslator` | `mockserver-core/.../grpc/GrpcWebTranslator.java` | gRPC-Web framing utilities (trailer frame, base64, content-type detection) |
 | `DnsRequestHandler` | `mockserver-netty/.../netty/dns/DnsRequestHandler.java` | DNS query matching and response |
 | `StreamingAwareHttpObjectAggregator` | `mockserver-core/.../codec/StreamingAwareHttpObjectAggregator.java` | Replaces `HttpObjectAggregator` in forward-path client pipelines; detects streaming responses and switches to `StreamingResponseRelayHandler` |
 | `StreamingResponseRelayHandler` | `mockserver-core/.../httpclient/StreamingResponseRelayHandler.java` | Consumes unaggregated `HttpObject` events; relays chunks immediately; captures bounded body; signals `HttpActionHandler` on completion |

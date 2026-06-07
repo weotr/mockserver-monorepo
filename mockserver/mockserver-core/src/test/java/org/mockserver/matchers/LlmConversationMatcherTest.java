@@ -1,6 +1,7 @@
 package org.mockserver.matchers;
 
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.Provider;
@@ -113,6 +114,32 @@ public class LlmConversationMatcherTest {
     }
 
     // --- latestMessageMatches predicate ---
+
+    @Test
+    public void shouldReturnFalseOnReDoSLatestMessageMatchesPatternRatherThanHanging() {
+        long previousTimeout = ConfigurationProperties.regexMatchingTimeoutMillis();
+        try {
+            ConfigurationProperties.regexMatchingTimeoutMillis(200L);
+            LlmConversationMatcher matcher = new LlmConversationMatcher()
+                .withProvider(Provider.ANTHROPIC)
+                .withLatestMessageMatches(Pattern.compile("(a+)+$"));
+
+            HttpRequest request = request().withBody("{\n" +
+                "  \"messages\": [\n" +
+                "    {\"role\": \"user\", \"content\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!\"}\n" +
+                "  ]\n" +
+                "}");
+
+            long startMillis = System.currentTimeMillis();
+            boolean matched = matcher.matches(request);
+            long elapsedMillis = System.currentTimeMillis() - startMillis;
+
+            assertThat("ReDoS latestMessageMatches pattern must not match", matched, is(false));
+            assertThat("regex evaluation should be bounded by the timeout but took " + elapsedMillis + "ms", elapsedMillis < 2_000L, is(true));
+        } finally {
+            ConfigurationProperties.regexMatchingTimeoutMillis(previousTimeout);
+        }
+    }
 
     @Test
     public void shouldMatchLatestMessageRegex() {

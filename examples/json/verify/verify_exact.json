@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "times": {
+    "atLeast": 2,
+    "atMost": 2
+  }
+}

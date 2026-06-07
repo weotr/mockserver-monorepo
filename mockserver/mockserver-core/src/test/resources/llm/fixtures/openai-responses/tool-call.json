@@ -1,0 +1,18 @@
+{
+  "id" : "<id>",
+  "object" : "response",
+  "created_at" : 0,
+  "model" : "gpt-4o",
+  "status" : "completed",
+  "output" : [ {
+    "type" : "function_call",
+    "id" : "<id>",
+    "name" : "get_weather",
+    "arguments" : "{\"city\":\"London\",\"units\":\"celsius\"}"
+  } ],
+  "usage" : {
+    "input_tokens" : 0,
+    "output_tokens" : 0,
+    "total_tokens" : 0
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "httpRequest": {
+    "path": "/grpc/service/StreamMethod"
+  },
+  "grpcStreamResponse": {
+    "statusName": "OK",
+    "statusMessage": "success",
+    "messages": [
+      {
+        "json": "{\"id\": 1, \"value\": \"first\"}"
+      },
+      {
+        "json": "{\"id\": 2, \"value\": \"second\"}",
+        "delay": {
+          "timeUnit": "MILLISECONDS",
+          "value": 500
+        }
+      }
+    ]
+  }
+}

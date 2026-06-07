@@ -1,0 +1,78 @@
+name: 'Setup MockServer'
+description: 'Start a MockServer instance (HTTP(S) mock server & proxy) for use in a CI job, and wait until it is ready.'
+author: 'MockServer'
+branding:
+  icon: 'server'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'MockServer Docker image tag (e.g. "latest" or a release tag like "mockserver-6.1.0").'
+    required: false
+    default: 'latest'
+  port:
+    description: 'Host port to expose MockServer on (the container always listens on 1080 internally).'
+    required: false
+    default: '1080'
+  container-name:
+    description: 'Name for the started container.'
+    required: false
+    default: 'mockserver'
+  log-level:
+    description: 'MockServer log level (e.g. INFO, WARN, DEBUG, TRACE).'
+    required: false
+    default: 'INFO'
+  args:
+    description: 'Extra arguments appended to the MockServer command (after -serverPort / -logLevel). Do NOT populate from untrusted input (e.g. PR titles / issue bodies) — values are word-split into the docker command, so arbitrary flags could be injected.'
+    required: false
+    default: ''
+  startup-timeout:
+    description: 'Maximum seconds to wait for MockServer to become ready before failing.'
+    required: false
+    default: '60'
+
+outputs:
+  url:
+    description: 'Base URL of the running MockServer (http://localhost:<port>).'
+    value: ${{ steps.start.outputs.url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: start
+      shell: bash
+      env:
+        MS_VERSION: ${{ inputs.version }}
+        MS_PORT: ${{ inputs.port }}
+        MS_NAME: ${{ inputs.container-name }}
+        MS_LOG_LEVEL: ${{ inputs.log-level }}
+        MS_ARGS: ${{ inputs.args }}
+        MS_TIMEOUT: ${{ inputs.startup-timeout }}
+      run: |
+        set -euo pipefail
+        if ! [[ "${MS_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::startup-timeout must be a positive integer (got: '${MS_TIMEOUT}')"
+          exit 1
+        fi
+        url="http://localhost:${MS_PORT}"
+        echo "Starting MockServer ${MS_VERSION} on ${url}"
+        # MS_ARGS is intentionally word-split into separate arguments.
+        # shellcheck disable=SC2086
+        docker run -d --rm \
+          --name "${MS_NAME}" \
+          -p "${MS_PORT}:1080" \
+          "mockserver/mockserver:${MS_VERSION}" \
+          -serverPort 1080 -logLevel "${MS_LOG_LEVEL}" ${MS_ARGS}
+        echo "url=${url}" >> "$GITHUB_OUTPUT"
+        echo "Waiting up to ${MS_TIMEOUT}s for MockServer to become ready…"
+        for _ in $(seq 1 "${MS_TIMEOUT}"); do
+          # The control-plane status endpoint answers only to PUT.
+          if curl -sf -X PUT "${url}/mockserver/status" >/dev/null 2>&1; then
+            echo "MockServer is ready at ${url}"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::MockServer did not become ready within ${MS_TIMEOUT}s"
+        docker logs "${MS_NAME}" 2>&1 | tail -50 || true
+        exit 1

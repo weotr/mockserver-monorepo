@@ -401,3 +401,42 @@ Implementation details:
 - The listener receives the full `LogEntry` object including type, timestamp, message, and associated HTTP objects
 - Setting the listener to `null` removes it
 - The listener is wired in `LifeCycle` constructor, which passes the `Configuration.logEventListener()` to `MockServerLogger`
+
+## Traffic Diff
+
+The traffic diff feature provides field-by-field comparison of two `HttpRequest` objects, enabling regression testing by comparing recorded HTTP sessions.
+
+### Components
+
+- **`FieldDiff`** (`org.mockserver.mock.diff.FieldDiff`) -- a data class representing a single field-level difference. Each diff has a `field` name, optional `expectedValue` and `actualValue`, and a `DiffType` (`ADDED`, `REMOVED`, `CHANGED`, `EQUAL`). Extends `ObjectWithReflectiveEqualsHashCodeToString` for standard equals/hashCode/toString support.
+
+- **`TrafficDiffEngine`** (`org.mockserver.mock.diff.TrafficDiffEngine`) -- compares two `HttpRequest` objects and returns `List<FieldDiff>`. Diffed fields include:
+  - `method` -- HTTP method comparison
+  - `path` -- request path comparison
+  - `body` -- body string comparison
+  - `header.<key>` -- per-header comparison (case-insensitive keys, multi-value joined with commas)
+  - `queryParam.<key>` -- per-query-parameter comparison (case-insensitive keys)
+  - `cookie.<key>` -- per-cookie comparison (case-insensitive keys)
+
+### API Endpoint
+
+`PUT /mockserver/diff` accepts a JSON body with `expected` and `actual` fields, each containing a serialized `HttpRequest`. Returns a JSON response with `diffCount`, `identical` (boolean), and a `diffs` array of `FieldDiff` objects.
+
+Example request:
+```json
+{
+  "expected": { "method": "GET", "path": "/api/users" },
+  "actual": { "method": "POST", "path": "/api/users" }
+}
+```
+
+Example response:
+```json
+{
+  "diffCount": 1,
+  "identical": false,
+  "diffs": [
+    { "field": "method", "expectedValue": "GET", "actualValue": "POST", "diffType": "CHANGED" }
+  ]
+}
+```

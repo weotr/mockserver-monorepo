@@ -240,6 +240,57 @@ client.when(
             .withMessage("{\"greeting\": \"Hello Charlie\"}", delay(MILLISECONDS, 200))
     );</code></pre>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+    <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, KeyToMultiValue, GrpcStreamResponse, GrpcStreamMessage, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest(
+        method="POST",
+        path="/com.example.grpc.GreetingService/ListGreetings",
+        headers=[
+            KeyToMultiValue(name="x-grpc-service", values=["com.example.grpc.GreetingService"]),
+            KeyToMultiValue(name="x-grpc-method", values=["ListGreetings"])
+        ]
+    )
+).respond_with_grpc_stream(
+    GrpcStreamResponse(
+        status_name="OK",
+        messages=[
+            GrpcStreamMessage(json='{"greeting": "Hello Alice"}'),
+            GrpcStreamMessage(json='{"greeting": "Hello Bob"}', delay=Delay(time_unit="MILLISECONDS", value=100)),
+            GrpcStreamMessage(json='{"greeting": "Hello Charlie"}', delay=Delay(time_unit="MILLISECONDS", value=200))
+        ]
+    )
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+  HttpRequest.new(
+    method: 'POST',
+    path: '/com.example.grpc.GreetingService/ListGreetings',
+    headers: [
+      KeyToMultiValue.new(name: 'x-grpc-service', values: ['com.example.grpc.GreetingService']),
+      KeyToMultiValue.new(name: 'x-grpc-method', values: ['ListGreetings'])
+    ]
+  )
+).respond_with_grpc_stream(
+  GrpcStreamResponse.new(
+    status_name: 'OK',
+    messages: [
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Alice"}'),
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Bob"}', delay: Delay.new(time_unit: 'MILLISECONDS', value: 100)),
+      GrpcStreamMessage.new(json: '{"greeting": "Hello Charlie"}', delay: Delay.new(time_unit: 'MILLISECONDS', value: 200))
+    ]
+  )
+)</code></pre>
+    </div>
 </div>
 
 <a id="client_streaming_rpc" class="anchor" href="#client_streaming_rpc">&nbsp;</a>
@@ -247,6 +298,157 @@ client.when(
 <h3>Client Streaming RPC</h3>
 
 <p>Client streaming requests are converted with the combined stream messages in the request body. MockServer adds an <span class="inline_code">x-grpc-client-streaming</span> header to indicate this is a client streaming request. Client streaming support is limited — see <a href="#grpc_limitations">Limitations</a> below.</p>
+
+<a id="bidi_streaming_rpc" class="anchor" href="#bidi_streaming_rpc">&nbsp;</a>
+
+<h3>Bidirectional Streaming RPC (Experimental)</h3>
+
+<p>MockServer supports true bidirectional (bidi) gRPC streaming, where both the client and server can send messages independently and interleaved on a single stream. This requires the <span class="inline_code">grpcBidiStreamingEnabled</span> configuration flag to be set to <span class="inline_code">true</span> (default is <span class="inline_code">false</span>). See the <a href="/mock_server/configuration_properties.html#grpc_configuration">gRPC Configuration</a> section for details on enabling it.</p>
+
+<p>A <span class="inline_code">grpcBidiResponse</span> action supports two response mechanisms:</p>
+<ul>
+    <li><strong>Eager messages</strong> — messages sent immediately when the stream is established (before any client message is received)</li>
+    <li><strong>Reactive rules</strong> — each inbound client message is matched against rules in order; the first rule whose <span class="inline_code">matchJson</span> matches emits its responses. The <span class="inline_code">matchJson</span> field supports exact string match and regex (via <span class="inline_code">String.matches()</span> semantics)</li>
+</ul>
+
+<button id="button_grpc_bidi" class="accordion title"><strong>Bidirectional Streaming RPC Code Examples</strong></button>
+<div class="panel title">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+    <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/com.example.grpc.ChatService/BidiChat",
+    "headers": {
+      "x-grpc-service": ["com.example.grpc.ChatService"],
+      "x-grpc-method": ["BidiChat"]
+    }
+  },
+  "grpcBidiResponse": {
+    "statusName": "OK",
+    "messages": [
+      {"json": "{\"message\": \"Welcome to the chat!\"}"}
+    ],
+    "rules": [
+      {
+        "matchJson": "{\"message\": \"hello\"}",
+        "responses": [
+          {"json": "{\"message\": \"Hello! How can I help?\"}"}
+        ]
+      },
+      {
+        "matchJson": ".*goodbye.*",
+        "responses": [
+          {"json": "{\"message\": \"Goodbye! Have a nice day.\"}"}
+        ]
+      }
+    ]
+  }
+}'</code></pre>
+    </div>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+    <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withMethod("POST")
+            .withPath("/com.example.grpc.ChatService/BidiChat")
+            .withHeader("x-grpc-service", "com.example.grpc.ChatService")
+            .withHeader("x-grpc-method", "BidiChat")
+    )
+    .respondWithGrpcBidi(
+        grpcBidiResponse()
+            .withStatusName("OK")
+            .withMessage("{\"message\": \"Welcome to the chat!\"}")
+            .withRule(grpcBidiRule("{\"message\": \"hello\"}")
+                .withResponse("{\"message\": \"Hello! How can I help?\"}"))
+            .withRule(grpcBidiRule(".*goodbye.*")
+                .withResponse("{\"message\": \"Goodbye! Have a nice day.\"}"))
+    );</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+    <pre class="prettyprint lang-python code"><code class="code">from mockserver import (
+    MockServerClient, HttpRequest, KeyToMultiValue,
+    GrpcBidiResponse, GrpcBidiRule, GrpcStreamMessage,
+)
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest(
+        method="POST",
+        path="/com.example.grpc.ChatService/BidiChat",
+        headers=[
+            KeyToMultiValue(name="x-grpc-service", values=["com.example.grpc.ChatService"]),
+            KeyToMultiValue(name="x-grpc-method", values=["BidiChat"])
+        ]
+    )
+).respond_with_grpc_bidi(
+    GrpcBidiResponse(
+        status_name="OK",
+        messages=[GrpcStreamMessage(json='{"message": "Welcome to the chat!"}')],
+        rules=[
+            GrpcBidiRule(
+                match_json='{"message": "hello"}',
+                responses=[GrpcStreamMessage(json='{"message": "Hello! How can I help?"}')]
+            ),
+            GrpcBidiRule(
+                match_json='.*goodbye.*',
+                responses=[GrpcStreamMessage(json='{"message": "Goodbye! Have a nice day."}')]
+            ),
+        ]
+    )
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+  HttpRequest.new(
+    method: 'POST',
+    path: '/com.example.grpc.ChatService/BidiChat',
+    headers: [
+      KeyToMultiValue.new(name: 'x-grpc-service', values: ['com.example.grpc.ChatService']),
+      KeyToMultiValue.new(name: 'x-grpc-method', values: ['BidiChat'])
+    ]
+  )
+).respond_with_grpc_bidi(
+  GrpcBidiResponse.new(
+    status_name: 'OK',
+    messages: [GrpcStreamMessage.new(json: '{"message": "Welcome to the chat!"}')],
+    rules: [
+      GrpcBidiRule.new(
+        match_json: '{"message": "hello"}',
+        responses: [GrpcStreamMessage.new(json: '{"message": "Hello! How can I help?"}')]
+      ),
+      GrpcBidiRule.new(
+        match_json: '.*goodbye.*',
+        responses: [GrpcStreamMessage.new(json: '{"message": "Goodbye! Have a nice day."}')]
+      )
+    ]
+  )
+)</code></pre>
+    </div>
+</div>
+
+<h4>Supported Features (Bidi Streaming)</h4>
+
+<ul>
+    <li><strong>Times-limiting</strong> &mdash; <span class="inline_code">grpcBidiResponse</span> expectations support <span class="inline_code">times(n)</span>; a <span class="inline_code">times(1)</span> bidi expectation will match once and then be exhausted, just like other expectation types.</li>
+    <li><strong>Request logging and verification</strong> &mdash; bidi requests are recorded in the request log and are verifiable via the verification API.</li>
+    <li><strong>Per-message delay</strong> &mdash; each eager message and rule response can have a per-message <span class="inline_code">delay</span>; messages are written after the configured delay elapses, chained sequentially so ordering is preserved. The top-level action <span class="inline_code">delay</span> is applied before the initial response HEADERS frame.</li>
+    <li><strong>Abandoned stream cleanup</strong> &mdash; if a client disconnects or abandons a bidi stream without sending END_STREAM, the expectation is cleaned up automatically (responseInProgress is cleared so the expectation can be removed when exhausted).</li>
+</ul>
+
+<h4>Requirements (Bidi Streaming)</h4>
+
+<ul>
+    <li>Bidi streaming requires the <span class="inline_code">grpcBidiStreamingEnabled=true</span> flag. Without it, a <span class="inline_code">grpcBidiResponse</span> expectation will return HTTP 501.</li>
+    <li>Not supported in WAR/servlet deployments (returns HTTP 501).</li>
+</ul>
 
 <a id="matching_grpc_requests" class="anchor" href="#matching_grpc_requests">&nbsp;</a>
 
@@ -303,8 +505,148 @@ client.when(
     <li><strong>Unary RPC</strong> — fully supported</li>
     <li><strong>Server streaming RPC</strong> — fully supported via <span class="inline_code">grpcStreamResponse</span></li>
     <li><strong>Client streaming RPC</strong> — limited support; stream messages are aggregated into a single request body</li>
-    <li><strong>Bidirectional streaming RPC</strong> — not yet supported</li>
+    <li><strong>Bidirectional streaming RPC</strong> — experimental support via <span class="inline_code">grpcBidiResponse</span> (requires <span class="inline_code">grpcBidiStreamingEnabled=true</span>); see <a href="#bidi_streaming_rpc">Bidirectional Streaming</a> above for details and known limitations</li>
 </ul>
+
+<a id="grpc_fault_injection_link" class="anchor" href="#grpc_fault_injection_link">&nbsp;</a>
+
+<h2>gRPC Fault Injection (Chaos)</h2>
+
+<p>MockServer can inject gRPC-level faults — <code class="inline code">UNAVAILABLE</code>, <code class="inline code">DEADLINE_EXCEEDED</code>, <code class="inline code">RESOURCE_EXHAUSTED</code>, and other status codes — into matched RPC calls, with optional latency and request-quota controls. Faults are registered per gRPC service name via a dedicated control-plane endpoint and apply before normal request conversion in <code class="inline code">GrpcToHttpRequestHandler</code>.</p>
+
+<p>This is separate from the health-check serving-status feature described below. See the <a href="/mock_server/chaos_testing.html#grpc_fault_injection">gRPC Fault Injection</a> section on the Chaos Testing page for the full profile reference and REST API examples.</p>
+
+<a id="grpc_health_check" class="anchor" href="#grpc_health_check">&nbsp;</a>
+
+<h2>gRPC Health Checking Protocol</h2>
+
+<p>Kubernetes readiness and liveness probes commonly use the <a href="https://github.com/grpc/grpc/blob/master/doc/health-checking.md">gRPC Health Checking Protocol</a> (<code class="inline code">grpc.health.v1.Health/Check</code>) to verify that a service is ready to receive traffic. MockServer auto-responds to this well-known method <strong>without requiring a proto descriptor</strong> — protobuf encoding and decoding is handled manually so health checks work out of the box even when no descriptors have been loaded.</p>
+
+<p>Health checks are enabled by default (<code class="inline code">grpcHealthCheckEnabled=true</code>). The default serving status for all services is <code class="inline code">SERVING</code>. You can override the status for individual services or for the global default via a REST endpoint.</p>
+
+<h3>ServingStatus values</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Value</th>
+            <th>Proto code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">SERVING</code></td>
+            <td>1</td>
+            <td>The service is healthy and ready to accept requests (default)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">NOT_SERVING</code></td>
+            <td>2</td>
+            <td>The service is temporarily unavailable (probe will fail)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">UNKNOWN</code></td>
+            <td>0</td>
+            <td>Status is unknown</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">SERVICE_UNKNOWN</code></td>
+            <td>3</td>
+            <td>The named service is not known to this server</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>REST API</h3>
+
+<p><strong>Override the status for a named service:</strong></p>
+<pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/grpc/health" \
+  -H "Content-Type: application/json" \
+  -d '{"service": "my.payments.PaymentService", "status": "NOT_SERVING"}'</code></pre>
+
+<p>Set <code class="inline code">service</code> to the fully-qualified gRPC service name. Use an empty string (<code class="inline code">""</code>) to override the default status that applies to <em>all</em> services without an explicit override. The response confirms the registration:</p>
+
+<pre class="prettyprint code"><code class="code">{ "status": "registered", "service": "my.payments.PaymentService", "servingStatus": "NOT_SERVING" }</code></pre>
+
+<p><strong>Read all current status overrides:</strong></p>
+<pre class="prettyprint code"><code class="code">curl -v "http://localhost:1080/mockserver/grpc/health"</code></pre>
+
+<p>Returns a JSON object mapping service names to their current status. The empty string key (<code class="inline code">"_default"</code>) shows the global default:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "_default": "SERVING",
+  "my.payments.PaymentService": "NOT_SERVING"
+}</code></pre>
+
+<p>All status overrides are cleared on server reset. The <code class="inline code">GET</code> endpoint returns only services that have had their status explicitly set, plus the global default.</p>
+
+<h3>How it works</h3>
+
+<p>When MockServer receives a request whose path is exactly <code class="inline code">/grpc.health.v1.Health/Check</code>, the request is intercepted in <code class="inline code">GrpcToHttpRequestHandler</code> before descriptor lookup — no proto descriptor for the health service is needed. <code class="inline code">GrpcHealthCheckHandler</code> decodes the 5-byte gRPC frame header and then manually parses the protobuf <code class="inline code">HealthCheckRequest</code> (field 1 = service name string). It looks up the serving status in <code class="inline code">GrpcHealthRegistry</code>, which falls back to the default status when no per-service override is registered. The response is a manually-encoded gRPC-framed <code class="inline code">HealthCheckResponse</code> (field 1 = status enum varint). The whole path bypasses the expectation matching engine so health checks always respond, even with no expectations registered.</p>
+
+<a id="grpc_server_reflection" class="anchor" href="#grpc_server_reflection">&nbsp;</a>
+
+<h2>Server Reflection</h2>
+
+<p>MockServer supports the <strong>gRPC Server Reflection Protocol</strong> out of the box. Tools such as <span class="inline_code">grpcurl</span> and <span class="inline_code">grpcui</span> can use reflection to discover services and describe message types without needing a local <span class="inline_code">.proto</span> file.</p>
+
+<p>Both the v1 and v1alpha reflection service paths are supported:</p>
+<ul>
+    <li><span class="inline_code">/grpc.reflection.v1.ServerReflection/ServerReflectionInfo</span></li>
+    <li><span class="inline_code">/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo</span></li>
+</ul>
+
+<p>The reflection service answers from the proto descriptors already loaded into MockServer (via <span class="inline_code">grpcDescriptorDirectory</span>, <span class="inline_code">grpcProtoDirectory</span>, or the REST API upload). No additional configuration is required.</p>
+
+<h3>Example: listing services with grpcurl</h3>
+
+<pre class="prettyprint code"><code class="code"># List all services known to MockServer
+grpcurl -plaintext localhost:1080 list
+
+# Describe a specific service
+grpcurl -plaintext localhost:1080 describe com.example.grpc.GreetingService
+
+# Describe a message type
+grpcurl -plaintext localhost:1080 describe com.example.grpc.HelloRequest</code></pre>
+
+<h3>Limitation</h3>
+
+<p>MockServer's gRPC path is buffered-unary: each HTTP/2 request carries exactly one gRPC message. The reflection handler therefore processes a single <span class="inline_code">ServerReflectionRequest</span> per call. This is sufficient for <span class="inline_code">grpcurl list</span>, single symbol lookups, and single file lookups. Fully interactive bidirectional-streaming reflection (a long-lived stream with multiple back-and-forth messages) is not supported by the current pipeline.</p>
+
+<a id="grpc_web_link" class="anchor" href="#grpc_web_link">&nbsp;</a>
+
+<h2>gRPC-Web Support</h2>
+
+<p>MockServer supports <a href="https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-WEB.md">gRPC-Web</a>, the variant of gRPC designed for browser clients and environments that cannot use HTTP/2 trailers. gRPC-Web requests are automatically detected and translated to standard gRPC for matching against existing expectations, so no additional configuration or separate expectations are needed.</p>
+
+<h3>Supported Content Types</h3>
+
+<ul>
+    <li><span class="inline_code">application/grpc-web</span> and <span class="inline_code">application/grpc-web+proto</span> &mdash; binary gRPC-Web (same length-prefixed framing as standard gRPC)</li>
+    <li><span class="inline_code">application/grpc-web-text</span> and <span class="inline_code">application/grpc-web-text+proto</span> &mdash; base64-encoded gRPC-Web (the entire request/response body is base64-encoded)</li>
+</ul>
+
+<h3>How It Works</h3>
+
+<p>When MockServer receives a request with a gRPC-Web content type:</p>
+
+<ol>
+    <li>The request body is decoded (base64-decoded for the <span class="inline_code">-text</span> variant) and the content type is translated to <span class="inline_code">application/grpc</span></li>
+    <li>The request is processed through the normal gRPC pipeline &mdash; descriptor lookup, protobuf-to-JSON conversion, and expectation matching all work unchanged</li>
+    <li>The response is re-framed as gRPC-Web: the message frame(s) are followed by a trailer frame (flag byte <span class="inline_code">0x80</span>) containing <span class="inline_code">grpc-status</span> and <span class="inline_code">grpc-message</span> as ASCII lines in the body, instead of HTTP/2 trailers</li>
+    <li>For the <span class="inline_code">-text</span> variant, the entire response body is base64-encoded</li>
+</ol>
+
+<p>gRPC-Web works over both HTTP/1.1 and HTTP/2, making it suitable for browser-based gRPC clients such as <a href="https://github.com/nicholasgasior/grpc-web">grpc-web</a> and <a href="https://github.com/nicholasgasior/grpc-web">Improbable grpc-web</a>.</p>
+
+<h3>Built-in Services via gRPC-Web</h3>
+
+<p>The built-in gRPC health check (<span class="inline_code">/grpc.health.v1.Health/Check</span>), server reflection, and chaos fault injection all work transparently via gRPC-Web. No special configuration is needed.</p>
+
+<h3>Connect Protocol (connectrpc)</h3>
+
+<p>The <a href="https://connectrpc.com/docs/protocol/">Connect protocol</a> (used by <span class="inline_code">connectrpc</span>) is not currently supported. Connect uses a different framing format (JSON or proto over standard HTTP POST with <span class="inline_code">application/connect+proto</span> content type and trailers in a JSON envelope) that is distinct from gRPC-Web. If you need Connect support, please open a feature request.</p>
 
 <a id="grpc_configuration_link" class="anchor" href="#grpc_configuration_link">&nbsp;</a>
 

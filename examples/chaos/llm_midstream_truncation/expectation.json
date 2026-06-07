@@ -1,0 +1,22 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "completion": {
+      "model": "gpt-4",
+      "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Tell me about chaos engineering."}
+      ],
+      "responseBody": "Chaos engineering is the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production."
+    },
+    "chaos": {
+      "truncateMode": "MID_STREAM",
+      "truncateAtFraction": 0.7,
+      "malformedSse": true
+    }
+  }
+}

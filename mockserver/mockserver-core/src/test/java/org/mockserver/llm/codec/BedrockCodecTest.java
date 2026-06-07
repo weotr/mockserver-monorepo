@@ -5,8 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
+import org.mockserver.llm.StreamingFormat;
 import org.mockserver.model.*;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -18,7 +21,8 @@ import static org.mockserver.model.ToolUse.toolUse;
 /**
  * Tests for the Bedrock codec (Anthropic-on-Bedrock wire format).
  * Since Bedrock delegates to AnthropicCodec, these tests verify delegation
- * is correct and the provider/version metadata is distinct.
+ * is correct and the provider/version metadata is distinct. Streaming tests
+ * verify that chunks can be decoded via the AWS event-stream binary format.
  */
 public class BedrockCodecTest {
 
@@ -193,5 +197,90 @@ public class BedrockCodecTest {
     @Test(expected = UnsupportedOperationException.class)
     public void shouldThrowForEmbeddings() {
         codec.encodeEmbedding(EmbeddingResponse.embedding(), "test input");
+    }
+
+    // --- Streaming Format ---
+
+    @Test
+    public void shouldDeclareAwsEventStreamStreamingFormat() {
+        assertThat(codec.streamingFormat(), is(StreamingFormat.AWS_EVENT_STREAM));
+    }
+
+    // --- Event-Stream Streaming Integration ---
+
+    @Test
+    public void shouldProduceStreamingChunksThatDecodeViaEventStream() throws Exception {
+        Completion completion = completion()
+            .withText("Hello world")
+            .withUsage(Usage.usage().withInputTokens(10).withOutputTokens(5));
+
+        List<SseEvent> events = codec.encodeStreaming(completion,
+            "anthropic.claude-3-7-sonnet-20250219-v1:0", null);
+
+        assertThat(events.size(), is(greaterThanOrEqualTo(6)));
+        assertThat(events.get(0).getEvent(), is("message_start"));
+        assertThat(events.get(events.size() - 1).getEvent(), is("message_stop"));
+
+        // Simulate the event-stream binary encoding that HttpSseResponseActionHandler performs.
+        // Each event's data is wrapped via BedrockEventStreamEncoder.encodeChunk.
+        for (SseEvent event : events) {
+            String chunkJson = event.getData();
+            assertThat("event data must not be null", chunkJson, is(notNullValue()));
+
+            byte[] encoded = BedrockEventStreamEncoder.encodeChunk(chunkJson);
+            List<BedrockEventStreamEncoder.DecodedMessage> decoded =
+                BedrockEventStreamEncoder.decode(encoded);
+
+            assertThat(decoded, hasSize(1));
+
+            // Verify headers
+            assertThat(decoded.get(0).getHeaders().get(":event-type"), is("chunk"));
+            assertThat(decoded.get(0).getHeaders().get(":content-type"), is("application/json"));
+            assertThat(decoded.get(0).getHeaders().get(":message-type"), is("event"));
+
+            // Verify base64 payload round-trips to the original chunk JSON
+            JsonNode payloadNode = OBJECT_MAPPER.readTree(decoded.get(0).getPayloadAsString());
+            String base64 = payloadNode.get("bytes").asText();
+            String roundTripped = new String(
+                Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
+            assertThat(roundTripped, is(chunkJson));
+        }
+    }
+
+    @Test
+    public void shouldProduceFullStreamThatDecodesIntoOrderedChunks() throws Exception {
+        Completion completion = completion()
+            .withText("Test stream")
+            .withUsage(Usage.usage().withInputTokens(5).withOutputTokens(3));
+
+        List<SseEvent> events = codec.encodeStreaming(completion,
+            "anthropic.claude-3-7-sonnet-20250219-v1:0", null);
+
+        // Build full event-stream byte array (simulating HttpSseResponseActionHandler)
+        java.io.ByteArrayOutputStream fullStream = new java.io.ByteArrayOutputStream();
+        for (SseEvent event : events) {
+            fullStream.write(BedrockEventStreamEncoder.encodeChunk(event.getData()));
+        }
+
+        // Decode the full stream
+        List<BedrockEventStreamEncoder.DecodedMessage> decoded =
+            BedrockEventStreamEncoder.decode(fullStream.toByteArray());
+
+        assertThat("decoded count must match event count",
+            decoded.size(), is(events.size()));
+
+        // First chunk should be message_start
+        JsonNode firstPayload = OBJECT_MAPPER.readTree(
+            new String(Base64.getDecoder().decode(
+                OBJECT_MAPPER.readTree(decoded.get(0).getPayloadAsString())
+                    .get("bytes").asText()), StandardCharsets.UTF_8));
+        assertThat(firstPayload.get("type").asText(), is("message_start"));
+
+        // Last chunk should be message_stop
+        JsonNode lastPayload = OBJECT_MAPPER.readTree(
+            new String(Base64.getDecoder().decode(
+                OBJECT_MAPPER.readTree(decoded.get(decoded.size() - 1).getPayloadAsString())
+                    .get("bytes").asText()), StandardCharsets.UTF_8));
+        assertThat(lastPayload.get("type").asText(), is("message_stop"));
     }
 }

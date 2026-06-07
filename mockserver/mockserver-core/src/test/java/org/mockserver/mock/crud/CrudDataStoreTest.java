@@ -347,6 +347,114 @@ public class CrudDataStoreTest {
     }
 
     @Test
+    public void shouldPatchItem() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice").put("email", "alice@example.com"));
+
+        // when
+        ObjectNode partial = objectMapper.createObjectNode().put("email", "alice.updated@example.com");
+        ObjectNode patched = store.patch("1", partial);
+
+        // then
+        assertThat(patched, is(notNullValue()));
+        assertThat(patched.get("name").asText(), is("Alice"));
+        assertThat(patched.get("email").asText(), is("alice.updated@example.com"));
+        assertThat(patched.get("id").asLong(), is(1L));
+    }
+
+    @Test
+    public void shouldPatchItemAddingNewFields() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice"));
+
+        // when
+        ObjectNode partial = objectMapper.createObjectNode().put("email", "alice@example.com").put("age", 30);
+        ObjectNode patched = store.patch("1", partial);
+
+        // then
+        assertThat(patched, is(notNullValue()));
+        assertThat(patched.get("name").asText(), is("Alice"));
+        assertThat(patched.get("email").asText(), is("alice@example.com"));
+        assertThat(patched.get("age").asInt(), is(30));
+    }
+
+    @Test
+    public void shouldNotOverrideIdFieldOnPatch() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice"));
+
+        // when
+        ObjectNode partial = objectMapper.createObjectNode().put("id", 999).put("name", "Alice Patched");
+        ObjectNode patched = store.patch("1", partial);
+
+        // then
+        assertThat(patched, is(notNullValue()));
+        assertThat(patched.get("id").asLong(), is(1L));
+        assertThat(patched.get("name").asText(), is("Alice Patched"));
+    }
+
+    @Test
+    public void shouldReturnNullWhenPatchingNonExistentItem() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+
+        // when
+        ObjectNode result = store.patch("999", objectMapper.createObjectNode().put("name", "Ghost"));
+
+        // then
+        assertThat(result, is(nullValue()));
+    }
+
+    @Test
+    public void shouldPatchPreserveStoredState() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice").put("email", "alice@example.com"));
+
+        // when
+        store.patch("1", objectMapper.createObjectNode().put("email", "new@example.com"));
+        ObjectNode retrieved = store.getById("1");
+
+        // then
+        assertThat(retrieved.get("name").asText(), is("Alice"));
+        assertThat(retrieved.get("email").asText(), is("new@example.com"));
+    }
+
+    @Test
+    public void shouldClearStore() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice"));
+        store.create(objectMapper.createObjectNode().put("name", "Bob"));
+
+        // when
+        store.clear();
+
+        // then
+        assertThat(store.size(), is(0));
+        assertThat(store.getAll(), hasSize(0));
+        assertThat(store.getById("1"), is(nullValue()));
+    }
+
+    @Test
+    public void shouldResetAutoIncrementOnClear() {
+        // given
+        CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);
+        store.create(objectMapper.createObjectNode().put("name", "Alice"));
+        store.create(objectMapper.createObjectNode().put("name", "Bob"));
+        store.clear();
+
+        // when
+        ObjectNode created = store.create(objectMapper.createObjectNode().put("name", "Charlie"));
+
+        // then
+        assertThat(created.get("id").asLong(), is(1L));
+    }
+
+    @Test
     public void shouldHandleDeletedItemsInGetAll() {
         // given
         CrudDataStore store = new CrudDataStore("id", IdStrategy.AUTO_INCREMENT);

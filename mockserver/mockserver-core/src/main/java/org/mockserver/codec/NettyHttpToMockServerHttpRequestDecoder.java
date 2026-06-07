@@ -30,14 +30,16 @@ public class NettyHttpToMockServerHttpRequestDecoder extends MessageToMessageDec
     @Override
     protected void decode(ChannelHandlerContext ctx, FullHttpRequest fullHttpRequest, List<Object> out) {
         List<Header> preservedHeaders = null;
+        byte[] originalRawBody = null;
         SocketAddress localAddress = null;
         SocketAddress remoteAddress = null;
         if (ctx != null && ctx.channel() != null) {
             preservedHeaders = PreserveHeadersNettyRemoves.preservedHeaders(ctx.channel());
+            originalRawBody = PreserveHeadersNettyRemoves.originalRawBody(ctx.channel());
             localAddress = ctx.channel().localAddress();
             remoteAddress = ctx.channel().remoteAddress();
         }
-        out.add(fullHttpRequestToMockServerRequest.mapFullHttpRequestToMockServerRequest(fullHttpRequest, preservedHeaders, localAddress, remoteAddress, getALPNProtocol(mockServerLogger, ctx)));
+        out.add(fullHttpRequestToMockServerRequest.mapFullHttpRequestToMockServerRequest(fullHttpRequest, preservedHeaders, originalRawBody, localAddress, remoteAddress, getALPNProtocol(mockServerLogger, ctx)));
     }
 
 }

@@ -97,6 +97,7 @@ export function expectationToJava(draft: ExpectationDraft): string {
   lines.push('import static org.mockserver.model.HttpRequest.request;');
   lines.push('import static org.mockserver.model.HttpLlmResponse.llmResponse;');
   lines.push('import static org.mockserver.mock.Expectation.when;');
+  lines.push('import org.mockserver.model.Provider;');
   lines.push('');
 
   // Build completion chain

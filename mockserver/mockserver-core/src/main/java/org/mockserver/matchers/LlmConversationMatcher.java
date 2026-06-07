@@ -253,7 +253,10 @@ public class LlmConversationMatcher {
                     return false;
                 }
                 String subject = PromptNormalizer.normalize(text, normalization);
-                if (!pattern.matcher(subject).find()) {
+                // latestMessageMatches is a user-supplied regex; bound its evaluation with the shared regex
+                // matching timeout so a pathological pattern cannot pin a worker thread (ReDoS)
+                if (!MatchingTimeoutExecutor.matchesWithRegexTimeout(null, "llm conversation latestMessageMatches", pattern,
+                    () -> pattern.matcher(subject).find())) {
                     return false;
                 }
             }

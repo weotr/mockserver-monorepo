@@ -5,7 +5,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
-import io.netty.channel.socket.nio.NioSocketChannel;
+import org.mockserver.socket.NettyTransport;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -58,7 +58,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
     public void channelRead0(final ChannelHandlerContext proxyClientCtx, final T request) {
         Bootstrap bootstrap = new Bootstrap()
             .group(proxyClientCtx.channel().eventLoop())
-            .channel(NioSocketChannel.class)
+            .channel(NettyTransport.socketChannelClassFor(proxyClientCtx.channel().eventLoop()))
             .handler(new ChannelInboundHandlerAdapter() {
                 @Override
                 public void channelActive(final ChannelHandlerContext mockServerCtx) {

@@ -1,0 +1,21 @@
+{
+  "id" : "<id>",
+  "type" : "message",
+  "role" : "assistant",
+  "model" : "anthropic.claude-sonnet-4-20250514-v1:0",
+  "content" : [ {
+    "type" : "tool_use",
+    "id" : "<id>",
+    "name" : "get_weather",
+    "input" : {
+      "city" : "London",
+      "units" : "celsius"
+    }
+  } ],
+  "stop_reason" : "tool_use",
+  "stop_sequence" : null,
+  "usage" : {
+    "input_tokens" : 0,
+    "output_tokens" : 0
+  }
+}

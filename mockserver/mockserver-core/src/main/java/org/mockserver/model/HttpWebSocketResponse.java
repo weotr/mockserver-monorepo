@@ -8,7 +8,9 @@ public class HttpWebSocketResponse extends Action<HttpWebSocketResponse> {
     private int hashCode;
     private String subprotocol;
     private List<WebSocketMessage> messages;
+    private List<WebSocketMessageMatcher> matchers;
     private Boolean closeConnection;
+    private GraphQLBody graphqlSubscriptionFilter;
 
     public static HttpWebSocketResponse webSocketResponse() {
         return new HttpWebSocketResponse();
@@ -49,6 +51,31 @@ public class HttpWebSocketResponse extends Action<HttpWebSocketResponse> {
         return messages;
     }
 
+    public HttpWebSocketResponse withMatchers(List<WebSocketMessageMatcher> matchers) {
+        this.matchers = matchers;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public HttpWebSocketResponse withMatchers(WebSocketMessageMatcher... matchers) {
+        this.matchers = new ArrayList<>(Arrays.asList(matchers));
+        this.hashCode = 0;
+        return this;
+    }
+
+    public HttpWebSocketResponse withMatcher(WebSocketMessageMatcher matcher) {
+        if (this.matchers == null) {
+            this.matchers = new ArrayList<>();
+        }
+        this.matchers.add(matcher);
+        this.hashCode = 0;
+        return this;
+    }
+
+    public List<WebSocketMessageMatcher> getMatchers() {
+        return matchers;
+    }
+
     public HttpWebSocketResponse withCloseConnection(Boolean closeConnection) {
         this.closeConnection = closeConnection;
         this.hashCode = 0;
@@ -57,6 +84,25 @@ public class HttpWebSocketResponse extends Action<HttpWebSocketResponse> {
 
     public Boolean getCloseConnection() {
         return closeConnection;
+    }
+
+    /**
+     * Set a GraphQL subscription filter for the graphql-transport-ws protocol.
+     * When the negotiated subprotocol is {@code graphql-transport-ws} or {@code graphql-ws},
+     * incoming {@code subscribe} messages will have their query matched against this filter.
+     * On match, the configured {@link #messages} are pushed as {@code next} payloads.
+     *
+     * @param filter the GraphQL body to match subscription queries against
+     * @return this instance for fluent chaining
+     */
+    public HttpWebSocketResponse withGraphqlSubscriptionFilter(GraphQLBody filter) {
+        this.graphqlSubscriptionFilter = filter;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public GraphQLBody getGraphqlSubscriptionFilter() {
+        return graphqlSubscriptionFilter;
     }
 
     @Override
@@ -82,13 +128,15 @@ public class HttpWebSocketResponse extends Action<HttpWebSocketResponse> {
         HttpWebSocketResponse that = (HttpWebSocketResponse) o;
         return Objects.equals(subprotocol, that.subprotocol) &&
             Objects.equals(messages, that.messages) &&
-            Objects.equals(closeConnection, that.closeConnection);
+            Objects.equals(matchers, that.matchers) &&
+            Objects.equals(closeConnection, that.closeConnection) &&
+            Objects.equals(graphqlSubscriptionFilter, that.graphqlSubscriptionFilter);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), subprotocol, messages, closeConnection);
+            hashCode = Objects.hash(super.hashCode(), subprotocol, messages, matchers, closeConnection, graphqlSubscriptionFilter);
         }
         return hashCode;
     }

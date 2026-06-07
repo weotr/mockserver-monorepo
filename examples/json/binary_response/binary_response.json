@@ -1,0 +1,8 @@
+{
+  "httpRequest": {
+    "path": "/download/file.bin"
+  },
+  "binaryResponse": {
+    "binaryData": "SGVsbG8gV29ybGQh"
+  }
+}

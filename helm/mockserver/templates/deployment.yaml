@@ -33,9 +33,41 @@ spec:
 {{- end }}
     spec:
       serviceAccountName: {{ .Values.app.serviceAccountName }}
+{{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
 {{- if .Values.imagePullSecrets }}
       imagePullSecrets:
 {{ toYaml .Values.imagePullSecrets | indent 8 }}
+{{- end }}
+{{- if and .Values.sidecar.transparentProxy .Values.sidecar.iptables.enabled }}
+      initContainers:
+        # Redirects outbound TCP on the configured ports to MockServer's transparent
+        # proxy port so traffic is intercepted without application changes. Requires
+        # a privileged init container with NET_ADMIN to apply iptables rules. Skip
+        # this init container if the platform applies the rules another way.
+        - name: iptables-init
+          image: {{ .Values.sidecar.iptables.image | quote }}
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Exclude MockServer's own egress (by UID) BEFORE any REDIRECT rules
+              # to prevent an infinite redirect loop when MockServer forwards upstream.
+              iptables -t nat -I OUTPUT -m owner --uid-owner {{ .Values.sidecar.iptables.excludeUid | default .Values.app.runAsUser }} -j RETURN
+              for port in $(echo "{{ .Values.sidecar.iptables.redirectPorts }}" | tr ',' ' '); do
+                iptables -t nat -A OUTPUT -p tcp --dport "$port" -j REDIRECT --to-ports {{ .Values.sidecar.iptables.proxyPort }}
+              done
+              echo "iptables REDIRECT rules applied for ports {{ .Values.sidecar.iptables.redirectPorts }} -> {{ .Values.sidecar.iptables.proxyPort }} (excludeUid={{ .Values.sidecar.iptables.excludeUid | default .Values.app.runAsUser }})"
 {{- end }}
       containers:
         - name: {{ template "release.name" . }}
@@ -51,6 +83,11 @@ spec:
 {{- end }}
             readOnlyRootFilesystem: {{ .Values.app.readOnlyRootFilesystem }}
             allowPrivilegeEscalation: false
+{{- if and .Values.sidecar.transparentProxy .Values.sidecar.netAdmin }}
+            capabilities:
+              add:
+                - NET_ADMIN
+{{- end }}
           ports:
             - name: serviceport
               containerPort: {{ .Values.app.serverPort }}
@@ -101,6 +138,10 @@ spec:
               value: {{ .Values.app.persistence.mountPath }}/persistedExpectations.json
             - name: MOCKSERVER_INITIALIZATION_JSON_PATH
               value: {{ .Values.app.persistence.mountPath }}/persistedExpectations.json
+{{- end }}
+{{- if .Values.sidecar.transparentProxy }}
+            - name: MOCKSERVER_TRANSPARENT_PROXY_ENABLED
+              value: "true"
 {{- end }}
           volumeMounts:
             - name: config-volume

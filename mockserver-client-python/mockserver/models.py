@@ -72,11 +72,15 @@ _FIELD_MAP = {
     "maximum_number_of_request_to_return_in_verification_failure": "maximumNumberOfRequestToReturnInVerificationFailure",
     "http_sse_response": "httpSseResponse",
     "http_websocket_response": "httpWebSocketResponse",
+    "before_actions": "beforeActions",
     "after_actions": "afterActions",
     "base_path": "basePath",
     "id_field": "idField",
     "id_strategy": "idStrategy",
     "initial_data": "initialData",
+    "http_class_callback": "httpClassCallback",
+    "http_object_callback": "httpObjectCallback",
+    "failure_policy": "failurePolicy",
 }
 
 
@@ -1075,6 +1079,302 @@ class HttpWebSocketResponse:
 
 
 @dataclass
+class GrpcStreamMessage:
+    json: str | None = None
+    delay: Delay | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.json is not None:
+            result["json"] = self.json
+        if self.delay is not None:
+            result["delay"] = self.delay.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GrpcStreamMessage:
+        if data is None:
+            return None
+        return cls(
+            json=data.get("json"),
+            delay=Delay.from_dict(data.get("delay")),
+        )
+
+
+@dataclass
+class GrpcStreamResponse:
+    status_name: str | None = None
+    status_message: str | None = None
+    headers: list[KeyToMultiValue] | None = None
+    messages: list[GrpcStreamMessage] | None = None
+    close_connection: bool | None = None
+    delay: Delay | None = None
+    primary: bool | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.status_name is not None:
+            result["statusName"] = self.status_name
+        if self.status_message is not None:
+            result["statusMessage"] = self.status_message
+        if self.headers is not None:
+            result["headers"] = _serialize_key_multi_values(self.headers)
+        if self.messages is not None:
+            result["messages"] = [m.to_dict() if hasattr(m, 'to_dict') else m for m in self.messages]
+        if self.close_connection is not None:
+            result["closeConnection"] = self.close_connection
+        if self.delay is not None:
+            result["delay"] = self.delay.to_dict()
+        if self.primary is not None:
+            result["primary"] = self.primary
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GrpcStreamResponse:
+        if data is None:
+            return None
+        messages_data = data.get("messages")
+        messages = None
+        if messages_data is not None:
+            messages = [GrpcStreamMessage.from_dict(m) if isinstance(m, dict) else m for m in messages_data]
+        return cls(
+            status_name=data.get("statusName"),
+            status_message=data.get("statusMessage"),
+            headers=_deserialize_key_multi_values(data.get("headers")),
+            messages=messages,
+            close_connection=data.get("closeConnection"),
+            delay=Delay.from_dict(data.get("delay")),
+            primary=data.get("primary"),
+        )
+
+
+@dataclass
+class GrpcBidiRule:
+    match_json: str | None = None
+    responses: list[GrpcStreamMessage] | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.match_json is not None:
+            result["matchJson"] = self.match_json
+        if self.responses is not None:
+            result["responses"] = [r.to_dict() if hasattr(r, 'to_dict') else r for r in self.responses]
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GrpcBidiRule:
+        if data is None:
+            return None
+        responses_data = data.get("responses")
+        responses = None
+        if responses_data is not None:
+            responses = [GrpcStreamMessage.from_dict(r) if isinstance(r, dict) else r for r in responses_data]
+        return cls(
+            match_json=data.get("matchJson"),
+            responses=responses,
+        )
+
+
+@dataclass
+class GrpcBidiResponse:
+    status_name: str | None = None
+    status_message: str | None = None
+    headers: list[KeyToMultiValue] | None = None
+    messages: list[GrpcStreamMessage] | None = None
+    rules: list[GrpcBidiRule] | None = None
+    close_connection: bool | None = None
+    delay: Delay | None = None
+    primary: bool | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.status_name is not None:
+            result["statusName"] = self.status_name
+        if self.status_message is not None:
+            result["statusMessage"] = self.status_message
+        if self.headers is not None:
+            result["headers"] = _serialize_key_multi_values(self.headers)
+        if self.messages is not None:
+            result["messages"] = [m.to_dict() if hasattr(m, 'to_dict') else m for m in self.messages]
+        if self.rules is not None:
+            result["rules"] = [r.to_dict() if hasattr(r, 'to_dict') else r for r in self.rules]
+        if self.close_connection is not None:
+            result["closeConnection"] = self.close_connection
+        if self.delay is not None:
+            result["delay"] = self.delay.to_dict()
+        if self.primary is not None:
+            result["primary"] = self.primary
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GrpcBidiResponse:
+        if data is None:
+            return None
+        messages_data = data.get("messages")
+        messages = None
+        if messages_data is not None:
+            messages = [GrpcStreamMessage.from_dict(m) if isinstance(m, dict) else m for m in messages_data]
+        rules_data = data.get("rules")
+        rules = None
+        if rules_data is not None:
+            rules = [GrpcBidiRule.from_dict(r) if isinstance(r, dict) else r for r in rules_data]
+        return cls(
+            status_name=data.get("statusName"),
+            status_message=data.get("statusMessage"),
+            headers=_deserialize_key_multi_values(data.get("headers")),
+            messages=messages,
+            rules=rules,
+            close_connection=data.get("closeConnection"),
+            delay=Delay.from_dict(data.get("delay")),
+            primary=data.get("primary"),
+        )
+
+
+@dataclass
+class BinaryResponse:
+    binary_data: str | None = None
+    delay: Delay | None = None
+    primary: bool | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.binary_data is not None:
+            result["binaryData"] = self.binary_data
+        if self.delay is not None:
+            result["delay"] = self.delay.to_dict()
+        if self.primary is not None:
+            result["primary"] = self.primary
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> BinaryResponse:
+        if data is None:
+            return None
+        return cls(
+            binary_data=data.get("binaryData"),
+            delay=Delay.from_dict(data.get("delay")),
+            primary=data.get("primary"),
+        )
+
+
+@dataclass
+class DnsRecord:
+    name: str | None = None
+    type: str | None = None
+    dns_class: str | None = None
+    ttl: int | None = None
+    value: str | None = None
+    priority: int | None = None
+    weight: int | None = None
+    port: int | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.name is not None:
+            result["name"] = self.name
+        if self.type is not None:
+            result["type"] = self.type
+        if self.dns_class is not None:
+            result["dnsClass"] = self.dns_class
+        if self.ttl is not None:
+            result["ttl"] = self.ttl
+        if self.value is not None:
+            result["value"] = self.value
+        if self.priority is not None:
+            result["priority"] = self.priority
+        if self.weight is not None:
+            result["weight"] = self.weight
+        if self.port is not None:
+            result["port"] = self.port
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DnsRecord:
+        if data is None:
+            return None
+        return cls(
+            name=data.get("name"),
+            type=data.get("type"),
+            dns_class=data.get("dnsClass"),
+            ttl=data.get("ttl"),
+            value=data.get("value"),
+            priority=data.get("priority"),
+            weight=data.get("weight"),
+            port=data.get("port"),
+        )
+
+    @staticmethod
+    def a_record(name: str, ip: str) -> DnsRecord:
+        return DnsRecord(name=name, type="A", value=ip)
+
+    @staticmethod
+    def aaaa_record(name: str, ip: str) -> DnsRecord:
+        return DnsRecord(name=name, type="AAAA", value=ip)
+
+    @staticmethod
+    def cname_record(name: str, cname: str) -> DnsRecord:
+        return DnsRecord(name=name, type="CNAME", value=cname)
+
+    @staticmethod
+    def mx_record(name: str, priority: int, exchange: str) -> DnsRecord:
+        return DnsRecord(name=name, type="MX", priority=priority, value=exchange)
+
+    @staticmethod
+    def srv_record(name: str, priority: int, weight: int, port: int, target: str) -> DnsRecord:
+        return DnsRecord(name=name, type="SRV", priority=priority, weight=weight, port=port, value=target)
+
+    @staticmethod
+    def txt_record(name: str, text: str) -> DnsRecord:
+        return DnsRecord(name=name, type="TXT", value=text)
+
+    @staticmethod
+    def ptr_record(name: str, pointer: str) -> DnsRecord:
+        return DnsRecord(name=name, type="PTR", value=pointer)
+
+
+@dataclass
+class DnsResponse:
+    response_code: str | None = None
+    answer_records: list[DnsRecord] | None = None
+    authority_records: list[DnsRecord] | None = None
+    additional_records: list[DnsRecord] | None = None
+    delay: Delay | None = None
+    primary: bool | None = None
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.response_code is not None:
+            result["responseCode"] = self.response_code
+        if self.answer_records is not None:
+            result["answerRecords"] = [r.to_dict() for r in self.answer_records]
+        if self.authority_records is not None:
+            result["authorityRecords"] = [r.to_dict() for r in self.authority_records]
+        if self.additional_records is not None:
+            result["additionalRecords"] = [r.to_dict() for r in self.additional_records]
+        if self.delay is not None:
+            result["delay"] = self.delay.to_dict()
+        if self.primary is not None:
+            result["primary"] = self.primary
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DnsResponse:
+        if data is None:
+            return None
+        answer_data = data.get("answerRecords")
+        authority_data = data.get("authorityRecords")
+        additional_data = data.get("additionalRecords")
+        return cls(
+            response_code=data.get("responseCode"),
+            answer_records=[DnsRecord.from_dict(r) for r in answer_data] if answer_data else None,
+            authority_records=[DnsRecord.from_dict(r) for r in authority_data] if authority_data else None,
+            additional_records=[DnsRecord.from_dict(r) for r in additional_data] if additional_data else None,
+            delay=Delay.from_dict(data.get("delay")),
+            primary=data.get("primary"),
+        )
+
+
+@dataclass
 class HttpOverrideForwardedRequest:
     http_request: HttpRequest | None = None
     http_response: HttpResponse | None = None
@@ -1152,6 +1452,10 @@ class AfterAction:
     http_class_callback: HttpClassCallback | None = None
     http_object_callback: HttpObjectCallback | None = None
     delay: Delay | None = None
+    # before-actions only (ignored for after-actions)
+    blocking: bool | None = None
+    timeout: Delay | None = None
+    failure_policy: str | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
@@ -1159,6 +1463,9 @@ class AfterAction:
             "httpClassCallback": self.http_class_callback.to_dict() if self.http_class_callback else None,
             "httpObjectCallback": self.http_object_callback.to_dict() if self.http_object_callback else None,
             "delay": self.delay.to_dict() if self.delay else None,
+            "blocking": self.blocking,
+            "timeout": self.timeout.to_dict() if self.timeout else None,
+            "failurePolicy": self.failure_policy,
         })
 
     @classmethod
@@ -1170,6 +1477,70 @@ class AfterAction:
             http_class_callback=HttpClassCallback.from_dict(data.get("httpClassCallback")),
             http_object_callback=HttpObjectCallback.from_dict(data.get("httpObjectCallback")),
             delay=Delay.from_dict(data.get("delay")),
+            blocking=data.get("blocking"),
+            timeout=Delay.from_dict(data.get("timeout")),
+            failure_policy=data.get("failurePolicy"),
+        )
+
+
+@dataclass
+class ExpectationStep:
+    """A single step in an ordered multi-action expectation pipeline.
+
+    Each step carries exactly ONE action target and a ``responder`` flag.
+    Steps without ``responder = True`` are side-effects (fire-and-forget
+    webhooks/callbacks). Exactly one step in the list must be marked as the
+    responder; that step's action produces the HTTP response.
+    """
+
+    # Action targets (exactly one must be set)
+    http_request: HttpRequest | None = None
+    http_class_callback: HttpClassCallback | None = None
+    http_object_callback: HttpObjectCallback | None = None
+    http_forward: HttpForward | None = None
+    http_override_forwarded_request: HttpOverrideForwardedRequest | None = None
+    http_response: HttpResponse | None = None
+    http_error: HttpError | None = None
+    # Step metadata
+    responder: bool | None = None
+    delay: Delay | None = None
+    blocking: bool | None = None
+    timeout: Delay | None = None
+    failure_policy: str | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "httpRequest": self.http_request.to_dict() if self.http_request else None,
+            "httpClassCallback": self.http_class_callback.to_dict() if self.http_class_callback else None,
+            "httpObjectCallback": self.http_object_callback.to_dict() if self.http_object_callback else None,
+            "httpForward": self.http_forward.to_dict() if self.http_forward else None,
+            "httpOverrideForwardedRequest": self.http_override_forwarded_request.to_dict() if self.http_override_forwarded_request else None,
+            "httpResponse": self.http_response.to_dict() if self.http_response else None,
+            "httpError": self.http_error.to_dict() if self.http_error else None,
+            "responder": self.responder,
+            "delay": self.delay.to_dict() if self.delay else None,
+            "blocking": self.blocking,
+            "timeout": self.timeout.to_dict() if self.timeout else None,
+            "failurePolicy": self.failure_policy,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ExpectationStep:
+        if data is None:
+            return None
+        return cls(
+            http_request=HttpRequest.from_dict(data.get("httpRequest")),
+            http_class_callback=HttpClassCallback.from_dict(data.get("httpClassCallback")),
+            http_object_callback=HttpObjectCallback.from_dict(data.get("httpObjectCallback")),
+            http_forward=HttpForward.from_dict(data.get("httpForward")),
+            http_override_forwarded_request=HttpOverrideForwardedRequest.from_dict(data.get("httpOverrideForwardedRequest")),
+            http_response=HttpResponse.from_dict(data.get("httpResponse")),
+            http_error=HttpError.from_dict(data.get("httpError")),
+            responder=data.get("responder"),
+            delay=Delay.from_dict(data.get("delay")),
+            blocking=data.get("blocking"),
+            timeout=Delay.from_dict(data.get("timeout")),
+            failure_policy=data.get("failurePolicy"),
         )
 
 
@@ -1191,12 +1562,18 @@ class Expectation:
     http_error: HttpError | None = None
     http_sse_response: HttpSseResponse | None = None
     http_websocket_response: HttpWebSocketResponse | None = None
+    grpc_stream_response: GrpcStreamResponse | None = None
+    grpc_bidi_response: GrpcBidiResponse | None = None
+    binary_response: BinaryResponse | None = None
+    dns_response: DnsResponse | None = None
     times: Times | None = None
     time_to_live: TimeToLive | None = None
     chaos: HttpChaosProfile | None = None
+    before_actions: list[AfterAction] | None = None
     after_actions: list[AfterAction] | None = None
     http_responses: list[HttpResponse] | None = None
     response_mode: str | None = None
+    steps: list[ExpectationStep] | None = None
     scenario_name: str | None = None
     scenario_state: str | None = None
     new_scenario_state: str | None = None
@@ -1219,12 +1596,18 @@ class Expectation:
             "httpError": self.http_error.to_dict() if self.http_error else None,
             "httpSseResponse": self.http_sse_response.to_dict() if self.http_sse_response else None,
             "httpWebSocketResponse": self.http_websocket_response.to_dict() if self.http_websocket_response else None,
+            "grpcStreamResponse": self.grpc_stream_response.to_dict() if self.grpc_stream_response else None,
+            "grpcBidiResponse": self.grpc_bidi_response.to_dict() if self.grpc_bidi_response else None,
+            "binaryResponse": self.binary_response.to_dict() if self.binary_response else None,
+            "dnsResponse": self.dns_response.to_dict() if self.dns_response else None,
             "times": self.times.to_dict() if self.times else None,
             "timeToLive": self.time_to_live.to_dict() if self.time_to_live else None,
             "chaos": self.chaos.to_dict() if self.chaos else None,
+            "beforeActions": [a.to_dict() for a in self.before_actions] if self.before_actions else None,
             "afterActions": [a.to_dict() for a in self.after_actions] if self.after_actions else None,
             "httpResponses": [r.to_dict() for r in self.http_responses] if self.http_responses else None,
             "responseMode": self.response_mode,
+            "steps": [s.to_dict() for s in self.steps] if self.steps else None,
             "scenarioName": self.scenario_name,
             "scenarioState": self.scenario_state,
             "newScenarioState": self.new_scenario_state,
@@ -1234,6 +1617,9 @@ class Expectation:
     def from_dict(cls, data: dict) -> Expectation:
         if data is None:
             return None
+        before_actions_data = data.get("beforeActions")
+        if isinstance(before_actions_data, dict):
+            before_actions_data = [before_actions_data]
         after_actions_data = data.get("afterActions")
         if isinstance(after_actions_data, dict):
             after_actions_data = [after_actions_data]
@@ -1254,12 +1640,18 @@ class Expectation:
             http_error=HttpError.from_dict(data.get("httpError")),
             http_sse_response=HttpSseResponse.from_dict(data.get("httpSseResponse")),
             http_websocket_response=HttpWebSocketResponse.from_dict(data.get("httpWebSocketResponse")),
+            grpc_stream_response=GrpcStreamResponse.from_dict(data.get("grpcStreamResponse")),
+            grpc_bidi_response=GrpcBidiResponse.from_dict(data.get("grpcBidiResponse")),
+            binary_response=BinaryResponse.from_dict(data.get("binaryResponse")),
+            dns_response=DnsResponse.from_dict(data.get("dnsResponse")),
             times=Times.from_dict(data.get("times")),
             time_to_live=TimeToLive.from_dict(data.get("timeToLive")),
             chaos=HttpChaosProfile.from_dict(data.get("chaos")),
+            before_actions=[AfterAction.from_dict(a) for a in before_actions_data] if before_actions_data else None,
             after_actions=[AfterAction.from_dict(a) for a in after_actions_data] if after_actions_data else None,
             http_responses=[HttpResponse.from_dict(r) for r in data["httpResponses"]] if data.get("httpResponses") else None,
             response_mode=data.get("responseMode"),
+            steps=[ExpectationStep.from_dict(s) for s in data["steps"]] if data.get("steps") else None,
             scenario_name=data.get("scenarioName"),
             scenario_state=data.get("scenarioState"),
             new_scenario_state=data.get("newScenarioState"),

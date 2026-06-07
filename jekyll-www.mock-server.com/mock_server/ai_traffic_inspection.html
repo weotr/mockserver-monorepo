@@ -344,6 +344,104 @@ curl -s -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES
 
 <p>If the SSE body was truncated during capture (when it exceeded <code class="code inline">maxStreamingCaptureBytes</code>), the fixture falls back to a static response with a warning header. Increase <code class="code inline">maxStreamingCaptureBytes</code> to capture longer streams.</p>
 
+<h2>AI-Powered Stub Generation</h2>
+
+<p>When MockServer receives an unmatched request, you can ask it to generate a plausible expectation (stub) automatically using the <code class="code inline">PUT /mockserver/generateExpectation</code> endpoint. If a runtime LLM backend is configured, MockServer calls the LLM to infer a realistic response based on the request structure and existing expectations. Without an LLM backend, it generates a simple template-based stub.</p>
+
+<h3>Generate a Stub Suggestion</h3>
+
+<p>Send a PUT request with the unmatched request in the body:</p>
+
+<pre><code class="code">curl -X PUT http://localhost:1080/mockserver/generateExpectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": {
+      "method": "GET",
+      "path": "/api/users/42"
+    },
+    "preview": true,
+    "limit": 1
+  }'</code></pre>
+
+<p>The response contains one or more suggested expectations:</p>
+
+<pre><code class="code">{
+  "suggestions": [
+    {
+      "httpRequest": {
+        "method": "GET",
+        "path": "/api/users/42"
+      },
+      "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+      }
+    }
+  ],
+  "confidence": 0.75,
+  "preview": true
+}</code></pre>
+
+<h3>Parameters</h3>
+
+<ul>
+    <li><code class="code inline">request</code> (required) — the unmatched HTTP request to generate a stub for</li>
+    <li><code class="code inline">preview</code> (default: <code class="code inline">true</code>) — when <code class="code inline">true</code>, returns the suggestion for review without registering it; set to <code class="code inline">false</code> to register the expectation immediately</li>
+    <li><code class="code inline">limit</code> (default: <code class="code inline">1</code>, max: <code class="code inline">5</code>) — number of suggestions to return</li>
+</ul>
+
+<h3>LLM Backend</h3>
+
+<p>To enable AI-powered generation, configure a runtime LLM backend using the standard MockServer LLM properties (<code class="code inline">mockserver.llmProvider</code>, <code class="code inline">mockserver.llmApiKey</code>, etc.) or environment variables (<code class="code inline">OPENAI_API_KEY</code>, <code class="code inline">ANTHROPIC_API_KEY</code>, etc.). When configured, the LLM uses existing expectations as context to infer the API style and generates more realistic responses. Without an LLM backend, the endpoint still works using simple template generation (appropriate status codes for each HTTP method, with a generic JSON body).</p>
+
+<h2>Request Diffing</h2>
+
+<p>The <code class="code inline">PUT /mockserver/diff</code> endpoint compares two HTTP requests field-by-field and returns the differences. This is useful for regression testing — record a session baseline and compare it against a later session to detect changes in method, path, headers, query parameters, cookies, or body.</p>
+
+<h3>Request Format</h3>
+
+<p>Send a JSON body with <code class="code inline">expected</code> and <code class="code inline">actual</code> fields, each containing a serialized HttpRequest:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -X PUT 'http://localhost:1080/mockserver/diff' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "expected": {
+      "method": "GET",
+      "path": "/api/users",
+      "headers": [{"name": "Accept", "values": ["application/json"]}]
+    },
+    "actual": {
+      "method": "POST",
+      "path": "/api/users",
+      "headers": [{"name": "Accept", "values": ["text/html"]}]
+    }
+  }'</code></pre>
+
+<h3>Response Format</h3>
+
+<p>The response contains a <code class="code inline">diffCount</code>, an <code class="code inline">identical</code> boolean, and a <code class="code inline">diffs</code> array with one entry per field difference:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "diffCount": 2,
+  "identical": false,
+  "diffs": [
+    {
+      "field": "method",
+      "expectedValue": "GET",
+      "actualValue": "POST",
+      "diffType": "CHANGED"
+    },
+    {
+      "field": "header.accept",
+      "expectedValue": "application/json",
+      "actualValue": "text/html",
+      "diffType": "CHANGED"
+    }
+  ]
+}</code></pre>
+
+<p>Each diff entry includes a <code class="code inline">diffType</code> of <code class="code inline">ADDED</code> (field only in actual), <code class="code inline">REMOVED</code> (field only in expected), or <code class="code inline">CHANGED</code> (field present in both but different). Fields that are identical are omitted from the response.</p>
+
 <h2>Related Pages</h2>
 
 <ul>

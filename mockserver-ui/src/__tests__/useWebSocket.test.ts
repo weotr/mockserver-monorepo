@@ -197,4 +197,27 @@ describe('useWebSocket', () => {
     expect(MockWebSocket.instances[0]!.closed).toBe(true);
     expect(useDashboardStore.getState().connectionStatus).toBe('disconnected');
   });
+
+  it('disconnect while still connecting defers close until the socket opens', () => {
+    // Closing a CONNECTING socket triggers the browser's "WebSocket is closed before the
+    // connection is established" warning (seen under React StrictMode's dev double-mount), so the
+    // close is deferred until the socket finishes opening.
+    const { result } = renderHook(() => useWebSocket(defaultParams));
+
+    act(() => {
+      result.current.connect({});
+    });
+    const ws = MockWebSocket.instances[0]!;
+    // socket is still CONNECTING (readyState 0)
+    act(() => {
+      result.current.disconnect();
+    });
+    expect(ws.closed).toBe(false);
+
+    // once it finishes connecting it is closed cleanly (no close-before-established)
+    act(() => {
+      ws.simulateOpen();
+    });
+    expect(ws.closed).toBe(true);
+  });
 });

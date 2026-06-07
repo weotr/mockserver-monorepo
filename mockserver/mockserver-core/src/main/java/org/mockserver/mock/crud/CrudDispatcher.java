@@ -50,6 +50,8 @@ public class CrudDispatcher {
                             return handler.handleGetById(request);
                         case "PUT":
                             return handler.handleUpdate(request);
+                        case "PATCH":
+                            return handler.handlePatch(request);
                         case "DELETE":
                             return handler.handleDelete(request);
                         default:

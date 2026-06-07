@@ -78,7 +78,10 @@ module MockServer
     'quota_limit'                    => 'quotaLimit',
     'quota_window_millis'            => 'quotaWindowMillis',
     'quota_error_status'             => 'quotaErrorStatus',
-    'degradation_ramp_millis'        => 'degradationRampMillis'
+    'degradation_ramp_millis'        => 'degradationRampMillis',
+    'http_class_callback'            => 'httpClassCallback',
+    'http_object_callback'           => 'httpObjectCallback',
+    'failure_policy'                 => 'failurePolicy'
   }.freeze
 
   REVERSE_FIELD_MAP = FIELD_MAP.invert.freeze
@@ -1163,6 +1166,294 @@ module MockServer
     end
   end
 
+  class GrpcStreamMessage
+    attr_accessor :json, :delay
+
+    def initialize(json: nil, delay: nil)
+      @json = json
+      @delay = delay
+    end
+
+    def to_h
+      result = {}
+      result['json'] = @json unless @json.nil?
+      result['delay'] = @delay.to_h if @delay
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        json:  data['json'],
+        delay: Delay.from_hash(data['delay'])
+      )
+    end
+  end
+
+  class GrpcStreamResponse
+    attr_accessor :status_name, :status_message, :headers, :messages,
+                  :close_connection, :delay, :primary
+
+    def initialize(status_name: nil, status_message: nil, headers: nil,
+                   messages: nil, close_connection: nil, delay: nil, primary: nil)
+      @status_name = status_name
+      @status_message = status_message
+      @headers = headers
+      @messages = messages
+      @close_connection = close_connection
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['statusName'] = @status_name unless @status_name.nil?
+      result['statusMessage'] = @status_message unless @status_message.nil?
+      result['headers'] = MockServer.serialize_key_multi_values(@headers) if @headers
+      result['messages'] = @messages&.map(&:to_h) if @messages
+      result['closeConnection'] = @close_connection unless @close_connection.nil?
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      messages_data = data['messages']
+      messages = messages_data&.map { |m| GrpcStreamMessage.from_hash(m) }
+      new(
+        status_name:      data['statusName'],
+        status_message:   data['statusMessage'],
+        headers:          MockServer.deserialize_key_multi_values(data['headers']),
+        messages:         messages,
+        close_connection: data['closeConnection'],
+        delay:            Delay.from_hash(data['delay']),
+        primary:          data['primary']
+      )
+    end
+  end
+
+  class GrpcBidiRule
+    attr_accessor :match_json, :responses
+
+    def initialize(match_json: nil, responses: nil)
+      @match_json = match_json
+      @responses = responses
+    end
+
+    def to_h
+      result = {}
+      result['matchJson'] = @match_json unless @match_json.nil?
+      result['responses'] = @responses&.map(&:to_h) if @responses
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      responses_data = data['responses']
+      responses = responses_data&.map { |r| GrpcStreamMessage.from_hash(r) }
+      new(
+        match_json: data['matchJson'],
+        responses:  responses
+      )
+    end
+  end
+
+  class GrpcBidiResponse
+    attr_accessor :status_name, :status_message, :headers, :messages,
+                  :rules, :close_connection, :delay, :primary
+
+    def initialize(status_name: nil, status_message: nil, headers: nil,
+                   messages: nil, rules: nil, close_connection: nil, delay: nil, primary: nil)
+      @status_name = status_name
+      @status_message = status_message
+      @headers = headers
+      @messages = messages
+      @rules = rules
+      @close_connection = close_connection
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['statusName'] = @status_name unless @status_name.nil?
+      result['statusMessage'] = @status_message unless @status_message.nil?
+      result['headers'] = MockServer.serialize_key_multi_values(@headers) if @headers
+      result['messages'] = @messages&.map(&:to_h) if @messages
+      result['rules'] = @rules&.map(&:to_h) if @rules
+      result['closeConnection'] = @close_connection unless @close_connection.nil?
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      messages_data = data['messages']
+      messages = messages_data&.map { |m| GrpcStreamMessage.from_hash(m) }
+      rules_data = data['rules']
+      rules = rules_data&.map { |r| GrpcBidiRule.from_hash(r) }
+      new(
+        status_name:      data['statusName'],
+        status_message:   data['statusMessage'],
+        headers:          MockServer.deserialize_key_multi_values(data['headers']),
+        messages:         messages,
+        rules:            rules,
+        close_connection: data['closeConnection'],
+        delay:            Delay.from_hash(data['delay']),
+        primary:          data['primary']
+      )
+    end
+  end
+
+  class BinaryResponse
+    attr_accessor :binary_data, :delay, :primary
+
+    def initialize(binary_data: nil, delay: nil, primary: nil)
+      @binary_data = binary_data
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['binaryData'] = @binary_data unless @binary_data.nil?
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        binary_data: data['binaryData'],
+        delay:       Delay.from_hash(data['delay']),
+        primary:     data['primary']
+      )
+    end
+  end
+
+  class DnsRecord
+    attr_accessor :name, :type, :dns_class, :ttl, :value,
+                  :priority, :weight, :port
+
+    def initialize(name: nil, type: nil, dns_class: nil, ttl: nil,
+                   value: nil, priority: nil, weight: nil, port: nil)
+      @name = name
+      @type = type
+      @dns_class = dns_class
+      @ttl = ttl
+      @value = value
+      @priority = priority
+      @weight = weight
+      @port = port
+    end
+
+    def to_h
+      result = {}
+      result['name'] = @name unless @name.nil?
+      result['type'] = @type unless @type.nil?
+      result['dnsClass'] = @dns_class unless @dns_class.nil?
+      result['ttl'] = @ttl unless @ttl.nil?
+      result['value'] = @value unless @value.nil?
+      result['priority'] = @priority unless @priority.nil?
+      result['weight'] = @weight unless @weight.nil?
+      result['port'] = @port unless @port.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        name:      data['name'],
+        type:      data['type'],
+        dns_class: data['dnsClass'],
+        ttl:       data['ttl'],
+        value:     data['value'],
+        priority:  data['priority'],
+        weight:    data['weight'],
+        port:      data['port']
+      )
+    end
+
+    def self.a_record(name, ip)
+      new(name: name, type: 'A', value: ip)
+    end
+
+    def self.aaaa_record(name, ip)
+      new(name: name, type: 'AAAA', value: ip)
+    end
+
+    def self.cname_record(name, cname)
+      new(name: name, type: 'CNAME', value: cname)
+    end
+
+    def self.mx_record(name, priority, exchange)
+      new(name: name, type: 'MX', priority: priority, value: exchange)
+    end
+
+    def self.srv_record(name, priority, weight, port, target)
+      new(name: name, type: 'SRV', priority: priority, weight: weight, port: port, value: target)
+    end
+
+    def self.txt_record(name, text)
+      new(name: name, type: 'TXT', value: text)
+    end
+
+    def self.ptr_record(name, pointer)
+      new(name: name, type: 'PTR', value: pointer)
+    end
+  end
+
+  class DnsResponse
+    attr_accessor :response_code, :answer_records, :authority_records,
+                  :additional_records, :delay, :primary
+
+    def initialize(response_code: nil, answer_records: nil, authority_records: nil,
+                   additional_records: nil, delay: nil, primary: nil)
+      @response_code = response_code
+      @answer_records = answer_records
+      @authority_records = authority_records
+      @additional_records = additional_records
+      @delay = delay
+      @primary = primary
+    end
+
+    def to_h
+      result = {}
+      result['responseCode'] = @response_code unless @response_code.nil?
+      result['answerRecords'] = @answer_records.map(&:to_h) if @answer_records
+      result['authorityRecords'] = @authority_records.map(&:to_h) if @authority_records
+      result['additionalRecords'] = @additional_records.map(&:to_h) if @additional_records
+      result['delay'] = @delay.to_h if @delay
+      result['primary'] = @primary unless @primary.nil?
+      result
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      answer_data = data['answerRecords']
+      authority_data = data['authorityRecords']
+      additional_data = data['additionalRecords']
+      new(
+        response_code:    data['responseCode'],
+        answer_records:   answer_data&.map { |r| DnsRecord.from_hash(r) },
+        authority_records: authority_data&.map { |r| DnsRecord.from_hash(r) },
+        additional_records: additional_data&.map { |r| DnsRecord.from_hash(r) },
+        delay:            Delay.from_hash(data['delay']),
+        primary:          data['primary']
+      )
+    end
+  end
+
   class HttpChaosProfile
     attr_accessor :error_status, :error_probability, :drop_connection_probability,
                   :retry_after, :latency, :seed, :succeed_first, :fail_request_count,
@@ -1252,13 +1543,19 @@ module MockServer
   end
 
   class AfterAction
-    attr_accessor :http_request, :http_class_callback, :http_object_callback, :delay
+    # blocking, timeout and failure_policy are only meaningful for before-actions
+    attr_accessor :http_request, :http_class_callback, :http_object_callback, :delay,
+                  :blocking, :timeout, :failure_policy
 
-    def initialize(http_request: nil, http_class_callback: nil, http_object_callback: nil, delay: nil)
+    def initialize(http_request: nil, http_class_callback: nil, http_object_callback: nil, delay: nil,
+                   blocking: nil, timeout: nil, failure_policy: nil)
       @http_request = http_request
       @http_class_callback = http_class_callback
       @http_object_callback = http_object_callback
       @delay = delay
+      @blocking = blocking
+      @timeout = timeout
+      @failure_policy = failure_policy
     end
 
     def to_h
@@ -1266,7 +1563,10 @@ module MockServer
         'httpRequest'        => @http_request&.to_h,
         'httpClassCallback'  => @http_class_callback&.to_h,
         'httpObjectCallback' => @http_object_callback&.to_h,
-        'delay'              => @delay&.to_h
+        'delay'              => @delay&.to_h,
+        'blocking'           => @blocking,
+        'timeout'            => @timeout&.to_h,
+        'failurePolicy'      => @failure_policy
       })
     end
 
@@ -1277,7 +1577,77 @@ module MockServer
         http_request:        HttpRequest.from_hash(data['httpRequest']),
         http_class_callback: HttpClassCallback.from_hash(data['httpClassCallback']),
         http_object_callback: HttpObjectCallback.from_hash(data['httpObjectCallback']),
-        delay:               Delay.from_hash(data['delay'])
+        delay:               Delay.from_hash(data['delay']),
+        blocking:            data['blocking'],
+        timeout:             Delay.from_hash(data['timeout']),
+        failure_policy:      data['failurePolicy']
+      )
+    end
+  end
+
+  # A single step in an ordered multi-action expectation pipeline.
+  #
+  # Each step carries exactly ONE action target and a +responder+ flag.
+  # Steps without +responder = true+ are side-effects (fire-and-forget
+  # webhooks/callbacks). Exactly one step in the list must be marked as the
+  # responder; that step's action produces the HTTP response.
+  class ExpectationStep
+    attr_accessor :http_request, :http_class_callback, :http_object_callback,
+                  :http_forward, :http_override_forwarded_request,
+                  :http_response, :http_error,
+                  :responder, :delay, :blocking, :timeout, :failure_policy
+
+    def initialize(http_request: nil, http_class_callback: nil, http_object_callback: nil,
+                   http_forward: nil, http_override_forwarded_request: nil,
+                   http_response: nil, http_error: nil,
+                   responder: nil, delay: nil, blocking: nil, timeout: nil, failure_policy: nil)
+      @http_request = http_request
+      @http_class_callback = http_class_callback
+      @http_object_callback = http_object_callback
+      @http_forward = http_forward
+      @http_override_forwarded_request = http_override_forwarded_request
+      @http_response = http_response
+      @http_error = http_error
+      @responder = responder
+      @delay = delay
+      @blocking = blocking
+      @timeout = timeout
+      @failure_policy = failure_policy
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'httpRequest'                  => @http_request&.to_h,
+        'httpClassCallback'            => @http_class_callback&.to_h,
+        'httpObjectCallback'           => @http_object_callback&.to_h,
+        'httpForward'                  => @http_forward&.to_h,
+        'httpOverrideForwardedRequest' => @http_override_forwarded_request&.to_h,
+        'httpResponse'                 => @http_response&.to_h,
+        'httpError'                    => @http_error&.to_h,
+        'responder'                    => @responder,
+        'delay'                        => @delay&.to_h,
+        'blocking'                     => @blocking,
+        'timeout'                      => @timeout&.to_h,
+        'failurePolicy'                => @failure_policy
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        http_request:                  HttpRequest.from_hash(data['httpRequest']),
+        http_class_callback:           HttpClassCallback.from_hash(data['httpClassCallback']),
+        http_object_callback:          HttpObjectCallback.from_hash(data['httpObjectCallback']),
+        http_forward:                  HttpForward.from_hash(data['httpForward']),
+        http_override_forwarded_request: HttpOverrideForwardedRequest.from_hash(data['httpOverrideForwardedRequest']),
+        http_response:                 HttpResponse.from_hash(data['httpResponse']),
+        http_error:                    HttpError.from_hash(data['httpError']),
+        responder:                     data['responder'],
+        delay:                         Delay.from_hash(data['delay']),
+        blocking:                      data['blocking'],
+        timeout:                       Delay.from_hash(data['timeout']),
+        failure_policy:                data['failurePolicy']
       )
     end
   end
@@ -1289,8 +1659,11 @@ module MockServer
                   :http_forward_template, :http_forward_class_callback,
                   :http_forward_object_callback, :http_override_forwarded_request,
                   :http_error, :times, :time_to_live, :chaos,
-                  :http_sse_response, :http_websocket_response, :after_actions,
-                  :http_responses, :response_mode,
+                  :http_sse_response, :http_websocket_response,
+                  :grpc_stream_response, :grpc_bidi_response,
+                  :binary_response, :dns_response,
+                  :before_actions, :after_actions,
+                  :http_responses, :response_mode, :steps,
                   :scenario_name, :scenario_state, :new_scenario_state
 
     def initialize(id: nil, priority: nil, percentage: nil, http_request: nil, http_response: nil,
@@ -1299,8 +1672,11 @@ module MockServer
                    http_forward_template: nil, http_forward_class_callback: nil,
                    http_forward_object_callback: nil, http_override_forwarded_request: nil,
                    http_error: nil, times: nil, time_to_live: nil, chaos: nil,
-                   http_sse_response: nil, http_websocket_response: nil, after_actions: nil,
-                   http_responses: nil, response_mode: nil,
+                   http_sse_response: nil, http_websocket_response: nil,
+                   grpc_stream_response: nil, grpc_bidi_response: nil,
+                   binary_response: nil, dns_response: nil,
+                   before_actions: nil, after_actions: nil,
+                   http_responses: nil, response_mode: nil, steps: nil,
                    scenario_name: nil, scenario_state: nil, new_scenario_state: nil)
       @id = id
       @priority = priority
@@ -1321,15 +1697,28 @@ module MockServer
       @chaos = chaos
       @http_sse_response = http_sse_response
       @http_websocket_response = http_websocket_response
+      @grpc_stream_response = grpc_stream_response
+      @grpc_bidi_response = grpc_bidi_response
+      @binary_response = binary_response
+      @dns_response = dns_response
+      @before_actions = before_actions
       @after_actions = after_actions
       @http_responses = http_responses
       @response_mode = response_mode
+      @steps = steps
       @scenario_name = scenario_name
       @scenario_state = scenario_state
       @new_scenario_state = new_scenario_state
     end
 
     def to_h
+      before_actions_h = nil
+      if @before_actions.is_a?(Array)
+        before_actions_h = @before_actions.map(&:to_h) unless @before_actions.empty?
+      elsif @before_actions
+        before_actions_h = @before_actions.to_h
+      end
+
       after_actions_h = nil
       if @after_actions.is_a?(Array)
         after_actions_h = @after_actions.map(&:to_h) unless @after_actions.empty?
@@ -1354,9 +1743,15 @@ module MockServer
         'httpError'                    => @http_error&.to_h,
         'httpSseResponse'              => @http_sse_response&.to_h,
         'httpWebSocketResponse'        => @http_websocket_response&.to_h,
+        'grpcStreamResponse'           => @grpc_stream_response&.to_h,
+        'grpcBidiResponse'             => @grpc_bidi_response&.to_h,
+        'binaryResponse'               => @binary_response&.to_h,
+        'dnsResponse'                  => @dns_response&.to_h,
+        'beforeActions'                => before_actions_h,
         'afterActions'                 => after_actions_h,
         'httpResponses'                => @http_responses&.map(&:to_h),
         'responseMode'                 => @response_mode,
+        'steps'                        => @steps&.map(&:to_h),
         'times'                        => @times&.to_h,
         'timeToLive'                   => @time_to_live&.to_h,
         'chaos'                        => @chaos&.to_h,
@@ -1369,11 +1764,18 @@ module MockServer
     def self.from_hash(data)
       return nil if data.nil?
 
+      before_actions_data = data['beforeActions']
+      before_actions = if before_actions_data.is_a?(Array)
+                         before_actions_data.map { |a| AfterAction.from_hash(a) }
+                       elsif before_actions_data
+                         [AfterAction.from_hash(before_actions_data)]
+                       end
+
       after_actions_data = data['afterActions']
       after_actions = if after_actions_data.is_a?(Array)
                         after_actions_data.map { |a| AfterAction.from_hash(a) }
                       elsif after_actions_data
-                        AfterAction.from_hash(after_actions_data)
+                        [AfterAction.from_hash(after_actions_data)]
                       end
 
       new(
@@ -1393,9 +1795,15 @@ module MockServer
         http_error:                      HttpError.from_hash(data['httpError']),
         http_sse_response:               HttpSseResponse.from_hash(data['httpSseResponse']),
         http_websocket_response:         HttpWebSocketResponse.from_hash(data['httpWebSocketResponse']),
+        grpc_stream_response:            GrpcStreamResponse.from_hash(data['grpcStreamResponse']),
+        grpc_bidi_response:              GrpcBidiResponse.from_hash(data['grpcBidiResponse']),
+        binary_response:                 BinaryResponse.from_hash(data['binaryResponse']),
+        dns_response:                    DnsResponse.from_hash(data['dnsResponse']),
+        before_actions:                  before_actions,
         after_actions:                   after_actions,
         http_responses:                  data['httpResponses']&.map { |r| HttpResponse.from_hash(r) },
         response_mode:                   data['responseMode'],
+        steps:                           data['steps']&.map { |s| ExpectationStep.from_hash(s) },
         times:                           Times.from_hash(data['times']),
         time_to_live:                    TimeToLive.from_hash(data['timeToLive']),
         chaos:                           HttpChaosProfile.from_hash(data['chaos']),

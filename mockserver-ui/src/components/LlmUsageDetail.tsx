@@ -13,30 +13,30 @@ interface TokenCounts {
   outputTokens: number;
 }
 
+// Returns null when no usage data is present at all (so the UI shows "no usage data"
+// rather than a misleading 0-token / $0.00). A field that is simply absent counts as 0,
+// but if BOTH counts are absent the whole reading is treated as unknown.
+function toCounts(input: number | undefined, output: number | undefined): TokenCounts | null {
+  if (input == null && output == null) return null;
+  return { inputTokens: input ?? 0, outputTokens: output ?? 0 };
+}
+
 function extractTokens(parsed: ParsedTraffic): TokenCounts | null {
   if (parsed.kind === 'anthropic' && parsed.usage) {
-    return {
-      inputTokens: parsed.usage.input_tokens ?? 0,
-      outputTokens: parsed.usage.output_tokens ?? 0,
-    };
+    return toCounts(parsed.usage.input_tokens, parsed.usage.output_tokens);
   }
-  if ((parsed.kind === 'openai' || parsed.kind === 'openai_responses') && parsed.usage) {
-    return {
-      inputTokens: parsed.usage.prompt_tokens ?? 0,
-      outputTokens: parsed.usage.completion_tokens ?? 0,
-    };
+  if (parsed.kind === 'openai' && parsed.usage) {
+    return toCounts(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+  }
+  if (parsed.kind === 'openai_responses' && parsed.usage) {
+    // Responses API uses input_tokens / output_tokens.
+    return toCounts(parsed.usage.input_tokens, parsed.usage.output_tokens);
   }
   if (parsed.kind === 'gemini' && parsed.usage) {
-    return {
-      inputTokens: parsed.usage.promptTokenCount ?? 0,
-      outputTokens: parsed.usage.candidatesTokenCount ?? 0,
-    };
+    return toCounts(parsed.usage.promptTokenCount, parsed.usage.candidatesTokenCount);
   }
   if (parsed.kind === 'ollama' && parsed.usage) {
-    return {
-      inputTokens: parsed.usage.prompt_eval_count ?? 0,
-      outputTokens: parsed.usage.eval_count ?? 0,
-    };
+    return toCounts(parsed.usage.prompt_eval_count, parsed.usage.eval_count);
   }
   return null;
 }

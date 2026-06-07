@@ -54,6 +54,11 @@ FROM gcr.io/distroless/java17:nonroot@sha256:81d09cac6ec47f6a13c61a941557f950792
 # maintainer details
 MAINTAINER James Bloom "jamesdbloom@gmail.com"
 
+# MCP registry ownership annotation — proves this image backs the io.github.mock-server/mockserver
+# entry on the official MCP registry (https://registry.modelcontextprotocol.io). Required before the
+# server.json OCI package can be published. See docs/operations/mcp-registry-publishing.md.
+LABEL io.modelcontextprotocol.server.name="io.github.mock-server/mockserver"
+
 # expose ports.
 EXPOSE 1080
 

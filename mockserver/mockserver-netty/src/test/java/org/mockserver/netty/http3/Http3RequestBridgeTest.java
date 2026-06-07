@@ -1,0 +1,307 @@
+package org.mockserver.netty.http3;
+
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.incubator.codec.http3.DefaultHttp3DataFrame;
+import io.netty.incubator.codec.http3.DefaultHttp3HeadersFrame;
+import org.junit.Test;
+import org.mockserver.model.HttpRequest;
+import org.mockserver.model.HttpResponse;
+
+import java.nio.charset.StandardCharsets;
+import java.util.AbstractMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.*;
+
+/**
+ * Unit tests for {@link Http3RequestBridge} conversion helpers.
+ * These tests do NOT require the native QUIC transport — they exercise
+ * pure data conversion between HTTP/3 frame objects and MockServer model objects.
+ */
+public class Http3RequestBridgeTest {
+
+    // ---- toHttpRequest tests ----
+
+    @Test
+    public void shouldConvertBasicGetRequest() {
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "GET", "/hello", "https", "localhost:8443",
+            new ArrayList<>(), new byte[0]
+        );
+
+        assertThat(request.getMethod(""), is("GET"));
+        assertThat(request.getPath().getValue(), is("/hello"));
+        assertThat(request.isSecure(), is(true));
+        assertThat(request.getFirstHeader("host"), is("localhost:8443"));
+    }
+
+    @Test
+    public void shouldParseQueryStringFromPath() {
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "GET", "/search?q=hello&page=1", "https", "example.com",
+            new ArrayList<>(), new byte[0]
+        );
+
+        assertThat(request.getPath().getValue(), is("/search"));
+        assertThat(request.getFirstQueryStringParameter("q"), is("hello"));
+        assertThat(request.getFirstQueryStringParameter("page"), is("1"));
+    }
+
+    @Test
+    public void shouldConvertPostRequestWithBody() {
+        byte[] body = "{\"name\":\"test\"}".getBytes(StandardCharsets.UTF_8);
+        List<Map.Entry<String, String>> headers = Arrays.asList(
+            new AbstractMap.SimpleImmutableEntry<>("content-type", "application/json"),
+            new AbstractMap.SimpleImmutableEntry<>("content-length", String.valueOf(body.length))
+        );
+
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "POST", "/api/items", "https", "localhost:8443",
+            headers, body
+        );
+
+        assertThat(request.getMethod(""), is("POST"));
+        assertThat(request.getPath().getValue(), is("/api/items"));
+        assertThat(request.getBodyAsString(), is("{\"name\":\"test\"}"));
+        assertThat(request.getFirstHeader("content-type"), is("application/json"));
+    }
+
+    @Test
+    public void shouldHandleNullMethodAndPath() {
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            null, null, null, null,
+            new ArrayList<>(), new byte[0]
+        );
+
+        assertThat(request.getMethod(""), is("GET"));
+        assertThat(request.getPath().getValue(), is("/"));
+    }
+
+    @Test
+    public void shouldHandleEmptyPath() {
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "GET", "", "https", null,
+            new ArrayList<>(), new byte[0]
+        );
+
+        assertThat(request.getPath().getValue(), is("/"));
+    }
+
+    @Test
+    public void shouldPreserveMultipleHeaders() {
+        List<Map.Entry<String, String>> headers = Arrays.asList(
+            new AbstractMap.SimpleImmutableEntry<>("accept", "text/html"),
+            new AbstractMap.SimpleImmutableEntry<>("accept-language", "en-US"),
+            new AbstractMap.SimpleImmutableEntry<>("x-custom", "value1")
+        );
+
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "GET", "/page", "https", "example.com",
+            headers, new byte[0]
+        );
+
+        assertThat(request.getFirstHeader("accept"), is("text/html"));
+        assertThat(request.getFirstHeader("accept-language"), is("en-US"));
+        assertThat(request.getFirstHeader("x-custom"), is("value1"));
+    }
+
+    // ---- parseHeaders tests ----
+
+    @Test
+    public void shouldParsePseudoHeadersAndRegularHeaders() {
+        DefaultHttp3HeadersFrame headersFrame = new DefaultHttp3HeadersFrame();
+        headersFrame.headers().method("POST");
+        headersFrame.headers().path("/api/data?foo=bar");
+        headersFrame.headers().scheme("https");
+        headersFrame.headers().authority("example.com:443");
+        headersFrame.headers().add("content-type", "application/json");
+        headersFrame.headers().add("x-request-id", "abc123");
+
+        Http3RequestBridge.ParsedHeaders parsed = Http3RequestBridge.parseHeaders(headersFrame);
+
+        assertThat(parsed.method(), is("POST"));
+        assertThat(parsed.path(), is("/api/data?foo=bar"));
+        assertThat(parsed.scheme(), is("https"));
+        assertThat(parsed.authority(), is("example.com:443"));
+        assertThat(parsed.headers(), hasSize(2));
+        assertThat(parsed.headers().get(0).getKey(), is("content-type"));
+        assertThat(parsed.headers().get(0).getValue(), is("application/json"));
+        assertThat(parsed.headers().get(1).getKey(), is("x-request-id"));
+        assertThat(parsed.headers().get(1).getValue(), is("abc123"));
+    }
+
+    @Test
+    public void shouldHandleHeadersFrameWithNoPseudoHeaders() {
+        DefaultHttp3HeadersFrame headersFrame = new DefaultHttp3HeadersFrame();
+        // HTTP/3 doesn't require all pseudo-headers in every frame
+        headersFrame.headers().add("x-custom", "value");
+
+        Http3RequestBridge.ParsedHeaders parsed = Http3RequestBridge.parseHeaders(headersFrame);
+
+        assertThat(parsed.method(), is(nullValue()));
+        assertThat(parsed.path(), is(nullValue()));
+        assertThat(parsed.headers(), hasSize(1));
+    }
+
+    // ---- toHttp3HeadersFrame tests ----
+
+    @Test
+    public void shouldConvertResponseToHeadersFrame() {
+        HttpResponse response = HttpResponse.response()
+            .withStatusCode(200)
+            .withHeader("content-type", "text/plain")
+            .withHeader("x-custom", "value");
+
+        DefaultHttp3HeadersFrame headersFrame = Http3RequestBridge.toHttp3HeadersFrame(response);
+
+        assertThat(headersFrame.headers().status().toString(), is("200"));
+        assertThat(headersFrame.headers().get("server").toString(), is("mockserver-http3"));
+        assertThat(headersFrame.headers().get("content-type").toString(), is("text/plain"));
+        assertThat(headersFrame.headers().get("x-custom").toString(), is("value"));
+    }
+
+    @Test
+    public void shouldConvertNon200StatusCode() {
+        HttpResponse response = HttpResponse.response()
+            .withStatusCode(404);
+
+        DefaultHttp3HeadersFrame headersFrame = Http3RequestBridge.toHttp3HeadersFrame(response);
+
+        assertThat(headersFrame.headers().status().toString(), is("404"));
+    }
+
+    @Test
+    public void shouldFilterConnectionHeaders() {
+        HttpResponse response = HttpResponse.response()
+            .withStatusCode(200)
+            .withHeader("connection", "close")
+            .withHeader("transfer-encoding", "chunked")
+            .withHeader("x-custom", "kept");
+
+        DefaultHttp3HeadersFrame headersFrame = Http3RequestBridge.toHttp3HeadersFrame(response);
+
+        // connection and transfer-encoding should be filtered out in HTTP/3
+        assertThat(headersFrame.headers().get("connection"), is(nullValue()));
+        assertThat(headersFrame.headers().get("transfer-encoding"), is(nullValue()));
+        assertThat(headersFrame.headers().get("x-custom").toString(), is("kept"));
+    }
+
+    @Test
+    public void shouldDefaultToStatus200WhenNull() {
+        HttpResponse response = HttpResponse.response();
+        // statusCode defaults to 200
+
+        DefaultHttp3HeadersFrame headersFrame = Http3RequestBridge.toHttp3HeadersFrame(response);
+
+        assertThat(headersFrame.headers().status().toString(), is("200"));
+    }
+
+    // ---- toHttp3DataFrame tests ----
+
+    @Test
+    public void shouldConvertResponseBodyToDataFrame() {
+        HttpResponse response = HttpResponse.response()
+            .withBody("Hello, HTTP/3!");
+
+        DefaultHttp3DataFrame dataFrame = Http3RequestBridge.toHttp3DataFrame(response);
+
+        assertThat(dataFrame, is(notNullValue()));
+        ByteBuf content = dataFrame.content();
+        assertThat(content.toString(StandardCharsets.UTF_8), is("Hello, HTTP/3!"));
+        content.release();
+    }
+
+    @Test
+    public void shouldReturnNullDataFrameForEmptyBody() {
+        HttpResponse response = HttpResponse.response()
+            .withStatusCode(204);
+
+        DefaultHttp3DataFrame dataFrame = Http3RequestBridge.toHttp3DataFrame(response);
+
+        assertThat(dataFrame, is(nullValue()));
+    }
+
+    // ---- body accumulation tests ----
+
+    @Test
+    public void shouldAccumulateMultipleDataFrames() {
+        CompositeByteBuf composite = Unpooled.compositeBuffer();
+
+        DefaultHttp3DataFrame frame1 = new DefaultHttp3DataFrame(
+            Unpooled.wrappedBuffer("Hello, ".getBytes(StandardCharsets.UTF_8))
+        );
+        DefaultHttp3DataFrame frame2 = new DefaultHttp3DataFrame(
+            Unpooled.wrappedBuffer("World!".getBytes(StandardCharsets.UTF_8))
+        );
+
+        Http3RequestBridge.accumulateBody(composite, frame1);
+        Http3RequestBridge.accumulateBody(composite, frame2);
+
+        byte[] body = Http3RequestBridge.readAccumulatedBody(composite);
+        assertThat(new String(body, StandardCharsets.UTF_8), is("Hello, World!"));
+
+        frame1.release();
+        frame2.release();
+        composite.release();
+    }
+
+    @Test
+    public void shouldHandleEmptyAccumulation() {
+        CompositeByteBuf composite = Unpooled.compositeBuffer();
+
+        byte[] body = Http3RequestBridge.readAccumulatedBody(composite);
+        assertThat(body, is(notNullValue()));
+        assertThat(body.length, is(0));
+
+        composite.release();
+    }
+
+    // ---- round-trip test ----
+
+    @Test
+    public void shouldRoundTripRequestAndResponse() {
+        // simulate an HTTP/3 request arriving as headers + body
+        byte[] requestBody = "{\"key\":\"value\"}".getBytes(StandardCharsets.UTF_8);
+        List<Map.Entry<String, String>> requestHeaders = Arrays.asList(
+            new AbstractMap.SimpleImmutableEntry<>("content-type", "application/json"),
+            new AbstractMap.SimpleImmutableEntry<>("x-trace-id", "trace-001")
+        );
+
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "PUT", "/api/resource/42?version=2", "https", "api.example.com:443",
+            requestHeaders, requestBody
+        );
+
+        // verify the request was correctly built
+        assertThat(request.getMethod(""), is("PUT"));
+        assertThat(request.getPath().getValue(), is("/api/resource/42"));
+        assertThat(request.getFirstQueryStringParameter("version"), is("2"));
+        assertThat(request.getFirstHeader("host"), is("api.example.com:443"));
+        assertThat(request.getFirstHeader("content-type"), is("application/json"));
+        assertThat(request.getFirstHeader("x-trace-id"), is("trace-001"));
+        assertThat(request.getBodyAsString(), is("{\"key\":\"value\"}"));
+
+        // create a response
+        HttpResponse response = HttpResponse.response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"status\":\"ok\"}");
+
+        // convert back to HTTP/3 frames
+        DefaultHttp3HeadersFrame responseHeaders = Http3RequestBridge.toHttp3HeadersFrame(response);
+        DefaultHttp3DataFrame responseData = Http3RequestBridge.toHttp3DataFrame(response);
+
+        assertThat(responseHeaders.headers().status().toString(), is("200"));
+        assertThat(responseHeaders.headers().get("content-type").toString(), is("application/json"));
+        assertThat(responseData, is(notNullValue()));
+        assertThat(responseData.content().toString(StandardCharsets.UTF_8), is("{\"status\":\"ok\"}"));
+
+        responseData.content().release();
+    }
+}

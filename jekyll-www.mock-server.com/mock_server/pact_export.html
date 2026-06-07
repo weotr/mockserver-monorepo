@@ -1,0 +1,228 @@
+---
+title: Pact Contract Export & Verification
+description: Export active MockServer response expectations as a Pact v3 consumer contract, or verify that active expectations satisfy a Pact contract — closing the consumer-driven contract loop.
+shortTitle: Pact Export & Verify
+layout: page
+pageOrder: 9.5
+section: 'Mock Server'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-02T08:00:00+00:00
+---
+
+<p>MockServer can export its active response expectations as a <a target="_blank" href="https://docs.pact.io/" rel="noopener noreferrer"><strong>Pact v3</strong></a> consumer contract. This bridges MockServer's record/mock workflow with consumer-driven contract testing: mock the API in MockServer during development, then export a Pact contract that can be published to a <a target="_blank" href="https://pactflow.io/" rel="noopener noreferrer">PactFlow</a> or <a target="_blank" href="https://docs.pact.io/pact_broker" rel="noopener noreferrer">Pact Broker</a> instance and used to verify the real provider.</p>
+
+<a id="pact_export_endpoint" class="anchor" href="#pact_export_endpoint">&nbsp;</a>
+
+<h2>Pact Export Endpoint</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/pact</span> to export the currently active response expectations as a Pact v3 consumer contract JSON document.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Query parameter</th>
+            <th>Required</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">consumer</span></td>
+            <td>No</td>
+            <td><span class="inline_code">consumer</span></td>
+            <td>The consumer name written into the Pact contract's <span class="inline_code">consumer.name</span> field.</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">provider</span></td>
+            <td>No</td>
+            <td><span class="inline_code">provider</span></td>
+            <td>The provider name written into the Pact contract's <span class="inline_code">provider.name</span> field.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>MockServer responds with HTTP 200 and the Pact contract as pretty-printed JSON.</p>
+
+<a id="pact_what_is_exported" class="anchor" href="#pact_what_is_exported">&nbsp;</a>
+
+<h2>What Gets Exported</h2>
+
+<p>Only expectations that have a concrete HTTP request matcher and a <strong>response action</strong> are exported. Expectations using forward, callback, or template actions have no direct Pact equivalent and are skipped.</p>
+
+<ul>
+    <li>Expectations whose <strong>method or path is a notted matcher</strong> (match anything <em>except</em>) are skipped — there is no positive Pact equivalent.</li>
+    <li><strong>Notted header or query-parameter values</strong> are dropped from the exported interaction; non-notted values are included.</li>
+    <li><strong>JSON bodies</strong> are embedded as structured JSON in the Pact interaction rather than as escaped strings.</li>
+    <li>The <strong>interaction description</strong> is the expectation ID when a meaningful (non-UUID) ID was set, otherwise <span class="inline_code">METHOD path</span> (e.g. <span class="inline_code">GET /api/users</span>).</li>
+    <li>The exported contract uses <strong>Pact specification version 3.0.0</strong>. Matcher values are emitted as concrete example values (Pact's default exact matching); MockServer matching rules (regex, JSON-schema, XPath) are not translated into Pact <span class="inline_code">matchingRules</span>.</li>
+</ul>
+
+<a id="pact_export_example" class="anchor" href="#pact_export_example">&nbsp;</a>
+
+<h2>Example</h2>
+
+<p>Given an active expectation that mocks <span class="inline_code">GET /api/users</span>, export a Pact contract for the <span class="inline_code">frontend</span> consumer and <span class="inline_code">users-service</span> provider:</p>
+
+<button id="button_pact_export" class="accordion">export Pact v3 consumer contract</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact?consumer=frontend&amp;provider=users-service"</code></pre>
+        <p>MockServer returns HTTP 200 with the contract as JSON:</p>
+        <pre class="prettyprint code"><code class="code">{
+  "consumer" : {
+    "name" : "frontend"
+  },
+  "provider" : {
+    "name" : "users-service"
+  },
+  "interactions" : [ {
+    "description" : "GET /api/users",
+    "request" : {
+      "method" : "GET",
+      "path" : "/api/users"
+    },
+    "response" : {
+      "status" : 200,
+      "headers" : {
+        "content-type" : [ "application/json" ]
+      },
+      "body" : {
+        "users" : [ ]
+      }
+    }
+  } ],
+  "metadata" : {
+    "pactSpecification" : {
+      "version" : "3.0.0"
+    }
+  }
+}</code></pre>
+    </div>
+</div>
+
+<a id="pact_workflow" class="anchor" href="#pact_workflow">&nbsp;</a>
+
+<h2>Consumer-Driven Contract Testing Workflow</h2>
+
+<p>A typical workflow using MockServer with Pact:</p>
+
+<ol>
+    <li><strong>Mock the provider</strong> — create expectations in MockServer for each API endpoint your consumer calls. Use <a href="/mock_server/creating_expectations.html">expectation IDs</a> that are meaningful to use as Pact interaction descriptions.</li>
+    <li><strong>Run consumer tests</strong> — run your consumer's test suite against MockServer. Tests pass because MockServer returns the expected responses.</li>
+    <li><strong>Export the contract</strong> — call <span class="inline_code">PUT /mockserver/pact?consumer=my-consumer&amp;provider=my-provider</span> to get the Pact JSON.</li>
+    <li><strong>Publish to Pact Broker</strong> — publish the exported JSON to your Pact Broker or PactFlow instance so the provider team can verify against it.</li>
+</ol>
+
+<p>Recordings made through MockServer's proxy/spy mode (see <a href="/mock_server/isolating_single_service.html#mock_mode">Operating Mode</a>) can also be exported: after recording real traffic through a SPY or CAPTURE session, the captured response expectations appear as active expectations and can be exported directly.</p>
+
+<a id="pact_verify_endpoint" class="anchor" href="#pact_verify_endpoint">&nbsp;</a>
+
+<h2>Verifying a Pact Contract</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/pact/verify</span> with a Pact v3 contract as the request body. MockServer verifies that its currently-active expectations satisfy every interaction in the contract.</p>
+
+<p>For each interaction, MockServer:</p>
+<ol>
+    <li>Builds an HTTP request from the interaction's <span class="inline_code">request</span> fields (method, path, query, headers, body).</li>
+    <li>Finds the first active expectation whose request matcher matches this request.</li>
+    <li>Compares the matched expectation's response against the interaction's expected <span class="inline_code">response</span>:
+        <ul>
+            <li><strong>Status code</strong> must be equal.</li>
+            <li><strong>Headers</strong> use subset matching — each header in the Pact response must be present in MockServer's response, but extra headers are allowed.</li>
+            <li><strong>Body</strong> — if both bodies parse as JSON, they are compared structurally; otherwise string equality is used.</li>
+        </ul>
+    </li>
+</ol>
+
+<h3>Response Codes</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>HTTP Status</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">202 Accepted</span></td>
+            <td>All interactions verified successfully. The response body is a JSON summary with <span class="inline_code">"verified": true</span>.</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">406 Not Acceptable</span></td>
+            <td>One or more interactions failed verification. The response body is a JSON summary with <span class="inline_code">"verified": false</span> and per-interaction failure reasons.</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">400 Bad Request</span></td>
+            <td>The request body is empty, not valid JSON, or contains no interactions.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Result Format</h3>
+
+<p>The JSON response body contains an overall <span class="inline_code">verified</span> flag and a per-interaction breakdown:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "verified" : false,
+  "interactions" : [ {
+    "description" : "get users",
+    "verified" : true
+  }, {
+    "description" : "create user",
+    "verified" : false,
+    "reason" : "status code mismatch: expected 201 but was 200"
+  } ]
+}</code></pre>
+
+<h3>Limitations</h3>
+
+<ul>
+    <li>Only expectations with a <strong>static response action</strong> (single response or response sequence) can be verified. Expectations using forward, callback, or template actions will fail verification with the reason <em>"unverifiable (non-static action)"</em>.</li>
+    <li>For response sequences, verification compares against the <strong>first response</strong> in the sequence.</li>
+</ul>
+
+<button id="button_pact_verify" class="accordion">verify a Pact v3 contract</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/verify" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+  }'</code></pre>
+        <p>If all interactions verify, MockServer returns HTTP 202:</p>
+        <pre class="prettyprint code"><code class="code">{
+  "verified" : true,
+  "interactions" : [ {
+    "description" : "get users",
+    "verified" : true
+  } ]
+}</code></pre>
+    </div>
+</div>
+
+<a id="pact_verify_workflow" class="anchor" href="#pact_verify_workflow">&nbsp;</a>
+
+<h2>Full Consumer-Driven Contract Loop</h2>
+
+<p>With both export and verify, MockServer supports the complete consumer-driven contract testing loop:</p>
+
+<ol>
+    <li><strong>Consumer side</strong> — create expectations in MockServer and run consumer tests against them.</li>
+    <li><strong>Export</strong> — call <span class="inline_code">PUT /mockserver/pact</span> to export the contract.</li>
+    <li><strong>Provider side</strong> — set up the provider's expectations in a separate MockServer instance and call <span class="inline_code">PUT /mockserver/pact/verify</span> with the exported contract to confirm the provider satisfies the consumer's expectations.</li>
+    <li><strong>Publish</strong> — optionally publish the contract to a Pact Broker for cross-team visibility.</li>
+</ol>

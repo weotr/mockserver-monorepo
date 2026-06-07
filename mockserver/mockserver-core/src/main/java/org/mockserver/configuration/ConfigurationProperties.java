@@ -68,6 +68,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_MEMORY_USAGE_CSV_DIRECTORY = "mockserver.memoryUsageCsvDirectory";
 
     // scalability
+    private static final String MOCKSERVER_USE_NATIVE_TRANSPORT = "mockserver.useNativeTransport";
     private static final String MOCKSERVER_NIO_EVENT_LOOP_THREAD_COUNT = "mockserver.nioEventLoopThreadCount";
     private static final String MOCKSERVER_ACTION_HANDLER_THREAD_COUNT = "mockserver.actionHandlerThreadCount";
     private static final String MOCKSERVER_CLIENT_NIO_EVENT_LOOP_THREAD_COUNT = "mockserver.clientNioEventLoopThreadCount";
@@ -95,12 +96,16 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_LLM_BASE_URL = "mockserver.llmBaseUrl";
     private static final String MOCKSERVER_LLM_BACKENDS_CONFIG = "mockserver.llmBackendsConfig";
     private static final String MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS = "mockserver.llmRequestTimeoutMillis";
+    private static final String MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED = "mockserver.driftSemanticAnalysisEnabled";
+    private static final String MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS = "mockserver.driftResponseTimeThresholdMs";
     private static final String MOCKSERVER_FIXTURE_BODY_REDACT_FIELDS = "mockserver.fixtureBodyRedactFields";
     private static final String MOCKSERVER_LLM_VCR_STRICT = "mockserver.llmVcrStrict";
     private static final String MOCKSERVER_OTEL_METRICS_ENABLED = "mockserver.otelMetricsEnabled";
     private static final String MOCKSERVER_OTEL_TRACES_ENABLED = "mockserver.otelTracesEnabled";
     private static final String MOCKSERVER_OTEL_ENDPOINT = "mockserver.otelEndpoint";
     private static final String MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS = "mockserver.otelMetricsExportIntervalSeconds";
+    private static final String MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT = "mockserver.otelPropagateTraceContext";
+    private static final String MOCKSERVER_OTEL_GENERATE_TRACE_ID = "mockserver.otelGenerateTraceId";
     private static final String MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED = "mockserver.llmSemanticMatchingEnabled";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
@@ -113,13 +118,19 @@ public class ConfigurationProperties {
     // body matching extensions
     private static final String MOCKSERVER_CUSTOM_JSON_UNIT_MATCHERS_CLASS = "mockserver.customJsonUnitMatchersClass";
 
+    // WASM
+    private static final String MOCKSERVER_WASM_ENABLED = "mockserver.wasmEnabled";
+    private static final String MOCKSERVER_WASM_MAX_MEMORY_PAGES = "mockserver.wasmMaxMemoryPages";
+
     // gRPC
     private static final String MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY = "mockserver.grpcDescriptorDirectory";
     private static final String MOCKSERVER_GRPC_PROTO_DIRECTORY = "mockserver.grpcProtoDirectory";
     private static final String MOCKSERVER_GRPC_ENABLED = "mockserver.grpcEnabled";
     private static final String MOCKSERVER_GRPC_PROTOC_PATH = "mockserver.grpcProtocPath";
+    private static final String MOCKSERVER_GRPC_BIDI_STREAMING_ENABLED = "mockserver.grpcBidiStreamingEnabled";
     private static final String MOCKSERVER_DNS_ENABLED = "mockserver.dnsEnabled";
     private static final String MOCKSERVER_DNS_PORT = "mockserver.dnsPort";
+    private static final String MOCKSERVER_HTTP3_PORT = "mockserver.http3Port";
 
     // non http proxying
     private static final String MOCKSERVER_FORWARD_BINARY_REQUESTS_WITHOUT_WAITING_FOR_RESPONSE = "mockserver.forwardBinaryRequestsWithoutWaitingForResponse";
@@ -160,6 +171,15 @@ public class ConfigurationProperties {
     // recorded expectation persistence
     private static final String MOCKSERVER_PERSIST_RECORDED_EXPECTATIONS = "mockserver.persistRecordedExpectations";
     private static final String MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH = "mockserver.persistedRecordedExpectationsPath";
+
+    // state backend (G10 phase 2a)
+    private static final String MOCKSERVER_STATE_BACKEND = "mockserver.stateBackend";
+    private static final String MOCKSERVER_BLOB_STORE_TYPE = "mockserver.blobStoreType";
+
+    // clustering (G10 phase 2c)
+    private static final String MOCKSERVER_CLUSTER_ENABLED = "mockserver.clusterEnabled";
+    private static final String MOCKSERVER_CLUSTER_NAME = "mockserver.clusterName";
+    private static final String MOCKSERVER_CLUSTER_TRANSPORT_CONFIG = "mockserver.clusterTransportConfig";
 
     // verification
     private static final String MOCKSERVER_MAXIMUM_NUMBER_OF_REQUESTS_TO_RETURN_IN_VERIFICATION_FAILURE = "mockserver.maximumNumberOfRequestToReturnInVerificationFailure";
@@ -239,6 +259,15 @@ public class ConfigurationProperties {
     // outbound - fixed private key & x509
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_PRIVATE_KEY = "mockserver.forwardProxyPrivateKey";
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATE_CHAIN = "mockserver.forwardProxyCertificateChain";
+
+    // service mesh / sidecar
+    private static final String MOCKSERVER_TRANSPARENT_PROXY_ENABLED = "mockserver.transparentProxyEnabled";
+    private static final String MOCKSERVER_TRANSPARENT_PROXY_TPROXY = "mockserver.transparentProxyTproxy";
+
+    // async messaging defaults
+    private static final String MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS = "mockserver.asyncKafkaBootstrapServers";
+    private static final String MOCKSERVER_ASYNC_MQTT_BROKER_URL = "mockserver.asyncMqttBrokerUrl";
+    private static final String MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES = "mockserver.asyncRecordedMessageMaxEntries";
 
     // properties file
     private static final String MOCKSERVER_PROPERTY_FILE = "mockserver.propertyFile";
@@ -476,6 +505,22 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MCP_ENABLED, "" + enable);
     }
 
+    public static boolean wasmEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_WASM_ENABLED, "MOCKSERVER_WASM_ENABLED", "" + false));
+    }
+
+    public static void wasmEnabled(boolean enable) {
+        setProperty(MOCKSERVER_WASM_ENABLED, "" + enable);
+    }
+
+    public static int wasmMaxMemoryPages() {
+        return readIntegerProperty(MOCKSERVER_WASM_MAX_MEMORY_PAGES, "MOCKSERVER_WASM_MAX_MEMORY_PAGES", 256);
+    }
+
+    public static void wasmMaxMemoryPages(int pages) {
+        setProperty(MOCKSERVER_WASM_MAX_MEMORY_PAGES, "" + pages);
+    }
+
     public static String grpcDescriptorDirectory() {
         return readPropertyHierarchically(PROPERTIES, MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY, "MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY", "");
     }
@@ -508,6 +553,28 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_GRPC_PROTOC_PATH, path);
     }
 
+    public static boolean grpcBidiStreamingEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_GRPC_BIDI_STREAMING_ENABLED, "MOCKSERVER_GRPC_BIDI_STREAMING_ENABLED", "false"));
+    }
+
+    /**
+     * If true the HTTP/2 pipeline uses Http2FrameCodec + Http2MultiplexHandler instead of
+     * HttpToHttp2ConnectionHandler + InboundHttp2ToHttpAdapter for connections where gRPC
+     * descriptors are loaded. This is required for true client-streaming and bidirectional-streaming
+     * gRPC in a future phase. In Phase 0 the multiplex branch re-aggregates frames so behaviour
+     * is identical to the connection-level adapter.
+     * <p>
+     * Requires gRPC descriptors to be loaded (grpcEnabled with descriptors present). When false
+     * (the default) or when no descriptors are loaded, the existing connection-level adapter is used.
+     * <p>
+     * Default is false
+     *
+     * @param enable enable the multiplex HTTP/2 pipeline for gRPC bidi-streaming support
+     */
+    public static void grpcBidiStreamingEnabled(boolean enable) {
+        setProperty(MOCKSERVER_GRPC_BIDI_STREAMING_ENABLED, "" + enable);
+    }
+
     public static boolean dnsEnabled() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DNS_ENABLED, "MOCKSERVER_DNS_ENABLED", "" + false));
     }
@@ -522,6 +589,81 @@ public class ConfigurationProperties {
 
     public static void dnsPort(int port) {
         setProperty(MOCKSERVER_DNS_PORT, "" + port);
+    }
+
+    // experimental HTTP/3 (QUIC)
+
+    public static int http3Port() {
+        return readIntegerProperty(MOCKSERVER_HTTP3_PORT, "MOCKSERVER_HTTP3_PORT", 0);
+    }
+
+    public static void http3Port(int port) {
+        setProperty(MOCKSERVER_HTTP3_PORT, "" + port);
+    }
+
+    // service mesh / sidecar
+
+    public static boolean transparentProxyEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TRANSPARENT_PROXY_ENABLED, "MOCKSERVER_TRANSPARENT_PROXY_ENABLED", "" + false));
+    }
+
+    public static void transparentProxyEnabled(boolean enable) {
+        setProperty(MOCKSERVER_TRANSPARENT_PROXY_ENABLED, "" + enable);
+    }
+
+    /**
+     * Enable TPROXY (IP_TRANSPARENT) mode for transparent proxy original destination
+     * resolution. When enabled, the listener socket is bound with IP_TRANSPARENT and
+     * the original destination is read from the socket's local address (preserved by
+     * the TPROXY iptables target). Requires Linux, epoll transport, CAP_NET_ADMIN,
+     * and TPROXY iptables rules instead of REDIRECT. Default: false.
+     */
+    public static boolean transparentProxyTproxy() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TRANSPARENT_PROXY_TPROXY, "MOCKSERVER_TRANSPARENT_PROXY_TPROXY", "" + false));
+    }
+
+    public static void transparentProxyTproxy(boolean enable) {
+        setProperty(MOCKSERVER_TRANSPARENT_PROXY_TPROXY, "" + enable);
+    }
+
+    // async messaging defaults
+
+    /**
+     * Default Kafka bootstrap servers used when a {@code PUT /mockserver/asyncapi}
+     * request body does not include {@code brokerConfig.kafkaBootstrapServers}.
+     * Empty string means no default (broker must be specified per-request).
+     */
+    public static String asyncKafkaBootstrapServers() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS, "MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS", "");
+    }
+
+    public static void asyncKafkaBootstrapServers(String servers) {
+        setProperty(MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS, servers);
+    }
+
+    /**
+     * Default MQTT broker URL used when a {@code PUT /mockserver/asyncapi}
+     * request body does not include {@code brokerConfig.mqttBrokerUrl}.
+     * Empty string means no default (broker must be specified per-request).
+     */
+    public static String asyncMqttBrokerUrl() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASYNC_MQTT_BROKER_URL, "MOCKSERVER_ASYNC_MQTT_BROKER_URL", "");
+    }
+
+    public static void asyncMqttBrokerUrl(String url) {
+        setProperty(MOCKSERVER_ASYNC_MQTT_BROKER_URL, url);
+    }
+
+    /**
+     * Maximum number of recorded messages retained per channel in async
+     * messaging subscribers. Default is 1000.
+     */
+    public static int asyncRecordedMessageMaxEntries() {
+        return readIntegerProperty(MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES, "MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES", 1000);
+    }
+
+    public static void asyncRecordedMessageMaxEntries(int maxEntries) {
+        setProperty(MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES, "" + maxEntries);
     }
 
     public static Map<String, String> logLevelOverrides() {
@@ -679,6 +821,23 @@ public class ConfigurationProperties {
     }
 
     // scalability
+
+    public static boolean useNativeTransport() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_USE_NATIVE_TRANSPORT, "MOCKSERVER_USE_NATIVE_TRANSPORT", "" + true));
+    }
+
+    /**
+     * If true (the default) MockServer will use the native epoll transport on Linux
+     * for higher performance and to enable transparent-proxy SO_ORIGINAL_DST resolution.
+     * Set to false to force the NIO transport on all platforms.
+     * <p>
+     * This property is read at start-up only.
+     *
+     * @param enable enable native transport when available
+     */
+    public static void useNativeTransport(boolean enable) {
+        setProperty(MOCKSERVER_USE_NATIVE_TRANSPORT, "" + enable);
+    }
 
     public static int nioEventLoopThreadCount() {
         return readIntegerProperty(MOCKSERVER_NIO_EVENT_LOOP_THREAD_COUNT, "MOCKSERVER_NIO_EVENT_LOOP_THREAD_COUNT", 5);
@@ -1097,6 +1256,35 @@ public class ConfigurationProperties {
     }
 
     /**
+     * Whether to enable LLM-powered semantic drift analysis. When enabled and a
+     * runtime LLM backend is available, each structural drift record is enriched
+     * with a severity classification (BREAKING / WARNING / INFORMATIONAL) and an
+     * explanation from the LLM. Default false (opt-in).
+     */
+    public static boolean driftSemanticAnalysisEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED, "MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED", "false"));
+    }
+
+    public static void driftSemanticAnalysisEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED, "" + enabled);
+    }
+
+    /**
+     * p95 response time threshold (in milliseconds) for performance drift detection.
+     * When set to a positive value, a PERFORMANCE drift record is emitted whenever
+     * the p95 response time for an expectation exceeds this threshold. Default 0
+     * (disabled).
+     */
+    public static long driftResponseTimeThresholdMs() {
+        return readLongProperty(MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS, "MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS", 0L);
+    }
+
+    public static void driftResponseTimeThresholdMs(long thresholdMs) {
+        setProperty(MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS, "" + thresholdMs);
+    }
+
+    /**
      * Comma-separated JSON field names whose values are redacted from recorded
      * fixture request/response bodies (in addition to the always-redacted
      * sensitive headers). Empty by default. Used by {@code record_llm_fixtures}.
@@ -1174,6 +1362,31 @@ public class ConfigurationProperties {
 
     public static void otelMetricsExportIntervalSeconds(long seconds) {
         setProperty(MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS, "" + seconds);
+    }
+
+    /**
+     * When true, MockServer copies the incoming W3C {@code traceparent} and
+     * {@code tracestate} headers into mock responses. Off by default so
+     * responses are not modified unless the user opts in.
+     */
+    public static boolean otelPropagateTraceContext() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT, "MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT", "" + false));
+    }
+
+    public static void otelPropagateTraceContext(boolean enabled) {
+        setProperty(MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT, "" + enabled);
+    }
+
+    /**
+     * When true, MockServer generates a new W3C trace ID for incoming requests
+     * that do not carry a {@code traceparent} header. Off by default.
+     */
+    public static boolean otelGenerateTraceId() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_OTEL_GENERATE_TRACE_ID, "MOCKSERVER_OTEL_GENERATE_TRACE_ID", "" + false));
+    }
+
+    public static void otelGenerateTraceId(boolean enabled) {
+        setProperty(MOCKSERVER_OTEL_GENERATE_TRACE_ID, "" + enabled);
     }
 
     /**
@@ -1656,6 +1869,100 @@ public class ConfigurationProperties {
      */
     public static void persistedRecordedExpectationsPath(String persistedRecordedExpectationsPath) {
         setProperty(MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH, persistedRecordedExpectationsPath);
+    }
+
+    // state backend (G10 phase 2a)
+
+    /**
+     * Returns the state backend type. Currently only "memory" is supported
+     * (default). Phase 2b will add "infinispan" for clustered state.
+     */
+    public static String stateBackend() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_STATE_BACKEND, "MOCKSERVER_STATE_BACKEND", "memory");
+    }
+
+    /**
+     * Sets the state backend type. Currently only "memory" is supported.
+     *
+     * @param stateBackend the backend type (e.g. "memory")
+     */
+    public static void stateBackend(String stateBackend) {
+        setProperty(MOCKSERVER_STATE_BACKEND, stateBackend);
+    }
+
+    /**
+     * Returns the blob store type. "filesystem" (default) delegates to the
+     * existing file persistence paths so on-disk behaviour is unchanged;
+     * "memory" keeps blobs in-memory only (lost on process exit).
+     */
+    public static String blobStoreType() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_TYPE, "MOCKSERVER_BLOB_STORE_TYPE", "filesystem");
+    }
+
+    /**
+     * Sets the blob store type.
+     *
+     * @param blobStoreType the blob store type (e.g. "memory", "filesystem")
+     */
+    public static void blobStoreType(String blobStoreType) {
+        setProperty(MOCKSERVER_BLOB_STORE_TYPE, blobStoreType);
+    }
+
+    // --- clustering (G10 phase 2c) ---
+
+    /**
+     * Returns whether clustering is enabled. Default is {@code false}.
+     */
+    public static boolean clusterEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_ENABLED, "MOCKSERVER_CLUSTER_ENABLED", "false"));
+    }
+
+    /**
+     * Enables or disables clustering.
+     *
+     * @param clusterEnabled true to enable JGroups transport
+     */
+    public static void clusterEnabled(boolean clusterEnabled) {
+        setProperty(MOCKSERVER_CLUSTER_ENABLED, String.valueOf(clusterEnabled));
+    }
+
+    /**
+     * Returns the JGroups cluster name. Default is {@code "mockserver-cluster"}.
+     */
+    public static String clusterName() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_NAME, "MOCKSERVER_CLUSTER_NAME", "mockserver-cluster");
+    }
+
+    /**
+     * Sets the JGroups cluster name.
+     *
+     * @param clusterName the cluster identifier
+     */
+    public static void clusterName(String clusterName) {
+        setProperty(MOCKSERVER_CLUSTER_NAME, clusterName);
+    }
+
+    /**
+     * Returns the optional path to a JGroups XML transport configuration.
+     * Default is empty string (use the built-in embedded stack). Empty
+     * string is used instead of {@code null} because the property cache
+     * is a {@code ConcurrentHashMap} which does not permit null values.
+     */
+    public static String clusterTransportConfig() {
+        String value = readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_TRANSPORT_CONFIG, "MOCKSERVER_CLUSTER_TRANSPORT_CONFIG", "");
+        return value != null && !value.isEmpty() ? value : null;
+    }
+
+    /**
+     * Sets the path to a custom JGroups XML transport configuration.
+     *
+     * @param clusterTransportConfig path to JGroups XML, or null for default
+     */
+    public static void clusterTransportConfig(String clusterTransportConfig) {
+        // Guard against null: System.setProperty (called by setProperty)
+        // throws NPE for null values. Store empty string to mirror other
+        // nullable string properties.
+        setProperty(MOCKSERVER_CLUSTER_TRANSPORT_CONFIG, clusterTransportConfig != null ? clusterTransportConfig : "");
     }
 
     // verification

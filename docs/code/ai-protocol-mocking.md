@@ -348,6 +348,32 @@ The handlers are placed after `MockServerHttpServerCodec` so they operate on Moc
 
 `GrpcToHttpResponseHandler` is an outbound encoder that intercepts `HttpResponse` objects with `x-grpc-service` header, encodes the JSON body back to protobuf binary with gRPC framing, and appends `grpc-status` / `grpc-message` trailers.
 
+### gRPC-Web Support
+
+gRPC-Web is a variant of gRPC designed for browser clients that cannot use HTTP/2 trailers. MockServer supports gRPC-Web as a translation layer in front of the existing gRPC pipeline:
+
+**Content types:** `application/grpc-web`, `application/grpc-web+proto` (binary), `application/grpc-web-text`, `application/grpc-web-text+proto` (base64-encoded).
+
+**Request path:**
+1. `GrpcToHttpRequestHandler` detects gRPC-Web content types and calls `translateGrpcWebRequest()` before any gRPC processing
+2. For the `-text` variant, the body is base64-decoded
+3. The content-type is replaced with `application/grpc` and the original content-type is stored in `x-grpc-web-content-type` header
+4. The translated request passes through the normal gRPC pipeline unchanged
+
+**Response path:**
+1. `GrpcToHttpResponseHandler.encode()` checks for the `x-grpc-web-content-type` header on outbound responses
+2. If present, `convertToGrpcWebResponse()` re-frames the response: `grpc-status`/`grpc-message` headers are removed and embedded in a trailer frame (flag byte `0x80`) appended to the message body
+3. For the `-text` variant, the entire body (message frames + trailer frame) is base64-encoded
+4. The response content-type is set to the matching gRPC-Web type
+
+**Pipeline placement:** gRPC handlers are added to the HTTP/1.1 pipeline (in `switchToHttp()`) in addition to the HTTP/2 pipelines, since gRPC-Web works over both HTTP/1.1 and HTTP/2.
+
+**Core class:** `GrpcWebTranslator` (`mockserver-core`, `org.mockserver.grpc`) provides the encoding/decoding utilities (trailer frame construction, base64 handling, content-type detection). The handler modifications in `mockserver-netty` are localized to the existing `GrpcToHttpRequestHandler` and `GrpcToHttpResponseHandler`.
+
+**Content-type discrimination:** `GrpcStatusMapper.isGrpcContentType()` explicitly excludes `application/grpc-*` prefixes (e.g. `application/grpc-web`) so that gRPC-Web requests are not misrouted through the standard gRPC path.
+
+**Connect protocol:** Not supported. Connect uses a fundamentally different framing format (JSON/proto over standard HTTP POST with a JSON trailer envelope).
+
 ### h2c Detection
 
 `PortUnificationHandler.decode()` includes `isH2cPreface()` which detects the HTTP/2 connection preface (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`) on cleartext connections. When detected, `switchToH2c()` assembles the HTTP/2 pipeline with gRPC handlers, enabling gRPC over plaintext HTTP/2.
@@ -386,6 +412,187 @@ sequenceDiagram
 - **`ExpectationDTO`** includes a `grpcStreamResponse` field mapped to `GrpcStreamResponseDTO`
 - **`grpcStreamResponse.json`** JSON schema is registered in `JsonSchemaExpectationValidator`
 
+### gRPC Fault Injection
+
+`GrpcChaosProfile` (`org.mockserver.model.GrpcChaosProfile`) is a declarative gRPC fault/chaos injection profile. It is stored in a `GrpcChaosRegistry` keyed by gRPC service name and applied by `GrpcToHttpRequestHandler` before normal request conversion. An empty-string key registers a default profile that covers all services without a more-specific override.
+
+**Profile fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `errorStatusCode` | String | gRPC status code name (e.g. `"UNAVAILABLE"`, `"DEADLINE_EXCEEDED"`) — one of the 17 `GrpcStatusMapper.GrpcStatusCode` enum names |
+| `errorMessage` | String | Optional `grpc-message` trailer value |
+| `errorProbability` | Double | 0.0–1.0 probability of fault injection; null/0 = never, 1.0 = always |
+| `seed` | Long | Optional seed to make fractional probability reproducible |
+| `latencyMs` | Long | Milliseconds of artificial delay before the response; >= 0 |
+| `succeedFirst` | Integer | First N calls per service are not eligible for chaos; >= 0 |
+| `failRequestCount` | Integer | After `succeedFirst`, the next M calls are eligible; >= 1; null = unlimited |
+| `quotaName` | String | Shared rate-limit counter key |
+| `quotaLimit` | Integer | Max calls allowed per quota window; >= 1 |
+| `quotaWindowMillis` | Long | Fixed-window length in ms; calls over the limit return `RESOURCE_EXHAUSTED`; >= 1 |
+| `omitGrpcStatus` | Boolean | When true, the fault response contains no `grpc-status` trailer at all, simulating an incomplete or broken RPC stream. Takes precedence over `corruptGrpcStatus` when both are set. |
+| `corruptGrpcStatus` | Boolean | When true (and `omitGrpcStatus` is false), the `grpc-status` trailer is set to the non-numeric value `"malformed"` — a genuine protocol violation (the gRPC spec requires `grpc-status` to be a decimal integer) that tests how clients cope with an unparseable status trailer. |
+| `customTrailers` | Map&lt;String,String&gt; | Arbitrary trailer key/value pairs injected on the fault response in addition to (or instead of) the normal status trailers. Applied after `omitGrpcStatus`/`corruptGrpcStatus` — always added regardless of which status variant fires. |
+| `abortAfterMessages` | Integer | For client-streaming requests: when the number of decoded gRPC messages in the request body is >= this threshold, inject an `ABORTED` status immediately. The message count is determined by decoding the 5-byte gRPC length-prefixed frames in the request body; >= 1. |
+
+**Trailer-fault precedence in `buildFaultResponse`:** `omitGrpcStatus: true` → no `grpc-status` header is written at all; else `corruptGrpcStatus: true` → `grpc-status: malformed` is written (a non-numeric value that violates the gRPC wire spec); else the normal numeric status code is written. `customTrailers` are always appended after the status decision, for every fault response. Custom trailer keys and values are validated against CR/LF injection at the model layer and defensively skipped at the handler layer.
+
+Serialization uses `GrpcChaosProfileDTO` (`org.mockserver.serialization.model.GrpcChaosProfileDTO`).
+
+This feature is distinct from `GrpcHealthRegistry` — gRPC fault injection fires on application RPC methods; health-check chaos controls the `grpc.health.v1.Health/Check` serving-status response.
+
+**REST endpoints:**
+
+| Endpoint | Action |
+|----------|--------|
+| `PUT /mockserver/grpcChaos` | Register, remove, or clear gRPC chaos profiles; supports `ttlMillis` for auto-expiry |
+| `GET /mockserver/grpcChaos` | Read all active profiles and TTL countdowns |
+| `PATCH /mockserver/grpcChaos` | JSON Merge Patch a single service's profile (preserves TTL) |
+
+See [Service-scoped chaos REST API](#service-scoped-chaos-rest-api) below for the full request/response shapes, which are identical across all three endpoints (substituting `service` for the key field and `GrpcChaosProfile` fields in the `chaos` object).
+
+### Service-Scoped Chaos REST API
+
+Three parallel REST APIs expose service-scoped chaos registration — one for each protocol layer. All three follow the same request/response structure; the differences are the endpoint path, the key field name (`host` vs `service`), and the profile type (`HttpChaosProfile` vs `TcpChaosProfile` vs `GrpcChaosProfile`).
+
+| Protocol | Endpoints | Key field | Profile type |
+|----------|-----------|-----------|--------------|
+| HTTP | `PUT/GET/PATCH /mockserver/serviceChaos` | `host` | `HttpChaosProfile` (see profile fields in the consumer chaos docs) |
+| TCP | `PUT/GET/PATCH /mockserver/tcpChaos` | `host` | `TcpChaosProfile` |
+| gRPC | `PUT/GET/PATCH /mockserver/grpcChaos` | `service` | `GrpcChaosProfile` (fields documented above) |
+
+#### PUT — register, remove, or clear
+
+Request body shapes (all fields except `clear`/`host`/`service` are optional):
+
+**Register or replace a profile** — sets or replaces the chaos profile for a single host/service:
+
+```json
+{
+  "host": "payments.internal:8080",
+  "chaos": { "errorStatus": 503, "errorProbability": 0.3 },
+  "ttlMillis": 60000
+}
+```
+
+- `ttlMillis` (optional, `>= 1`) — auto-reverts the registration after this many milliseconds. When the TTL expires the profile is removed and the host returns to normal behaviour.
+- Omitting `ttlMillis` registers the profile indefinitely.
+
+**Remove a single host** — omit `chaos` or supply `remove: true`:
+
+```json
+{ "host": "payments.internal:8080", "remove": true }
+```
+
+**Clear all registrations**:
+
+```json
+{ "clear": true }
+```
+
+`clear` and `host`/`service` are mutually exclusive.
+
+**Responses** — all 200 with a `status` field:
+
+| Scenario | Response body |
+|----------|--------------|
+| Registered | `{"status":"registered","host":"...","ttlMillis":60000}` (ttlMillis omitted when no TTL) |
+| Removed | `{"status":"removed","host":"..."}` |
+| Cleared | `{"status":"cleared"}` |
+| Error | 400 `{"error":"<message>"}` |
+
+#### GET — snapshot
+
+Returns all currently registered profiles. For `serviceChaos` the top-level key is `services`; for `tcpChaos` it is `hosts`. A `ttlRemainingMillis` map is included only when at least one TTL-bearing registration exists.
+
+`GET /mockserver/serviceChaos` example response:
+
+```json
+{
+  "services": {
+    "payments.internal:8080": { "errorStatus": 503, "errorProbability": 0.3 }
+  },
+  "ttlRemainingMillis": {
+    "payments.internal:8080": 42310
+  }
+}
+```
+
+`GET /mockserver/tcpChaos` uses `hosts` as the outer key instead of `services`.
+
+`GET /mockserver/grpcChaos` uses `services` and the keys are gRPC service names (e.g. `helloworld.Greeter`); an empty string key is the catch-all default profile.
+
+#### PATCH — merge-patch a single profile
+
+Only the fields present in the `chaos` object are updated; all other fields of the existing profile are preserved. The TTL on the existing registration is also preserved (the PATCH does not reset or remove it).
+
+Request body:
+
+```json
+{
+  "host": "payments.internal:8080",
+  "chaos": { "errorProbability": 0.5 }
+}
+```
+
+Both `host`/`service` and `chaos` are required. A missing key returns 400.
+
+Response body on success:
+
+```json
+{
+  "status": "patched",
+  "host": "payments.internal:8080",
+  "chaos": { "errorStatus": 503, "errorProbability": 0.5 }
+}
+```
+
+The `chaos` field in the response reflects the merged profile as serialised by the corresponding `*ChaosProfileDTO`.
+
+**Implementation references:** all nine handlers (`handleServiceChaosPut`, `handleServiceChaosPatch`, `handleServiceChaosGet`, `handleTcpChaosPut`, `handleTcpChaosPatch`, `handleTcpChaosGet`, `handleGrpcChaosPut`, `handleGrpcChaosPatch`, `handleGrpcChaosGet`) are in `mockserver/mockserver-core/src/main/java/org/mockserver/mock/HttpState.java` around lines 2070–2503.
+
+### GraphQL-Semantic HTTP Chaos
+
+`HttpChaosProfile` carries four fields for injecting GraphQL-semantic errors into HTTP responses. These fields are part of the broader `HttpChaosProfile` model (documented on the consumer-facing chaos page) but are relevant here because they are specifically designed for testing GraphQL clients.
+
+**New fields (added alongside the existing body-corruption fields):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `graphqlErrors` | Boolean | When `true`, activates GraphQL error injection. The response is rewritten as an HTTP 200 GraphQL error envelope: `{"data":...,"errors":[{"message":...,"extensions":{"code":...}}]}`, with `Content-Type: application/json` and `Content-Length` stripped. |
+| `graphqlErrorMessage` | String | The `errors[0].message` value. Defaults to `"simulated GraphQL error"` when `graphqlErrors` is true and this field is unset. |
+| `graphqlErrorCode` | String | Optional value placed in `errors[0].extensions.code` (e.g. `"INTERNAL_SERVER_ERROR"`). The `extensions` object is omitted entirely when this field is null. |
+| `graphqlNullifyData` | Boolean | When `true` (the default), `data` is set to `null`. When `false`, the handler attempts to parse the original response body as JSON and embed it as the `data` value, enabling partial-success simulation. Falls back to `data: null` if the original body is not valid JSON. |
+
+**Precedence in `applyResponseChaos`:** `graphqlErrors` takes precedence over `truncateBodyAtFraction` and `malformedBody` — when `graphqlErrors` is true, body corruption is skipped because the envelope is the intended body. The slow-response dribble (`slowResponseChunkSize` + `slowResponseChunkDelay`) composes normally with GraphQL injection since it only affects delivery timing. The fault is metered as `fault_type="graphql"`.
+
+**Scope:** GraphQL error injection works on both expectation-level chaos (attached to an `Expectation`) and service-scoped chaos (`ServiceChaosRegistry` / `PUT /mockserver/serviceChaos`). It respects the count window (`succeedFirst` / `failRequestCount`) in the same way as other body-corruption faults.
+
+### gRPC Health Checking Protocol
+
+MockServer auto-responds to `grpc.health.v1.Health/Check` without requiring a proto descriptor. The implementation uses manual protobuf encode/decode so health checks work even when the descriptor store is empty.
+
+**Key classes:**
+
+| Class | Package | Role |
+|-------|---------|------|
+| `GrpcHealthRegistry` | `org.mockserver.grpc` | Singleton map of service name → `ServingStatus`; falls back to a configurable default (`SERVING`) when no per-service entry exists |
+| `GrpcHealthCheckHandler` | `org.mockserver.grpc` | Decodes the gRPC-framed `HealthCheckRequest` (5-byte header + protobuf field 1 varint), looks up `GrpcHealthRegistry`, encodes a gRPC-framed `HealthCheckResponse` |
+| `ServingStatus` | `org.mockserver.grpc` | Enum: `UNKNOWN(0)`, `SERVING(1)`, `NOT_SERVING(2)`, `SERVICE_UNKNOWN(3)` |
+
+**Interception point:** `GrpcToHttpRequestHandler` checks whether the request path equals `GrpcHealthCheckHandler.HEALTH_CHECK_PATH` (`/grpc.health.v1.Health/Check`) before performing any descriptor lookup. When matched, the response is written directly and the request never reaches the expectation matching engine.
+
+**Configuration:** `grpcHealthCheckEnabled` (default `true`) controls whether health check interception is active.
+
+**REST endpoints:**
+
+| Endpoint | Action |
+|----------|--------|
+| `PUT /mockserver/grpc/health` | Set the `ServingStatus` for a named service (`service` + `status` fields) |
+| `GET /mockserver/grpc/health` | Read all status overrides plus the global default |
+
+All overrides are cleared on `HttpState.reset()`. An empty `service` string sets the global default. The `GET` response uses `_default` as the key for the global default entry.
+
 ### Control Plane REST API
 
 | Endpoint | Action |
@@ -411,7 +618,11 @@ sequenceDiagram
 | `SseEventDTO`, `HttpSseResponseDTO`, `JsonRpcBodyDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `HttpRequestTemplateObject` (jsonRpc fields) | `mockserver-core` | `org.mockserver.templates.engine.model` |
 | `GrpcStreamMessage`, `GrpcStreamResponse` | `mockserver-core` | `org.mockserver.model` |
-| `GrpcFrameCodec`, `GrpcJsonMessageConverter`, `GrpcProtoDescriptorStore`, `GrpcProtoFileCompiler`, `GrpcStatusMapper`, `GrpcException` | `mockserver-core` | `org.mockserver.grpc` |
+| `GrpcFrameCodec`, `GrpcJsonMessageConverter`, `GrpcProtoDescriptorStore`, `GrpcProtoFileCompiler`, `GrpcStatusMapper`, `GrpcWebTranslator`, `GrpcException` | `mockserver-core` | `org.mockserver.grpc` |
+| `GrpcHealthRegistry`, `GrpcHealthCheckHandler`, `ServingStatus` | `mockserver-core` | `org.mockserver.grpc` |
+| `GrpcChaosProfile` | `mockserver-core` | `org.mockserver.model` |
+| `GrpcChaosRegistry` | `mockserver-core` | `org.mockserver.mock.action.http` |
+| `GrpcChaosProfileDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `GrpcStreamResponseActionHandler` | `mockserver-core` | `org.mockserver.mock.action.http` |
 | `GrpcStreamMessageDTO`, `GrpcStreamResponseDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `GrpcToHttpRequestHandler`, `GrpcToHttpResponseHandler` | `mockserver-netty` | `org.mockserver.netty.grpc` |
@@ -443,9 +654,11 @@ sequenceDiagram
 | `GrpcFrameCodecTest` | core | 6 | Unit |
 | `GrpcJsonMessageConverterTest` | core | 7 | Unit |
 | `GrpcProtoDescriptorStoreTest` | core | 7 | Unit |
-| `GrpcStatusMapperTest` | core | 7 | Unit |
+| `GrpcStatusMapperTest` | core | 9 | Unit |
+| `GrpcWebTranslatorTest` | core | 20 | Unit |
 | `GrpcStreamResponseDTOTest` | core | 3 | Unit |
 | `GrpcIntegrationTest` | netty | 11 | Integration |
+| `GrpcWebHandlerTest` | netty | 12 | Handler |
 
 ## Client Library Support
 

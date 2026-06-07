@@ -1,0 +1,71 @@
+name: Bug report
+description: Create a report to help us improve
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in the fields below — the more detail you provide, the faster we can help.
+  - type: textarea
+    id: describe
+    attributes:
+      label: Describe the issue
+      description: A clear and concise description of the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What you are trying to do
+      description: Description of what you are trying to do so we can understand the context of the problem.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: MockServer version
+      description: The exact MockServer version you are using (e.g. 5.15.0). "latest" is not a version — please check your dependency or Docker image tag.
+      placeholder: e.g. 5.15.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running MockServer?
+      options:
+        - Maven plugin
+        - Docker
+        - Helm / Kubernetes
+        - Standalone JAR
+        - WAR / servlet container
+        - Java client / JUnit rule
+        - Node.js client
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: To Reproduce
+      description: |
+        Steps to reproduce the issue:
+        1. Code you used to create expectations
+        2. The request(s) you sent
+        3. What error or unexpected behaviour you saw
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: MockServer Log
+      description: Log output at INFO level (or lower). This will be automatically formatted as code, so no need for backticks.
+      render: shell
+    validations:
+      required: false

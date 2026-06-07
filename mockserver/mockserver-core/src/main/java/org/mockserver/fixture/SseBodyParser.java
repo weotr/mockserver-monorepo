@@ -24,8 +24,10 @@ import static org.mockserver.model.SseEvent.sseEvent;
  *   <li>Multiple {@code data:} lines within one event are joined with {@code \n}</li>
  * </ul>
  * <p>
- * Since per-chunk timestamps are not captured by the streaming relay, a fixed inter-event
- * delay is applied to each event (except the first). The default is 50 milliseconds.
+ * When per-chunk timestamps are available (captured by the streaming relay during recording),
+ * the parser applies the actual inter-chunk delays to reproduce the original timing. When
+ * per-chunk timestamps are absent (legacy recordings), a fixed inter-event delay is applied
+ * to each event (except the first). The default fallback is 50 milliseconds.
  */
 public class SseBodyParser {
 
@@ -57,6 +59,25 @@ public class SseBodyParser {
      * @return the parsed events; empty list if the input is null or blank
      */
     public List<SseEvent> parse(String sseText) {
+        return parse(sseText, null);
+    }
+
+    /**
+     * Parse raw SSE body text into a list of {@link SseEvent} objects, optionally applying
+     * per-chunk replay timing captured during recording.
+     * <p>
+     * When {@code perChunkDelaysMs} is non-null and has enough entries, each event (after the
+     * first) receives its corresponding captured inter-chunk delay instead of the fixed default.
+     * When {@code perChunkDelaysMs} is null or too short, the fixed {@code interEventDelayMs}
+     * fallback is used, preserving backward compatibility with recordings that predate per-chunk
+     * timing capture.
+     *
+     * @param sseText           the raw SSE body text
+     * @param perChunkDelaysMs  optional list of inter-chunk delays in milliseconds (index 0 = first
+     *                          chunk delay, typically 0). May be null for fallback behaviour.
+     * @return the parsed events; empty list if the input is null or blank
+     */
+    public List<SseEvent> parse(String sseText, List<Long> perChunkDelaysMs) {
         List<SseEvent> events = new ArrayList<>();
         if (sseText == null || sseText.isEmpty()) {
             return events;
@@ -64,7 +85,7 @@ public class SseBodyParser {
 
         // Split on blank lines (event boundaries in SSE). Handle both \n\n and \r\n\r\n.
         String[] rawBlocks = sseText.split("\\r?\\n\\r?\\n");
-        boolean isFirst = true;
+        int eventIndex = 0;
 
         for (String block : rawBlocks) {
             String trimmed = block.trim();
@@ -74,15 +95,35 @@ public class SseBodyParser {
 
             SseEvent event = parseBlock(trimmed);
             if (event != null) {
-                if (!isFirst && interEventDelayMs > 0) {
-                    event.withDelay(new Delay(TimeUnit.MILLISECONDS, interEventDelayMs));
+                if (eventIndex > 0) {
+                    long delayMs = resolveDelayMs(eventIndex, perChunkDelaysMs);
+                    if (delayMs > 0) {
+                        event.withDelay(new Delay(TimeUnit.MILLISECONDS, delayMs));
+                    }
                 }
                 events.add(event);
-                isFirst = false;
+                eventIndex++;
             }
         }
 
         return events;
+    }
+
+    /**
+     * Resolve the delay for the event at the given index. If per-chunk delays are available
+     * and cover this index, use the captured value; otherwise fall back to the fixed default.
+     * <p>
+     * Note: mapping chunk-level delays to SSE event indices is approximate when HTTP chunk
+     * boundaries do not align 1:1 with SSE events. The mapping is exact for typical
+     * one-event-per-chunk LLM streams, and best-effort otherwise. When a delay is absent
+     * for an event index (fewer chunk delays than events), the fixed default is used as
+     * a fallback.
+     */
+    private long resolveDelayMs(int eventIndex, List<Long> perChunkDelaysMs) {
+        if (perChunkDelaysMs != null && eventIndex < perChunkDelaysMs.size()) {
+            return Math.max(0, perChunkDelaysMs.get(eventIndex));
+        }
+        return interEventDelayMs;
     }
 
     private SseEvent parseBlock(String block) {

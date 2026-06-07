@@ -1,0 +1,161 @@
+{
+  "info": {
+    "_postman_id": "9d7b6a51-2c84-4f0e-9b2a-7f1c3e5a6b40",
+    "name": "MockServer Control Plane",
+    "description": "Drive MockServer's REST control plane: create expectations, verify requests, inspect recorded traffic, and manage server state. Set the `baseUrl` collection variable to your MockServer (default http://localhost:1080). Start MockServer with: docker run -d --rm -p 1080:1080 mockserver/mockserver. Full API: https://www.mock-server.com",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:1080" }
+  ],
+  "item": [
+    {
+      "name": "Expectations",
+      "item": [
+        {
+          "name": "Create expectation (GET /hello -> 200)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequest\": { \"method\": \"GET\", \"path\": \"/hello\" },\n  \"httpResponse\": { \"statusCode\": 200, \"body\": \"Hello World\" }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/mockserver/expectation", "host": ["{{baseUrl}}"], "path": ["mockserver", "expectation"] },
+            "description": "Register an expectation. Returns 201 with the created expectation(s)."
+          }
+        },
+        {
+          "name": "Call the mocked endpoint (GET /hello)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/hello", "host": ["{{baseUrl}}"], "path": ["hello"] },
+            "description": "Calls the endpoint mocked above — returns 200 'Hello World'."
+          }
+        },
+        {
+          "name": "Retrieve active expectations",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/retrieve?type=active_expectations&format=json",
+              "host": ["{{baseUrl}}"],
+              "path": ["mockserver", "retrieve"],
+              "query": [
+                { "key": "type", "value": "active_expectations" },
+                { "key": "format", "value": "json" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Verify",
+      "item": [
+        {
+          "name": "Verify request received",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequest\": { \"path\": \"/hello\" },\n  \"times\": { \"atLeast\": 1 }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/mockserver/verify", "host": ["{{baseUrl}}"], "path": ["mockserver", "verify"] },
+            "description": "202 if the request was received the expected number of times; 406 with a failure message otherwise."
+          }
+        },
+        {
+          "name": "Verify sequence",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequests\": [\n    { \"path\": \"/hello\" }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/mockserver/verifySequence", "host": ["{{baseUrl}}"], "path": ["mockserver", "verifySequence"] },
+            "description": "Verify a set of requests were received in the given order."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Traffic",
+      "item": [
+        {
+          "name": "Retrieve recorded requests",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/retrieve?type=requests&format=json",
+              "host": ["{{baseUrl}}"],
+              "path": ["mockserver", "retrieve"],
+              "query": [
+                { "key": "type", "value": "requests" },
+                { "key": "format", "value": "json" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Retrieve logs",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/retrieve?type=logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["mockserver", "retrieve"],
+              "query": [{ "key": "type", "value": "logs" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Manage",
+      "item": [
+        {
+          "name": "Status",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/mockserver/status", "host": ["{{baseUrl}}"], "path": ["mockserver", "status"] },
+            "description": "Returns the bound ports — a simple readiness check."
+          }
+        },
+        {
+          "name": "Clear (by request matcher)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/hello\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/mockserver/clear", "host": ["{{baseUrl}}"], "path": ["mockserver", "clear"] },
+            "description": "Clear expectations and recorded requests matching the body (or all when empty)."
+          }
+        },
+        {
+          "name": "Reset (everything)",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/mockserver/reset", "host": ["{{baseUrl}}"], "path": ["mockserver", "reset"] },
+            "description": "Remove ALL expectations and recorded requests."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.mockserver.model.HttpSseResponse.sseResponse;
@@ -33,6 +34,7 @@ public class SseAwareExpectationConverter {
 
     private static final String STREAMED_HEADER = "x-mockserver-streamed";
     private static final String TRUNCATED_HEADER = "x-mockserver-stream-truncated";
+    private static final String CHUNK_DELAYS_HEADER = "x-mockserver-chunk-delays-ms";
     private static final String WARNING_HEADER = "x-mockserver-fixture-warning";
 
     private final SseBodyParser sseBodyParser;
@@ -85,13 +87,14 @@ public class SseAwareExpectationConverter {
             return createTruncatedFallback(expectation, response);
         }
 
-        // Parse the SSE body
+        // Parse the SSE body, using per-chunk timing if available
         String body = response.getBodyAsString();
         if (body == null || body.isEmpty()) {
             return expectation;
         }
 
-        List<SseEvent> events = sseBodyParser.parse(body);
+        List<Long> perChunkDelays = parseChunkDelaysHeader(response.getFirstHeader(CHUNK_DELAYS_HEADER));
+        List<SseEvent> events = sseBodyParser.parse(body, perChunkDelays);
         if (events.isEmpty()) {
             return expectation;
         }
@@ -110,6 +113,7 @@ public class SseAwareExpectationConverter {
                 // Skip internal headers and headers the SSE handler sets automatically
                 if (lowerName.equals(STREAMED_HEADER)
                     || lowerName.equals(TRUNCATED_HEADER)
+                    || lowerName.equals(CHUNK_DELAYS_HEADER)
                     || lowerName.equals("content-type")
                     || lowerName.equals("transfer-encoding")
                     || lowerName.equals("cache-control")
@@ -128,15 +132,39 @@ public class SseAwareExpectationConverter {
         ).thenRespondWithSse(sseResponse);
     }
 
+    /**
+     * Parse the comma-separated list of per-chunk delays from the header value.
+     *
+     * @param headerValue the raw header value, e.g. "0,42,15,8"
+     * @return list of delays in millis, or null if the header is absent/empty
+     */
+    static List<Long> parseChunkDelaysHeader(String headerValue) {
+        if (headerValue == null || headerValue.isEmpty()) {
+            return null;
+        }
+        String[] parts = headerValue.split(",");
+        List<Long> delays = new ArrayList<>(parts.length);
+        for (String part : parts) {
+            try {
+                delays.add(Long.parseLong(part.trim()));
+            } catch (NumberFormatException e) {
+                // Malformed entry — fall back to no per-chunk timing
+                return null;
+            }
+        }
+        return delays.isEmpty() ? null : delays;
+    }
+
     private Expectation createTruncatedFallback(Expectation expectation, HttpResponse response) {
         // Clone and add a warning header
         HttpResponse fallbackResponse = response.clone();
         fallbackResponse.withHeader(WARNING_HEADER,
             "SSE stream was truncated during capture; replay may be incomplete. " +
                 "Increase maxStreamingCaptureBytes for full capture.");
-        // Remove the internal headers
+        // Remove all internal headers
         fallbackResponse.removeHeader(STREAMED_HEADER);
         fallbackResponse.removeHeader(TRUNCATED_HEADER);
+        fallbackResponse.removeHeader(CHUNK_DELAYS_HEADER);
 
         return new Expectation(
             expectation.getHttpRequest(),

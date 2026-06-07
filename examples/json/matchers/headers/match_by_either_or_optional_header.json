@@ -1,0 +1,19 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "headers": {
+      "headerOne|headerTwo": [
+        ".*"
+      ],
+      "?headerOne": [
+        "headerOneValue"
+      ],
+      "?headerTwo": [
+        "headerTwoValue"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

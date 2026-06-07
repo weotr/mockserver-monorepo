@@ -1,0 +1,17 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/search"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"results\": [\"result-1\", \"result-2\"]}"
+  },
+  "chaos": {
+    "quotaName": "search-api-limit",
+    "quotaLimit": 3,
+    "quotaWindowMillis": 10000,
+    "quotaErrorStatus": 429,
+    "retryAfter": "10"
+  }
+}

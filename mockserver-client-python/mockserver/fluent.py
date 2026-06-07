@@ -4,9 +4,15 @@ import asyncio
 from typing import TYPE_CHECKING, Callable
 
 from mockserver.models import (
+    BinaryResponse,
     Delay,
+    DnsResponse,
     Expectation,
+    ExpectationStep,
+    GrpcBidiResponse,
+    GrpcStreamResponse,
     HttpChaosProfile,
+    HttpClassCallback,
     HttpError,
     HttpForward,
     HttpObjectCallback,
@@ -115,7 +121,68 @@ class ForwardChainExpectation:
         self._expectation.http_websocket_response = websocket_response
         return await self._client.upsert(self._expectation)
 
+    async def respond_with_grpc_stream(self, grpc_stream_response: GrpcStreamResponse) -> list[Expectation]:
+        if not isinstance(grpc_stream_response, GrpcStreamResponse):
+            raise TypeError(
+                f"Expected GrpcStreamResponse, got {type(grpc_stream_response).__name__}"
+            )
+        self._expectation.grpc_stream_response = grpc_stream_response
+        return await self._client.upsert(self._expectation)
+
+    async def respond_with_grpc_bidi(self, grpc_bidi_response: GrpcBidiResponse) -> list[Expectation]:
+        if not isinstance(grpc_bidi_response, GrpcBidiResponse):
+            raise TypeError(
+                f"Expected GrpcBidiResponse, got {type(grpc_bidi_response).__name__}"
+            )
+        self._expectation.grpc_bidi_response = grpc_bidi_response
+        return await self._client.upsert(self._expectation)
+
+    async def respond_with_binary(self, binary_response: BinaryResponse) -> list[Expectation]:
+        if not isinstance(binary_response, BinaryResponse):
+            raise TypeError(
+                f"Expected BinaryResponse, got {type(binary_response).__name__}"
+            )
+        self._expectation.binary_response = binary_response
+        return await self._client.upsert(self._expectation)
+
+    async def respond_with_dns(self, dns_response: DnsResponse) -> list[Expectation]:
+        if not isinstance(dns_response, DnsResponse):
+            raise TypeError(
+                f"Expected DnsResponse, got {type(dns_response).__name__}"
+            )
+        self._expectation.dns_response = dns_response
+        return await self._client.upsert(self._expectation)
+
+    async def forward_with_template(self, template: HttpTemplate) -> list[Expectation]:
+        if not isinstance(template, HttpTemplate):
+            raise TypeError(
+                f"Expected HttpTemplate, got {type(template).__name__}"
+            )
+        self._expectation.http_forward_template = template
+        return await self._client.upsert(self._expectation)
+
+    async def forward_with_class_callback(self, class_callback: HttpClassCallback) -> list[Expectation]:
+        if not isinstance(class_callback, HttpClassCallback):
+            raise TypeError(
+                f"Expected HttpClassCallback, got {type(class_callback).__name__}"
+            )
+        self._expectation.http_forward_class_callback = class_callback
+        return await self._client.upsert(self._expectation)
+
     async def error(self, error: HttpError) -> list[Expectation]:
         self._expectation.http_error = error
+        return await self._client.upsert(self._expectation)
+
+    async def with_steps(self, steps: list[ExpectationStep]) -> list[Expectation]:
+        """Set an ordered multi-action pipeline of steps.
+
+        Exactly one step must have ``responder=True``; that step produces the
+        HTTP response. All other steps are side-effects executed in order.
+        """
+        if not isinstance(steps, list) or not all(isinstance(s, ExpectationStep) for s in steps):
+            raise TypeError(
+                "Expected a list of ExpectationStep objects"
+            )
+        self._expectation.steps = steps
         return await self._client.upsert(self._expectation)
 

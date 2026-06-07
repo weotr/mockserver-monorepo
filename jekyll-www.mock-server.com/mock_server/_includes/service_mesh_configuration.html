@@ -1,0 +1,22 @@
+<a id="service_mesh_configuration" class="anchor" href="#service_mesh_configuration">&nbsp;</a>
+
+<h2>Service Mesh / Sidecar Configuration:</h2>
+
+<p>These properties configure MockServer for running as a Kubernetes sidecar with transparent proxy interception. See <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a> for a full usage guide.</p>
+
+<button id="button_configuration_transparent_proxy_enabled" class="accordion title"><strong>Transparent Proxy Enabled</strong></button>
+<div class="panel title">
+    <p>Enable transparent HTTP proxy mode where all connections are treated as proxy requests using the Host header as the forwarding target. This enables iptables REDIRECT-based interception without requiring clients to send explicit HTTP CONNECT requests or configure proxy settings.</p>
+    <p>When enabled, MockServer reads the <span class="inline_code">Host</span> header from each incoming request to determine the forwarding target. If an expectation matches, MockServer returns the mock response; otherwise it forwards to the original target.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.transparentProxyEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.transparentProxyEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEnabled="true"</code></pre>
+</div>

@@ -24,6 +24,10 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
     private Long quotaWindowMillis;
     private Integer quotaErrorStatus;
     private Long degradationRampMillis;
+    private Boolean graphqlErrors;
+    private String graphqlErrorMessage;
+    private String graphqlErrorCode;
+    private Boolean graphqlNullifyData;
 
     public HttpChaosProfileDTO(HttpChaosProfile httpChaosProfile) {
         if (httpChaosProfile != null) {
@@ -50,6 +54,10 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             quotaWindowMillis = httpChaosProfile.getQuotaWindowMillis();
             quotaErrorStatus = httpChaosProfile.getQuotaErrorStatus();
             degradationRampMillis = httpChaosProfile.getDegradationRampMillis();
+            graphqlErrors = httpChaosProfile.getGraphqlErrors();
+            graphqlErrorMessage = httpChaosProfile.getGraphqlErrorMessage();
+            graphqlErrorCode = httpChaosProfile.getGraphqlErrorCode();
+            graphqlNullifyData = httpChaosProfile.getGraphqlNullifyData();
         }
     }
 
@@ -76,7 +84,11 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
             .withQuotaLimit(quotaLimit)
             .withQuotaWindowMillis(quotaWindowMillis)
             .withQuotaErrorStatus(quotaErrorStatus)
-            .withDegradationRampMillis(degradationRampMillis);
+            .withDegradationRampMillis(degradationRampMillis)
+            .withGraphqlErrors(graphqlErrors)
+            .withGraphqlErrorMessage(graphqlErrorMessage)
+            .withGraphqlErrorCode(graphqlErrorCode)
+            .withGraphqlNullifyData(graphqlNullifyData);
     }
 
     public Integer getErrorStatus() {
@@ -247,6 +259,42 @@ public class HttpChaosProfileDTO extends ObjectWithReflectiveEqualsHashCodeToStr
 
     public HttpChaosProfileDTO setDegradationRampMillis(Long degradationRampMillis) {
         this.degradationRampMillis = degradationRampMillis;
+        return this;
+    }
+
+    public Boolean getGraphqlErrors() {
+        return graphqlErrors;
+    }
+
+    public HttpChaosProfileDTO setGraphqlErrors(Boolean graphqlErrors) {
+        this.graphqlErrors = graphqlErrors;
+        return this;
+    }
+
+    public String getGraphqlErrorMessage() {
+        return graphqlErrorMessage;
+    }
+
+    public HttpChaosProfileDTO setGraphqlErrorMessage(String graphqlErrorMessage) {
+        this.graphqlErrorMessage = graphqlErrorMessage;
+        return this;
+    }
+
+    public String getGraphqlErrorCode() {
+        return graphqlErrorCode;
+    }
+
+    public HttpChaosProfileDTO setGraphqlErrorCode(String graphqlErrorCode) {
+        this.graphqlErrorCode = graphqlErrorCode;
+        return this;
+    }
+
+    public Boolean getGraphqlNullifyData() {
+        return graphqlNullifyData;
+    }
+
+    public HttpChaosProfileDTO setGraphqlNullifyData(Boolean graphqlNullifyData) {
+        this.graphqlNullifyData = graphqlNullifyData;
         return this;
     }
 }

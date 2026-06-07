@@ -770,6 +770,32 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetGrpcBidiStreamingEnabled() {
+        boolean original = ConfigurationProperties.grpcBidiStreamingEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.grpcBidiStreamingEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.grpcBidiStreamingEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.grpcBidiStreamingEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.grpcBidiStreamingEnabled"), equalTo("true"));
+            assertThat(configuration.grpcBidiStreamingEnabled(), equalTo(true));
+            ConfigurationProperties.grpcBidiStreamingEnabled(original);
+
+            // when - setter
+            configuration.grpcBidiStreamingEnabled(true);
+
+            // then - getter
+            assertThat(configuration.grpcBidiStreamingEnabled(), equalTo(true));
+        } finally {
+            ConfigurationProperties.grpcBidiStreamingEnabled(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetForwardBinaryRequestsWithoutWaitingForResponse() {
         boolean original = ConfigurationProperties.forwardBinaryRequestsWithoutWaitingForResponse();
         try {
@@ -2580,6 +2606,106 @@ public class ConfigurationTest {
         String valid = tempFilePath();
         configuration.x509CertificatePath(valid);
         assertThat(configuration.x509CertificatePath(), equalTo(valid));
+    }
+
+    @Test
+    public void shouldSetAndGetTransparentProxyEnabled() {
+        boolean original = ConfigurationProperties.transparentProxyEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.transparentProxyEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.transparentProxyEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.transparentProxyEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.transparentProxyEnabled"), equalTo("true"));
+            assertThat(configuration.transparentProxyEnabled(), equalTo(true));
+
+            // when - setter
+            configuration.transparentProxyEnabled(false);
+
+            // then - getter
+            assertThat(configuration.transparentProxyEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.transparentProxyEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetAsyncKafkaBootstrapServers() {
+        String original = ConfigurationProperties.asyncKafkaBootstrapServers();
+        try {
+            // then - default value
+            assertThat(configuration.asyncKafkaBootstrapServers(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.asyncKafkaBootstrapServers("localhost:9092");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.asyncKafkaBootstrapServers(), equalTo("localhost:9092"));
+            assertThat(System.getProperty("mockserver.asyncKafkaBootstrapServers"), equalTo("localhost:9092"));
+            assertThat(configuration.asyncKafkaBootstrapServers(), equalTo("localhost:9092"));
+
+            // when - setter
+            configuration.asyncKafkaBootstrapServers("broker1:9093,broker2:9093");
+
+            // then - getter
+            assertThat(configuration.asyncKafkaBootstrapServers(), equalTo("broker1:9093,broker2:9093"));
+        } finally {
+            ConfigurationProperties.asyncKafkaBootstrapServers(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetAsyncMqttBrokerUrl() {
+        String original = ConfigurationProperties.asyncMqttBrokerUrl();
+        try {
+            // then - default value
+            assertThat(configuration.asyncMqttBrokerUrl(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.asyncMqttBrokerUrl("tcp://localhost:1883");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.asyncMqttBrokerUrl(), equalTo("tcp://localhost:1883"));
+            assertThat(System.getProperty("mockserver.asyncMqttBrokerUrl"), equalTo("tcp://localhost:1883"));
+            assertThat(configuration.asyncMqttBrokerUrl(), equalTo("tcp://localhost:1883"));
+
+            // when - setter
+            configuration.asyncMqttBrokerUrl("tcp://mqtt.example.com:1883");
+
+            // then - getter
+            assertThat(configuration.asyncMqttBrokerUrl(), equalTo("tcp://mqtt.example.com:1883"));
+        } finally {
+            ConfigurationProperties.asyncMqttBrokerUrl(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetAsyncRecordedMessageMaxEntries() {
+        int original = ConfigurationProperties.asyncRecordedMessageMaxEntries();
+        try {
+            // then - default value
+            assertThat(configuration.asyncRecordedMessageMaxEntries(), equalTo(1000));
+
+            // when - system property setter
+            ConfigurationProperties.asyncRecordedMessageMaxEntries(500);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.asyncRecordedMessageMaxEntries(), equalTo(500));
+            assertThat(System.getProperty("mockserver.asyncRecordedMessageMaxEntries"), equalTo("500"));
+            assertThat(configuration.asyncRecordedMessageMaxEntries(), equalTo(500));
+
+            // when - setter
+            configuration.asyncRecordedMessageMaxEntries(2000);
+
+            // then - getter
+            assertThat(configuration.asyncRecordedMessageMaxEntries(), equalTo(2000));
+        } finally {
+            ConfigurationProperties.asyncRecordedMessageMaxEntries(original);
+        }
     }
 
 }

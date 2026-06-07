@@ -24,7 +24,6 @@ import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.net.URI;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
@@ -53,7 +52,10 @@ public class OpenAPIConverter {
 
     public List<Expectation> buildExpectations(String specUrlOrPayload, Map<String, Object> operationsAndResponses, String contextPathPrefix) {
         OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
-        AtomicInteger expectationCounter = new AtomicInteger(0);
+        String specKey = deriveSpecKey(openAPI, specUrlOrPayload);
+        // Track how many times each operationId appears so we can disambiguate
+        // when the same operationId maps to multiple expectations (e.g. multiple response codes)
+        Map<String, Integer> operationIdCounts = new HashMap<>();
         return openAPI
             .getPaths()
             .values()
@@ -88,13 +90,34 @@ public class OpenAPIConverter {
                 if (!afterActions.isEmpty()) {
                     expectation.withAfterActions(afterActions);
                 }
+                // Assign stable deterministic id: openapi:<specKey>:<operationId>[:<n>]
+                String operationId = operation.getOperationId();
+                int count = operationIdCounts.merge(operationId, 1, Integer::sum);
+                String stableId = OpenApiSyncPlanner.OPENAPI_ID_PREFIX + specKey + ":" + operationId;
+                if (count > 1) {
+                    stableId += ":" + count;
+                }
+                expectation.withId(stableId);
                 return expectation;
             })
-            .map(expectation -> {
-                int index = expectationCounter.incrementAndGet();
-                return expectation.withId(new UUID((long) Objects.hash(specUrlOrPayload, operationsAndResponses) * index, (long) Objects.hash(specUrlOrPayload, operationsAndResponses) * index).toString());
-            })
             .collect(Collectors.toList());
+    }
+
+    /**
+     * Derives a stable spec key from the parsed OpenAPI object. Uses the
+     * spec title (sanitized) if available, otherwise falls back to a short
+     * hash of the raw spec URL or payload.
+     */
+    static String deriveSpecKey(OpenAPI openAPI, String specUrlOrPayload) {
+        String title = null;
+        if (openAPI.getInfo() != null) {
+            title = openAPI.getInfo().getTitle();
+        }
+        String key = OpenApiSyncPlanner.specKeyFromTitle(title);
+        if (key == null) {
+            key = OpenApiSyncPlanner.specKeyFromHash(specUrlOrPayload);
+        }
+        return key;
     }
 
     private List<AfterAction> buildAfterActions(OpenAPI openAPI, io.swagger.v3.oas.models.Operation operation) {
@@ -121,7 +144,10 @@ public class OpenAPIConverter {
                         String resolvedUrl = resolveCallbackUrl(callbackUrl);
                         org.mockserver.model.HttpRequest callbackRequest = org.mockserver.model.HttpRequest.request()
                             .withMethod(method.name());
-                        if (resolvedUrl.startsWith("http://") || resolvedUrl.startsWith("https://")) {
+                        if (OpenApiRuntimeExpressionResolver.containsExpression(resolvedUrl)) {
+                            // URL contains runtime expressions — store verbatim for fire-time resolution
+                            callbackRequest.withPath(resolvedUrl);
+                        } else if (resolvedUrl.startsWith("http://") || resolvedUrl.startsWith("https://")) {
                             URI uri = new URI(resolvedUrl);
                             callbackRequest
                                 .withPath(uri.getPath() != null ? uri.getPath() : "/")
@@ -160,13 +186,13 @@ public class OpenAPIConverter {
         return afterActions;
     }
 
+    /**
+     * Preserves OpenAPI runtime expressions verbatim in callback URLs.
+     * Expressions like {@code {$request.body#/callbackUrl}} are kept as-is and
+     * resolved at callback fire-time by {@link OpenApiRuntimeExpressionResolver}.
+     */
     private String resolveCallbackUrl(String callbackUrl) {
-        return callbackUrl
-            .replaceAll("\\{\\$request\\.body#[^}]*}", "")
-            .replaceAll("\\{\\$request\\.header\\.[^}]*}", "")
-            .replaceAll("\\{\\$request\\.query\\.[^}]*}", "")
-            .replaceAll("\\{\\$response\\.body#[^}]*}", "")
-            .replaceAll("\\{\\$url}", "");
+        return callbackUrl;
     }
 
     private HttpResponse buildHttpResponse(OpenAPI openAPI, ApiResponses apiResponses, String apiResponseKey) {

@@ -63,8 +63,19 @@ public class OtelMetricsExporterTest {
                 .filter(m -> m.getName().equals("mock_server_active_service_chaos"))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("mock_server_active_service_chaos not exported"));
-            long value = gauge.getLongGaugeData().getPoints().iterator().next().getValue();
-            assertThat(value, is(1L));
+            // labeled by fault_type: the registered profile injects 'error'
+            long errorCount = gauge.getLongGaugeData().getPoints().stream()
+                .filter(p -> "error".equals(p.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("fault_type"))))
+                .mapToLong(io.opentelemetry.sdk.metrics.data.LongPointData::getValue)
+                .findFirst()
+                .orElse(-1);
+            assertThat(errorCount, is(1L));
+            long dropCount = gauge.getLongGaugeData().getPoints().stream()
+                .filter(p -> "drop".equals(p.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("fault_type"))))
+                .mapToLong(io.opentelemetry.sdk.metrics.data.LongPointData::getValue)
+                .findFirst()
+                .orElse(-1);
+            assertThat(dropCount, is(0L));
         } finally {
             exporter.stop();
             org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();

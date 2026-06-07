@@ -15,7 +15,7 @@ describe('LogPanel', () => {
 
   it('shows empty state when no log messages', () => {
     render(<LogPanel />);
-    expect(screen.getByText('No log messages')).toBeInTheDocument();
+    expect(screen.getByText(/No log messages/)).toBeInTheDocument();
   });
 
   it('renders log entries', () => {

@@ -53,13 +53,26 @@ public class HttpWebSocketResponseActionHandler {
         handshaker.handshake(ctx.channel(), nettyRequest).addListener(future -> {
             try {
                 if (future.isSuccess()) {
+                    // fire cross-protocol event for WebSocket connect
+                    org.mockserver.mock.CrossProtocolEventBus.getInstance().fire(
+                        CrossProtocolTrigger.WEBSOCKET_CONNECT,
+                        request.getPath() != null ? request.getPath().getValue() : "/"
+                    );
                     removePipelineHandlers(ctx);
 
-                    List<WebSocketMessage> messages = httpWebSocketResponse.getMessages();
-                    if (messages != null && !messages.isEmpty()) {
-                        scheduleMessages(messages, 0, ctx, httpWebSocketResponse, request, handshaker);
+                    // Check if this is a GraphQL subscription WebSocket
+                    if (GraphQLSubscriptionHandler.isGraphQLWebSocketProtocol(httpWebSocketResponse.getSubprotocol())
+                        && httpWebSocketResponse.getGraphqlSubscriptionFilter() != null) {
+                        installGraphQLSubscriptionHandler(ctx, httpWebSocketResponse, handshaker);
                     } else {
-                        finishWebSocket(ctx, httpWebSocketResponse, handshaker);
+                        installBidirectionalHandler(ctx, httpWebSocketResponse, handshaker);
+
+                        List<WebSocketMessage> messages = httpWebSocketResponse.getMessages();
+                        if (messages != null && !messages.isEmpty()) {
+                            scheduleMessages(messages, 0, ctx, httpWebSocketResponse, request, handshaker);
+                        } else if (httpWebSocketResponse.getMatchers() == null || httpWebSocketResponse.getMatchers().isEmpty()) {
+                            finishWebSocket(ctx, httpWebSocketResponse, handshaker);
+                        }
                     }
                 } else {
                     if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
@@ -100,7 +113,10 @@ public class HttpWebSocketResponseActionHandler {
                                   HttpWebSocketResponse httpWebSocketResponse, org.mockserver.model.HttpRequest request,
                                   WebSocketServerHandshaker handshaker) {
         if (index >= messages.size() || !ctx.channel().isActive()) {
-            finishWebSocket(ctx, httpWebSocketResponse, handshaker);
+            boolean hasMatchers = httpWebSocketResponse.getMatchers() != null && !httpWebSocketResponse.getMatchers().isEmpty();
+            if (!hasMatchers) {
+                finishWebSocket(ctx, httpWebSocketResponse, handshaker);
+            }
             return;
         }
 
@@ -181,6 +197,57 @@ public class HttpWebSocketResponseActionHandler {
             if (httpWebSocketResponse.getCloseConnection() == null || httpWebSocketResponse.getCloseConnection()) {
                 handshaker.close(ctx.channel(), new CloseWebSocketFrame());
             }
+        }
+    }
+
+    private void installGraphQLSubscriptionHandler(ChannelHandlerContext ctx, HttpWebSocketResponse httpWebSocketResponse,
+                                                      WebSocketServerHandshaker handshaker) {
+        GraphQLSubscriptionHandler.FrameSender frameSender = (senderCtx, text, delay) -> {
+            if (!senderCtx.channel().isActive()) {
+                return;
+            }
+            Runnable writeAction = () -> senderCtx.writeAndFlush(new TextWebSocketFrame(text));
+            if (delay != null) {
+                scheduler.schedule(writeAction, false, delay);
+            } else {
+                writeAction.run();
+            }
+        };
+
+        ctx.pipeline().addLast("graphqlSubscriptionHandler",
+            new GraphQLSubscriptionHandler(
+                httpWebSocketResponse.getGraphqlSubscriptionFilter(),
+                httpWebSocketResponse.getMessages(),
+                frameSender,
+                handshaker
+            ));
+    }
+
+    private void installBidirectionalHandler(ChannelHandlerContext ctx, HttpWebSocketResponse httpWebSocketResponse,
+                                             WebSocketServerHandshaker handshaker) {
+        List<WebSocketMessageMatcher> matchers = httpWebSocketResponse.getMatchers();
+        if (matchers != null && !matchers.isEmpty()) {
+            BidirectionalWebSocketFrameHandler.FrameSender frameSender = (senderCtx, message) -> {
+                if (!senderCtx.channel().isActive()) {
+                    return;
+                }
+                WebSocketFrame frame;
+                if (message.getBinary() != null) {
+                    frame = new BinaryWebSocketFrame(Unpooled.copiedBuffer(message.getBinary()));
+                } else if (message.getText() != null) {
+                    frame = new TextWebSocketFrame(message.getText());
+                } else {
+                    return;
+                }
+                Delay delay = message.getDelay();
+                if (delay != null) {
+                    scheduler.schedule(() -> senderCtx.writeAndFlush(frame), false, delay);
+                } else {
+                    senderCtx.writeAndFlush(frame);
+                }
+            };
+            ctx.pipeline().addLast("bidirectionalWebSocketHandler",
+                new BidirectionalWebSocketFrameHandler(matchers, frameSender));
         }
     }
 

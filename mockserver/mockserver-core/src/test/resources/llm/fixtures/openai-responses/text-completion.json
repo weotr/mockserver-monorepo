@@ -1,0 +1,21 @@
+{
+  "id" : "<id>",
+  "object" : "response",
+  "created_at" : 0,
+  "model" : "gpt-4o",
+  "status" : "completed",
+  "output" : [ {
+    "type" : "message",
+    "id" : "<id>",
+    "role" : "assistant",
+    "content" : [ {
+      "type" : "output_text",
+      "text" : "Hello! How can I help you today?"
+    } ]
+  } ],
+  "usage" : {
+    "input_tokens" : 0,
+    "output_tokens" : 0,
+    "total_tokens" : 0
+  }
+}

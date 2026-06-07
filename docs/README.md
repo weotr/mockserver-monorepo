@@ -14,15 +14,21 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [Netty Pipeline](code/netty-pipeline.md) | Medium | Port unification, protocol detection, channel handlers, MCP handler, relay pattern |
 | [Request Processing](code/request-processing.md) | Medium | Mock matching, proxy forwarding, action dispatch, WAR bridge |
 | [Event System](code/event-system.md) | Medium | LMAX Disruptor ring buffer, verification, persistence, observers |
-| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, five top-level views (Dashboard / Traffic / Sessions / Composer / Library), WebSocket communication, data assembly |
+| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, nine top-level views (Dashboard / Traffic / Sessions / Composer / Library / Chaos / Drift / Metrics / MCP Tools), WebSocket communication, data assembly |
 | [Domain Model](code/domain-model.md) | Low | Model hierarchy, matchers, codecs, OpenAPI support, configuration (incl. MCP) |
 | [TLS & Security](code/tls-and-security.md) | Low | BouncyCastle CA, SNI, mTLS, JWT auth, control plane security |
 | [Client & Integrations](code/client-and-integrations.md) | Low | MockServerClient, JUnit 4/5, Spring, WebSocket callbacks |
 | [Memory Management](code/memory-management.md) | Medium | Log entry and expectation memory analysis, default limit calculation, tuning guide |
 | [Metrics & Monitoring](code/metrics.md) | Low | Prometheus metrics, memory monitoring, CSV export |
+| [Telemetry](code/telemetry.md) | Low | OpenTelemetry integration: OTLP export, GenAI spans, W3C trace context propagation |
 | [AI & RPC Protocol Mocking](code/ai-protocol-mocking.md) | Medium | SSE streaming, JSON-RPC matching, MCP and A2A mock builders, gRPC mocking |
 | [LLM Mocking](code/llm-mocking.md) | Medium | LLM response builder, provider codecs, streaming physics, conversation matchers, isolation, MCP tools, dashboard |
+| [LLM Codec Golden Files](code/llm-codec-fixtures.md) | Low | Automated wire-format drift detection for the LLM provider codecs: golden-master fixtures, normalization, refresh process |
 | [Configuration Reference](code/configuration-reference.md) | Low | Property mechanism, resolution order, four equivalent forms, how to add a property |
+| [Drift Detection](code/drift-detection.md) | Low | Mock drift detection: comparing forwarded responses against stub expectations |
+| [WASM Rules](code/wasm-rules.md) | Low | WASM custom rule engine: chicory interpreter, module ABI, REST endpoints, configuration |
+| [Async Messaging](code/async-messaging.md) | Low | AsyncAPI broker mocking: spec parsing, example generation, Kafka/MQTT publisher adapters, orchestrator |
+| [HTTP/3 (QUIC)](code/http3.md) | Low | Experimental HTTP/3 support: Http3Server, QUIC native dependency, MVP boundaries |
 
 ### Infrastructure
 
@@ -34,6 +40,7 @@ AWS accounts, CI/CD pipelines, container images, and Kubernetes deployment.
 | [CI/CD](infrastructure/ci-cd.md) | Buildkite pipelines and GitHub Actions workflows |
 | [Docker](infrastructure/docker.md) | Docker images, variants, multi-arch builds, and Compose examples |
 | [Helm & Kubernetes](infrastructure/helm.md) | Helm charts, deployment templates, and Kind-based testing |
+| [Service Mesh / Sidecar](infrastructure/service-mesh.md) | Transparent HTTP interception and Kubernetes sidecar deployment |
 | [AWS SES Email Forwarding](infrastructure/aws-ses-email-forwarding.md) | SES catch-all email forwarding for mock-server.com |
 
 ### Operations
@@ -81,8 +88,8 @@ mockserver-monorepo/
 │   ├── mockserver-junit-jupiter/   # JUnit 5 integration
 │   ├── mockserver-spring-test-listener/ # Spring test integration
 │   ├── mockserver-testing/         # Shared test utilities
-│   ├── mockserver-integration-testing/ # Integration test infrastructure
-│   └── mockserver-examples/        # Usage examples & Docker Compose samples
+│   └── mockserver-integration-testing/ # Integration test infrastructure
+├── examples/                       # Runnable usage examples (java/node/python/ruby/curl/json/docker-compose/wasm/chaos)
 ├── mockserver-ui/                  # React dashboard UI (Vite + TypeScript)
 ├── mockserver-node/                # Node.js MockServer launcher (npm)
 ├── mockserver-client-node/         # Node.js/browser client library (npm)
@@ -97,8 +104,8 @@ mockserver-monorepo/
 ├── terraform/                      # Terraform IaC (Buildkite agents + pipelines)
 ├── scripts/                        # Build, deploy, and utility scripts
 └── docs/                           # This documentation (you are here)
-    ├── code/                       #   Code architecture (12 docs)
-    ├── infrastructure/             #   AWS, CI/CD, Docker, Helm (5 docs)
+    ├── code/                       #   Code architecture (14 docs)
+    ├── infrastructure/             #   AWS, CI/CD, Docker, Helm, Service Mesh (6 docs)
     ├── operations/                 #   Build, release, deps, security, website, perf (11 docs)
     ├── plans/                      #   Active plans and RFCs (3 docs)
     └── testing.md                  #   Test frameworks, architecture, config, coverage, CI

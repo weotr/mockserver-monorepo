@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.lang3.StringUtils;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.model.GraphQLBody;
+import org.mockserver.model.SelectionSetMatchType;
 import org.mockserver.validator.jsonschema.JsonSchemaValidator;
 
 import java.util.regex.Pattern;
@@ -13,19 +15,32 @@ import java.util.regex.PatternSyntaxException;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 public class GraphQLMatcher extends BodyMatcher<String> {
-    private static final String[] EXCLUDED_FIELDS = {"mockServerLogger", "objectMapper", "paramsValidator", "compiledOperationNamePattern"};
+    private static final String[] EXCLUDED_FIELDS = {"mockServerLogger", "objectMapper", "paramsValidator", "compiledOperationNamePattern", "astMatcher"};
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final MockServerLogger mockServerLogger;
     private final String query;
     private final String operationName;
     private final String variablesSchema;
+    private final SelectionSetMatchType selectionSetMatchType;
     private JsonSchemaValidator paramsValidator;
     private Pattern compiledOperationNamePattern;
+    private GraphQLAstMatcher astMatcher;
 
     private static final Pattern LITERAL_OPERATION_NAME_PATTERN = Pattern.compile("[a-zA-Z0-9_/.-]+");
 
+    public GraphQLMatcher(MockServerLogger mockServerLogger, GraphQLBody graphQLBody) {
+        this(mockServerLogger, graphQLBody.getQuery(), graphQLBody.getOperationName(), graphQLBody.getVariablesSchema(),
+            graphQLBody.getSelectionSetMatchType(), graphQLBody);
+    }
+
     public GraphQLMatcher(MockServerLogger mockServerLogger, String query, String operationName, String variablesSchema) {
+        this(mockServerLogger, query, operationName, variablesSchema, null, null);
+    }
+
+    private GraphQLMatcher(MockServerLogger mockServerLogger, String query, String operationName, String variablesSchema,
+                           SelectionSetMatchType selectionSetMatchType, GraphQLBody graphQLBody) {
         this.mockServerLogger = mockServerLogger;
+        this.selectionSetMatchType = selectionSetMatchType;
         this.query = query != null ? normalizeQuery(query) : null;
         this.operationName = operationName;
         this.variablesSchema = variablesSchema;
@@ -43,6 +58,9 @@ public class GraphQLMatcher extends BodyMatcher<String> {
         if (isNotBlank(variablesSchema)) {
             paramsValidator = new JsonSchemaValidator(mockServerLogger, variablesSchema);
         }
+        if (selectionSetMatchType != null && selectionSetMatchType != SelectionSetMatchType.NORMALISED_STRING && graphQLBody != null) {
+            astMatcher = new GraphQLAstMatcher(graphQLBody);
+        }
     }
 
     public boolean matches(final MatchDifference context, final String matched) {
@@ -58,6 +76,20 @@ public class GraphQLMatcher extends BodyMatcher<String> {
             if (context != null) {
                 context.addDifference(mockServerLogger, "graphql match failed expected query:{}found:{}failed because:{}", query, "null", "request body was empty");
                 alreadyLoggedMatchFailure = true;
+            }
+        } else if (astMatcher != null) {
+            // AST-based matching (AST_EXACT or AST_SUBSET)
+            try {
+                result = astMatcher.matches(matched);
+                if (!result && context != null) {
+                    context.addDifference(mockServerLogger, "graphql AST match failed expected query:{}found:{}mode:{}", query, matched, selectionSetMatchType.name());
+                    alreadyLoggedMatchFailure = true;
+                }
+            } catch (Throwable throwable) {
+                if (context != null) {
+                    context.addDifference(mockServerLogger, throwable, "graphql AST match failed expected query:{}found:{}failed because:{}", query, matched, throwable.getMessage());
+                    alreadyLoggedMatchFailure = true;
+                }
             }
         } else {
             try {
@@ -126,7 +158,11 @@ public class GraphQLMatcher extends BodyMatcher<String> {
             return true;
         }
         if (compiledOperationNamePattern != null) {
-            return compiledOperationNamePattern.matcher(actualOperationName).matches();
+            // operationName is a user-supplied regex from the expectation; bound its evaluation with the
+            // shared regex matching timeout so a pathological pattern cannot pin a worker thread (ReDoS)
+            final Pattern pattern = compiledOperationNamePattern;
+            return MatchingTimeoutExecutor.matchesWithRegexTimeout(mockServerLogger, "graphql operationName", pattern,
+                () -> pattern.matcher(actualOperationName).matches());
         }
         return false;
     }

@@ -1,0 +1,10 @@
+{
+  "httpRequest": {
+    "path": "/grpc/service/FailingMethod"
+  },
+  "grpcStreamResponse": {
+    "statusName": "UNAVAILABLE",
+    "statusMessage": "service is temporarily unavailable",
+    "closeConnection": true
+  }
+}

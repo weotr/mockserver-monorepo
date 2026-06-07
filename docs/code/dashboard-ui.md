@@ -92,15 +92,27 @@ The `DashboardWebSocketHandler` implements both `MockServerLogListener` and `Moc
 
 ## Top-Level Views
 
-The dashboard has **seven top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Metrics**, and **Chaos**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'metrics' | 'chaos'`.
+The dashboard has **nine top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Chaos**, **Drift**, **Metrics**, and **MCP Tools**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'`.
 
-The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Metrics, and Chaos.
+The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Chaos, Drift, Metrics, and MCP Tools.
+
+| View | Component | Description |
+|------|-----------|-------------|
+| `dashboard` | `DashboardGrid.tsx` | 2×2 grid of Log Messages, Active Expectations, Received Requests, Proxied Requests panels |
+| `traffic` | `TrafficInspector.tsx` | Full-width master/detail list of all captured traffic (mock-matched + proxied) |
+| `sessions` | `SessionInspector.tsx` | Swim-lane grouped view of isolated LLM conversation sessions |
+| `composer` | `ComposerView.tsx` | Unified expectation creator/editor for Standard HTTP and LLM Conversation expectations |
+| `library` | `LibraryView.tsx` | Fixture cassettes, run comparison, and export (HAR / OpenAPI / Postman / Bruno) |
+| `chaos` | `ServiceChaosPanel.tsx` | Service-scoped HTTP chaos registration, live TTL countdown, and clear-all |
+| `drift` | `DriftPanel.tsx` | Mock drift detection results: divergence records between forwarded responses and stub expectations |
+| `metrics` | `MetricsView.tsx` | Prometheus metrics polling: request counters, latency percentiles, JVM stats, chaos gauges |
+| `mcp-tools` | `McpToolsPanel.tsx` | Interactive MCP tool explorer for MockServer's own `/mockserver/mcp` control-plane tools |
 
 ```mermaid
 graph TB
     APP["App.tsx"]
     AB["AppBar.tsx
-6-button toggle strip"]
+9-button toggle strip"]
     FP["FilterPanel.tsx
 (dashboard, traffic, sessions only)"]
     DG["DashboardGrid.tsx
@@ -113,8 +125,14 @@ graph TB
 (view = 'composer')"]
     LV["LibraryView.tsx
 (view = 'library')"]
+    SCP["ServiceChaosPanel.tsx
+(view = 'chaos')"]
+    DP["DriftPanel.tsx
+(view = 'drift')"]
     MV["MetricsView.tsx
 (view = 'metrics')"]
+    MTP["McpToolsPanel.tsx
+(view = 'mcp-tools')"]
 
     APP --> AB
     APP --> FP
@@ -124,7 +142,10 @@ graph TB
     APP -->|view = sessions| SI
     APP -->|view = composer| CV
     APP -->|view = library| LV
+    APP -->|view = chaos| SCP
+    APP -->|view = drift| DP
     APP -->|view = metrics| MV
+    APP -->|view = mcp-tools| MTP
 ```
 
 ## Metrics View
@@ -135,7 +156,7 @@ It renders:
 - summary stat cards (requests received, matched, not-matched, forwarded) with inline-SVG sparklines (`Sparkline.tsx`),
 - a derived requests-per-second throughput chart (Δcount / Δt between scrapes, since the metrics are monotonic gauges),
 - request latency percentiles (p50/p95/p99) from the `mock_server_request_duration_seconds` histogram (shown only when present),
-- an **HTTP Chaos Faults** section showing cumulative `mock_server_http_chaos_injected_total` split by every `fault_type` the server emits (`drop`, `error`, `latency`, `truncate`, `malformed`, `slow`, `quota` — fault types are discovered from the scrape via `labelValues`, so a future type renders automatically), the `mock_server_active_service_chaos` gauge as an "active services" stat, and a per-fault-type time-series chart (shown only when a chaos metric is present and has non-zero data),
+- an **HTTP Chaos Faults** section (shown only when a chaos metric is present and has non-zero data) with: a per-fault-type stat + time-series chart of cumulative injections (`mock_server_http_chaos_injected_total`), and a separate per-fault-type chart of the active service-scoped chaos gauge (`mock_server_active_service_chaos`, labeled by `fault_type`) plotted by type rather than as a single counter. Fault types for both are discovered from the scrape via `labelValues`, so a future type renders automatically,
 - JVM heap memory, thread count, and GC stats (shown only when JVM metrics are present), and
 - a per-action breakdown of the `*_actions_count` gauges, plus the served MockServer version from `mock_server_build_info`.
 
@@ -161,6 +182,19 @@ There is **no charting dependency** (inline SVG) and no server change required. 
 | Active Expectations | `ExpectationPanel` → `JsonListItem` | `activeExpectations` | Currently registered expectations |
 | Received Requests | `RequestPanel` → `JsonListItem` | `recordedRequests` | All received HTTP requests with paired responses |
 | Proxied Requests | `RequestPanel` → `JsonListItem` | `proxiedRequests` | Forwarded requests with upstream responses |
+
+### Generate Stub on Unmatched Requests
+
+Log entries for unmatched requests (description contains `EXPECTATION_NOT_MATCHED`) show an
+extra "Generate Stub" action button (alongside the "Debug Mismatch / Why?" button) in
+`LogEntry`. It follows the same React-context pattern as Debug Mismatch: a nullable async
+callback is provided via `GenerateStubContext` (hook `useGenerateStubContext`) from `App`,
+backed by the `useGenerateStub` hook and Zustand UI state (`generateStubOpen` /
+`generateStubSuggestions` / `generateStubConfidence` / `generateStubLoading` /
+`generateStubError`). Clicking it extracts the request from the log entry, calls
+`PUT /mockserver/generateExpectation` via `lib/generateStub.ts`, and opens `GenerateStubDialog`
+with the returned suggestion(s) and confidence so the user can register the stub or open it in
+the Composer. The button is gated to unmatched entries only and hidden when no context is provided.
 
 ### Row Layout in Requests and Expectations
 
@@ -303,11 +337,33 @@ Prior to this, any UI feature that called an MCP tool was broken with a session-
 
 ## AppBar Styling
 
-The AppBar renders the five toggle buttons (Dashboard / Traffic / Sessions / Composer / Library) as a `ToggleButtonGroup`. The HAR download lives in Library → Export rather than as a top-bar icon.
+The AppBar renders the nine toggle buttons (Dashboard / Traffic / Sessions / Composer / Library / Chaos / Drift / Metrics / MCP Tools) as a `ToggleButtonGroup`. The HAR download lives in Library → Export rather than as a top-bar icon.
 
 **Light mode**: toggle buttons use `primary.contrastText` (white) text with a translucent white border (`rgba(255,255,255,0.3)`) and a translucent-white selected state. The status chip uses pale colour tints (`#7fffa0` connected, `#ffd180` connecting, `#ff8a80` error) so colour semantics remain readable against the blue AppBar background.
 
 **Dark mode**: MUI defaults are kept; no overrides applied.
+
+The toolbar uses `flexWrap` so its controls wrap onto a second row on narrow screens rather than clipping. Icon-only buttons carry both a `Tooltip` and an `aria-label`.
+
+## Tools Menu
+
+The AppBar "Import / export" (wrench) menu groups one-off control-plane tools, each opening a dialog:
+
+| Menu item | Dialog | Endpoint(s) |
+|-----------|--------|-------------|
+| Import OpenAPI / WSDL | `OpenApiImportDialog` / `WsdlImportDialog` | `PUT /mockserver/openapi` / WSDL import |
+| Pact contract (export / verify) | `PactExportDialog` | `PUT /mockserver/pact`, `PUT /mockserver/pact/verify` |
+| Mock OIDC provider | `OidcDialog` | `PUT /mockserver/oidc` |
+| AsyncAPI broker mock | `AsyncApiDialog` | `PUT/GET /mockserver/asyncapi`, `PUT /mockserver/asyncapi/verify` |
+| Register CRUD resource | `CrudDialog` | `PUT /mockserver/crud` |
+| Mock file store | `FileStoreDialog` | `PUT /mockserver/files/{store,list,retrieve,delete}` |
+| Diff two requests | `DiffRequestsDialog` | `PUT /mockserver/diff` (renders `DiffPanel`) |
+
+## Destructive-Action Safety & Feedback
+
+- **Confirmation**: "Reset server (all)" and "Clear expectations" route through a reusable `ConfirmDialog` instead of firing immediately; Reset is styled in the error colour and separated by a divider. "Clear logs" is benign and fires directly.
+- **Keyboard**: `⌘/Ctrl-L` clears **logs only** (not a full reset) — a full reset is intentionally not bound to a keystroke.
+- **Toasts**: a global `notification` in the store (`setNotification`) drives a `Snackbar` in `App.tsx`, giving success feedback for clear/reset and operating-mode changes. Failed operations use `severity="error"` consistently (not `warning`).
 
 ## Frontend Application
 
@@ -340,7 +396,7 @@ The AppBar renders the five toggle buttons (Dashboard / Traffic / Sessions / Com
   receivedSearch: '',
   proxiedSearch: '',
   trafficSearch: '',
-  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library'
+  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'
   selectedTrafficIndex: null,
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -369,7 +425,7 @@ graph TB
 Orchestrator: theme, WebSocket, shortcuts"]
     AB["AppBar.tsx
 Title bar: status, theme, clear menu
-5-button view toggle"]
+9-button view toggle"]
     FP["FilterPanel.tsx
 Collapsible request filter form"]
     DG["DashboardGrid.tsx
@@ -449,7 +505,7 @@ Expandable match failure reasons"]
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 5-button view toggle |
+| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 9-button view toggle |
 | `FilterPanel` | `FilterPanel.tsx` | Collapsible request filter form (method, path, headers, query params, cookies) with debounced WebSocket send; shown on dashboard/traffic/sessions |
 | `DashboardGrid` | `DashboardGrid.tsx` | 2×2 CSS grid layout for the four panels |
 | `TrafficInspector` | `TrafficInspector.tsx` | Full-width master list + adaptive detail pane for all captured traffic (mock-matched + proxied) |
@@ -733,3 +789,20 @@ The script:
 | `/mockserver/dashboard*` | — | Served by Vite (returns `req.url` in bypass) |
 
 The `MOCKSERVER_URL` env var is set by `local_ui_dev.sh` to match the configured MockServer port.
+
+### Cross-Origin (CORS) Support
+
+The dashboard is designed to connect to a MockServer at an arbitrary `host`/`port` (set via its
+connection fields or the `?host=`/`?port=` query parameters), which is inherently a cross-origin
+request when the dashboard is not served from that same MockServer. To make this work without any
+configuration, **MockServer always returns CORS headers on control-plane responses** (every
+`/mockserver/*` API response, written with `apiResponse == true`) and **answers the CORS preflight**
+(`OPTIONS`) for control-plane paths — both independent of the `enableCORSForAPI` setting. This is
+applied centrally in `ResponseWriter.writeResponse(...)` and `HttpActionHandler` (preflight), so it
+covers every control-plane endpoint, not just the dashboard-specific ones.
+
+Mock/proxy responses (`apiResponse == false`) are unaffected — they only receive CORS headers when
+`enableCORSForAllResponses` is enabled — so enabling cross-origin dashboard access never changes how
+mocked APIs respond. The Vite dev proxy above is therefore optional; the demo launcher
+(`launch-with-demo-data.sh`) points the dashboard straight at the MockServer port via `?port=` and
+relies on this CORS support.

@@ -1,0 +1,17 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "headers": {
+      "keyMatchStyle": "MATCHING_KEY",
+      "multiValuedHeader": [
+        "value.*"
+      ],
+      "headerTwo": [
+        "headerTwoValue"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

@@ -23,3 +23,12 @@ maintainers:
   - name: James D Bloom
     email: jamesdbloom+mockserver@gmail.com
 icon: http://mock-server.com/apple-touch-icon.png
+annotations:
+  # Artifact Hub listing metadata (https://artifacthub.io). name/description/keywords/home/sources/
+  # maintainers/icon above are read natively; these add the license and quick links.
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://www.mock-server.com
+    - name: Chart install guide
+      url: https://github.com/mock-server/mockserver-monorepo/blob/master/helm/mockserver/README.md

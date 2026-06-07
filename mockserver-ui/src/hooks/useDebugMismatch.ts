@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useDashboardStore } from '../store';
 import type { ConnectionParams } from './useConnectionParams';
 import type { DebugMismatchResult } from '../types';
+import { buildBaseUrl } from '../lib/mcpClient';
 
 export function useDebugMismatch(params: ConnectionParams) {
   const openDebugMismatch = useDashboardStore((s) => s.openDebugMismatch);
@@ -12,8 +13,7 @@ export function useDebugMismatch(params: ConnectionParams) {
     async (request: Record<string, unknown>) => {
       setLoading(true);
       useDashboardStore.setState({ debugMismatchOpen: true });
-      const protocol = params.secure ? 'https' : 'http';
-      const base = `${protocol}://${params.host}:${params.port}`;
+      const base = buildBaseUrl(params);
       try {
         const response = await fetch(`${base}/mockserver/debugMismatch`, {
           method: 'PUT',

@@ -1,0 +1,8 @@
+{
+  "httpRequest": {
+    "path": "/dns/notfound"
+  },
+  "dnsResponse": {
+    "responseCode": "NXDOMAIN"
+  }
+}

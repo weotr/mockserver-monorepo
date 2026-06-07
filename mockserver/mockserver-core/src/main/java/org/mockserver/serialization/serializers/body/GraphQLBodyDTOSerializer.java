@@ -32,6 +32,16 @@ public class GraphQLBodyDTOSerializer extends StdSerializer<GraphQLBodyDTO> {
         if (graphQLBodyDTO.getVariablesSchema() != null) {
             jgen.writeStringField("variablesSchema", graphQLBodyDTO.getVariablesSchema());
         }
+        if (graphQLBodyDTO.getSelectionSetMatchType() != null) {
+            jgen.writeStringField("selectionSetMatchType", graphQLBodyDTO.getSelectionSetMatchType().name());
+        }
+        if (graphQLBodyDTO.getFields() != null && !graphQLBodyDTO.getFields().isEmpty()) {
+            jgen.writeArrayFieldStart("fields");
+            for (String field : graphQLBodyDTO.getFields()) {
+                jgen.writeString(field);
+            }
+            jgen.writeEndArray();
+        }
         jgen.writeEndObject();
     }
 }

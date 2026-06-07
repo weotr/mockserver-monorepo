@@ -170,6 +170,123 @@ RSpec.describe MockServer::ForwardChainExpectation do
   end
 
   # -------------------------------------------------------------------
+  # respond_with_grpc_stream
+  # -------------------------------------------------------------------
+  describe '#respond_with_grpc_stream' do
+    it 'sets grpc_stream_response and upserts' do
+      grpc_resp = MockServer::GrpcStreamResponse.new(
+        status_name: 'OK',
+        messages: [MockServer::GrpcStreamMessage.new(json: '{"id": 1}')]
+      )
+      chain.respond_with_grpc_stream(grpc_resp)
+
+      expect(expectation.grpc_stream_response).to eq(grpc_resp)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.respond_with_grpc_stream('invalid') }.to raise_error(TypeError, /Expected GrpcStreamResponse/)
+      expect { chain.respond_with_grpc_stream(123) }.to raise_error(TypeError, /Expected GrpcStreamResponse/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # respond_with_grpc_bidi
+  # -------------------------------------------------------------------
+  describe '#respond_with_grpc_bidi' do
+    it 'sets grpc_bidi_response and upserts' do
+      bidi_resp = MockServer::GrpcBidiResponse.new(
+        status_name: 'OK',
+        messages: [MockServer::GrpcStreamMessage.new(json: '{"id": 1}')],
+        rules: [MockServer::GrpcBidiRule.new(
+          match_json: '{"name": "test"}',
+          responses: [MockServer::GrpcStreamMessage.new(json: '{"reply": "ok"}')]
+        )]
+      )
+      chain.respond_with_grpc_bidi(bidi_resp)
+
+      expect(expectation.grpc_bidi_response).to eq(bidi_resp)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.respond_with_grpc_bidi('invalid') }.to raise_error(TypeError, /Expected GrpcBidiResponse/)
+      expect { chain.respond_with_grpc_bidi(123) }.to raise_error(TypeError, /Expected GrpcBidiResponse/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # respond_with_binary
+  # -------------------------------------------------------------------
+  describe '#respond_with_binary' do
+    it 'sets binary_response and upserts' do
+      bin_resp = MockServer::BinaryResponse.new(binary_data: 'AQID')
+      chain.respond_with_binary(bin_resp)
+
+      expect(expectation.binary_response).to eq(bin_resp)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.respond_with_binary('invalid') }.to raise_error(TypeError, /Expected BinaryResponse/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # respond_with_dns
+  # -------------------------------------------------------------------
+  describe '#respond_with_dns' do
+    it 'sets dns_response and upserts' do
+      dns_resp = MockServer::DnsResponse.new(
+        response_code: 'NOERROR',
+        answer_records: [MockServer::DnsRecord.a_record('example.com', '1.2.3.4')]
+      )
+      chain.respond_with_dns(dns_resp)
+
+      expect(expectation.dns_response).to eq(dns_resp)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.respond_with_dns('invalid') }.to raise_error(TypeError, /Expected DnsResponse/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # forward_with_template
+  # -------------------------------------------------------------------
+  describe '#forward_with_template' do
+    it 'sets http_forward_template and upserts' do
+      tpl = MockServer::HttpTemplate.new(template_type: 'VELOCITY', template: '$req.path')
+      chain.forward_with_template(tpl)
+
+      expect(expectation.http_forward_template).to eq(tpl)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.forward_with_template('invalid') }.to raise_error(TypeError, /Expected HttpTemplate/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # forward_with_class_callback
+  # -------------------------------------------------------------------
+  describe '#forward_with_class_callback' do
+    it 'sets http_forward_class_callback and upserts' do
+      callback = MockServer::HttpClassCallback.new(callback_class: 'com.example.MyForwardCallback')
+      chain.forward_with_class_callback(callback)
+
+      expect(expectation.http_forward_class_callback).to eq(callback)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'raises TypeError for invalid types' do
+      expect { chain.forward_with_class_callback('invalid') }.to raise_error(TypeError, /Expected HttpClassCallback/)
+    end
+  end
+
+  # -------------------------------------------------------------------
   # Chaining with_id and with_priority
   # -------------------------------------------------------------------
   describe 'chaining' do

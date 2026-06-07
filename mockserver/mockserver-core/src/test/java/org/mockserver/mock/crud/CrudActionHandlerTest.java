@@ -220,6 +220,101 @@ public class CrudActionHandlerTest {
         assertThat(response.getBodyAsString(), containsString("missing id"));
     }
 
+    // PATCH
+
+    @Test
+    public void shouldPatchItem() throws Exception {
+        // given
+        HttpRequest request = request("/api/users/1")
+            .withMethod("PATCH")
+            .withBody("{\"email\":\"alice.patched@example.com\"}");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        ObjectNode body = (ObjectNode) objectMapper.readTree(response.getBodyAsString());
+        assertThat(body.get("name").asText(), is("Alice"));
+        assertThat(body.get("email").asText(), is("alice.patched@example.com"));
+        assertThat(body.get("id").asLong(), is(1L));
+    }
+
+    @Test
+    public void shouldReturn404WhenPatchingNonExistentItem() {
+        // given
+        HttpRequest request = request("/api/users/999")
+            .withMethod("PATCH")
+            .withBody("{\"name\":\"Ghost\"}");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(404));
+        assertThat(response.getBodyAsString(), containsString("not found"));
+    }
+
+    @Test
+    public void shouldReturn400ForEmptyBodyOnPatch() {
+        // given
+        HttpRequest request = request("/api/users/1").withMethod("PATCH");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(400));
+        assertThat(response.getBodyAsString(), containsString("request body is required"));
+    }
+
+    @Test
+    public void shouldReturn400ForMissingIdInPatch() {
+        // given
+        HttpRequest request = request("/api/users")
+            .withMethod("PATCH")
+            .withBody("{\"name\":\"Alice\"}");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(400));
+        assertThat(response.getBodyAsString(), containsString("missing id"));
+    }
+
+    @Test
+    public void shouldReturn400ForInvalidJsonOnPatch() {
+        // given
+        HttpRequest request = request("/api/users/1")
+            .withMethod("PATCH")
+            .withBody("not json");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(400));
+        assertThat(response.getBodyAsString(), containsString("invalid request body"));
+    }
+
+    @Test
+    public void shouldPatchPreserveUnchangedFields() throws Exception {
+        // given
+        HttpRequest request = request("/api/users/1")
+            .withMethod("PATCH")
+            .withBody("{\"name\":\"Alice Patched\"}");
+
+        // when
+        HttpResponse response = handler.handlePatch(request);
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        ObjectNode body = (ObjectNode) objectMapper.readTree(response.getBodyAsString());
+        assertThat(body.get("name").asText(), is("Alice Patched"));
+        assertThat(body.get("email").asText(), is("alice@example.com"));
+    }
+
     // DELETE
 
     @Test

@@ -3209,6 +3209,28 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldAddCorsHeadersToDriftResponsesWithoutEnableCorsForApi() {
+        // the Drift dashboard tab GETs /mockserver/drift (and clears via /drift/clear)
+        // cross-origin from the UI dev server, so these responses must carry CORS headers
+        // even when enableCORSForAPI is off (the default here)
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        HttpRequest getRequest = request("/mockserver/drift")
+            .withMethod("GET")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(getRequest, getWriter, false), is(true));
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        assertThat(getWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+
+        FakeResponseWriter clearWriter = new FakeResponseWriter();
+        HttpRequest clearRequest = request("/mockserver/drift/clear")
+            .withMethod("PUT")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(clearRequest, clearWriter, false), is(true));
+        assertThat(clearWriter.response.getStatusCode(), is(200));
+        assertThat(clearWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+    }
+
+    @Test
     public void shouldRejectServiceChaosWithTtlBelowOne() throws Exception {
         FakeResponseWriter writer = new FakeResponseWriter();
         HttpRequest putRequest = request("/mockserver/serviceChaos")
@@ -3234,6 +3256,340 @@ public class HttpStateTest {
         assertThat(handle, is(true));
         assertThat(responseWriter.response.getStatusCode(), is(400));
         assertThat(responseWriter.response.getBodyAsString(), containsString("request body is required"));
+    }
+
+    @Test
+    public void shouldHandleOidcRequestWithDefaults() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(6));
+
+        // Verify the discovery endpoint is now matchable
+        HttpResponse discoveryResponse = httpState.firstMatchingExpectation(
+            request("/.well-known/openid-configuration").withMethod("GET")
+        ).getHttpResponse();
+        assertThat(discoveryResponse, is(notNullValue()));
+        assertThat(discoveryResponse.getStatusCode(), is(200));
+        assertThat(discoveryResponse.getBodyAsString(), containsString("\"issuer\""));
+    }
+
+    @Test
+    public void shouldHandleOidcRequestWithCustomConfig() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("{\"issuer\":\"https://custom.idp\",\"subject\":\"custom-sub\",\"tokenPath\":\"/custom/token\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+
+        // Verify the token endpoint matches the custom path
+        Expectation tokenMatch = httpState.firstMatchingExpectation(
+            request("/custom/token").withMethod("POST")
+        );
+        assertThat(tokenMatch, is(notNullValue()));
+        assertThat(tokenMatch.getHttpResponse().getBodyAsString(), containsString("access_token"));
+    }
+
+    @Test
+    public void shouldHandleOidcRequestWithEmptyBody() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(6));
+    }
+
+    @Test
+    public void shouldHandleInvalidOidcRequest() {
+        // given
+        HttpRequest oidcRequest = request("/mockserver/oidc")
+            .withMethod("PUT")
+            .withBody("{invalid json");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    // --- PUT /import tests ---
+
+    @Test
+    public void shouldHandleImportHarAutoDetected() {
+        // given
+        String har = "{\"log\":{\"entries\":[" +
+            "{\"request\":{\"method\":\"GET\",\"url\":\"http://example.com/api/test\"}," +
+            "\"response\":{\"status\":200,\"content\":{\"text\":\"{\\\"ok\\\":true}\"}}}" +
+            "]}}";
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody(har);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(1));
+
+        // Verify the expectation is now matchable
+        Expectation match = httpState.firstMatchingExpectation(
+            request("/api/test").withMethod("GET")
+        );
+        assertThat(match, is(notNullValue()));
+        assertThat(match.getHttpResponse().getStatusCode(), is(200));
+    }
+
+    @Test
+    public void shouldHandleImportPostmanAutoDetected() {
+        // given
+        String postman = "{\"info\":{\"name\":\"Test\"},\"item\":[" +
+            "{\"name\":\"Get Health\",\"request\":{\"method\":\"GET\",\"url\":\"http://example.com/health\"}," +
+            "\"response\":[{\"code\":200,\"body\":\"{\\\"status\\\":\\\"up\\\"}\"}]}" +
+            "]}";
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody(postman);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(1));
+    }
+
+    @Test
+    public void shouldHandleImportWithFormatQueryParam() {
+        // given — use ?format=har
+        String har = "{\"log\":{\"entries\":[" +
+            "{\"request\":{\"method\":\"GET\",\"url\":\"http://example.com/data\"}," +
+            "\"response\":{\"status\":200}}" +
+            "]}}";
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "har")
+            .withBody(har);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+    }
+
+    @Test
+    public void shouldHandleImportMalformedJson() {
+        // given
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody("{not valid json");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    @Test
+    public void shouldHandleImportEmptyBody() {
+        // given
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    @Test
+    public void shouldHandleImportUnsupportedFormat() {
+        // given
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "insomnia")
+            .withBody("{\"some\":\"json\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("unsupported import format"));
+    }
+
+    @Test
+    public void shouldHandleImportUnrecognisedAutoDetect() {
+        // given — JSON that is neither HAR nor Postman
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody("{\"something\":\"else\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("unable to auto-detect"));
+    }
+
+    // ---- Pact Verify Endpoint Tests ----
+
+    @Test
+    public void shouldHandlePactVerifyReturning202WhenAllInteractionsPass() {
+        // given — register an expectation
+        httpState.add(new Expectation(
+            request().withMethod("GET").withPath("/health")
+        ).thenRespond(
+            response().withStatusCode(200)
+        ));
+
+        String pactContract = "{\n"
+            + "  \"consumer\": {\"name\": \"test\"},\n"
+            + "  \"provider\": {\"name\": \"provider\"},\n"
+            + "  \"interactions\": [{\n"
+            + "    \"description\": \"health check\",\n"
+            + "    \"request\": {\"method\": \"GET\", \"path\": \"/health\"},\n"
+            + "    \"response\": {\"status\": 200}\n"
+            + "  }],\n"
+            + "  \"metadata\": {\"pactSpecification\": {\"version\": \"3.0.0\"}}\n"
+            + "}";
+
+        HttpRequest verifyRequest = request("/mockserver/pact/verify")
+            .withMethod("PUT")
+            .withBody(pactContract);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(verifyRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(202));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("\"verified\" : true"));
+    }
+
+    @Test
+    public void shouldHandlePactVerifyReturning406WhenInteractionFails() {
+        // given — register an expectation with status 200
+        httpState.add(new Expectation(
+            request().withMethod("GET").withPath("/health")
+        ).thenRespond(
+            response().withStatusCode(200)
+        ));
+
+        // Pact expects status 204 — mismatch
+        String pactContract = "{\n"
+            + "  \"consumer\": {\"name\": \"test\"},\n"
+            + "  \"provider\": {\"name\": \"provider\"},\n"
+            + "  \"interactions\": [{\n"
+            + "    \"description\": \"health check\",\n"
+            + "    \"request\": {\"method\": \"GET\", \"path\": \"/health\"},\n"
+            + "    \"response\": {\"status\": 204}\n"
+            + "  }],\n"
+            + "  \"metadata\": {\"pactSpecification\": {\"version\": \"3.0.0\"}}\n"
+            + "}";
+
+        HttpRequest verifyRequest = request("/mockserver/pact/verify")
+            .withMethod("PUT")
+            .withBody(pactContract);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(verifyRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(406));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("\"verified\" : false"));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("status code mismatch"));
+    }
+
+    @Test
+    public void shouldHandlePactVerifyReturning400OnEmptyBody() {
+        HttpRequest verifyRequest = request("/mockserver/pact/verify")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(verifyRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("must not be empty"));
+    }
+
+    @Test
+    public void shouldHandlePactVerifyReturning400OnMalformedJson() {
+        HttpRequest verifyRequest = request("/mockserver/pact/verify")
+            .withMethod("PUT")
+            .withBody("not json at all {{{");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(verifyRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
     }
 
 }

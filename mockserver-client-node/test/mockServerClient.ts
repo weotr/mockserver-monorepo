@@ -1,6 +1,6 @@
 import {mockServerClient, ClockStatus, MockServerClient} from '../index';
 import {RequestResponse} from '../mockServerClient';
-import {Expectation, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, RequestDefinition} from '../mockServer';
+import {Expectation, ExpectationStep, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, RequestDefinition} from '../mockServer';
 
 const client: MockServerClient = mockServerClient('mockhttp', 1080);
 
@@ -124,6 +124,88 @@ const overrideForwardRequestWithModifiers: HttpOverrideForwardedRequest = {
         }
     }
 }
+
+// ExpectationStep type-checking
+const sideEffectStep: ExpectationStep = {
+    httpRequest: {
+        method: 'POST',
+        path: '/webhook'
+    },
+    blocking: true,
+    timeout: {
+        timeUnit: 'SECONDS',
+        value: 5
+    },
+    failurePolicy: 'FAIL_FAST'
+};
+
+const responderStep: ExpectationStep = {
+    httpResponse: {
+        statusCode: 200,
+        body: 'ok'
+    },
+    responder: true,
+    delay: {
+        timeUnit: 'MILLISECONDS',
+        value: 100
+    }
+};
+
+const forwardStep: ExpectationStep = {
+    httpForward: {
+        host: 'example.com',
+        port: 8080,
+        scheme: 'HTTP'
+    },
+    responder: true
+};
+
+const callbackStep: ExpectationStep = {
+    httpClassCallback: {
+        callbackClass: 'com.example.Callback'
+    }
+};
+
+const objectCallbackStep: ExpectationStep = {
+    httpObjectCallback: {
+        clientId: 'ws-client-1'
+    }
+};
+
+const overrideStep: ExpectationStep = {
+    httpOverrideForwardedRequest: {
+        requestOverride: {
+            path: '/override'
+        }
+    },
+    responder: true
+};
+
+const errorStep: ExpectationStep = {
+    httpError: {
+        dropConnection: true
+    },
+    responder: true
+};
+
+const bestEffortStep: ExpectationStep = {
+    httpRequest: {
+        path: '/hook'
+    },
+    blocking: false,
+    failurePolicy: 'BEST_EFFORT'
+};
+
+const stepsExpectation: Expectation = {
+    httpRequest: {
+        method: 'GET',
+        path: '/api'
+    },
+    steps: [sideEffectStep, responderStep],
+    times: {
+        unlimited: true
+    }
+};
 
 async function test() {
     let requestResponse: RequestResponse = await client.mockAnyResponse(expectation);

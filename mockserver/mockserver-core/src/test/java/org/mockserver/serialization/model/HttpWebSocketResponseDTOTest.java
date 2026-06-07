@@ -1,9 +1,7 @@
 package org.mockserver.serialization.model;
 
 import org.junit.Test;
-import org.mockserver.model.Delay;
-import org.mockserver.model.HttpWebSocketResponse;
-import org.mockserver.model.WebSocketMessage;
+import org.mockserver.model.*;
 
 import java.util.Arrays;
 import java.util.List;
@@ -102,5 +100,75 @@ public class HttpWebSocketResponseDTOTest {
         assertThat(dto.getSubprotocol(), is(nullValue()));
         assertThat(dto.getCloseConnection(), is(nullValue()));
         assertThat(dto.getMessages(), is(nullValue()));
+        assertThat(dto.getMatchers(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldSerializeMatchers() {
+        WebSocketMessageMatcher matcher = WebSocketMessageMatcher.webSocketMessageMatcher()
+            .withText("ping")
+            .withResponses(WebSocketMessage.webSocketMessage("pong"));
+
+        HttpWebSocketResponse httpWebSocketResponse = HttpWebSocketResponse.webSocketResponse()
+            .withMatcher(matcher);
+
+        HttpWebSocketResponseDTO dto = new HttpWebSocketResponseDTO(httpWebSocketResponse);
+
+        assertThat(dto.getMatchers().size(), is(1));
+        assertThat(dto.getMatchers().get(0).getTextMatcher(), is("ping"));
+        assertThat(dto.getMatchers().get(0).getFrameType(), is(WebSocketFrameType.TEXT));
+        assertThat(dto.getMatchers().get(0).getResponses().size(), is(1));
+    }
+
+    @Test
+    public void shouldDeserializeMatchers() {
+        WebSocketMessageMatcher matcher = WebSocketMessageMatcher.webSocketMessageMatcher()
+            .withText("ping")
+            .withResponses(WebSocketMessage.webSocketMessage("pong"));
+
+        HttpWebSocketResponse httpWebSocketResponse = HttpWebSocketResponse.webSocketResponse()
+            .withMatcher(matcher);
+
+        HttpWebSocketResponse builtResponse = new HttpWebSocketResponseDTO(httpWebSocketResponse).buildObject();
+
+        assertThat(builtResponse.getMatchers().size(), is(1));
+        assertThat(builtResponse.getMatchers().get(0).getTextMatcher().getValue(), is("ping"));
+        assertThat(builtResponse.getMatchers().get(0).getFrameType(), is(WebSocketFrameType.TEXT));
+        assertThat(builtResponse.getMatchers().get(0).getResponses().size(), is(1));
+        assertThat(builtResponse.getMatchers().get(0).getResponses().get(0).getText(), is("pong"));
+    }
+
+    @Test
+    public void shouldRoundTripMatchersAndMessages() {
+        WebSocketMessageMatcher matcher = WebSocketMessageMatcher.webSocketMessageMatcher()
+            .withText("ping")
+            .withResponses(WebSocketMessage.webSocketMessage("pong"));
+        WebSocketMessage initialMessage = WebSocketMessage.webSocketMessage("welcome");
+
+        HttpWebSocketResponse original = HttpWebSocketResponse.webSocketResponse()
+            .withMessage(initialMessage)
+            .withMatcher(matcher)
+            .withCloseConnection(false);
+
+        HttpWebSocketResponse roundTripped = new HttpWebSocketResponseDTO(original).buildObject();
+
+        assertThat(roundTripped.getMessages().size(), is(1));
+        assertThat(roundTripped.getMessages().get(0).getText(), is("welcome"));
+        assertThat(roundTripped.getMatchers().size(), is(1));
+        assertThat(roundTripped.getMatchers().get(0).getTextMatcher().getValue(), is("ping"));
+        assertThat(roundTripped.getCloseConnection(), is(false));
+    }
+
+    @Test
+    public void shouldSetMatchersViaSetter() {
+        WebSocketMessageMatcherDTO matcherDTO = new WebSocketMessageMatcherDTO();
+        matcherDTO.setFrameType(WebSocketFrameType.TEXT);
+        matcherDTO.setTextMatcher("ping");
+
+        HttpWebSocketResponseDTO dto = new HttpWebSocketResponseDTO(null);
+        dto.setMatchers(List.of(matcherDTO));
+
+        assertThat(dto.getMatchers().size(), is(1));
+        assertThat(dto.getMatchers().get(0).getTextMatcher(), is("ping"));
     }
 }

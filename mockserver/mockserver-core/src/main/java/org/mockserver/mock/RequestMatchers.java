@@ -16,10 +16,14 @@ import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.listeners.MockServerMatcherNotifier;
 import org.mockserver.model.*;
 import org.mockserver.scheduler.Scheduler;
+import org.mockserver.state.ExpectationEntry;
+import org.mockserver.state.KeyValueStore;
+import org.mockserver.state.StateBackend;
 import org.mockserver.uuid.UUIDService;
 import org.slf4j.event.Level;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -39,6 +43,10 @@ import static org.slf4j.event.Level.TRACE;
 @SuppressWarnings("FieldMayBeFinal")
 public class RequestMatchers extends MockServerMatcherNotifier {
 
+    // Node-local cache of compiled HttpRequestMatchers, kept in sync with the
+    // backend KeyValueStore<ExpectationEntry>. Tests access this field directly
+    // (package-private) so it must remain a functioning CPQ with identical
+    // ordering semantics.
     final CircularPriorityQueue<String, HttpRequestMatcher, SortableExpectationId> httpRequestMatchers;
     final CircularHashMap<String, RequestDefinition> expectationRequestDefinitions;
     private final MockServerLogger mockServerLogger;
@@ -48,6 +56,19 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     private MatcherBuilder matcherBuilder;
     private Metrics metrics;
     private final ScenarioManager scenarioManager = new ScenarioManager();
+    // G10 phase 2b: the backend's expectation KV store is the SOURCE OF TRUTH
+    // for expectation definitions, ordering, and eviction. The node-local
+    // httpRequestMatchers CPQ is a derived cache of compiled matchers.
+    private volatile StateBackend stateBackend;
+    private volatile KeyValueStore<ExpectationEntry> expectationBackend;
+    // Fast id-to-matcher lookup for the node-local cache. Kept in sync with
+    // httpRequestMatchers; used to avoid O(n) scans during reconciliation.
+    private final ConcurrentHashMap<String, HttpRequestMatcher> matcherCacheById = new ConcurrentHashMap<>();
+    // Tracks the backend version that was last reconciled for each expectation
+    // id. Used by reconcileFromBackend() to detect remote updates that changed
+    // only non-sort fields (e.g. response body) — without this, such updates
+    // would leave a stale matcher serving the old behaviour.
+    private final ConcurrentHashMap<String, Long> lastReconciledVersion = new ConcurrentHashMap<>();
 
     public RequestMatchers(Configuration configuration, MockServerLogger mockServerLogger, Scheduler scheduler, WebSocketClientRegistry webSocketClientRegistry) {
         super(scheduler);
@@ -73,11 +94,67 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         }
     }
 
+    /**
+     * Sets the state backend reference and wires the expectation KV store
+     * as the source of truth. Called by {@code HttpState} after construction.
+     * The node-local httpRequestMatchers CPQ becomes a derived cache; all
+     * mutations route through the backend first.
+     * <p>
+     * When a backend is wired, the node-local CPQ's maxSize is raised to
+     * {@code Integer.MAX_VALUE} so that eviction is controlled exclusively
+     * by the backend (avoiding insertion-order divergence between two CPQs
+     * on update-in-place vs re-insert). {@link #reconcileEvictions()} trims
+     * the node-local cache after each backend mutation.
+     * <p>
+     * <b>Threading contract:</b> all control-plane mutations (add, update,
+     * remove, clear, reset, setStateBackend) are assumed to be externally
+     * serialized — i.e. a single writer at a time. This is satisfied today
+     * because {@code HttpState} serializes control-plane calls on the Netty
+     * event loop or holds the action lock.
+     * <p>
+     * TODO(jamesdbloom): phase 2c — when remote invalidation events arrive
+     * concurrently from a clustered backend, this single-writer assumption
+     * must be revisited — likely by introducing an internal lock or
+     * event-queue around the node-local cache reconciliation.
+     */
+    public void setStateBackend(StateBackend stateBackend) {
+        this.stateBackend = stateBackend;
+        this.expectationBackend = stateBackend != null ? stateBackend.expectations() : null;
+        if (this.expectationBackend != null) {
+            // Disable node-local eviction — backend is the eviction authority
+            httpRequestMatchers.setMaxSize(Integer.MAX_VALUE);
+        } else {
+            // Restore original eviction when backend is removed
+            httpRequestMatchers.setMaxSize(configuration.maxExpectations());
+        }
+    }
+
+    /**
+     * Returns the state backend, or {@code null} if none has been set.
+     */
+    public StateBackend getStateBackend() {
+        return stateBackend;
+    }
+
     public Expectation add(Expectation expectation, Cause cause) {
         Expectation upsertedExpectation = null;
         if (expectation != null) {
             validateRespondBeforeBody(expectation);
             expectationRequestDefinitions.put(expectation.getId(), expectation.getHttpRequest());
+
+            // CPX-04: Propagate created time from existing backend entry (if
+            // updating) to preserve ordering — must happen before backend put.
+            // This is intentionally redundant with the node-local created
+            // propagation below (line ~155): the backend propagation covers
+            // the case where the node-local CPQ does not yet have the matcher
+            // (e.g. after a cold-start rebuild from backend state), while the
+            // node-local propagation covers the no-backend fallback path.
+            if (expectationBackend != null) {
+                expectationBackend.get(expectation.getId()).ifPresent(existing -> {
+                    expectation.withCreated(existing.getValue().getExpectation().getCreated());
+                });
+            }
+
             upsertedExpectation = httpRequestMatchers
                 .getByKey(expectation.getId())
                 .map(httpRequestMatcher -> {
@@ -107,10 +184,20 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                     } else {
                         httpRequestMatchers.addPriorityKey(httpRequestMatcher);
                     }
+                    matcherCacheById.put(expectation.getId(), httpRequestMatcher);
                     return httpRequestMatcher;
                 })
                 .orElseGet(() -> addPrioritisedExpectation(expectation, cause))
                 .getExpectation();
+
+            // Put into backend KV (source of truth) — this may trigger
+            // maxExpectations eviction inside the backend's CPQ.
+            if (expectationBackend != null) {
+                long newVersion = expectationBackend.put(expectation.getId(), new ExpectationEntry(expectation));
+                lastReconciledVersion.put(expectation.getId(), newVersion);
+                reconcileEvictions();
+            }
+
             notifyListeners(this, cause);
         }
         return upsertedExpectation;
@@ -136,6 +223,14 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                         addedIds.add(expectation.getId());
                         expectationRequestDefinitions.put(expectation.getId(), expectation.getHttpRequest());
                         existingKeysForCause.remove(expectation.getId());
+
+                        // Propagate created time from backend if present
+                        if (expectationBackend != null) {
+                            expectationBackend.get(expectation.getId()).ifPresent(existing -> {
+                                expectation.withCreated(existing.getValue().getExpectation().getCreated());
+                            });
+                        }
+
                         if (httpRequestMatchersByKey.containsKey(expectation.getId())) {
                             HttpRequestMatcher httpRequestMatcher = httpRequestMatchersByKey.get(expectation.getId());
                             // update source to new cause
@@ -167,9 +262,16 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                             } else {
                                 httpRequestMatchers.addPriorityKey(httpRequestMatcher);
                             }
+                            matcherCacheById.put(expectation.getId(), httpRequestMatcher);
                         } else {
                             addPrioritisedExpectation(expectation, cause);
                             numberOfChanges.getAndIncrement();
+                        }
+
+                        // Put into backend KV (source of truth)
+                        if (expectationBackend != null) {
+                            long newVersion = expectationBackend.put(expectation.getId(), new ExpectationEntry(expectation));
+                            lastReconciledVersion.put(expectation.getId(), newVersion);
                         }
                     }
                 });
@@ -182,6 +284,12 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                         metrics.decrement(httpRequestMatcher.getExpectation().getAction().getType());
                     }
                 });
+
+            // Reconcile evictions after batch update
+            if (expectationBackend != null) {
+                reconcileEvictions();
+            }
+
             if (numberOfChanges.get() > 0) {
                 notifyListeners(this, cause);
             }
@@ -212,6 +320,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         HttpRequestMatcher httpRequestMatcher = matcherBuilder.transformsToMatcher(expectation);
         httpRequestMatchers.add(httpRequestMatcher);
         httpRequestMatcher.withSource(cause);
+        matcherCacheById.put(expectation.getId(), httpRequestMatcher);
         if (expectation.getAction() != null) {
             metrics.increment(expectation.getAction().getType());
         }
@@ -229,12 +338,20 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     }
 
     public int size() {
+        // The node-local cache is kept in sync with the backend, so
+        // either source gives the same answer; prefer the CPQ as it
+        // is what tests assert against.
         return httpRequestMatchers.size();
     }
 
     public void reset(Cause cause) {
         httpRequestMatchers.stream().forEach(httpRequestMatcher -> removeHttpRequestMatcher(httpRequestMatcher, cause, false, UUIDService.getUUID()));
         expectationRequestDefinitions.clear();
+        matcherCacheById.clear();
+        lastReconciledVersion.clear();
+        if (expectationBackend != null) {
+            expectationBackend.clear();
+        }
         scenarioManager.reset();
         Metrics.clearActionMetrics();
         Metrics.clearRequestAndExpectationMetrics();
@@ -281,6 +398,9 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                     continue;
                 }
                 httpRequestMatcher.setResponseInProgress(true);
+                // TODO(phase-2c-times): under clustering, Times consumption must be a
+                // backend CAS so Times.exactly(N) is exactly-once across nodes; currently
+                // node-local (correct only single-node).
                 if (!expectation.consumeMatch()) {
                     httpRequestMatcher.setResponseInProgress(false);
                     continue;
@@ -357,6 +477,9 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                     continue;
                 }
                 httpRequestMatcher.setResponseInProgress(true);
+                // TODO(phase-2c-times): under clustering, Times consumption must be a
+                // backend CAS so Times.exactly(N) is exactly-once across nodes; currently
+                // node-local (correct only single-node).
                 if (!expectation.consumeMatch()) {
                     httpRequestMatcher.setResponseInProgress(false);
                     continue;
@@ -425,6 +548,115 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         }
     }
 
+    /**
+     * Reconciles the node-local HttpRequestMatcher cache against the backend
+     * KeyValueStore. This handles three cases:
+     * <ol>
+     *   <li><b>Eviction:</b> cached matchers whose id is no longer in the
+     *       backend are removed (mirrors maxExpectations eviction).</li>
+     *   <li><b>Remote add:</b> backend entries with no local matcher get a
+     *       new compiled HttpRequestMatcher (enables cross-node visibility
+     *       under clustering).</li>
+     *   <li><b>Remote update:</b> backend entries whose version is newer
+     *       than the locally cached version get their matcher rebuilt.</li>
+     * </ol>
+     * <p>
+     * In single-node / no-backend mode this method is a no-op. When the
+     * backend is LOCAL (non-clustered), only eviction applies because all
+     * mutations originate locally and the CPQ is already in sync.
+     * <p>
+     * <b>Threading contract:</b> serialized via {@code synchronized} so
+     * that concurrent remote invalidation events (from a clustered backend)
+     * do not corrupt the node-local CPQ. Local mutations are still
+     * single-writer (Netty event loop / action lock); the lock is
+     * reentrant-safe for local callers because Java's {@code synchronized}
+     * is reentrant.
+     * <p>
+     * <b>Concurrent matching (data-plane) note:</b> this method applies
+     * incremental per-entry mutations (add/update/remove) to the CPQ — the
+     * same granularity as normal control-plane add/remove. The CPQ's
+     * {@code toSortedList()} provides an eventually-consistent sorted
+     * snapshot via {@code ConcurrentSkipListSet + volatile sortedCache +
+     * filter(nonNull)}. A matching thread calling {@code toSortedList()}
+     * during a reconcile may see a snapshot that lags by one mutation, but
+     * will never see a torn/empty view. This matches the pre-existing
+     * control-plane / data-plane concurrency contract.
+     */
+    public synchronized void reconcileFromBackend() {
+        if (expectationBackend == null) {
+            return;
+        }
+        // Snapshot backend state
+        Map<String, KeyValueStore.Entry<ExpectationEntry>> backendEntries = new HashMap<>();
+        expectationBackend.entries().forEach(e -> backendEntries.put(e.getKey(), e));
+
+        Set<String> backendIds = backendEntries.keySet();
+
+        // 1. Remove evicted matchers (id no longer in backend)
+        List<String> evictedIds = new ArrayList<>();
+        for (String cachedId : matcherCacheById.keySet()) {
+            if (!backendIds.contains(cachedId)) {
+                evictedIds.add(cachedId);
+            }
+        }
+        for (String evictedId : evictedIds) {
+            HttpRequestMatcher evictedMatcher = matcherCacheById.remove(evictedId);
+            if (evictedMatcher != null) {
+                httpRequestMatchers.remove(evictedMatcher);
+            }
+            expectationRequestDefinitions.remove(evictedId);
+            lastReconciledVersion.remove(evictedId);
+        }
+
+        // 2. Add new entries and update stale entries (remote writes)
+        for (Map.Entry<String, KeyValueStore.Entry<ExpectationEntry>> entry : backendEntries.entrySet()) {
+            String id = entry.getKey();
+            long backendVersion = entry.getValue().getVersion();
+            ExpectationEntry backendEntry = entry.getValue().getValue();
+            Expectation expectation = backendEntry.getExpectation();
+
+            HttpRequestMatcher existing = matcherCacheById.get(id);
+            if (existing == null) {
+                // New entry from remote node — build matcher locally
+                HttpRequestMatcher newMatcher = matcherBuilder.transformsToMatcher(expectation);
+                httpRequestMatchers.add(newMatcher);
+                newMatcher.withSource(Cause.API);
+                matcherCacheById.put(id, newMatcher);
+                expectationRequestDefinitions.put(id, expectation.getHttpRequest());
+                lastReconciledVersion.put(id, backendVersion);
+                if (expectation.getAction() != null) {
+                    metrics.increment(expectation.getAction().getType());
+                }
+            } else if (existing.getExpectation() != null) {
+                // Check if backend version is strictly newer than the last
+                // version we reconciled for this id. This catches ALL remote
+                // updates — not just sort-field changes (id/priority/created)
+                // but also response body, request pattern, or action changes.
+                Long lastVersion = lastReconciledVersion.get(id);
+                if (lastVersion == null || backendVersion > lastVersion) {
+                    // Update the matcher preserving runtime state (Times,
+                    // responseInProgress). Re-insert priority key if sort
+                    // fields changed.
+                    httpRequestMatchers.removePriorityKey(existing);
+                    existing.update(expectation);
+                    httpRequestMatchers.addPriorityKey(existing);
+                    matcherCacheById.put(id, existing);
+                    expectationRequestDefinitions.put(id, expectation.getHttpRequest());
+                    lastReconciledVersion.put(id, backendVersion);
+                }
+            }
+        }
+    }
+
+    /**
+     * Backward-compatible alias: reconciles evictions only. Called after
+     * local mutations where the node-local CPQ is already up-to-date
+     * except for backend eviction. Delegates to the full reconcile.
+     */
+    private void reconcileEvictions() {
+        reconcileFromBackend();
+    }
+
     Expectation postProcess(Expectation expectation) {
         if (expectation != null) {
             getHttpRequestMatchersCopy()
@@ -447,6 +679,15 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     @SuppressWarnings("rawtypes")
     private void removeHttpRequestMatcher(HttpRequestMatcher httpRequestMatcher, Cause cause, boolean notifyAndUpdateMetrics, String logCorrelationId) {
         if (httpRequestMatchers.remove(httpRequestMatcher)) {
+            // Remove from backend KV and node-local cache
+            if (httpRequestMatcher.getExpectation() != null) {
+                String id = httpRequestMatcher.getExpectation().getId();
+                matcherCacheById.remove(id);
+                lastReconciledVersion.remove(id);
+                if (expectationBackend != null) {
+                    expectationBackend.remove(id);
+                }
+            }
             if (httpRequestMatcher.getExpectation() != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                 Expectation expectation = httpRequestMatcher.getExpectation().clone();
                 mockServerLogger.logEvent(
@@ -498,6 +739,11 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                 }
                 if (expectationRequestDefinitions.containsKey(expectationId.getId())) {
                     return expectationRequestDefinitions.get(expectationId.getId());
+                } else if (expectationBackend != null) {
+                    // Fall back to backend KV as source of truth
+                    return expectationBackend.get(expectationId.getId())
+                        .map(v -> v.getValue().getExpectation().getHttpRequest())
+                        .orElseThrow(() -> new IllegalArgumentException("No expectation found with id " + expectationId.getId()));
                 } else {
                     throw new IllegalArgumentException("No expectation found with id " + expectationId.getId());
                 }
@@ -523,12 +769,99 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
                 if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
                     scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
-                } else if (requestMatcher.matches(httpRequestMatcher.getExpectation().getHttpRequest())) {
-                    expectations.add(httpRequestMatcher.getExpectation());
+                } else {
+                    RequestDefinition expectationDefinition = httpRequestMatcher.getExpectation().getHttpRequest();
+                    if (notFilterableByRequest(requestDefinition, expectationDefinition) || requestMatcher.matches(expectationDefinition)) {
+                        expectations.add(httpRequestMatcher.getExpectation());
+                    }
                 }
             });
             return expectations;
         }
+    }
+
+    /**
+     * Determines whether an expectation should bypass reverse-match filtering because the
+     * supplied filter cannot describe it.
+     *
+     * <p>The dashboard UI and the {@code PUT /mockserver/retrieve} endpoint filter active
+     * expectations using an HTTP-shaped {@link RequestDefinition} — and when no filter is
+     * supplied they send an <em>empty</em> {@link HttpRequest} (matches everything) rather
+     * than {@code null}. An HTTP/OpenAPI filter has no vocabulary to express non-HTTP
+     * protocol expectations such as {@link DnsRequestDefinition} or
+     * {@link BinaryRequestDefinition}: reverse-matching it against them always fails (see
+     * {@code HttpRequestPropertiesMatcher#matches}). Filtering on that basis would silently
+     * hide every DNS and binary mock from "active expectations" listings (e.g. the Mocks
+     * page), even with no filter applied. Such expectations therefore bypass the filter and
+     * are always listed whenever the filter itself is HTTP/OpenAPI shaped. A filter of the
+     * matching protocol (e.g. a {@link DnsRequestDefinition} filter) still narrows normally.
+     */
+    private boolean notFilterableByRequest(RequestDefinition filter, RequestDefinition expectationDefinition) {
+        boolean httpStyleFilter = filter instanceof HttpRequest || filter instanceof OpenAPIDefinition;
+        boolean nonHttpExpectation = !(expectationDefinition instanceof HttpRequest)
+            && !(expectationDefinition instanceof OpenAPIDefinition);
+        return httpStyleFilter && nonHttpExpectation;
+    }
+
+    /**
+     * Returns every active expectation whose request matcher matches the given concrete
+     * incoming request, using <em>forward</em> matching (the same direction used when
+     * serving — "does this expectation match this request?"). This differs from
+     * {@link #retrieveActiveExpectations(RequestDefinition)}, which treats its argument
+     * as a filter and reverse-matches it against each expectation's definition.
+     *
+     * <p>Used by drift analysis on the proxy-forward path: a forwarded request needs the
+     * set of <em>other</em> matching stubs (e.g. a lower-priority response-type baseline)
+     * to diff the real upstream response against. Reverse/filter matching cannot be used
+     * there because the concrete request carries headers/cookies that bare stub
+     * definitions do not, so it would never match.
+     */
+    /**
+     * Side-effect-free probe: returns the first active expectation whose matcher matches the
+     * given request, WITHOUT consuming the match. Specifically, this method avoids:
+     * <ul>
+     *   <li>Times decrement ({@code consumeMatch()})</li>
+     *   <li>Scenario state transition</li>
+     *   <li>{@code responseInProgress} flag</li>
+     *   <li>Metrics increment</li>
+     * </ul>
+     * <p>
+     * <strong>Note on logging:</strong> the underlying {@code HttpRequestMatcher.matches()} call
+     * may still emit {@code INFO}-level {@code EXPECTATION_MATCHED} or {@code EXPECTATION_NOT_MATCHED}
+     * log entries as a side-effect of the match evaluation. This method does not suppress those
+     * match-diagnostic logs. It is the Times/scenario/responseInProgress/metrics side-effects
+     * that are avoided.
+     * <p>
+     * Used by the gRPC bidi router to decide the routing path before committing to a handler.
+     * Callers that need to actually consume the match (decrement Times, transition scenarios,
+     * emit logs) must still call {@link #firstMatchingExpectation(RequestDefinition)} separately
+     * on the committed path.
+     */
+    public Expectation peekFirstMatchingExpectation(RequestDefinition requestDefinition) {
+        if (requestDefinition == null) {
+            return null;
+        }
+        for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
+            if ((httpRequestMatcher.isResponseInProgress() || httpRequestMatcher.isActive())
+                && httpRequestMatcher.matches(requestDefinition)) {
+                return httpRequestMatcher.getExpectation();
+            }
+        }
+        return null;
+    }
+
+    public List<Expectation> retrieveExpectationsMatchingRequest(RequestDefinition requestDefinition) {
+        List<Expectation> expectations = new ArrayList<>();
+        if (requestDefinition == null) {
+            return expectations;
+        }
+        getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
+            if ((httpRequestMatcher.isResponseInProgress() || httpRequestMatcher.isActive())
+                && httpRequestMatcher.matches(requestDefinition)) {
+                expectations.add(httpRequestMatcher.getExpectation());
+            }
+        });
+        return expectations;
     }
 
     public List<HttpRequestMatcher> retrieveRequestMatchers(RequestDefinition requestDefinition) {
@@ -548,8 +881,11 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
                 if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
                     scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
-                } else if (requestMatcher.matches(httpRequestMatcher.getExpectation().getHttpRequest())) {
-                    httpRequestMatchers.add(httpRequestMatcher);
+                } else {
+                    RequestDefinition expectationDefinition = httpRequestMatcher.getExpectation().getHttpRequest();
+                    if (notFilterableByRequest(requestDefinition, expectationDefinition) || requestMatcher.matches(expectationDefinition)) {
+                        httpRequestMatchers.add(httpRequestMatcher);
+                    }
                 }
             });
             return httpRequestMatchers;

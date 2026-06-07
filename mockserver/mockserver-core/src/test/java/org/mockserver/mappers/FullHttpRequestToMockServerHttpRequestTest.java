@@ -423,6 +423,26 @@ public class FullHttpRequestToMockServerHttpRequestTest {
         }
     }
 
+    @Test
+    public void shouldNotDuplicatePreservedHeaderAlreadyInLiveHeaders() {
+        // given - the preserved header is still present in the live request headers (e.g. when
+        // request decompression is disabled, Content-Encoding is never stripped by Netty)
+        FullHttpRequest nettyRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/path");
+        nettyRequest.headers().add("Content-Encoding", "gzip");
+        List<Header> preservedHeaders = Collections.singletonList(new Header("content-encoding", "gzip"));
+
+        try {
+            // when
+            HttpRequest result = createMapper(false, 80)
+                .mapFullHttpRequestToMockServerRequest(nettyRequest, preservedHeaders, null, null, Protocol.HTTP_1_1);
+
+            // then - the header appears exactly once, not duplicated
+            assertThat(result.getHeader("Content-Encoding"), equalTo(Collections.singletonList("gzip")));
+        } finally {
+            nettyRequest.release();
+        }
+    }
+
     // --- headers-only mapping ---
 
     @Test

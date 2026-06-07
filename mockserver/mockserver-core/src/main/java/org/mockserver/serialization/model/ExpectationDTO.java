@@ -7,6 +7,7 @@ import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.ResponseMode;
+import org.mockserver.mock.CrossProtocolEventBus;
 import org.mockserver.model.*;
 
 import java.util.List;
@@ -33,15 +34,21 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     private HttpObjectCallbackDTO httpForwardObjectCallback;
     private HttpOverrideForwardedRequestDTO httpOverrideForwardedRequest;
     private HttpForwardValidateActionDTO httpForwardValidateAction;
+    private HttpForwardWithFallbackDTO httpForwardWithFallback;
     private HttpSseResponseDTO httpSseResponse;
     private HttpLlmResponseDTO httpLlmResponse;
     private HttpWebSocketResponseDTO httpWebSocketResponse;
     private GrpcStreamResponseDTO grpcStreamResponse;
+    private GrpcBidiResponseDTO grpcBidiResponse;
     private BinaryResponseDTO binaryResponse;
     private DnsResponseDTO dnsResponse;
     private HttpErrorDTO httpError;
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<AfterActionDTO> beforeActions;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<AfterActionDTO> afterActions;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<ExpectationStepDTO> steps;
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<HttpResponseDTO> httpResponses;
     private ResponseMode responseMode;
@@ -50,6 +57,8 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     private String scenarioName;
     private String scenarioState;
     private String newScenarioState;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<CrossProtocolScenario> crossProtocolScenarios;
 
     public ExpectationDTO(Expectation expectation) {
         if (expectation != null) {
@@ -110,6 +119,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             if (httpForwardValidateAction != null) {
                 this.httpForwardValidateAction = new HttpForwardValidateActionDTO(httpForwardValidateAction);
             }
+            HttpForwardWithFallback httpForwardWithFallback = expectation.getHttpForwardWithFallback();
+            if (httpForwardWithFallback != null) {
+                this.httpForwardWithFallback = new HttpForwardWithFallbackDTO(httpForwardWithFallback);
+            }
             HttpSseResponse httpSseResponse = expectation.getHttpSseResponse();
             if (httpSseResponse != null) {
                 this.httpSseResponse = new HttpSseResponseDTO(httpSseResponse);
@@ -126,6 +139,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             if (grpcStreamResponse != null) {
                 this.grpcStreamResponse = new GrpcStreamResponseDTO(grpcStreamResponse);
             }
+            GrpcBidiResponse grpcBidiResponse = expectation.getGrpcBidiResponse();
+            if (grpcBidiResponse != null) {
+                this.grpcBidiResponse = new GrpcBidiResponseDTO(grpcBidiResponse);
+            }
             BinaryResponse binaryResponse = expectation.getBinaryResponse();
             if (binaryResponse != null) {
                 this.binaryResponse = new BinaryResponseDTO(binaryResponse);
@@ -138,9 +155,17 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             if (httpError != null) {
                 this.httpError = new HttpErrorDTO(httpError);
             }
+            List<AfterAction> beforeActions = expectation.getBeforeActions();
+            if (beforeActions != null && !beforeActions.isEmpty()) {
+                this.beforeActions = beforeActions.stream().map(AfterActionDTO::new).collect(Collectors.toList());
+            }
             List<AfterAction> afterActions = expectation.getAfterActions();
             if (afterActions != null && !afterActions.isEmpty()) {
                 this.afterActions = afterActions.stream().map(AfterActionDTO::new).collect(Collectors.toList());
+            }
+            List<ExpectationStep> stepsList = expectation.getSteps();
+            if (stepsList != null && !stepsList.isEmpty()) {
+                this.steps = stepsList.stream().map(ExpectationStepDTO::new).collect(Collectors.toList());
             }
             List<HttpResponse> httpResponsesList = expectation.getHttpResponses();
             if (httpResponsesList != null && !httpResponsesList.isEmpty()) {
@@ -164,6 +189,9 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             if (expectation.getNewScenarioState() != null) {
                 this.newScenarioState = expectation.getNewScenarioState();
             }
+            if (expectation.getCrossProtocolScenarios() != null && !expectation.getCrossProtocolScenarios().isEmpty()) {
+                this.crossProtocolScenarios = expectation.getCrossProtocolScenarios();
+            }
         }
     }
 
@@ -182,10 +210,12 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         HttpObjectCallback httpForwardObjectCallback = null;
         HttpOverrideForwardedRequest httpOverrideForwardedRequest = null;
         HttpForwardValidateAction httpForwardValidateAction = null;
+        HttpForwardWithFallback httpForwardWithFallback = null;
         HttpSseResponse httpSseResponse = null;
         HttpLlmResponse httpLlmResponse = null;
         HttpWebSocketResponse httpWebSocketResponse = null;
         GrpcStreamResponse grpcStreamResponse = null;
+        GrpcBidiResponse grpcBidiResponse = null;
         BinaryResponse binaryResponse = null;
         DnsResponse dnsResponse = null;
         HttpError httpError = null;
@@ -225,6 +255,9 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         if (this.httpForwardValidateAction != null) {
             httpForwardValidateAction = this.httpForwardValidateAction.buildObject();
         }
+        if (this.httpForwardWithFallback != null) {
+            httpForwardWithFallback = this.httpForwardWithFallback.buildObject();
+        }
         if (this.httpSseResponse != null) {
             httpSseResponse = this.httpSseResponse.buildObject();
         }
@@ -237,6 +270,9 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         if (this.grpcStreamResponse != null) {
             grpcStreamResponse = this.grpcStreamResponse.buildObject();
         }
+        if (this.grpcBidiResponse != null) {
+            grpcBidiResponse = this.grpcBidiResponse.buildObject();
+        }
         if (this.binaryResponse != null) {
             binaryResponse = this.binaryResponse.buildObject();
         }
@@ -245,6 +281,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         }
         if (this.httpError != null) {
             httpError = this.httpError.buildObject();
+        }
+        List<AfterAction> beforeActionList = null;
+        if (this.beforeActions != null && !this.beforeActions.isEmpty()) {
+            beforeActionList = this.beforeActions.stream().map(AfterActionDTO::buildObject).collect(Collectors.toList());
         }
         List<AfterAction> afterActionList = null;
         if (this.afterActions != null && !this.afterActions.isEmpty()) {
@@ -265,7 +305,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         } else {
             priority = 0;
         }
-        return new Expectation(httpRequest, times, timeToLive, priority)
+        Expectation expectation = new Expectation(httpRequest, times, timeToLive, priority)
             .withId(this.id)
             .withPercentage(this.percentage)
             .withChaos(this.chaos != null ? this.chaos.buildObject() : null)
@@ -282,16 +322,27 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             .thenForward(httpForwardObjectCallback)
             .thenForward(httpOverrideForwardedRequest)
             .thenForwardValidate(httpForwardValidateAction)
+            .thenForwardWithFallback(httpForwardWithFallback)
             .thenRespondWithSse(httpSseResponse)
             .thenRespondWithLlm(httpLlmResponse)
             .thenRespondWithWebSocket(httpWebSocketResponse)
             .thenRespondWithGrpcStream(grpcStreamResponse)
+            .thenRespondWithGrpcBidi(grpcBidiResponse)
             .thenRespondWithBinary(binaryResponse)
             .thenRespondWithDns(dnsResponse)
             .thenError(httpError)
+            .withBeforeActions(beforeActionList)
             .withAfterActions(afterActionList)
+            .withSteps(this.steps != null ? this.steps.stream().map(ExpectationStepDTO::buildObject).collect(Collectors.toList()) : null)
             .thenRespond(this.httpResponses != null ? this.httpResponses.stream().map(HttpResponseDTO::buildObject).collect(Collectors.toList()) : null)
-            .withResponseMode(this.responseMode);
+            .withResponseMode(this.responseMode)
+            .withCrossProtocolScenarios(this.crossProtocolScenarios);
+        if (this.crossProtocolScenarios != null) {
+            for (CrossProtocolScenario scenario : this.crossProtocolScenarios) {
+                CrossProtocolEventBus.getInstance().register(scenario);
+            }
+        }
+        return expectation;
     }
 
     public String getId() {
@@ -429,6 +480,15 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         return this;
     }
 
+    public HttpForwardWithFallbackDTO getHttpForwardWithFallback() {
+        return httpForwardWithFallback;
+    }
+
+    public ExpectationDTO setHttpForwardWithFallback(HttpForwardWithFallbackDTO httpForwardWithFallback) {
+        this.httpForwardWithFallback = httpForwardWithFallback;
+        return this;
+    }
+
     public HttpSseResponseDTO getHttpSseResponse() {
         return httpSseResponse;
     }
@@ -462,6 +522,15 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
 
     public ExpectationDTO setGrpcStreamResponse(GrpcStreamResponseDTO grpcStreamResponse) {
         this.grpcStreamResponse = grpcStreamResponse;
+        return this;
+    }
+
+    public GrpcBidiResponseDTO getGrpcBidiResponse() {
+        return grpcBidiResponse;
+    }
+
+    public ExpectationDTO setGrpcBidiResponse(GrpcBidiResponseDTO grpcBidiResponse) {
+        this.grpcBidiResponse = grpcBidiResponse;
         return this;
     }
 
@@ -510,6 +579,16 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         return this;
     }
 
+    public List<AfterActionDTO> getBeforeActions() {
+        return beforeActions;
+    }
+
+    @JsonSetter("beforeActions")
+    public ExpectationDTO setBeforeActions(List<AfterActionDTO> beforeActions) {
+        this.beforeActions = beforeActions;
+        return this;
+    }
+
     public List<AfterActionDTO> getAfterActions() {
         return afterActions;
     }
@@ -517,6 +596,16 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     @JsonSetter("afterActions")
     public ExpectationDTO setAfterActions(List<AfterActionDTO> afterActions) {
         this.afterActions = afterActions;
+        return this;
+    }
+
+    public List<ExpectationStepDTO> getSteps() {
+        return steps;
+    }
+
+    @JsonSetter("steps")
+    public ExpectationDTO setSteps(List<ExpectationStepDTO> steps) {
+        this.steps = steps;
         return this;
     }
 
@@ -563,6 +652,16 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
 
     public ExpectationDTO setNewScenarioState(String newScenarioState) {
         this.newScenarioState = newScenarioState;
+        return this;
+    }
+
+    public List<CrossProtocolScenario> getCrossProtocolScenarios() {
+        return crossProtocolScenarios;
+    }
+
+    @JsonSetter("crossProtocolScenarios")
+    public ExpectationDTO setCrossProtocolScenarios(List<CrossProtocolScenario> crossProtocolScenarios) {
+        this.crossProtocolScenarios = crossProtocolScenarios;
         return this;
     }
 

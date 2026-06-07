@@ -49,10 +49,31 @@ public class StreamingBody {
     /** Chunks that arrived before subscribe() was called. Each entry is a copy of the chunk bytes. */
     private List<byte[]> pendingChunks;
 
+    /**
+     * Per-chunk arrival timestamps in nanoseconds (monotonic clock). The first entry
+     * records the baseline; subsequent entries allow computing inter-chunk delays.
+     * Populated only when {@code captureChunkTimestamps} is true.
+     */
+    private List<Long> chunkTimestampsNanos;
+
+    /** Whether to record per-chunk monotonic timestamps on {@link #addChunk}. */
+    private final boolean captureChunkTimestamps;
+
     public StreamingBody(int maxCaptureBytes) {
+        this(maxCaptureBytes, false);
+    }
+
+    /**
+     * @param maxCaptureBytes       maximum bytes to capture for the event log
+     * @param captureChunkTimestamps when true, records a {@code System.nanoTime()} per chunk
+     *                              for later per-chunk replay timing
+     */
+    public StreamingBody(int maxCaptureBytes, boolean captureChunkTimestamps) {
         this.maxCaptureBytes = Math.max(0, maxCaptureBytes);
         this.captureBuffer = new ByteArrayOutputStream(Math.min(this.maxCaptureBytes, 8192));
         this.pendingChunks = new ArrayList<>();
+        this.captureChunkTimestamps = captureChunkTimestamps;
+        this.chunkTimestampsNanos = captureChunkTimestamps ? new ArrayList<>() : null;
     }
 
     /**
@@ -138,6 +159,13 @@ public class StreamingBody {
         if (completed) {
             return;
         }
+        // record monotonic timestamp for per-chunk replay timing (stop once truncated —
+        // a truncated recording falls back to a static/fixed response so per-chunk timing
+        // is moot, and continuing to record timestamps would grow the list without bound
+        // on long-lived streams)
+        if (chunkTimestampsNanos != null && !truncated) {
+            chunkTimestampsNanos.add(System.nanoTime());
+        }
         // capture into bounded buffer
         int readable = chunk.readableBytes();
         if (!truncated && readable > 0) {
@@ -149,9 +177,13 @@ public class StreamingBody {
                 captureBuffer.write(bytes, 0, toCapture);
                 if (captureBuffer.size() >= maxCaptureBytes) {
                     truncated = true;
+                    // discard timestamps — truncated recordings use fixed-delay fallback
+                    chunkTimestampsNanos = null;
                 }
             } else {
                 truncated = true;
+                // discard timestamps — truncated recordings use fixed-delay fallback
+                chunkTimestampsNanos = null;
             }
         }
         // forward to subscriber or buffer for later
@@ -198,6 +230,7 @@ public class StreamingBody {
             completed = true;
             error = cause;
             truncated = true;
+            chunkTimestampsNanos = null;
             listenersToFire = completionListeners;
             completionListeners = null;
         }
@@ -295,5 +328,26 @@ public class StreamingBody {
      */
     public byte[] capturedBytes() {
         return captureBuffer.toByteArray();
+    }
+
+    /**
+     * Compute inter-chunk delays in milliseconds from the captured monotonic timestamps.
+     * The first element is always 0 (no delay before the first chunk). Subsequent elements
+     * represent the wall-clock gap between consecutive chunk arrivals.
+     *
+     * @return a list of inter-chunk delays in milliseconds, or {@code null} if timestamps
+     *         were not captured (i.e. {@code captureChunkTimestamps} was false)
+     */
+    public List<Long> interChunkDelaysMillis() {
+        if (chunkTimestampsNanos == null || chunkTimestampsNanos.isEmpty()) {
+            return null;
+        }
+        List<Long> delays = new ArrayList<>(chunkTimestampsNanos.size());
+        delays.add(0L); // first chunk has no preceding delay
+        for (int i = 1; i < chunkTimestampsNanos.size(); i++) {
+            long deltaNanos = chunkTimestampsNanos.get(i) - chunkTimestampsNanos.get(i - 1);
+            delays.add(Math.max(0, deltaNanos / 1_000_000L)); // nanos to millis, floor at 0
+        }
+        return delays;
     }
 }

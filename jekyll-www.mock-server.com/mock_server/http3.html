@@ -1,0 +1,108 @@
+---
+title: HTTP/3 (QUIC) Support
+description: Experimental HTTP/3 over QUIC support in MockServer, enabled via the http3Port configuration property. HTTP/3 requests are routed through the full expectation matching pipeline.
+shortTitle: HTTP/3
+layout: page
+pageOrder: 12
+section: 'Mock Server'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-01T14:00:00+00:00
+---
+
+<div class="alert" style="background-color:#fff3cd;border-left:4px solid #ffc107;padding:12px 16px;margin-bottom:20px;">
+    <strong>EXPERIMENTAL</strong> &mdash; HTTP/3 support is fully integrated with MockServer's request pipeline but is labelled experimental because the underlying QUIC transport is a <a target="_blank" href="https://github.com/netty/netty-incubator-codec-http3" rel="noopener noreferrer">Netty incubator</a> dependency (pre-release artifact). HTTP/3 is off by default and must be explicitly enabled.
+</div>
+
+<p>MockServer can optionally accept HTTP/3 requests over <a target="_blank" href="https://quicwg.org/" rel="noopener noreferrer">QUIC</a> (UDP). HTTP/3 is the third major version of the HTTP protocol, using QUIC as the transport instead of TCP. This is useful when you want to test clients that connect using HTTP/3.</p>
+
+<p>HTTP/3 requests are routed through the <strong>same expectation matching pipeline</strong> as HTTP/1.1 and HTTP/2 requests. This means all features work the same way: expectation matching, response actions, template actions, recording for verification, and proxy forwarding.</p>
+
+<a id="http3_enabling" class="anchor" href="#http3_enabling">&nbsp;</a>
+
+<h2>Enabling HTTP/3</h2>
+
+<p>HTTP/3 is disabled by default (<span class="inline_code">http3Port</span> defaults to <span class="inline_code">0</span>). Set it to a non-zero UDP port number to start the listener:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr><th>Method</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Java system property</td>
+            <td><span class="inline_code">-Dmockserver.http3Port=8443</span></td>
+        </tr>
+        <tr>
+            <td>Environment variable</td>
+            <td><span class="inline_code">MOCKSERVER_HTTP3_PORT=8443</span></td>
+        </tr>
+        <tr>
+            <td>Configuration API</td>
+            <td><span class="inline_code">Configuration.configuration().http3Port(8443)</span></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>When <span class="inline_code">http3Port</span> is <span class="inline_code">0</span> (the default), the HTTP/3 listener is <strong>not started</strong> and has no impact on the existing TCP/HTTP server.</p>
+
+<a id="http3_lifecycle" class="anchor" href="#http3_lifecycle">&nbsp;</a>
+
+<h2>Lifecycle</h2>
+
+<p>When <span class="inline_code">http3Port</span> is configured, the HTTP/3 server starts automatically with MockServer and stops when MockServer shuts down. No separate lifecycle management is needed.</p>
+
+<p>If the native QUIC transport is not available on the platform (see <a href="#http3_native_requirement">native platform requirement</a>), MockServer logs a warning and continues without HTTP/3. The existing TCP/HTTP server is never affected.</p>
+
+<p>The bound HTTP/3 port can be retrieved programmatically via <span class="inline_code">MockServer.getHttp3Port()</span>.</p>
+
+<a id="http3_native_requirement" class="anchor" href="#http3_native_requirement">&nbsp;</a>
+
+<h2>Native platform requirement</h2>
+
+<p>HTTP/3 uses the <a target="_blank" href="https://github.com/netty/netty-incubator-codec-http3" rel="noopener noreferrer">netty-incubator-codec-http3</a> library, which requires a native BoringSSL library for the QUIC transport. The native library is included automatically for the following platforms:</p>
+
+<ul>
+    <li><span class="inline_code">linux-x86_64</span></li>
+    <li><span class="inline_code">linux-aarch_64</span></li>
+    <li><span class="inline_code">osx-x86_64</span></li>
+    <li><span class="inline_code">osx-aarch_64</span></li>
+    <li><span class="inline_code">windows-x86_64</span></li>
+</ul>
+
+<p>If the native library cannot be loaded on the current platform, the HTTP/3 server will not start (a warning is logged). The existing TCP/HTTP server is not affected.</p>
+
+<a id="http3_tls" class="anchor" href="#http3_tls">&nbsp;</a>
+
+<h2>TLS</h2>
+
+<p>The HTTP/3 server uses MockServer's configured TLS certificate material &mdash; the same private key and certificate chain used by the HTTPS server. This means the TLS configuration properties (<span class="inline_code">privateKeyPath</span>, <span class="inline_code">x509CertificatePath</span>, etc.) apply to HTTP/3 as well.</p>
+
+<p>If no custom certificate is configured, MockServer's auto-generated certificate (created via BouncyCastle) is used, which is suitable for testing.</p>
+
+<a id="http3_what_works" class="anchor" href="#http3_what_works">&nbsp;</a>
+
+<h2>What works</h2>
+
+<ul>
+    <li><strong>Expectation matching</strong> &mdash; HTTP/3 requests are matched against expectations identically to HTTP/1.1 and HTTP/2</li>
+    <li><strong>Response actions</strong> &mdash; all response action types (static, template, callback, etc.)</li>
+    <li><strong>Request recording</strong> &mdash; HTTP/3 requests are recorded for verification</li>
+    <li><strong>Proxy forwarding</strong> &mdash; unmatched requests can be forwarded when proxy mode is configured</li>
+    <li><strong>Request body</strong> &mdash; text and binary request bodies are read and matched correctly</li>
+    <li><strong>Configurable TLS</strong> &mdash; uses the same TLS certificate as the HTTPS server</li>
+    <li><strong>Lifecycle integration</strong> &mdash; starts and stops automatically with MockServer</li>
+    <li><strong>Fail-soft startup</strong> &mdash; graceful fallback when native QUIC is unavailable</li>
+</ul>
+
+<a id="http3_limitations" class="anchor" href="#http3_limitations">&nbsp;</a>
+
+<h2>Limitations</h2>
+
+<ul>
+    <li><strong>Streaming/SSE responses</strong> &mdash; streaming response bodies (Server-Sent Events, chunked streaming) are not supported over HTTP/3. If an expectation returns a streaming body, MockServer logs a warning and sends only the headers and any static body bytes. Use HTTP/1.1 or HTTP/2 for streaming responses.</li>
+    <li><strong>Dashboard visibility</strong> &mdash; HTTP/3 connections do not appear as a separate protocol in the MockServer dashboard (requests are logged and visible, but the protocol is not distinguished)</li>
+    <li><strong>Incubator dependency</strong> &mdash; the <span class="inline_code">netty-incubator-codec-http3</span> library is a pre-release artifact; its API may change in future Netty releases</li>
+</ul>

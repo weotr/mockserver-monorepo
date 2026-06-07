@@ -2,28 +2,33 @@
 
 ### Prerequisites
 
-- Kubernetes (i.e. [minikube](https://kubernetes.io/docs/tasks/tools/install-minikube/) or [Docker for Desktop](https://www.docker.com/products/docker-desktop)) 
-- [Helm](https://docs.helm.sh/using_helm/#quickstart-guide)
+- A Kubernetes cluster
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/) configured to talk to it
+- [Helm](https://helm.sh/docs/intro/quickstart/) 3.8 or later (OCI support is enabled by default from 3.8)
 
 ### Helm Install
 
-To run MockServer in Kubernetes the easiest way is to use the existing [MockServer helm chart](https://www.mock-server.com/mockserver-6.1.0.tgz).
+The chart is published to the **GitHub Container Registry (GHCR) as an OCI artifact** — no `helm repo add` is needed, `helm install` can pull straight from `oci://`:
 
-This is available by using `www.mock-server.com` as a chart repo, with the following command:
+```bash
+helm upgrade --install --create-namespace --namespace mockserver --version 6.1.0 mockserver oci://ghcr.io/mock-server/charts/mockserver
+```
+
+The OCI artifact is public — no authentication is required for `helm pull` / `helm install`. Browse the published versions on the [GHCR package page](https://github.com/orgs/mock-server/packages/container/package/charts%2Fmockserver) and pass the one you want with `--version` (omit `--version` to get the latest).
+
+**OR** install from the legacy `.tgz` served by `www.mock-server.com`:
 
 ```bash
 helm upgrade --install --create-namespace --namespace mockserver mockserver https://www.mock-server.com/mockserver-6.1.0.tgz
 ```
 
-**OR** 
-
-If you have helm chart source folder (i.e. you have the repository cloned):
+**OR** if you have the helm chart source folder (i.e. you have the repository cloned):
 
 ```bash
 helm upgrade --install --create-namespace --namespace mockserver mockserver helm/mockserver
 ```
 
-The two commands above will install MockServer into a **namespace** called `mockserver` with default configuration (as per the embedded [values.yaml](https://github.com/mock-server/mockserver-monorepo/blob/master/helm/mockserver/values.yaml)).  
+Each of the commands above installs MockServer into a **namespace** called `mockserver` with default configuration (as per the embedded [values.yaml](https://github.com/mock-server/mockserver-monorepo/blob/master/helm/mockserver/values.yaml)).  
 MockServer will then be available on domain name `mockserver.mockserver.svc.cluster.local`, as long as the namespace you are calling from isn't prevented (by network policy) to call the `mockserver` namespace.
 
 **THEN**
@@ -48,10 +53,10 @@ kubectl -n mockserver get po -l release=mockserver
 
 ### Basic MockServer Configuration 
 
-Modify the arguments used to start the docker container by setting values explicitly using `--set`, as follows:
+Modify the arguments MockServer starts with by setting values explicitly using `--set`, as follows:
 
 ```bash
-helm upgrade --install --create-namespace --namespace mockserver --set app.serverPort=1080 --set app.logLevel=INFO mockserver https://www.mock-server.com/mockserver-6.1.0.tgz
+helm upgrade --install --create-namespace --namespace mockserver --set app.serverPort=1080 --set app.logLevel=INFO mockserver oci://ghcr.io/mock-server/charts/mockserver
 ```
 
 The following values are supported:
@@ -65,7 +70,7 @@ The following values are supported:
 For example configure a proxyRemoteHost and proxyRemotePort, as follows:
 
 ```bash
-helm upgrade --install --create-namespace --namespace mockserver --set app.serverPort=1080 --set app.proxyRemoteHost=www.mock-server.com --set app.proxyRemotePort=443 mockserver https://www.mock-server.com/mockserver-6.1.0.tgz
+helm upgrade --install --create-namespace --namespace mockserver --set app.serverPort=1080 --set app.proxyRemoteHost=www.mock-server.com --set app.proxyRemotePort=443 mockserver oci://ghcr.io/mock-server/charts/mockserver
 ```
 
 Double check the correct arguments have been passed to the pod, as follows:
@@ -188,6 +193,16 @@ When persistence is enabled, the chart automatically sets `MOCKSERVER_PERSIST_EX
 
 **Note:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data.
 
+**Pod securityContext / PVC permissions:** if the pod cannot write to the mounted volume (a common cause of persistence failing on clusters with restrictive defaults), set a pod-level `fsGroup` via `podSecurityContext`, which is rendered verbatim into the Deployment's `spec.template.spec.securityContext`:
+
+```bash
+helm upgrade --install --namespace mockserver mockserver oci://ghcr.io/mock-server/charts/mockserver \
+  --set app.persistence.enabled=true \
+  --set podSecurityContext.fsGroup=2000
+```
+
+`podSecurityContext` accepts any pod-level `securityContext` fields (`fsGroup`, `fsGroupChangePolicy`, `runAsGroup`, `seccompProfile`, …) and defaults to `{}` (nothing emitted).
+
 See the [full persistence documentation](https://www.mock-server.com/where/kubernetes.html#helm_persistent_storage) for more examples including existing PVC usage and clustering with shared storage.
 
 ### Chaos Proxy (fault injection)
@@ -245,18 +260,18 @@ echo http://$MOCKSERVER_HOST
 To test the installation the following `curl` command should return the ports MockServer is bound to:
 
 ```bash
-curl -v -X PUT http://$MOCKSERVER_HOST/status
+curl -v -X PUT http://$MOCKSERVER_HOST/mockserver/status
 ```
 
 #### Docker for Desktop
 
-[Docker for Desktop](https://www.docker.com/products/docker-desktop) automatically exposes **LoadBalancer** services.  
-On MacOS Docker for Desktop runs inside [Hyperkit](https://github.com/moby/hyperkit) so the node IP address is not reachable, therefore the only way to call services is via the exposed **LoadBalancer** service added by Docker for Desktop.
+[Docker Desktop](https://www.docker.com/products/docker-desktop) automatically exposes **LoadBalancer** services.  
+On macOS Docker Desktop runs inside a lightweight VM, so the node IP address is not reachable from the host; the only way to call services is via the exposed **LoadBalancer** service added by Docker Desktop.
 
 To ensure that Docker for Desktop exposes MockServer update the service type to **LoadBalancer** using **--set service.type=LoadBalancer** and set the exposed port using **--set service.port=1080**, as follows:
 
 ```bash
-helm upgrade --install --namespace mockserver --set service.type=LoadBalancer --set service.port=1080 mockserver https://www.mock-server.com/mockserver-6.1.0.tgz
+helm upgrade --install --create-namespace --namespace mockserver --set service.type=LoadBalancer --set service.port=1080 mockserver oci://ghcr.io/mock-server/charts/mockserver
 ```
 
 MockServer will then be reachable on **http://localhost:1080**
@@ -265,7 +280,7 @@ For **LoadBalancer** services it is possible to query kubernetes to programmatic
 
 ```bash
 export SERVICE_IP=$(kubectl get svc --namespace mockserver mockserver -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-export MOCKSERVER_HOST=$SERVICE_IP:1081
+export MOCKSERVER_HOST=$SERVICE_IP:1080
 echo http://$MOCKSERVER_HOST
 ```
 
@@ -283,9 +298,14 @@ If a [DNS server](https://kubernetes.io/docs/concepts/services-networking/servic
 
 ### Available Versions
 
-| Version | Chart Archive |
+Every released version is published to GHCR — the canonical, always-current list is the
+[GHCR package page](https://github.com/orgs/mock-server/packages/container/package/charts%2Fmockserver)
+(install any with `--version`). The legacy `.tgz` archives below are kept for the HTTP install method:
+
+| Version | Chart Archive (legacy `.tgz`) |
 |---------|---------------|
 | 6.1.0 (latest) | [mockserver-6.1.0.tgz](https://www.mock-server.com/mockserver-6.1.0.tgz) |
+| 6.0.0 | [mockserver-6.0.0.tgz](https://www.mock-server.com/mockserver-6.0.0.tgz) |
 | 5.14.0 | [mockserver-5.14.0.tgz](https://www.mock-server.com/mockserver-5.14.0.tgz) |
 | 5.13.2 | [mockserver-5.13.2.tgz](https://www.mock-server.com/mockserver-5.13.2.tgz) |
 | 5.13.1 | [mockserver-5.13.1.tgz](https://www.mock-server.com/mockserver-5.13.1.tgz) |
@@ -300,5 +320,7 @@ If a [DNS server](https://kubernetes.io/docs/concepts/services-networking/servic
 To completely remove the chart:
 
 ```bash
-helm delete mockserver --purge
+helm uninstall mockserver --namespace mockserver
 ```
+
+> **Note:** if you enabled persistence, the chart-managed PersistentVolumeClaim is **not** removed by `helm uninstall` — delete it manually (`kubectl -n mockserver delete pvc -l release=mockserver`) if you want to discard the persisted data.

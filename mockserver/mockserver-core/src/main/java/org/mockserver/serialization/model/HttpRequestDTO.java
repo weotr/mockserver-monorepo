@@ -16,6 +16,7 @@ public class HttpRequestDTO extends RequestDefinitionDTO implements DTO<HttpRequ
     private Parameters pathParameters;
     private Parameters queryStringParameters;
     private BodyDTO body;
+    private byte[] originalBody;
     private Cookies cookies;
     private Headers headers;
     private Boolean keepAlive;
@@ -41,6 +42,7 @@ public class HttpRequestDTO extends RequestDefinitionDTO implements DTO<HttpRequ
             pathParameters = httpRequest.getPathParameters();
             queryStringParameters = httpRequest.getQueryStringParameters();
             body = BodyDTO.createDTO(httpRequest.getBody());
+            originalBody = httpRequest.getOriginalBody();
             keepAlive = httpRequest.isKeepAlive();
             secure = httpRequest.isSecure();
             respondBeforeBody = httpRequest.getRespondBeforeBody();
@@ -59,6 +61,7 @@ public class HttpRequestDTO extends RequestDefinitionDTO implements DTO<HttpRequ
             .withPathParameters(pathParameters)
             .withQueryStringParameters(queryStringParameters)
             .withBody((body != null ? Not.not(body.buildObject(), body.getNot()) : null))
+            .withOriginalBody(originalBody)
             .withHeaders(headers)
             .withCookies(cookies)
             .withSecure(secure)
@@ -114,6 +117,15 @@ public class HttpRequestDTO extends RequestDefinitionDTO implements DTO<HttpRequ
 
     public HttpRequestDTO setBody(BodyDTO body) {
         this.body = body;
+        return this;
+    }
+
+    public byte[] getOriginalBody() {
+        return originalBody;
+    }
+
+    public HttpRequestDTO setOriginalBody(byte[] originalBody) {
+        this.originalBody = originalBody;
         return this;
     }
 

@@ -2,9 +2,29 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { ConnectionParams } from './useConnectionParams';
 import type { ClearType, RequestFilter, WebSocketMessage } from '../types';
 import { useDashboardStore } from '../store';
+import { buildBaseUrl } from '../lib/mcpClient';
 
 const RECONNECT_DELAY_MS = 3000;
-const MAX_RECONNECT_ATTEMPTS = 10;
+
+/**
+ * Close a WebSocket we're discarding (reconnect or unmount) without side effects. Calling
+ * `close()` on a socket that is still CONNECTING makes the browser log a noisy
+ * "WebSocket is closed before the connection is established" warning — which happens routinely
+ * under React StrictMode's dev double-mount (connect, then immediate cleanup). We detach the
+ * handlers first (so this intentional close neither updates state nor schedules a reconnect),
+ * then close immediately if already open/closing, or defer the close until it finishes opening.
+ */
+function closeWebSocket(ws: WebSocket): void {
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.onopen = () => ws.close();
+  } else {
+    ws.onopen = null;
+    ws.close();
+  }
+}
 
 export function useWebSocket(params: ConnectionParams) {
   const socketRef = useRef<WebSocket | null>(null);
@@ -19,18 +39,23 @@ export function useWebSocket(params: ConnectionParams) {
 
   const scheduleReconnect = useCallback(
     (filter: RequestFilter) => {
-      if (reconnectCountRef.current >= MAX_RECONNECT_ATTEMPTS) {
-        setError('Max reconnection attempts reached. Refresh the page to retry.');
-        return;
-      }
+      // Keep retrying with a capped backoff rather than permanently giving up — a server that
+      // is down longer than the first few attempts (a deploy/restart) should still reconnect
+      // automatically once it comes back. onopen resets the counter and clears the error.
       reconnectCountRef.current += 1;
+      // Surface the banner early (after the 2nd failed attempt, ~a few seconds) so a user pointed
+      // at the wrong server isn't left guessing. Include the host/port so the cause is actionable —
+      // they come from the ?host=/?port= URL params. onopen resets the counter and clears the error.
+      if (reconnectCountRef.current === 2) {
+        setError(`Connection lost to ${params.host}:${params.port} — retrying automatically. Check the server is running and the host/port (?host=&port= in the URL) are correct.`);
+      }
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      const delay = RECONNECT_DELAY_MS * Math.min(reconnectCountRef.current, 5);
+      const delay = RECONNECT_DELAY_MS * Math.min(reconnectCountRef.current, 5); // capped at 15s
       reconnectTimerRef.current = setTimeout(() => {
         connectRef.current(filter);
       }, delay);
     },
-    [setError],
+    [setError, params.host, params.port],
   );
 
   const connect = useCallback(
@@ -41,16 +66,13 @@ export function useWebSocket(params: ConnectionParams) {
         reconnectTimerRef.current = null;
       }
       if (socketRef.current) {
-        socketRef.current.onclose = null;
-        socketRef.current.onerror = null;
-        socketRef.current.close();
+        closeWebSocket(socketRef.current);
         socketRef.current = null;
       }
 
       setConnectionStatus('connecting');
       const protocol = params.secure ? 'wss' : 'ws';
-      const basePath = window.location.pathname.replace(/\/mockserver\/dashboard\/?$/, '').replace(/\/+$/, '');
-      const url = `${protocol}://${params.host}:${params.port}${basePath}/_mockserver_ui_websocket`;
+      const url = `${protocol}://${params.host}:${params.port}${params.basePath ?? ''}/_mockserver_ui_websocket`;
 
       const ws = new WebSocket(url);
       socketRef.current = ws;
@@ -107,8 +129,7 @@ export function useWebSocket(params: ConnectionParams) {
       reconnectTimerRef.current = null;
     }
     if (socketRef.current) {
-      socketRef.current.onclose = null;
-      socketRef.current.close();
+      closeWebSocket(socketRef.current);
       socketRef.current = null;
     }
     setConnectionStatus('disconnected');
@@ -116,8 +137,7 @@ export function useWebSocket(params: ConnectionParams) {
 
   const clearServer = useCallback(
     async (type: ClearType = 'all') => {
-      const protocol = params.secure ? 'https' : 'http';
-      const base = `${protocol}://${params.host}:${params.port}`;
+      const base = buildBaseUrl(params);
       try {
         const url =
           type === 'all'
@@ -132,6 +152,8 @@ export function useWebSocket(params: ConnectionParams) {
         if (type === 'all') {
           connect(lastFilterRef.current);
         }
+        const what = type === 'all' ? 'Server reset — all expectations, logs and recorded traffic cleared' : type === 'log' ? 'Server logs cleared' : 'Expectations cleared';
+        useDashboardStore.getState().setNotification({ message: what, severity: 'success' });
       } catch {
         setError('Failed to clear server');
       }

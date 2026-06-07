@@ -1,0 +1,19 @@
+{
+  "httpRequest": {
+    "path": "/ws/echo"
+  },
+  "httpWebSocketResponse": {
+    "matchers": [
+      {
+        "frameType": "TEXT",
+        "textMatcher": "ping",
+        "responses": [
+          {
+            "text": "pong"
+          }
+        ]
+      }
+    ],
+    "closeConnection": false
+  }
+}

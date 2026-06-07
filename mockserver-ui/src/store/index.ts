@@ -10,7 +10,12 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'metrics' | 'chaos';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async';
+
+/** Map legacy/removed ViewMode values to their replacement. */
+const VIEW_MIGRATION: Record<string, ViewMode> = {
+  'mcp-tools': 'composer',
+};
 
 interface DashboardState {
   logMessages: LogMessage[];
@@ -35,12 +40,21 @@ interface DashboardState {
 
   error: string | null;
 
+  /** Transient toast/snackbar for action feedback (success/info/warning/error). */
+  notification: { message: string; severity: 'success' | 'info' | 'warning' | 'error' } | null;
+
   debugMismatchOpen: boolean;
   debugMismatchLoading: boolean;
   debugMismatchResult: DebugMismatchResult | null;
   debugMismatchError: string | null;
 
-  selectedTrafficIndex: number | null;
+  generateStubOpen: boolean;
+  generateStubLoading: boolean;
+  generateStubSuggestions: Record<string, unknown>[];
+  generateStubConfidence: number;
+  generateStubError: string | null;
+
+  selectedTrafficKey: string | null;
 
   actionTypeFilter: string[];
   llmProviderFilter: string[];
@@ -65,12 +79,18 @@ interface DashboardState {
   setReceivedSearch: (term: string) => void;
   setProxiedSearch: (term: string) => void;
   setTrafficSearch: (term: string) => void;
-  setSelectedTrafficIndex: (index: number | null) => void;
+  setSelectedTrafficKey: (key: string | null) => void;
   setError: (error: string | null) => void;
+  setNotification: (notification: { message: string; severity: 'success' | 'info' | 'warning' | 'error' } | null) => void;
   openDebugMismatch: (result: DebugMismatchResult) => void;
   closeDebugMismatch: () => void;
   setDebugMismatchLoading: (loading: boolean) => void;
   setDebugMismatchError: (error: string | null) => void;
+
+  openGenerateStub: (suggestions: Record<string, unknown>[], confidence: number) => void;
+  closeGenerateStub: () => void;
+  setGenerateStubLoading: (loading: boolean) => void;
+  setGenerateStubError: (error: string | null) => void;
 }
 
 function getInitialTheme(): ThemeMode {
@@ -105,13 +125,20 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   trafficSearch: '',
 
   error: null,
+  notification: null,
 
   debugMismatchOpen: false,
   debugMismatchLoading: false,
   debugMismatchResult: null,
   debugMismatchError: null,
 
-  selectedTrafficIndex: null,
+  generateStubOpen: false,
+  generateStubLoading: false,
+  generateStubSuggestions: [],
+  generateStubConfidence: 0,
+  generateStubError: null,
+
+  selectedTrafficKey: null,
 
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -140,15 +167,25 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       activeExpectations: [],
       recordedRequests: [],
       proxiedRequests: [],
+      selectedTrafficKey: null,
       error: null,
 
       debugMismatchOpen: false,
       debugMismatchLoading: false,
       debugMismatchResult: null,
       debugMismatchError: null,
+
+      generateStubOpen: false,
+      generateStubLoading: false,
+      generateStubSuggestions: [],
+      generateStubConfidence: 0,
+      generateStubError: null,
     }),
 
-  setView: (view) => set({ view, selectedTrafficIndex: null }),
+  setView: (view) => {
+    const resolved = VIEW_MIGRATION[view as string] ?? view;
+    set({ view: resolved, selectedTrafficKey: null });
+  },
   setRequestFilter: (filter) => set({ requestFilter: filter }),
   setFilterEnabled: (enabled) => set({ filterEnabled: enabled }),
   setFilterExpanded: (expanded) => set({ filterExpanded: expanded }),
@@ -171,8 +208,9 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   setReceivedSearch: (term) => set({ receivedSearch: term }),
   setProxiedSearch: (term) => set({ proxiedSearch: term }),
   setTrafficSearch: (term) => set({ trafficSearch: term }),
-  setSelectedTrafficIndex: (index) => set({ selectedTrafficIndex: index }),
+  setSelectedTrafficKey: (key) => set({ selectedTrafficKey: key }),
   setError: (error) => set({ error }),
+  setNotification: (notification) => set({ notification }),
   openDebugMismatch: (result) =>
     set({ debugMismatchOpen: true, debugMismatchResult: result, debugMismatchLoading: false, debugMismatchError: null }),
   closeDebugMismatch: () =>
@@ -180,4 +218,12 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   setDebugMismatchLoading: (loading) => set({ debugMismatchLoading: loading }),
   setDebugMismatchError: (error) =>
     set({ debugMismatchError: error, debugMismatchLoading: false }),
+
+  openGenerateStub: (suggestions, confidence) =>
+    set({ generateStubOpen: true, generateStubSuggestions: suggestions, generateStubConfidence: confidence, generateStubLoading: false, generateStubError: null }),
+  closeGenerateStub: () =>
+    set({ generateStubOpen: false, generateStubSuggestions: [], generateStubConfidence: 0, generateStubLoading: false, generateStubError: null }),
+  setGenerateStubLoading: (loading) => set({ generateStubLoading: loading }),
+  setGenerateStubError: (error) =>
+    set({ generateStubError: error, generateStubLoading: false }),
 }));

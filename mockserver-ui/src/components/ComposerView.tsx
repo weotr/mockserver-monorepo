@@ -7,39 +7,87 @@ import RadioGroup from '@mui/material/RadioGroup';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Radio from '@mui/material/Radio';
 import Button from '@mui/material/Button';
+import Tooltip from '@mui/material/Tooltip';
 import Alert from '@mui/material/Alert';
 import MenuItem from '@mui/material/MenuItem';
 import Divider from '@mui/material/Divider';
 import Snackbar from '@mui/material/Snackbar';
 import Switch from '@mui/material/Switch';
+import Checkbox from '@mui/material/Checkbox';
 import Collapse from '@mui/material/Collapse';
+import IconButton from '@mui/material/IconButton';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import List from '@mui/material/List';
+import ListItemButton from '@mui/material/ListItemButton';
+import ListItemText from '@mui/material/ListItemText';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useDashboardStore } from '../store';
 import type { JsonListItem } from '../types';
 import { listConversationScenarios } from '../lib/conversationCodegen';
+import { buildBaseUrl } from '../lib/mcpClient';
 import LlmConversationForm from './LlmConversationForm';
 import StandardReview from './StandardReview';
 import {
   buildExpectationJson,
   chaosFromExpectation,
+  sideEffectsFromExpectation,
+  stepsFromExpectation,
+  STEP_ACTION_TYPES,
+  STEP_ACTION_LABELS,
+  RESPONDER_CAPABLE_ACTIONS,
   type StandardActionPayload,
   type StandardChaosDraft,
   type ChaosDelayUnit,
+  type BodyMatcherType,
+  type SelectionSetMatchType,
+  type GraphQLMatcherOptions,
+  type StandardForwardFallbackState,
+  type WebSocketFrameType,
+  type StandardSseState,
+  type StandardSseEventDraft,
+  type StandardBinaryResponseState,
+  type StandardDnsState,
+  type DnsResponseCodeName,
+  type StandardForwardTemplateState,
+  type StandardForwardClassCallbackState,
+  type StandardGrpcStreamState,
+  type StandardDnsMatcher,
+  type DnsRecordType,
+  type DnsRecordClass,
+  type StandardSideEffectAction,
+  type SideEffectPosition,
+  type SideEffectDelayUnit,
+  type SideEffectFailurePolicy,
+  type StandardConnectionOptions,
+  type StandardExpectationStep,
+  type StepActionType,
 } from '../lib/standardCodegen';
+import McpToolsPanel from './McpToolsPanel';
+import ImportForm from './ImportForm';
 
 // ---------------------------------------------------------------------------
 // Response action types
 // ---------------------------------------------------------------------------
 
-type ExpectationKind = 'standard' | 'llm_conversation';
+type ExpectationKind = 'standard' | 'llm_conversation' | 'grpc' | 'mcp' | 'dns' | 'import';
 
 type ActionType =
   | 'static'
   | 'forward'
   | 'forward_override'
+  | 'forward_fallback'
   | 'callback'
   | 'template'
-  | 'error';
+  | 'error'
+  | 'websocket'
+  | 'sse'
+  | 'binary_response'
+  | 'dns_response'
+  | 'forward_template'
+  | 'forward_class_callback'
+  | 'grpc_stream';
 
 interface ActionTypeMeta {
   value: ActionType;
@@ -51,18 +99,138 @@ const ACTION_TYPES: ActionTypeMeta[] = [
   { value: 'static', label: 'Static HTTP response', description: 'Return a fixed status / headers / body for matching requests.' },
   { value: 'forward', label: 'Forward to upstream', description: 'Proxy the request to a configured scheme://host:port.' },
   { value: 'forward_override', label: 'Forward with override', description: 'Forward upstream while rewriting host / scheme / path on the outgoing request.' },
+  { value: 'forward_fallback', label: 'Forward with fallback', description: 'Forward upstream; if it returns a configured error status or times out, return a fallback mock response.' },
   { value: 'callback', label: 'Class callback', description: 'Invoke a server-side class FQCN to build the response dynamically.' },
   { value: 'template', label: 'Response template', description: 'Velocity / JavaScript / Mustache templates for dynamic responses.' },
   { value: 'error', label: 'Error / fault injection', description: 'Drop the connection mid-request or send arbitrary bytes as the response.' },
+  { value: 'websocket', label: 'WebSocket response', description: 'Upgrade to a WebSocket connection and send messages, with optional bidirectional frame matchers.' },
+  { value: 'sse', label: 'SSE response', description: 'Server-Sent Events stream with typed events, data, and optional retry/close.' },
+  { value: 'binary_response', label: 'Binary response', description: 'Return raw binary data (base64-encoded) as the response body.' },
+  { value: 'dns_response', label: 'DNS response', description: 'Return a DNS response with a response code and answer records.' },
+  { value: 'forward_template', label: 'Forward template', description: 'Forward the request upstream using a Velocity / JavaScript / Mustache template to build the forwarded request.' },
+  { value: 'forward_class_callback', label: 'Forward class callback', description: 'Forward the request upstream via a server-side Java class implementing ExpectationForwardCallback.' },
+  { value: 'grpc_stream', label: 'gRPC stream response', description: 'Return a gRPC streaming response with status, messages, and optional close.' },
 ];
+
+/**
+ * Which action types are valid for each expectation kind.
+ * HTTP ('standard') gets all HTTP action types but NOT dns_response or grpc_stream.
+ * gRPC gets grpc_stream (primary) + static (for unary RPCs).
+ * DNS gets only dns_response.
+ * MCP gets only static.
+ * LLM has its own form path and does not use the ACTION_TYPES radio at all.
+ * Import has its own form path (bulk import from JSON/OpenAPI/WSDL/HAR).
+ */
+type ActionKind = Exclude<ExpectationKind, 'llm_conversation' | 'import'>;
+
+const ACTION_TYPES_BY_KIND: Record<ActionKind, ActionType[]> = {
+  standard: [
+    'static', 'forward', 'forward_override', 'forward_fallback',
+    'callback', 'template', 'error', 'websocket', 'sse',
+    'binary_response', 'forward_template', 'forward_class_callback',
+  ],
+  grpc: ['grpc_stream', 'static'],
+  dns: ['dns_response'],
+  mcp: ['static'],
+};
+
+/** Default action type when switching to a kind. */
+const DEFAULT_ACTION_BY_KIND: Record<ActionKind, ActionType> = {
+  standard: 'static',
+  grpc: 'grpc_stream',
+  dns: 'dns_response',
+  mcp: 'static',
+};
+
+/**
+ * Return the filtered ACTION_TYPES metadata for a given kind.
+ * Preserves the ordering defined in ACTION_TYPES_BY_KIND.
+ */
+function actionTypesForKind(k: ActionKind): ActionTypeMeta[] {
+  const allowed = ACTION_TYPES_BY_KIND[k];
+  return allowed.map((v) => ACTION_TYPES.find((a) => a.value === v)!);
+}
+
+/**
+ * Infer the expectation kind from an action type.
+ * Used when loading an existing expectation to auto-select the correct kind.
+ */
+function kindForActionType(at: ActionType): ActionKind {
+  if (at === 'dns_response') return 'dns';
+  if (at === 'grpc_stream') return 'grpc';
+  return 'standard';
+}
+
+// ---------------------------------------------------------------------------
+// Per-expectation kind classification — used to scope the existing-mocks list
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a raw expectation (from the store) into an ExpectationKind.
+ * LLM conversation expectations are detected by `httpLlmResponse`.
+ * DNS expectations are detected by `dnsResponse` action or `dnsName` in the request.
+ * gRPC expectations by `grpcStreamResponse`.
+ * MCP is a virtual kind — MCP tools are derived from HTTP static response
+ * expectations, so we classify them as 'standard' for the mocks list; MCP
+ * kind shows the same set of HTTP expectations filtered to static responses.
+ */
+function kindForExpectation(value: Record<string, unknown>): ExpectationKind {
+  // LLM conversation scenarios have httpLlmResponse
+  if (value['httpLlmResponse']) return 'llm_conversation';
+  // DNS — action is dnsResponse OR request has dnsName
+  if (value['dnsResponse']) return 'dns';
+  const req = value['httpRequest'] as Record<string, unknown> | undefined;
+  if (req && typeof req['dnsName'] === 'string' && (req['dnsName'] as string).length > 0) return 'dns';
+  // gRPC — action is grpcStreamResponse
+  if (value['grpcStreamResponse']) return 'grpc';
+  // Everything else is HTTP (standard). MCP is a view over HTTP static mocks.
+  return 'standard';
+}
+
+/**
+ * Build a short one-line summary string for an expectation, scoped by kind.
+ */
+function summaryForExpectation(value: Record<string, unknown>, expKind: ExpectationKind): string {
+  const req = (value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
+
+  if (expKind === 'dns') {
+    const dnsName = (typeof req['dnsName'] === 'string' ? req['dnsName'] : '(unknown)') as string;
+    const dnsType = typeof req['dnsType'] === 'string' ? ` (${req['dnsType']})` : '';
+    return `${dnsName}${dnsType}`;
+  }
+
+  if (expKind === 'grpc') {
+    const path = typeof req['path'] === 'string' ? (req['path'] as string) : '';
+    // gRPC paths are /package.Service/Method — show the path directly
+    return path || '(gRPC)';
+  }
+
+  // HTTP / MCP — METHOD /path
+  const method = typeof req['method'] === 'string' ? (req['method'] as string) : 'ANY';
+  const path = typeof req['path'] === 'string' ? (req['path'] as string) : '(no path)';
+  return `${method} ${path}`;
+}
+
+/**
+ * Human-readable kind label for display.
+ */
+function kindLabel(k: ExpectationKind): string {
+  switch (k) {
+    case 'standard': return 'HTTP';
+    case 'llm_conversation': return 'LLM';
+    case 'grpc': return 'gRPC';
+    case 'dns': return 'DNS';
+    case 'mcp': return 'MCP';
+    case 'import': return 'Import';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function baseUrl(p: ConnectionParams): string {
-  const protocol = p.secure ? 'https' : 'http';
-  return `${protocol}://${p.host}:${p.port}`;
+  return buildBaseUrl(p);
 }
 
 /**
@@ -102,9 +270,14 @@ interface MatcherState {
   pathParams: string;    // "name=value" lines, "!" prefix negates (for /users/{id} style)
   body: string;
   bodyBinary: boolean;   // when true, body is base64-encoded raw bytes
+  bodyMatcherType: BodyMatcherType;
+  graphqlOptions: GraphQLMatcherOptions;
   secure: boolean;
   priority: number;
   times: number;         // 0 = unlimited
+  ttlSeconds: number;    // 0 = unlimited (auto-expire after N seconds)
+  /** DNS matcher — set when the expectation kind is 'dns'. */
+  dns?: StandardDnsMatcher;
 }
 
 function emptyMatcher(): MatcherState {
@@ -118,9 +291,12 @@ function emptyMatcher(): MatcherState {
     pathParams: '',
     body: '',
     bodyBinary: false,
+    bodyMatcherType: 'string',
+    graphqlOptions: { selectionSetMatchType: 'NORMALISED_STRING', fields: '' },
     secure: false,
     priority: 0,
     times: 0,
+    ttlSeconds: 0,
   };
 }
 
@@ -228,28 +404,125 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
         />
       </Box>
       <Box>
+        <Box sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+          <TextField
+            label="Body type"
+            size="small"
+            select
+            value={matcher.bodyMatcherType}
+            onChange={(e) => {
+              const newType = e.target.value as BodyMatcherType;
+              setMatcher({
+                ...matcher,
+                bodyMatcherType: newType,
+                bodyBinary: newType === 'binary',
+              });
+            }}
+            sx={{ width: 190 }}
+          >
+            <MenuItem value="string">String / JSON</MenuItem>
+            <MenuItem value="graphql">GraphQL</MenuItem>
+            <MenuItem value="binary">Binary (base64)</MenuItem>
+            <MenuItem value="json-schema">JSON Schema</MenuItem>
+            <MenuItem value="json-path">JSON Path</MenuItem>
+            <MenuItem value="xml">XML</MenuItem>
+            <MenuItem value="xml-schema">XML Schema</MenuItem>
+            <MenuItem value="xpath">XPath</MenuItem>
+            <MenuItem value="regex">Regex</MenuItem>
+            <MenuItem value="parameters">Parameters</MenuItem>
+          </TextField>
+        </Box>
         <TextField
-          label={matcher.bodyBinary ? 'Body matcher (base64 bytes)' : 'Body matcher (string or JSON)'}
+          label={
+            matcher.bodyMatcherType === 'binary'
+              ? 'Body matcher (base64 bytes)'
+              : matcher.bodyMatcherType === 'graphql'
+                ? 'GraphQL query'
+                : matcher.bodyMatcherType === 'json-schema'
+                  ? 'JSON Schema'
+                  : matcher.bodyMatcherType === 'json-path'
+                    ? 'JSON Path expression'
+                    : matcher.bodyMatcherType === 'xml'
+                      ? 'XML body'
+                      : matcher.bodyMatcherType === 'xml-schema'
+                        ? 'XML Schema (XSD)'
+                        : matcher.bodyMatcherType === 'xpath'
+                          ? 'XPath expression'
+                          : matcher.bodyMatcherType === 'regex'
+                            ? 'Regex pattern'
+                            : matcher.bodyMatcherType === 'parameters'
+                              ? 'Parameters (key=value per line)'
+                              : 'Body matcher (string or JSON)'
+          }
           fullWidth
           multiline
-          minRows={2}
+          minRows={matcher.bodyMatcherType === 'json-path' || matcher.bodyMatcherType === 'xpath' || matcher.bodyMatcherType === 'regex' ? 1 : 2}
           maxRows={10}
           value={matcher.body}
           onChange={(e) => setMatcher({ ...matcher, body: e.target.value })}
-          placeholder={matcher.bodyBinary ? 'SGVsbG8sIFdvcmxkIQ==' : 'e.g. {"foo":"bar"}'}
+          placeholder={
+            matcher.bodyMatcherType === 'binary'
+              ? 'SGVsbG8sIFdvcmxkIQ=='
+              : matcher.bodyMatcherType === 'graphql'
+                ? '{ hero { name } }'
+                : matcher.bodyMatcherType === 'json-schema'
+                  ? '{"type":"object","properties":{"name":{"type":"string"}}}'
+                  : matcher.bodyMatcherType === 'json-path'
+                    ? '$.store.book[0].title'
+                    : matcher.bodyMatcherType === 'xml'
+                      ? '<root><element>value</element></root>'
+                      : matcher.bodyMatcherType === 'xml-schema'
+                        ? '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">...</xs:schema>'
+                        : matcher.bodyMatcherType === 'xpath'
+                          ? '/root/element[@attr="value"]'
+                          : matcher.bodyMatcherType === 'regex'
+                            ? '^Hello.*World$'
+                            : matcher.bodyMatcherType === 'parameters'
+                              ? 'username=admin\npassword=secret'
+                              : 'e.g. {"foo":"bar"}'
+          }
           slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
         />
-        <FormControlLabel
-          control={
-            <Switch
+        {matcher.bodyMatcherType === 'graphql' && (
+          <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <TextField
+              label="Selection set match type"
               size="small"
-              checked={matcher.bodyBinary}
-              onChange={(e) => setMatcher({ ...matcher, bodyBinary: e.target.checked })}
-            />
-          }
-          label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Body is binary (base64)</Typography>}
-          sx={{ mt: 0.5 }}
-        />
+              select
+              value={matcher.graphqlOptions.selectionSetMatchType}
+              onChange={(e) =>
+                setMatcher({
+                  ...matcher,
+                  graphqlOptions: {
+                    ...matcher.graphqlOptions,
+                    selectionSetMatchType: e.target.value as SelectionSetMatchType,
+                  },
+                })
+              }
+              sx={{ width: 260 }}
+            >
+              <MenuItem value="NORMALISED_STRING">Normalised string (default)</MenuItem>
+              <MenuItem value="AST_EXACT">AST exact</MenuItem>
+              <MenuItem value="AST_SUBSET">AST subset</MenuItem>
+            </TextField>
+            {(matcher.graphqlOptions.selectionSetMatchType === 'AST_EXACT' ||
+              matcher.graphqlOptions.selectionSetMatchType === 'AST_SUBSET') && (
+              <TextField
+                label="Fields (comma-separated, optional)"
+                size="small"
+                value={matcher.graphqlOptions.fields}
+                onChange={(e) =>
+                  setMatcher({
+                    ...matcher,
+                    graphqlOptions: { ...matcher.graphqlOptions, fields: e.target.value },
+                  })
+                }
+                placeholder="hero, name, friends"
+                slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+              />
+            )}
+          </Box>
+        )}
       </Box>
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
         <FormControlLabel
@@ -277,6 +550,111 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           sx={{ width: 170 }}
           value={matcher.times}
           onChange={(e) => setMatcher({ ...matcher, times: Math.max(0, Number(e.target.value) || 0) })}
+        />
+        <TextField
+          label="Time to live (s, 0 = forever)"
+          size="small"
+          type="number"
+          sx={{ width: 200 }}
+          value={matcher.ttlSeconds}
+          onChange={(e) => setMatcher({ ...matcher, ttlSeconds: Math.max(0, Number(e.target.value) || 0) })}
+        />
+      </Box>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DNS request matcher panel — shown instead of the HTTP MatcherPanel when
+// the expectation kind is 'dns'. DNS matching is based on dnsName / dnsType /
+// dnsClass, NOT method / path / headers / body.
+// ---------------------------------------------------------------------------
+
+function DnsMatcherPanel({
+  matcher,
+  setMatcher,
+  dnsMatcher,
+  setDnsMatcher,
+}: {
+  matcher: MatcherState;
+  setMatcher: (m: MatcherState) => void;
+  dnsMatcher: StandardDnsMatcher;
+  setDnsMatcher: (d: StandardDnsMatcher) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Expectation ID (optional)"
+          size="small"
+          sx={{ flex: 1 }}
+          value={matcher.id}
+          onChange={(e) => setMatcher({ ...matcher, id: e.target.value })}
+          placeholder="leave blank to auto-generate; reuse an ID to update an existing expectation"
+        />
+      </Box>
+      <TextField
+        label="DNS name"
+        size="small"
+        fullWidth
+        value={dnsMatcher.dnsName}
+        onChange={(e) => setDnsMatcher({ ...dnsMatcher, dnsName: e.target.value })}
+        placeholder="example.com"
+        helperText="required — the server routes to a DNS matcher when dnsName is present"
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Record type"
+          size="small"
+          select
+          value={dnsMatcher.dnsType}
+          onChange={(e) => setDnsMatcher({ ...dnsMatcher, dnsType: e.target.value as DnsRecordType | '' })}
+          sx={{ minWidth: 160 }}
+        >
+          <MenuItem value="">(any)</MenuItem>
+          {(['A', 'AAAA', 'CNAME', 'MX', 'SRV', 'TXT', 'PTR'] as const).map((t) => (
+            <MenuItem key={t} value={t}>{t}</MenuItem>
+          ))}
+        </TextField>
+        <TextField
+          label="Record class"
+          size="small"
+          select
+          value={dnsMatcher.dnsClass}
+          onChange={(e) => setDnsMatcher({ ...dnsMatcher, dnsClass: e.target.value as DnsRecordClass | '' })}
+          sx={{ minWidth: 140 }}
+        >
+          <MenuItem value="">(any)</MenuItem>
+          {(['IN', 'CH', 'HS', 'ANY'] as const).map((c) => (
+            <MenuItem key={c} value={c}>{c}</MenuItem>
+          ))}
+        </TextField>
+      </Box>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextField
+          label="Priority (higher = wins)"
+          size="small"
+          type="number"
+          sx={{ width: 200 }}
+          value={matcher.priority}
+          onChange={(e) => setMatcher({ ...matcher, priority: Number(e.target.value) || 0 })}
+        />
+        <TextField
+          label="Times (0 = unlimited)"
+          size="small"
+          type="number"
+          sx={{ width: 170 }}
+          value={matcher.times}
+          onChange={(e) => setMatcher({ ...matcher, times: Math.max(0, Number(e.target.value) || 0) })}
+        />
+        <TextField
+          label="Time to live (s, 0 = forever)"
+          size="small"
+          type="number"
+          sx={{ width: 200 }}
+          value={matcher.ttlSeconds}
+          onChange={(e) => setMatcher({ ...matcher, ttlSeconds: Math.max(0, Number(e.target.value) || 0) })}
         />
       </Box>
     </Box>
@@ -317,6 +695,8 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
   const rawBody = req['body'];
   let bodyText = '';
   let bodyBinary = false;
+  let bodyMatcherType: BodyMatcherType = 'string';
+  const graphqlOptions: GraphQLMatcherOptions = { selectionSetMatchType: 'NORMALISED_STRING', fields: '' };
   if (typeof rawBody === 'string') {
     bodyText = rawBody;
   } else if (rawBody && typeof rawBody === 'object') {
@@ -324,6 +704,48 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
     if (b['type'] === 'BINARY' && typeof b['base64Bytes'] === 'string') {
       bodyText = b['base64Bytes'] as string;
       bodyBinary = true;
+      bodyMatcherType = 'binary';
+    } else if (b['type'] === 'GRAPHQL' && typeof b['graphql'] === 'string') {
+      bodyText = b['graphql'] as string;
+      bodyMatcherType = 'graphql';
+      const ssmt = b['selectionSetMatchType'];
+      if (ssmt === 'AST_EXACT' || ssmt === 'AST_SUBSET') {
+        graphqlOptions.selectionSetMatchType = ssmt;
+      }
+      if (Array.isArray(b['fields'])) {
+        graphqlOptions.fields = (b['fields'] as string[]).join(', ');
+      }
+    } else if (b['type'] === 'JSON_SCHEMA' && typeof b['jsonSchema'] === 'string') {
+      bodyText = b['jsonSchema'] as string;
+      bodyMatcherType = 'json-schema';
+    } else if (b['type'] === 'JSON_PATH' && typeof b['jsonPath'] === 'string') {
+      bodyText = b['jsonPath'] as string;
+      bodyMatcherType = 'json-path';
+    } else if (b['type'] === 'XML' && typeof b['xml'] === 'string') {
+      bodyText = b['xml'] as string;
+      bodyMatcherType = 'xml';
+    } else if (b['type'] === 'XML_SCHEMA' && typeof b['xmlSchema'] === 'string') {
+      bodyText = b['xmlSchema'] as string;
+      bodyMatcherType = 'xml-schema';
+    } else if (b['type'] === 'XPATH' && typeof b['xpath'] === 'string') {
+      bodyText = b['xpath'] as string;
+      bodyMatcherType = 'xpath';
+    } else if (b['type'] === 'REGEX' && typeof b['regex'] === 'string') {
+      bodyText = b['regex'] as string;
+      bodyMatcherType = 'regex';
+    } else if (b['type'] === 'PARAMETERS' && b['parameters'] != null && typeof b['parameters'] === 'object') {
+      // Round-trip parameters back to key=value lines
+      const params = b['parameters'] as Record<string, unknown>;
+      const lines: string[] = [];
+      for (const [k, v] of Object.entries(params)) {
+        if (Array.isArray(v)) {
+          for (const vv of v as unknown[]) lines.push(`${k}=${String(vv)}`);
+        } else {
+          lines.push(`${k}=${String(v)}`);
+        }
+      }
+      bodyText = lines.join('\n');
+      bodyMatcherType = 'parameters';
     } else if (typeof b['string'] === 'string') {
       bodyText = b['string'];
     } else if (b['json'] != null) {
@@ -343,12 +765,31 @@ function matcherFromExpectation(item: JsonListItem): MatcherState {
     pathParams: mapToLines(req['pathParameters'], '='),
     body: bodyText,
     bodyBinary,
+    bodyMatcherType,
+    graphqlOptions,
     secure: req['secure'] === true,
     priority: typeof v['priority'] === 'number' ? (v['priority'] as number) : 0,
-    times:
-      typeof v['times'] === 'object' && v['times'] !== null && typeof (v['times'] as Record<string, unknown>)['remainingTimes'] === 'number'
-        ? ((v['times'] as Record<string, unknown>)['remainingTimes'] as number)
-        : 0,
+    // 0 = unlimited. An explicitly unlimited expectation prefills 0 rather than its
+    // (irrelevant) remainingTimes count.
+    times: (() => {
+      const t = v['times'];
+      if (typeof t !== 'object' || t === null) return 0;
+      const tr = t as Record<string, unknown>;
+      if (tr['unlimited'] === true) return 0;
+      return typeof tr['remainingTimes'] === 'number' ? (tr['remainingTimes'] as number) : 0;
+    })(),
+    // timeToLive prefills as seconds (0 = unlimited), converting from the stored timeUnit.
+    ttlSeconds: (() => {
+      const t = v['timeToLive'];
+      if (typeof t !== 'object' || t === null) return 0;
+      const tr = t as Record<string, unknown>;
+      if (tr['unlimited'] === true) return 0;
+      const val = tr['timeToLive'];
+      if (typeof val !== 'number') return 0;
+      const factor: Record<string, number> = { DAYS: 86400, HOURS: 3600, MINUTES: 60, SECONDS: 1, MILLISECONDS: 0.001 };
+      const unit = typeof tr['timeUnit'] === 'string' ? (tr['timeUnit'] as string) : 'SECONDS';
+      return Math.round(val * (factor[unit] ?? 1));
+    })(),
   };
 }
 
@@ -362,9 +803,17 @@ interface ActionPrefill {
   staticState?: StaticState;
   forwardState?: ForwardState;
   forwardOverrideState?: ForwardOverrideState;
+  forwardFallbackState?: ForwardFallbackState;
   callbackState?: CallbackState;
   templateState?: TemplateState;
   errorState?: ErrorState;
+  websocketState?: WebSocketState;
+  sseState?: StandardSseState;
+  binaryResponseState?: StandardBinaryResponseState;
+  dnsResponseState?: StandardDnsState;
+  forwardTemplateState?: StandardForwardTemplateState;
+  forwardClassCallbackState?: StandardForwardClassCallbackState;
+  grpcStreamState?: StandardGrpcStreamState;
 }
 
 function unwrapBody(body: unknown): string {
@@ -392,6 +841,19 @@ function headersToText(headers: unknown, exclude?: string): string {
     }
   }
   return lines.join('\n');
+}
+
+/** Parse an httpResponse.connectionOptions object back into the composer's draft shape. */
+function connectionOptionsFromValue(raw: unknown): StandardConnectionOptions | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const co: StandardConnectionOptions = {};
+  if (typeof r['keepAliveOverride'] === 'boolean') co.keepAliveOverride = r['keepAliveOverride'];
+  if (typeof r['closeSocket'] === 'boolean') co.closeSocket = r['closeSocket'];
+  if (typeof r['contentLengthHeaderOverride'] === 'number') co.contentLengthHeaderOverride = r['contentLengthHeaderOverride'];
+  if (r['suppressContentLengthHeader'] === true) co.suppressContentLengthHeader = true;
+  if (r['suppressConnectionHeader'] === true) co.suppressConnectionHeader = true;
+  return Object.keys(co).length > 0 ? co : undefined;
 }
 
 function paramsToText(params: unknown): string {
@@ -422,6 +884,9 @@ function actionFromExpectation(item: JsonListItem): ActionPrefill | null {
         body: unwrapBody(r['body']),
         contentType: Array.isArray(contentType) ? String((contentType as unknown[])[0] ?? 'application/json')
           : typeof contentType === 'string' ? contentType : 'application/json',
+        // Preserve any non-content-type response headers so editing in place does not drop them.
+        headers: headersToText(r['headers'], 'content-type'),
+        connectionOptions: connectionOptionsFromValue(r['connectionOptions']),
       },
     };
   }
@@ -504,6 +969,142 @@ function actionFromExpectation(item: JsonListItem): ActionPrefill | null {
     };
   }
 
+  // Forward with fallback
+  if (v['httpForwardWithFallback'] && typeof v['httpForwardWithFallback'] === 'object') {
+    const fwf = v['httpForwardWithFallback'] as Record<string, unknown>;
+    const fwd = (fwf['httpForward'] as Record<string, unknown> | undefined) ?? {};
+    const fbResp = (fwf['fallbackResponse'] as Record<string, unknown> | undefined) ?? {};
+    const codes = Array.isArray(fwf['fallbackOnStatusCodes'])
+      ? (fwf['fallbackOnStatusCodes'] as number[]).join(',')
+      : '';
+    return {
+      type: 'forward_fallback',
+      forwardFallbackState: {
+        scheme: fwd['scheme'] === 'HTTP' ? 'HTTP' : 'HTTPS',
+        host: typeof fwd['host'] === 'string' ? (fwd['host'] as string) : '',
+        port: typeof fwd['port'] === 'number' ? (fwd['port'] as number) : 443,
+        fallbackStatusCode: typeof fbResp['statusCode'] === 'number' ? (fbResp['statusCode'] as number) : 200,
+        fallbackBody: unwrapBody(fbResp['body']),
+        fallbackOnStatusCodes: codes,
+        fallbackOnTimeout: fwf['fallbackOnTimeout'] === true,
+      },
+    };
+  }
+
+  // WebSocket response
+  if (v['httpWebSocketResponse'] && typeof v['httpWebSocketResponse'] === 'object') {
+    const ws = v['httpWebSocketResponse'] as Record<string, unknown>;
+    const msgs = Array.isArray(ws['messages'])
+      ? (ws['messages'] as Record<string, unknown>[]).map((m) => typeof m['text'] === 'string' ? m['text'] as string : '').join('\n')
+      : '';
+    const rawMatchers = Array.isArray(ws['matchers']) ? (ws['matchers'] as Record<string, unknown>[]) : [];
+    const matchers: WebSocketMatcherRow[] = rawMatchers.map((m) => ({
+      frameType: (['TEXT', 'BINARY', 'PING', 'PONG', 'ANY'].includes(m['frameType'] as string)
+        ? m['frameType'] as WebSocketFrameType
+        : 'ANY'),
+      // The WebSocketMessageMatcherDTO serialises textMatcher as a plain string (value only),
+      // but denottable also tolerates a NottableString object form defensively.
+      textMatcher: denottable(m['textMatcher']),
+      responses: Array.isArray(m['responses'])
+        ? (m['responses'] as Record<string, unknown>[]).map((r) => typeof r['text'] === 'string' ? r['text'] as string : '').join('\n')
+        : '',
+    }));
+    return {
+      type: 'websocket',
+      websocketState: {
+        subprotocol: typeof ws['subprotocol'] === 'string' ? (ws['subprotocol'] as string) : '',
+        messages: msgs,
+        closeConnection: ws['closeConnection'] === true,
+        matchers,
+      },
+    };
+  }
+
+  // SSE response
+  if (v['httpSseResponse'] && typeof v['httpSseResponse'] === 'object') {
+    const sse = v['httpSseResponse'] as Record<string, unknown>;
+    const rawEvents = Array.isArray(sse['events']) ? (sse['events'] as Record<string, unknown>[]) : [];
+    const events: StandardSseEventDraft[] = rawEvents.map((ev) => ({
+      event: typeof ev['event'] === 'string' ? (ev['event'] as string) : '',
+      data: typeof ev['data'] === 'string' ? (ev['data'] as string) : '',
+      id: typeof ev['id'] === 'string' ? (ev['id'] as string) : '',
+      retry: typeof ev['retry'] === 'number' ? String(ev['retry']) : '',
+    }));
+    return {
+      type: 'sse',
+      sseState: {
+        statusCode: typeof sse['statusCode'] === 'number' ? (sse['statusCode'] as number) : 200,
+        headers: headersToText(sse['headers']),
+        events: events.length > 0 ? events : [{ event: '', data: '', id: '', retry: '' }],
+        closeConnection: sse['closeConnection'] === true,
+      },
+    };
+  }
+
+  // Binary response
+  if (v['binaryResponse'] && typeof v['binaryResponse'] === 'object') {
+    const bin = v['binaryResponse'] as Record<string, unknown>;
+    // binaryData is a byte[] serialised as base64 by Jackson
+    const data = typeof bin['binaryData'] === 'string' ? (bin['binaryData'] as string) : '';
+    return {
+      type: 'binary_response',
+      binaryResponseState: { binaryData: data },
+    };
+  }
+
+  // DNS response
+  if (v['dnsResponse'] && typeof v['dnsResponse'] === 'object') {
+    const dns = v['dnsResponse'] as Record<string, unknown>;
+    const validCodes: DnsResponseCodeName[] = ['NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED'];
+    const rc = validCodes.includes(dns['responseCode'] as DnsResponseCodeName) ? (dns['responseCode'] as DnsResponseCodeName) : 'NOERROR';
+    const answerRecords = Array.isArray(dns['answerRecords']) ? JSON.stringify(dns['answerRecords'], null, 2) : '';
+    return {
+      type: 'dns_response',
+      dnsResponseState: { responseCode: rc, answerRecords },
+    };
+  }
+
+  // Forward template
+  if (v['httpForwardTemplate'] && typeof v['httpForwardTemplate'] === 'object') {
+    const ft = v['httpForwardTemplate'] as Record<string, unknown>;
+    const tt = ft['templateType'];
+    return {
+      type: 'forward_template',
+      forwardTemplateState: {
+        templateType: tt === 'JAVASCRIPT' || tt === 'MUSTACHE' ? tt : 'VELOCITY',
+        template: typeof ft['template'] === 'string' ? (ft['template'] as string) : '',
+      },
+    };
+  }
+
+  // Forward class callback
+  if (v['httpForwardClassCallback'] && typeof v['httpForwardClassCallback'] === 'object') {
+    const fc = v['httpForwardClassCallback'] as Record<string, unknown>;
+    return {
+      type: 'forward_class_callback',
+      forwardClassCallbackState: {
+        callbackClass: typeof fc['callbackClass'] === 'string' ? (fc['callbackClass'] as string) : '',
+      },
+    };
+  }
+
+  // gRPC stream response
+  if (v['grpcStreamResponse'] && typeof v['grpcStreamResponse'] === 'object') {
+    const grpc = v['grpcStreamResponse'] as Record<string, unknown>;
+    const rawMsgs = Array.isArray(grpc['messages']) ? (grpc['messages'] as Record<string, unknown>[]) : [];
+    const msgs = rawMsgs.map((m) => typeof m['json'] === 'string' ? m['json'] as string : '').join('\n');
+    return {
+      type: 'grpc_stream',
+      grpcStreamState: {
+        statusName: typeof grpc['statusName'] === 'string' ? (grpc['statusName'] as string) : '',
+        statusMessage: typeof grpc['statusMessage'] === 'string' ? (grpc['statusMessage'] as string) : '',
+        headers: headersToText(grpc['headers']),
+        messages: msgs,
+        closeConnection: grpc['closeConnection'] === true,
+      },
+    };
+  }
+
   // LLM Conversation expectations are filtered out of the standard picker
   // entirely — they have their own top-level kind + wizard path.
 
@@ -518,6 +1119,18 @@ interface StaticState {
   statusCode: number;
   body: string;
   contentType: string;
+  /** Additional response headers as "Name: value" lines, beyond Content-Type. */
+  headers: string;
+  /** Connection-level response controls; undefined fields use the server default. */
+  connectionOptions?: StandardConnectionOptions;
+}
+
+/** '' (default) | 'true' | 'false' tri-state mapping for an optional boolean connection option. */
+function triValue(v: boolean | undefined): '' | 'true' | 'false' {
+  return v == null ? '' : v ? 'true' : 'false';
+}
+function triParse(v: string): boolean | undefined {
+  return v === '' ? undefined : v === 'true';
 }
 
 function StaticHttpPanel({
@@ -547,6 +1160,16 @@ function StaticHttpPanel({
         />
       </Box>
       <TextField
+        label="Response headers (one per line, Name: value)"
+        multiline
+        minRows={2}
+        maxRows={8}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'Cache-Control: no-cache\nLocation: /elsewhere'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <TextField
         label="Response body"
         multiline
         minRows={6}
@@ -556,6 +1179,55 @@ function StaticHttpPanel({
         placeholder='{"ok":true}'
         slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
       />
+      <ConnectionOptionsFields
+        value={state.connectionOptions}
+        onChange={(co) => setState({ ...state, connectionOptions: co })}
+      />
+    </Box>
+  );
+}
+
+/** Connection-level response controls (keep-alive, close socket, Content-Length, header suppression). */
+function ConnectionOptionsFields({
+  value,
+  onChange,
+}: {
+  value: StandardConnectionOptions | undefined;
+  onChange: (co: StandardConnectionOptions | undefined) => void;
+}) {
+  const co = value ?? {};
+  const update = (patch: Partial<StandardConnectionOptions>) => {
+    const next = { ...co, ...patch };
+    // Drop keys that are undefined so an all-default object becomes undefined (omitted).
+    (Object.keys(next) as (keyof StandardConnectionOptions)[]).forEach((k) => { if (next[k] == null) delete next[k]; });
+    onChange(Object.keys(next).length > 0 ? next : undefined);
+  };
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary">Connection options (advanced)</Typography>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 0.5 }}>
+        <TextField select size="small" label="Keep-alive" sx={{ width: 130 }} value={triValue(co.keepAliveOverride)}
+          onChange={(e) => update({ keepAliveOverride: triParse(e.target.value) })}>
+          <MenuItem value="">Default</MenuItem>
+          <MenuItem value="true">Keep alive</MenuItem>
+          <MenuItem value="false">Close</MenuItem>
+        </TextField>
+        <TextField select size="small" label="Close socket" sx={{ width: 130 }} value={triValue(co.closeSocket)}
+          onChange={(e) => update({ closeSocket: triParse(e.target.value) })}>
+          <MenuItem value="">Default</MenuItem>
+          <MenuItem value="true">Yes</MenuItem>
+          <MenuItem value="false">No</MenuItem>
+        </TextField>
+        <TextField size="small" type="number" label="Content-Length override" sx={{ width: 180 }}
+          value={co.contentLengthHeaderOverride ?? ''}
+          onChange={(e) => update({ contentLengthHeaderOverride: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0) })} />
+        <FormControlLabel control={<Switch size="small" checked={co.suppressContentLengthHeader === true}
+          onChange={(e) => update({ suppressContentLengthHeader: e.target.checked || undefined })} />}
+          label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Suppress Content-Length</Typography>} />
+        <FormControlLabel control={<Switch size="small" checked={co.suppressConnectionHeader === true}
+          onChange={(e) => update({ suppressConnectionHeader: e.target.checked || undefined })} />}
+          label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Suppress Connection</Typography>} />
+      </Box>
     </Box>
   );
 }
@@ -886,6 +1558,246 @@ function ErrorPanel({
 }
 
 // ---------------------------------------------------------------------------
+// Forward with fallback
+// ---------------------------------------------------------------------------
+
+type ForwardFallbackState = StandardForwardFallbackState;
+
+function ForwardFallbackPanel({
+  state,
+  setState,
+}: {
+  state: ForwardFallbackState;
+  setState: (s: ForwardFallbackState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Forward the matched request to an upstream host. If the upstream returns one of the
+        configured status codes or times out, MockServer returns the fallback response instead.
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, mt: 0.5 }}>
+        Forward target
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Scheme"
+          size="small"
+          select
+          value={state.scheme}
+          onChange={(e) => setState({ ...state, scheme: e.target.value as 'HTTP' | 'HTTPS' })}
+          sx={{ width: 130 }}
+        >
+          <MenuItem value="HTTP">HTTP</MenuItem>
+          <MenuItem value="HTTPS">HTTPS</MenuItem>
+        </TextField>
+        <TextField
+          label="Host"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.host}
+          onChange={(e) => setState({ ...state, host: e.target.value })}
+          placeholder="api.example.com"
+        />
+        <TextField
+          label="Port"
+          size="small"
+          type="number"
+          sx={{ width: 110 }}
+          value={state.port}
+          onChange={(e) => setState({ ...state, port: Number(e.target.value) || 0 })}
+        />
+      </Box>
+      <Divider sx={{ my: 0.5 }} />
+      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+        Fallback response
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Status code"
+          size="small"
+          type="number"
+          value={state.fallbackStatusCode}
+          onChange={(e) => setState({ ...state, fallbackStatusCode: Number(e.target.value) || 200 })}
+          sx={{ width: 130 }}
+        />
+        <TextField
+          label="Fallback on status codes (comma-separated)"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.fallbackOnStatusCodes}
+          onChange={(e) => setState({ ...state, fallbackOnStatusCodes: e.target.value })}
+          placeholder="500,502,503"
+          slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+        />
+      </Box>
+      <TextField
+        label="Fallback body"
+        multiline
+        minRows={3}
+        maxRows={10}
+        value={state.fallbackBody}
+        onChange={(e) => setState({ ...state, fallbackBody: e.target.value })}
+        placeholder='{"error":"upstream unavailable"}'
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.fallbackOnTimeout}
+            onChange={(e) => setState({ ...state, fallbackOnTimeout: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Fallback on timeout / connection error
+          </Typography>
+        }
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket response
+// ---------------------------------------------------------------------------
+
+interface WebSocketMatcherRow {
+  frameType: WebSocketFrameType;
+  textMatcher: string;
+  responses: string; // one message per line
+}
+
+interface WebSocketState {
+  subprotocol: string;
+  messages: string; // one message per line
+  closeConnection: boolean;
+  matchers: WebSocketMatcherRow[];
+}
+
+function WebSocketPanel({
+  state,
+  setState,
+}: {
+  state: WebSocketState;
+  setState: (s: WebSocketState) => void;
+}) {
+  const addMatcher = () => {
+    setState({
+      ...state,
+      matchers: [...state.matchers, { frameType: 'ANY', textMatcher: '', responses: '' }],
+    });
+  };
+  const removeMatcher = (idx: number) => {
+    setState({ ...state, matchers: state.matchers.filter((_, i) => i !== idx) });
+  };
+  const updateMatcher = (idx: number, patch: Partial<WebSocketMatcherRow>) => {
+    setState({
+      ...state,
+      matchers: state.matchers.map((m, i) => (i === idx ? { ...m, ...patch } : m)),
+    });
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Upgrade the connection to a WebSocket and send initial messages. Optionally add
+        bidirectional frame matchers that respond to incoming frames.
+      </Typography>
+      <TextField
+        label="Subprotocol (optional)"
+        size="small"
+        value={state.subprotocol}
+        onChange={(e) => setState({ ...state, subprotocol: e.target.value })}
+        placeholder="graphql-ws"
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <TextField
+        label="Initial messages (one per line)"
+        multiline
+        minRows={3}
+        maxRows={10}
+        value={state.messages}
+        onChange={(e) => setState({ ...state, messages: e.target.value })}
+        placeholder={'{"type":"connection_ack"}\n{"type":"ka"}'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.closeConnection}
+            onChange={(e) => setState({ ...state, closeConnection: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Close connection after messages
+          </Typography>
+        }
+      />
+
+      <Divider sx={{ my: 0.5 }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Bidirectional frame matchers
+        </Typography>
+        <Button size="small" variant="outlined" onClick={addMatcher}>
+          Add matcher
+        </Button>
+      </Box>
+      {state.matchers.map((m, idx) => (
+        <Paper key={idx} variant="outlined" sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              label="Frame type"
+              size="small"
+              select
+              value={m.frameType}
+              onChange={(e) => updateMatcher(idx, { frameType: e.target.value as WebSocketFrameType })}
+              sx={{ width: 130 }}
+            >
+              {(['TEXT', 'BINARY', 'PING', 'PONG', 'ANY'] as const).map((ft) => (
+                <MenuItem key={ft} value={ft}>{ft}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="Text matcher"
+              size="small"
+              sx={{ flex: 1 }}
+              value={m.textMatcher}
+              onChange={(e) => updateMatcher(idx, { textMatcher: e.target.value })}
+              placeholder='e.g. {"type":"ping"}'
+              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            />
+            <Button
+              size="small"
+              color="error"
+              variant="outlined"
+              onClick={() => removeMatcher(idx)}
+              sx={{ minWidth: 'auto', px: 1 }}
+            >
+              Remove
+            </Button>
+          </Box>
+          <TextField
+            label="Responses (one message per line)"
+            multiline
+            minRows={2}
+            maxRows={6}
+            value={m.responses}
+            onChange={(e) => updateMatcher(idx, { responses: e.target.value })}
+            placeholder={'{"type":"pong"}\n{"type":"ka"}'}
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+          />
+        </Paper>
+      ))}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Chaos / fault injection panel (optional, cross-cutting across action types)
 // ---------------------------------------------------------------------------
 
@@ -987,6 +1899,957 @@ function ChaosPanel({
 }
 
 // ---------------------------------------------------------------------------
+// SSE response panel
+// ---------------------------------------------------------------------------
+
+function SsePanel({
+  state,
+  setState,
+}: {
+  state: StandardSseState;
+  setState: (s: StandardSseState) => void;
+}) {
+  const addEvent = () => {
+    setState({ ...state, events: [...state.events, { event: '', data: '', id: '', retry: '' }] });
+  };
+  const removeEvent = (idx: number) => {
+    setState({ ...state, events: state.events.filter((_, i) => i !== idx) });
+  };
+  const updateEvent = (idx: number, patch: Partial<StandardSseEventDraft>) => {
+    setState({
+      ...state,
+      events: state.events.map((ev, i) => (i === idx ? { ...ev, ...patch } : ev)),
+    });
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Stream Server-Sent Events to the client. Each event has an optional type, data payload,
+        ID, and retry interval.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Status code"
+          size="small"
+          type="number"
+          value={state.statusCode}
+          onChange={(e) => setState({ ...state, statusCode: Number(e.target.value) || 200 })}
+          sx={{ width: 130 }}
+        />
+      </Box>
+      <TextField
+        label="Headers (Name: value per line)"
+        multiline
+        minRows={2}
+        maxRows={4}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'Cache-Control: no-cache'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Events
+        </Typography>
+        <Button size="small" variant="outlined" onClick={addEvent}>
+          Add event
+        </Button>
+      </Box>
+      {state.events.map((ev, idx) => (
+        <Paper key={idx} variant="outlined" sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              label="Event type"
+              size="small"
+              sx={{ flex: 1 }}
+              value={ev.event}
+              onChange={(e) => updateEvent(idx, { event: e.target.value })}
+              placeholder="message"
+            />
+            <TextField
+              label="ID"
+              size="small"
+              sx={{ width: 100 }}
+              value={ev.id}
+              onChange={(e) => updateEvent(idx, { id: e.target.value })}
+            />
+            <TextField
+              label="Retry (ms)"
+              size="small"
+              type="number"
+              sx={{ width: 100 }}
+              value={ev.retry}
+              onChange={(e) => updateEvent(idx, { retry: e.target.value })}
+            />
+            <Button
+              size="small"
+              color="error"
+              variant="outlined"
+              onClick={() => removeEvent(idx)}
+              sx={{ minWidth: 'auto', px: 1 }}
+            >
+              Remove
+            </Button>
+          </Box>
+          <TextField
+            label="Data"
+            multiline
+            minRows={2}
+            maxRows={6}
+            value={ev.data}
+            onChange={(e) => updateEvent(idx, { data: e.target.value })}
+            placeholder='{"update":"value"}'
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+          />
+        </Paper>
+      ))}
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.closeConnection}
+            onChange={(e) => setState({ ...state, closeConnection: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Close connection after events
+          </Typography>
+        }
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Binary response panel
+// ---------------------------------------------------------------------------
+
+function BinaryResponsePanel({
+  state,
+  setState,
+}: {
+  state: StandardBinaryResponseState;
+  setState: (s: StandardBinaryResponseState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return raw binary data as the response body. Provide the data as a base64-encoded string.
+      </Typography>
+      <TextField
+        label="Binary data (base64)"
+        multiline
+        minRows={4}
+        maxRows={12}
+        value={state.binaryData}
+        onChange={(e) => setState({ ...state, binaryData: e.target.value })}
+        placeholder="SGVsbG8sIFdvcmxkIQ=="
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DNS response panel
+// ---------------------------------------------------------------------------
+
+function DnsResponsePanel({
+  state,
+  setState,
+}: {
+  state: StandardDnsState;
+  setState: (s: StandardDnsState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return a DNS response with a response code and answer records. Records are provided as a JSON
+        array of objects with name, type, value, ttl, etc.
+      </Typography>
+      <TextField
+        label="Response code"
+        size="small"
+        select
+        value={state.responseCode}
+        onChange={(e) => setState({ ...state, responseCode: e.target.value as DnsResponseCodeName })}
+        sx={{ width: 200 }}
+      >
+        {(['NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED'] as const).map((rc) => (
+          <MenuItem key={rc} value={rc}>{rc}</MenuItem>
+        ))}
+      </TextField>
+      {(() => {
+        const recs = state.answerRecords.trim();
+        let invalid = false;
+        if (recs.length > 0) {
+          try { invalid = !Array.isArray(JSON.parse(recs)); } catch { invalid = true; }
+        }
+        return (
+          <TextField
+            label="Answer records (JSON array)"
+            multiline
+            minRows={4}
+            maxRows={12}
+            error={invalid}
+            value={state.answerRecords}
+            onChange={(e) => setState({ ...state, answerRecords: e.target.value })}
+            placeholder={'[\n  { "name": "example.com", "type": "A", "value": "127.0.0.1", "ttl": 300 }\n]'}
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            helperText={invalid
+              ? 'Not valid JSON — must be an array of records, e.g. [ { "name": "...", "type": "A", "value": "..." } ]'
+              : 'Each record supports: name, type (A/AAAA/CNAME/MX/SRV/TXT/PTR), value, ttl, priority, weight, port. Advanced records are best authored via the REST API.'}
+          />
+        );
+      })()}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Forward template panel
+// ---------------------------------------------------------------------------
+
+function ForwardTemplatePanel({
+  state,
+  setState,
+}: {
+  state: StandardForwardTemplateState;
+  setState: (s: StandardForwardTemplateState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Build the forwarded request dynamically using a template engine. The template receives
+        a <code>request</code> object. This is the forward-direction counterpart of the response template.
+      </Typography>
+      <TextField
+        label="Template engine"
+        size="small"
+        select
+        value={state.templateType}
+        onChange={(e) => setState({ ...state, templateType: e.target.value as StandardForwardTemplateState['templateType'] })}
+        sx={{ width: 200 }}
+      >
+        <MenuItem value="VELOCITY">Velocity</MenuItem>
+        <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
+        <MenuItem value="MUSTACHE">Mustache</MenuItem>
+      </TextField>
+      <TextField
+        label="Template body"
+        multiline
+        minRows={6}
+        maxRows={20}
+        value={state.template}
+        onChange={(e) => setState({ ...state, template: e.target.value })}
+        placeholder='return { "method": request.method, "path": "/upstream" + request.path };'
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Forward class callback panel
+// ---------------------------------------------------------------------------
+
+function ForwardClassCallbackPanel({
+  state,
+  setState,
+}: {
+  state: StandardForwardClassCallbackState;
+  setState: (s: StandardForwardClassCallbackState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Invoke a Java class implementing <code>ExpectationForwardCallback</code> on
+        the MockServer instance to build the forwarded request dynamically. The class must already
+        be on MockServer's classpath.
+      </Typography>
+      <TextField
+        label="Callback class (fully-qualified name)"
+        size="small"
+        value={state.callbackClass}
+        onChange={(e) => setState({ ...state, callbackClass: e.target.value })}
+        placeholder="com.example.MyForwardCallback"
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// gRPC stream response panel
+// ---------------------------------------------------------------------------
+
+function GrpcStreamPanel({
+  state,
+  setState,
+}: {
+  state: StandardGrpcStreamState;
+  setState: (s: StandardGrpcStreamState) => void;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Return a gRPC streaming response. Each message is a JSON-encoded protobuf payload
+        sent as a stream frame.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <TextField
+          label="Status name"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.statusName}
+          onChange={(e) => setState({ ...state, statusName: e.target.value })}
+          placeholder="OK"
+        />
+        <TextField
+          label="Status message"
+          size="small"
+          sx={{ flex: 1 }}
+          value={state.statusMessage}
+          onChange={(e) => setState({ ...state, statusMessage: e.target.value })}
+          placeholder="optional status detail"
+        />
+      </Box>
+      <TextField
+        label="Headers (Name: value per line)"
+        multiline
+        minRows={2}
+        maxRows={4}
+        value={state.headers}
+        onChange={(e) => setState({ ...state, headers: e.target.value })}
+        placeholder={'grpc-encoding: identity'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <TextField
+        label="Messages (one JSON per line)"
+        multiline
+        minRows={4}
+        maxRows={12}
+        value={state.messages}
+        onChange={(e) => setState({ ...state, messages: e.target.value })}
+        placeholder={'{"name":"Alice"}\n{"name":"Bob"}'}
+        slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+      />
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={state.closeConnection}
+            onChange={(e) => setState({ ...state, closeConnection: e.target.checked })}
+          />
+        }
+        label={
+          <Typography variant="body2" sx={{ fontSize: '0.82rem' }}>
+            Close connection after messages
+          </Typography>
+        }
+      />
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Side-effects (before / after actions) panel
+// ---------------------------------------------------------------------------
+
+function emptySideEffect(): StandardSideEffectAction {
+  return {
+    position: 'before',
+    method: '',
+    path: '',
+    host: '',
+    body: '',
+    delayValue: 0,
+    delayUnit: 'MILLISECONDS',
+    blocking: true,
+    timeoutValue: 0,
+    timeoutUnit: 'SECONDS',
+    failurePolicy: 'BEST_EFFORT',
+  };
+}
+
+function SideEffectsPanel({
+  sideEffects,
+  setSideEffects,
+}: {
+  sideEffects: StandardSideEffectAction[];
+  setSideEffects: (s: StandardSideEffectAction[]) => void;
+}) {
+  const addRow = () => setSideEffects([...sideEffects, emptySideEffect()]);
+  const removeRow = (idx: number) => setSideEffects(sideEffects.filter((_, i) => i !== idx));
+  const updateRow = (idx: number, patch: Partial<StandardSideEffectAction>) => {
+    setSideEffects(sideEffects.map((se, i) => (i === idx ? { ...se, ...patch } : se)));
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Fire HTTP webhook requests before and/or after the main response action.
+        Before-actions can optionally block the response until the webhook completes.
+        {/* Future increment: class/object callback targets. */}
+      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Actions ({sideEffects.length})
+        </Typography>
+        <Button size="small" variant="outlined" onClick={addRow} data-testid="add-side-effect">
+          Add action
+        </Button>
+      </Box>
+      {sideEffects.map((se, idx) => (
+        <Paper key={idx} variant="outlined" sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="side-effect-row">
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <TextField
+              label="Position"
+              size="small"
+              select
+              value={se.position}
+              onChange={(e) => updateRow(idx, { position: e.target.value as SideEffectPosition })}
+              sx={{ width: 120 }}
+            >
+              <MenuItem value="before">Before</MenuItem>
+              <MenuItem value="after">After</MenuItem>
+            </TextField>
+            <TextField
+              label="Method"
+              size="small"
+              value={se.method}
+              onChange={(e) => updateRow(idx, { method: e.target.value })}
+              placeholder="GET"
+              sx={{ width: 100 }}
+            />
+            <TextField
+              label="Path"
+              size="small"
+              sx={{ flex: 1 }}
+              value={se.path}
+              onChange={(e) => updateRow(idx, { path: e.target.value })}
+              placeholder="/webhook/notify"
+              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            />
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => removeRow(idx)}
+              aria-label="Remove side-effect"
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              label="Host (optional)"
+              size="small"
+              value={se.host}
+              onChange={(e) => updateRow(idx, { host: e.target.value })}
+              placeholder="auth.svc:8080"
+              sx={{ width: 200 }}
+              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            />
+            <TextField
+              label="Body (optional)"
+              size="small"
+              sx={{ flex: 1 }}
+              value={se.body}
+              onChange={(e) => updateRow(idx, { body: e.target.value })}
+              placeholder='{"event":"matched"}'
+              slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            />
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+            <TextField
+              label="Delay"
+              size="small"
+              type="number"
+              value={se.delayValue}
+              onChange={(e) => updateRow(idx, { delayValue: Number(e.target.value) || 0 })}
+              sx={{ width: 120 }}
+              helperText="0 = no delay"
+            />
+            <TextField
+              label="Delay unit"
+              size="small"
+              select
+              value={se.delayUnit}
+              onChange={(e) => updateRow(idx, { delayUnit: e.target.value as SideEffectDelayUnit })}
+              sx={{ width: 150 }}
+            >
+              <MenuItem value="MILLISECONDS">milliseconds</MenuItem>
+              <MenuItem value="SECONDS">seconds</MenuItem>
+              <MenuItem value="MINUTES">minutes</MenuItem>
+            </TextField>
+          </Box>
+          {/* Before-only fields: blocking, timeout, failurePolicy */}
+          {se.position === 'before' && (
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={se.blocking}
+                    onChange={(e) => updateRow(idx, { blocking: e.target.checked })}
+                  />
+                }
+                label={
+                  <Typography variant="body2" sx={{ fontSize: '0.78rem' }}>
+                    Blocking
+                  </Typography>
+                }
+              />
+              <TextField
+                label="Timeout"
+                size="small"
+                type="number"
+                value={se.timeoutValue}
+                onChange={(e) => updateRow(idx, { timeoutValue: Number(e.target.value) || 0 })}
+                sx={{ width: 110 }}
+                helperText="0 = none"
+              />
+              <TextField
+                label="Timeout unit"
+                size="small"
+                select
+                value={se.timeoutUnit}
+                onChange={(e) => updateRow(idx, { timeoutUnit: e.target.value as SideEffectDelayUnit })}
+                sx={{ width: 150 }}
+              >
+                <MenuItem value="MILLISECONDS">milliseconds</MenuItem>
+                <MenuItem value="SECONDS">seconds</MenuItem>
+                <MenuItem value="MINUTES">minutes</MenuItem>
+              </TextField>
+              <TextField
+                label="Failure policy"
+                size="small"
+                select
+                value={se.failurePolicy}
+                onChange={(e) => updateRow(idx, { failurePolicy: e.target.value as SideEffectFailurePolicy })}
+                sx={{ width: 170 }}
+              >
+                <MenuItem value="BEST_EFFORT">BEST_EFFORT</MenuItem>
+                <MenuItem value="FAIL_FAST">FAIL_FAST</MenuItem>
+              </TextField>
+            </Box>
+          )}
+        </Paper>
+      ))}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Steps panel — ordered multi-action pipeline (M1 increment-2)
+// ---------------------------------------------------------------------------
+
+function emptyStep(): StandardExpectationStep {
+  return {
+    actionType: 'httpResponse',
+    responder: false,
+    actionBody: '',
+    blocking: true,
+    delayValue: 0,
+    delayUnit: 'MILLISECONDS',
+    timeoutValue: 0,
+    timeoutUnit: 'SECONDS',
+    failurePolicy: 'BEST_EFFORT',
+  };
+}
+
+function StepsPanel({
+  steps,
+  setSteps,
+}: {
+  steps: StandardExpectationStep[];
+  setSteps: (s: StandardExpectationStep[]) => void;
+}) {
+  const addStep = () => setSteps([...steps, emptyStep()]);
+  const removeStep = (idx: number) => {
+    const next = steps.filter((_, i) => i !== idx);
+    // If the removed step was the responder and no other step is, auto-select
+    // the first response-capable step (if any).
+    if (steps[idx]?.responder && !next.some((s) => s.responder)) {
+      const respIdx = next.findIndex((s) => RESPONDER_CAPABLE_ACTIONS.has(s.actionType));
+      if (respIdx >= 0) next[respIdx] = { ...next[respIdx]!, responder: true };
+    }
+    setSteps(next);
+  };
+  const updateStep = (idx: number, patch: Partial<StandardExpectationStep>) => {
+    setSteps(steps.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+  const moveStep = (idx: number, direction: -1 | 1) => {
+    const target = idx + direction;
+    if (target < 0 || target >= steps.length) return;
+    const next = [...steps];
+    [next[idx], next[target]] = [next[target]!, next[idx]!];
+    setSteps(next);
+  };
+
+  const setResponder = (idx: number) => {
+    setSteps(steps.map((s, i) => ({ ...s, responder: i === idx })));
+  };
+
+  const responderCount = steps.filter((s) => s.responder).length;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Typography variant="body2" color="text.secondary">
+        Define an ordered pipeline of actions. Exactly one step must be the <strong>responder</strong>{' '}
+        (produces the HTTP response); all other steps are side-effects that run before or after it
+        in list order. Steps cannot be combined with top-level before/after actions.
+      </Typography>
+
+      {responderCount === 0 && steps.length > 0 && (
+        <Alert severity="warning" variant="outlined" sx={{ fontSize: '0.78rem' }} data-testid="steps-no-responder-warning">
+          No responder selected. Exactly one step must be marked as the responder.
+        </Alert>
+      )}
+      {responderCount > 1 && (
+        <Alert severity="error" variant="outlined" sx={{ fontSize: '0.78rem' }} data-testid="steps-multi-responder-error">
+          Multiple responders selected ({responderCount}). Only one step can be the responder.
+        </Alert>
+      )}
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Steps ({steps.length})
+        </Typography>
+        <Button size="small" variant="outlined" onClick={addStep} data-testid="add-step">
+          Add step
+        </Button>
+      </Box>
+
+      {steps.map((step, idx) => (
+        <Paper
+          key={idx}
+          variant="outlined"
+          sx={{
+            p: 1.5,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+            borderColor: step.responder ? 'primary.main' : undefined,
+            borderWidth: step.responder ? 2 : 1,
+          }}
+          data-testid="step-row"
+        >
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, minWidth: 24 }}>
+              #{idx + 1}
+            </Typography>
+            <TextField
+              label="Action type"
+              size="small"
+              select
+              value={step.actionType}
+              onChange={(e) => {
+                const newType = e.target.value as StepActionType;
+                // If the step is currently the responder and the new action type
+                // cannot serve as a responder, unset its responder flag AND
+                // auto-select the first other response-capable step as responder
+                // (mirrors removeStep), so the pipeline keeps exactly one responder.
+                if (step.responder && !RESPONDER_CAPABLE_ACTIONS.has(newType)) {
+                  const next = steps.map((s, i) =>
+                    i === idx ? { ...s, actionType: newType, responder: false } : s
+                  );
+                  if (!next.some((s) => s.responder)) {
+                    const respIdx = next.findIndex(
+                      (s, i) => i !== idx && RESPONDER_CAPABLE_ACTIONS.has(s.actionType)
+                    );
+                    if (respIdx >= 0) next[respIdx] = { ...next[respIdx]!, responder: true };
+                  }
+                  setSteps(next);
+                } else {
+                  updateStep(idx, { actionType: newType });
+                }
+              }}
+              sx={{ minWidth: 220 }}
+              data-testid="step-action-type"
+            >
+              {STEP_ACTION_TYPES.map((at) => (
+                <MenuItem key={at} value={at}>{STEP_ACTION_LABELS[at]}</MenuItem>
+              ))}
+            </TextField>
+
+            <Tooltip title={
+              !RESPONDER_CAPABLE_ACTIONS.has(step.actionType)
+                ? `${STEP_ACTION_LABELS[step.actionType]} cannot be a responder`
+                : step.responder
+                  ? 'This step produces the HTTP response'
+                  : 'Click to make this the responder'
+            }>
+              <span>
+                <FormControlLabel
+                  control={
+                    <Radio
+                      size="small"
+                      checked={step.responder}
+                      onChange={() => setResponder(idx)}
+                      disabled={!RESPONDER_CAPABLE_ACTIONS.has(step.actionType)}
+                    />
+                  }
+                  label={
+                    <Typography variant="body2" sx={{ fontSize: '0.78rem', fontWeight: step.responder ? 600 : 400 }}>
+                      Responder
+                    </Typography>
+                  }
+                  sx={{ mr: 0 }}
+                />
+              </span>
+            </Tooltip>
+
+            <Box sx={{ ml: 'auto', display: 'flex', gap: 0.25 }}>
+              <IconButton
+                size="small"
+                onClick={() => moveStep(idx, -1)}
+                disabled={idx === 0}
+                aria-label="Move step up"
+                data-testid="step-move-up"
+              >
+                <ArrowUpwardIcon fontSize="small" />
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => moveStep(idx, 1)}
+                disabled={idx === steps.length - 1}
+                aria-label="Move step down"
+                data-testid="step-move-down"
+              >
+                <ArrowDownwardIcon fontSize="small" />
+              </IconButton>
+              <IconButton
+                size="small"
+                color="error"
+                onClick={() => removeStep(idx)}
+                aria-label="Remove step"
+                data-testid="step-remove"
+              >
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Box>
+          </Box>
+
+          <TextField
+            label={`${STEP_ACTION_LABELS[step.actionType]} payload (JSON)`}
+            multiline
+            minRows={3}
+            maxRows={12}
+            value={step.actionBody}
+            onChange={(e) => updateStep(idx, { actionBody: e.target.value })}
+            placeholder={stepPlaceholder(step.actionType)}
+            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+          />
+
+          {/* Side-effect controls — only for non-responder steps */}
+          {!step.responder && (
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={step.blocking}
+                    onChange={(e) => updateStep(idx, { blocking: e.target.checked })}
+                  />
+                }
+                label={<Typography variant="body2" sx={{ fontSize: '0.78rem' }}>Blocking</Typography>}
+              />
+              <TextField
+                label="Delay"
+                size="small"
+                type="number"
+                value={step.delayValue}
+                onChange={(e) => updateStep(idx, { delayValue: Number(e.target.value) || 0 })}
+                sx={{ width: 100 }}
+              />
+              <TextField
+                label="Delay unit"
+                size="small"
+                select
+                value={step.delayUnit}
+                onChange={(e) => updateStep(idx, { delayUnit: e.target.value as SideEffectDelayUnit })}
+                sx={{ width: 140 }}
+              >
+                <MenuItem value="MILLISECONDS">milliseconds</MenuItem>
+                <MenuItem value="SECONDS">seconds</MenuItem>
+                <MenuItem value="MINUTES">minutes</MenuItem>
+              </TextField>
+              <TextField
+                label="Timeout"
+                size="small"
+                type="number"
+                value={step.timeoutValue}
+                onChange={(e) => updateStep(idx, { timeoutValue: Number(e.target.value) || 0 })}
+                sx={{ width: 100 }}
+              />
+              <TextField
+                label="Timeout unit"
+                size="small"
+                select
+                value={step.timeoutUnit}
+                onChange={(e) => updateStep(idx, { timeoutUnit: e.target.value as SideEffectDelayUnit })}
+                sx={{ width: 140 }}
+              >
+                <MenuItem value="MILLISECONDS">milliseconds</MenuItem>
+                <MenuItem value="SECONDS">seconds</MenuItem>
+                <MenuItem value="MINUTES">minutes</MenuItem>
+              </TextField>
+              <TextField
+                label="Failure policy"
+                size="small"
+                select
+                value={step.failurePolicy}
+                onChange={(e) => updateStep(idx, { failurePolicy: e.target.value as SideEffectFailurePolicy })}
+                sx={{ width: 150 }}
+              >
+                <MenuItem value="BEST_EFFORT">BEST_EFFORT</MenuItem>
+                <MenuItem value="FAIL_FAST">FAIL_FAST</MenuItem>
+              </TextField>
+            </Box>
+          )}
+        </Paper>
+      ))}
+    </Box>
+  );
+}
+
+/** Placeholder JSON for each step action type. */
+function stepPlaceholder(actionType: StepActionType): string {
+  switch (actionType) {
+    case 'httpResponse': return '{\n  "statusCode": 200,\n  "body": "{\\"ok\\":true}"\n}';
+    case 'httpForward': return '{\n  "scheme": "HTTPS",\n  "host": "api.example.com",\n  "port": 443\n}';
+    case 'httpOverrideForwardedRequest': return '{\n  "requestOverride": {\n    "path": "/v2/endpoint"\n  }\n}';
+    case 'httpError': return '{\n  "dropConnection": true\n}';
+    case 'httpRequest': return '{\n  "method": "POST",\n  "path": "/webhook/notify",\n  "body": "{\\"event\\":\\"matched\\"}"\n}';
+    case 'httpClassCallback': return '{\n  "callbackClass": "com.example.MyCallback"\n}';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Existing mocks list — compact, scrollable list scoped to the selected kind
+// ---------------------------------------------------------------------------
+
+interface ExistingMocksListProps {
+  kind: ExpectationKind;
+  expectations: JsonListItem[];
+  selectedKey: string;
+  onSelect: (key: string) => void;
+  onClear: () => void;
+}
+
+function ExistingMocksList({
+  kind,
+  expectations,
+  selectedKey,
+  onSelect,
+  onClear,
+}: ExistingMocksListProps) {
+  // Filter expectations to the current kind. For MCP, show static HTTP
+  // response expectations (the ones that become MCP tools).
+  const filtered = useMemo(() => {
+    return expectations.filter((e) => {
+      const expKind = kindForExpectation(e.value);
+      if (kind === 'mcp') {
+        // MCP tools are derived from standard (HTTP) expectations with httpResponse
+        return expKind === 'standard' && e.value['httpResponse'] != null;
+      }
+      return expKind === kind;
+    });
+  }, [expectations, kind]);
+
+  const label = kind === 'mcp' ? 'MCP (HTTP response)' : kindLabel(kind);
+
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5 }} data-testid="existing-mocks-list">
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+        <Typography
+          variant="subtitle2"
+          sx={{
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            color: 'text.secondary',
+          }}
+        >
+          Existing {label} mocks ({filtered.length})
+        </Typography>
+        {selectedKey && (
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={onClear}
+            sx={{ fontSize: '0.7rem', py: 0, px: 1, minHeight: 24 }}
+          >
+            New / clear
+          </Button>
+        )}
+      </Box>
+
+      {selectedKey && (
+        <Alert severity="info" variant="outlined" sx={{ fontSize: '0.72rem', py: 0, px: 1, mb: 0.5, '& .MuiAlert-message': { py: 0.3 } }}>
+          Editing {selectedKey.slice(0, 12)}... — changes update this expectation.
+        </Alert>
+      )}
+
+      {filtered.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.78rem', fontStyle: 'italic', py: 1 }}>
+          No {kindLabel(kind)} mocks yet — fill in the form below to add one.
+        </Typography>
+      ) : (
+        <Box sx={{ maxHeight: 200, overflowY: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
+          <List dense disablePadding>
+            {filtered.map((e) => {
+              const idShort = e.key.slice(0, 8);
+              const summary = summaryForExpectation(e.value, kind === 'mcp' ? 'standard' : kind);
+              return (
+                <ListItemButton
+                  key={e.key}
+                  selected={e.key === selectedKey}
+                  onClick={() => onSelect(e.key)}
+                  sx={{
+                    py: 0.25,
+                    px: 1,
+                    minHeight: 28,
+                    borderBottom: '1px solid',
+                    borderBottomColor: 'divider',
+                    '&:last-child': { borderBottom: 'none' },
+                  }}
+                >
+                  <ListItemText
+                    primary={
+                      <Typography
+                        component="span"
+                        sx={{ fontSize: '0.78rem', fontFamily: 'monospace' }}
+                      >
+                        <Box component="span" sx={{ color: 'text.secondary', mr: 0.5 }}>
+                          {idShort}...
+                        </Box>
+                        {summary}
+                      </Typography>
+                    }
+                    sx={{ m: 0 }}
+                  />
+                </ListItemButton>
+              );
+            })}
+          </List>
+        </Box>
+      )}
+
+      {!selectedKey && filtered.length > 0 && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, fontSize: '0.68rem' }}>
+          Select a mock to edit it, or fill in the form below to add a new one.
+        </Typography>
+      )}
+    </Paper>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
 
@@ -1000,6 +2863,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
   const [kind, setKind] = useState<ExpectationKind>('standard');
   const [actionType, setActionType] = useState<ActionType>('static');
   const [matcher, setMatcher] = useState<MatcherState>(emptyMatcher);
+  const [dnsMatcher, setDnsMatcher] = useState<StandardDnsMatcher>({ dnsName: '', dnsType: '', dnsClass: '' });
   const [loadFromKey, setLoadFromKey] = useState('');
   const [llmScenarioName, setLlmScenarioName] = useState('');
 
@@ -1008,6 +2872,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     statusCode: 200,
     body: '',
     contentType: 'application/json',
+    headers: '',
   });
   const [forwardState, setForwardState] = useState<ForwardState>({
     scheme: 'HTTPS',
@@ -1034,11 +2899,63 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     delayValue: 0,
     delayUnit: 'MILLISECONDS',
   });
+  const [forwardFallbackState, setForwardFallbackState] = useState<ForwardFallbackState>({
+    scheme: 'HTTPS',
+    host: '',
+    port: 443,
+    fallbackStatusCode: 200,
+    fallbackBody: '',
+    fallbackOnStatusCodes: '500,502,503',
+    fallbackOnTimeout: true,
+  });
+  const [websocketState, setWebsocketState] = useState<WebSocketState>({
+    subprotocol: '',
+    messages: '',
+    closeConnection: false,
+    matchers: [],
+  });
+  const [sseState, setSseState] = useState<StandardSseState>({
+    statusCode: 200,
+    headers: '',
+    events: [{ event: '', data: '', id: '', retry: '' }],
+    closeConnection: false,
+  });
+  const [binaryResponseState, setBinaryResponseState] = useState<StandardBinaryResponseState>({
+    binaryData: '',
+  });
+  const [dnsResponseState, setDnsResponseState] = useState<StandardDnsState>({
+    responseCode: 'NOERROR',
+    answerRecords: '',
+  });
+  const [forwardTemplateState, setForwardTemplateState] = useState<StandardForwardTemplateState>({
+    templateType: 'VELOCITY',
+    template: '',
+  });
+  const [forwardClassCallbackState, setForwardClassCallbackState] = useState<StandardForwardClassCallbackState>({
+    callbackClass: '',
+  });
+  const [grpcStreamState, setGrpcStreamState] = useState<StandardGrpcStreamState>({
+    statusName: '',
+    statusMessage: '',
+    headers: '',
+    messages: '',
+    closeConnection: false,
+  });
 
   // Chaos profile — cross-cutting, applies regardless of action type
   // (except httpError which is already a fault action).
   const [chaosEnabled, setChaosEnabled] = useState(false);
   const [chaosState, setChaosState] = useState<StandardChaosDraft>({});
+
+  // Side-effect actions — before / after actions (webhook httpRequest targets)
+  const [sideEffectsEnabled, setSideEffectsEnabled] = useState(false);
+  const [sideEffects, setSideEffects] = useState<StandardSideEffectAction[]>([]);
+
+  // Steps pipeline — ordered multi-action (M1 increment-2).
+  // When steps mode is enabled, the top-level action + before/after side-effects
+  // are ignored and the expectation uses the `steps` array instead.
+  const [stepsEnabled, setStepsEnabled] = useState(false);
+  const [stepsState, setStepsState] = useState<StandardExpectationStep[]>([]);
 
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1049,18 +2966,31 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     [actionType],
   );
 
+  // When an existing expectation is selected for editing, expose its id so the MCP
+  // Tools panel can highlight the tool derived from it, making the mock -> tool
+  // relationship explicit. The list key is the expectation id, but prefer the value's
+  // own id when present in case the two ever diverge.
+  const selectedExpectationId = useMemo(() => {
+    if (!loadFromKey) return undefined;
+    const item = activeExpectations.find((e) => e.key === loadFromKey);
+    const id = item?.value?.['id'];
+    return typeof id === 'string' && id.length > 0 ? id : loadFromKey;
+  }, [loadFromKey, activeExpectations]);
+
   // Single register helper — builds a StandardActionPayload from current
   // state and PUTs via registerExpectation, which itself uses
   // buildExpectationJson so the JSON sent matches the Java/JSON/curl preview
   // exactly. Replaces six per-action register helpers that had drifted apart
   // from the codegen path.
   const handleRegister = useCallback(
-    async (action: StandardActionPayload) => {
+    async (action: StandardActionPayload, effectiveMatcher?: MatcherState) => {
+      const m = effectiveMatcher ?? matcher;
       setRegistering(true);
       setError(null);
       try {
-        await registerExpectation(connectionParams, matcher, action);
-        setSnackMessage(`Registered ${matcher.method || 'ANY'} ${matcher.path}`);
+        await registerExpectation(connectionParams, m, action);
+        const label = m.dns ? m.dns.dnsName : `${m.method || 'ANY'} ${m.path}`;
+        setSnackMessage(`Registered ${label}`);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -1081,13 +3011,42 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       // Detect the action shape and prefill the matching panel + switch the radio.
       const prefill = actionFromExpectation(item);
       if (!prefill) return;
+      // Infer the correct kind from the action type and switch to it. MCP is a
+      // view over standard HTTP response expectations, so loading one from the
+      // MCP list must NOT switch the user away from the MCP kind.
+      const inferredKind = kindForActionType(prefill.type);
+      setKind((prevKind) => (prevKind === 'mcp' && inferredKind === 'standard') ? 'mcp' : inferredKind);
       setActionType(prefill.type);
       if (prefill.staticState) setStaticState(prefill.staticState);
       if (prefill.forwardState) setForwardState(prefill.forwardState);
       if (prefill.forwardOverrideState) setForwardOverrideState(prefill.forwardOverrideState);
+      if (prefill.forwardFallbackState) setForwardFallbackState(prefill.forwardFallbackState);
       if (prefill.callbackState) setCallbackState(prefill.callbackState);
       if (prefill.templateState) setTemplateState(prefill.templateState);
       if (prefill.errorState) setErrorState(prefill.errorState);
+      if (prefill.websocketState) setWebsocketState(prefill.websocketState);
+      if (prefill.sseState) setSseState(prefill.sseState);
+      if (prefill.binaryResponseState) setBinaryResponseState(prefill.binaryResponseState);
+      if (prefill.dnsResponseState) setDnsResponseState(prefill.dnsResponseState);
+      if (prefill.forwardTemplateState) setForwardTemplateState(prefill.forwardTemplateState);
+      if (prefill.forwardClassCallbackState) setForwardClassCallbackState(prefill.forwardClassCallbackState);
+      if (prefill.grpcStreamState) setGrpcStreamState(prefill.grpcStreamState);
+
+      // Populate the DNS matcher fields from the httpRequest if this is a
+      // DNS expectation (the server serialises dnsName / dnsType / dnsClass
+      // inside the httpRequest object).
+      const req = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
+      if (typeof req['dnsName'] === 'string') {
+        const validTypes: string[] = ['A', 'AAAA', 'CNAME', 'MX', 'SRV', 'TXT', 'PTR'];
+        const validClasses: string[] = ['IN', 'CH', 'HS', 'ANY'];
+        setDnsMatcher({
+          dnsName: req['dnsName'] as string,
+          dnsType: validTypes.includes(req['dnsType'] as string) ? (req['dnsType'] as DnsRecordType) : '',
+          dnsClass: validClasses.includes(req['dnsClass'] as string) ? (req['dnsClass'] as DnsRecordClass) : '',
+        });
+      } else {
+        setDnsMatcher({ dnsName: '', dnsType: '', dnsClass: '' });
+      }
 
       // Repopulate chaos panel from an existing expectation
       const existingChaos = chaosFromExpectation(item.value);
@@ -1097,6 +3056,29 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       } else {
         setChaosEnabled(false);
         setChaosState({});
+      }
+
+      // Repopulate side-effects panel from an existing expectation
+      const existingSideEffects = sideEffectsFromExpectation(item.value);
+      if (existingSideEffects) {
+        setSideEffectsEnabled(true);
+        setSideEffects(existingSideEffects);
+      } else {
+        setSideEffectsEnabled(false);
+        setSideEffects([]);
+      }
+
+      // Repopulate steps pipeline from an existing expectation
+      const existingSteps = stepsFromExpectation(item.value);
+      if (existingSteps) {
+        setStepsEnabled(true);
+        setStepsState(existingSteps);
+        // Steps mode overrides side-effects — turn them off
+        setSideEffectsEnabled(false);
+        setSideEffects([]);
+      } else {
+        setStepsEnabled(false);
+        setStepsState([]);
       }
     },
     [activeExpectations],
@@ -1119,12 +3101,10 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
       <Box sx={{ maxWidth: 920, mx: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-          Compose a new expectation
+          Mocks
         </Typography>
 
-        {/* Top-level kind selector — LLM Conversation is structurally
-            different from a standard HTTP expectation (multiple expectations
-            with scenario state) so it gets its own form path entirely. */}
+        {/* Top-level kind selector — each kind has a different form path. */}
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
             Expectation kind
@@ -1133,100 +3113,166 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
             row
             value={kind}
             onChange={(e) => {
-              setKind(e.target.value as ExpectationKind);
+              const newKind = e.target.value as ExpectationKind;
+              setKind(newKind);
               setLoadFromKey('');
               setLlmScenarioName('');
+              // gRPC pre-shapes the matcher for gRPC conventions; leaving gRPC for
+              // another kind undoes that pre-shaping unless the user customised it,
+              // so the matcher no longer shows gRPC content under HTTP / DNS / MCP.
+              const GRPC_PATH = '/package.Service/Method';
+              if (newKind === 'grpc') {
+                setMatcher((prev) => ({
+                  ...prev,
+                  method: 'POST',
+                  path: prev.path || GRPC_PATH,
+                }));
+              } else if (kind === 'grpc') {
+                setMatcher((prev) => ({
+                  ...prev,
+                  method: prev.method === 'POST' ? 'GET' : prev.method,
+                  path: prev.path === GRPC_PATH ? '' : prev.path,
+                }));
+              }
+              // Reset actionType to a valid default for the new kind
+              if (newKind !== 'llm_conversation' && newKind !== 'import') {
+                const allowed = ACTION_TYPES_BY_KIND[newKind];
+                setActionType((prev) =>
+                  allowed.includes(prev) ? prev : DEFAULT_ACTION_BY_KIND[newKind],
+                );
+              }
             }}
           >
             <FormControlLabel
               value="standard"
               control={<Radio size="small" />}
-              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>Standard HTTP expectation</Typography>}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>HTTP</Typography>}
             />
             <FormControlLabel
               value="llm_conversation"
               control={<Radio size="small" />}
               label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>LLM Conversation</Typography>}
             />
+            <FormControlLabel
+              value="grpc"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>gRPC</Typography>}
+            />
+            <FormControlLabel
+              value="dns"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>DNS</Typography>}
+            />
+            <FormControlLabel
+              value="mcp"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>MCP</Typography>}
+            />
+            <FormControlLabel
+              value="import"
+              control={<Radio size="small" />}
+              label={<Typography variant="body2" sx={{ fontSize: '0.82rem' }}>Import</Typography>}
+            />
           </RadioGroup>
         </Paper>
 
-        {kind === 'standard' && (
-          <Paper variant="outlined" sx={{ p: 2 }}>
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-              <TextField
-                label="Edit existing or add new"
-                size="small"
-                select
-                sx={{ flex: 1 }}
-                value={loadFromKey}
-                onChange={(e) => handleLoadExisting(e.target.value)}
-                slotProps={{ select: { native: true, displayEmpty: true }, inputLabel: { shrink: true } }}
-              >
-                <option value="">— add new expectation —</option>
-                {standardExpectations.map((e) => {
-                  const req = (e.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
-                  const m = (req['method'] as string | undefined) ?? '';
-                  const p = (req['path'] as string | undefined) ?? '';
-                  const idShort = e.key.slice(0, 8);
-                  return (
-                    <option key={e.key} value={e.key}>
-                      {idShort}… · {m || 'ANY'} {p || '(no path)'}
-                    </option>
-                  );
-                })}
-              </TextField>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => {
-                  setLoadFromKey('');
-                  setMatcher(emptyMatcher());
-                }}
-              >
-                Reset
-              </Button>
-            </Box>
-            {loadFromKey && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
-                Matcher and response action are prefilled from the selected
-                expectation. Keep the Expectation ID to update in place; clear
-                it to create a new expectation.
-              </Typography>
-            )}
-          </Paper>
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp' || kind === 'dns') && (
+          <ExistingMocksList
+            kind={kind}
+            expectations={standardExpectations}
+            selectedKey={loadFromKey}
+            onSelect={handleLoadExisting}
+            onClear={() => {
+              setLoadFromKey('');
+              setMatcher(emptyMatcher());
+              setDnsMatcher({ dnsName: '', dnsType: '', dnsClass: '' });
+              setChaosEnabled(false);
+              setChaosState({});
+              setSideEffectsEnabled(false);
+              setSideEffects([]);
+              setStepsEnabled(false);
+              setStepsState([]);
+            }}
+          />
         )}
 
         {kind === 'llm_conversation' && (
           <>
-            <Paper variant="outlined" sx={{ p: 2 }}>
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                <TextField
-                  label="Edit existing or add new"
-                  size="small"
-                  select
-                  sx={{ flex: 1 }}
-                  value={llmScenarioName}
-                  onChange={(e) => setLlmScenarioName(e.target.value)}
-                  slotProps={{ select: { native: true, displayEmpty: true }, inputLabel: { shrink: true } }}
+            <Paper variant="outlined" sx={{ p: 1.5 }} data-testid="existing-mocks-list">
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography
+                  variant="subtitle2"
+                  sx={{
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                    color: 'text.secondary',
+                  }}
                 >
-                  <option value="">— add new LLM conversation —</option>
-                  {llmScenarios.map((s) => (
-                    <option key={s.scenarioName} value={s.scenarioName}>
-                      {s.shortName} ({s.expectations.length} turn{s.expectations.length === 1 ? '' : 's'})
-                    </option>
-                  ))}
-                </TextField>
+                  Existing LLM scenarios ({llmScenarios.length})
+                </Typography>
                 {llmScenarioName && (
-                  <Button size="small" variant="outlined" onClick={() => setLlmScenarioName('')}>
-                    Reset
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setLlmScenarioName('')}
+                    sx={{ fontSize: '0.7rem', py: 0, px: 1, minHeight: 24 }}
+                  >
+                    New / clear
                   </Button>
                 )}
               </Box>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
-                Editing preserves the existing expectation IDs so other clients
-                holding references keep working.
-              </Typography>
+
+              {llmScenarioName && (
+                <Alert severity="info" variant="outlined" sx={{ fontSize: '0.72rem', py: 0, px: 1, mb: 0.5, '& .MuiAlert-message': { py: 0.3 } }}>
+                  Editing {llmScenarioName.replace(/^__llm_conv_/, '').replace(/__iso=.*$/, '')} — changes update this scenario.
+                </Alert>
+              )}
+
+              {llmScenarios.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.78rem', fontStyle: 'italic', py: 1 }}>
+                  No LLM mocks yet — fill in the form below to add one.
+                </Typography>
+              ) : (
+                <Box sx={{ maxHeight: 200, overflowY: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
+                  <List dense disablePadding>
+                    {llmScenarios.map((s) => (
+                      <ListItemButton
+                        key={s.scenarioName}
+                        selected={s.scenarioName === llmScenarioName}
+                        onClick={() => setLlmScenarioName(s.scenarioName)}
+                        sx={{
+                          py: 0.25,
+                          px: 1,
+                          minHeight: 28,
+                          borderBottom: '1px solid',
+                          borderBottomColor: 'divider',
+                          '&:last-child': { borderBottom: 'none' },
+                        }}
+                      >
+                        <ListItemText
+                          primary={
+                            <Typography
+                              component="span"
+                              sx={{ fontSize: '0.78rem', fontFamily: 'monospace' }}
+                            >
+                              {s.shortName} ({s.expectations.length} turn{s.expectations.length === 1 ? '' : 's'})
+                            </Typography>
+                          }
+                          sx={{ m: 0 }}
+                        />
+                      </ListItemButton>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {!llmScenarioName && llmScenarios.length > 0 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, fontSize: '0.68rem' }}>
+                  Select a scenario to edit it, or fill in the form below to add a new one.
+                </Typography>
+              )}
             </Paper>
 
             {/* Inline LLM conversation form — remounts whenever the selected
@@ -1239,19 +3285,75 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </>
         )}
 
-        {kind === 'standard' && (
+        {kind === 'import' && (
+          <ImportForm connectionParams={connectionParams} />
+        )}
+
+        {(kind === 'standard' || kind === 'grpc' || kind === 'mcp' || kind === 'dns') && (
           <>
-            {/* Step 1: matcher */}
+            {kind === 'grpc' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                gRPC requests are transcoded to HTTP and matched by normal expectations. The matcher
+                is pre-shaped with POST and a <code>/package.Service/Method</code> path pattern.
+                Choose a standard HTTP response or a gRPC stream response action.
+              </Alert>
+            )}
+            {kind === 'dns' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                DNS expectations are served by the DNS handler on the MockServer DNS port. The
+                request matcher matches by DNS name, record type, and record class; the action
+                returns a DNS response with a response code and answer records.
+              </Alert>
+            )}
+            {kind === 'mcp' && (
+              <Alert severity="info" variant="outlined" sx={{ fontSize: '0.78rem' }}>
+                MCP tools are generated automatically from HTTP response expectations — create a
+                response mock and it appears as a callable tool on the MCP endpoint. The derived tools
+                are shown below after you register.
+              </Alert>
+            )}
+            {/* MCP kind: show the derived tools at the top so it is clear the MCP
+                radio is active, immediately above the request matcher. */}
+            {kind === 'mcp' && (
+              <Paper variant="outlined" sx={{ p: 0 }}>
+                <McpToolsPanel
+                  connectionParams={connectionParams}
+                  selectedExpectationId={selectedExpectationId}
+                />
+              </Paper>
+            )}
+            {/* Step 1: matcher — DNS uses a dedicated panel with dnsName /
+                dnsType / dnsClass instead of the HTTP method / path / headers
+                / body fields. */}
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, mb: 1, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
                 1 · Match a request
               </Typography>
-              <MatcherPanel matcher={matcher} setMatcher={setMatcher} />
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
-                Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the
-                socket-address override, and client certificate chains are not yet
-                exposed in the form — use the REST API or raw JSON for those.
-              </Typography>
+              {kind === 'dns' ? (
+                <>
+                  <DnsMatcherPanel
+                    matcher={matcher}
+                    setMatcher={setMatcher}
+                    dnsMatcher={dnsMatcher}
+                    setDnsMatcher={setDnsMatcher}
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
+                    DNS queries are matched by dnsName (required), record type, and record class.
+                    Leave type and class empty to match any. The server routes to a DnsRequestDefinition
+                    when the request object contains a dnsName field.
+                  </Typography>
+                </>
+              ) : (
+                <>
+                  <MatcherPanel matcher={matcher} setMatcher={setMatcher} />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, fontSize: '0.7rem' }}>
+                    {kind === 'grpc'
+                      ? 'gRPC path convention: /package.Service/Method. gRPC clients send Content-Type: application/grpc — add it to the matcher headers to restrict to gRPC traffic only.'
+                      : 'Protocol (HTTP/1.1 vs HTTP/2), keep-alive, respond-before-body, the socket-address override, and client certificate chains are not yet exposed in the form — use the REST API or raw JSON for those.'}
+                    {' '}Object callbacks (httpResponseObjectCallback / httpForwardObjectCallback) require live WebSocket registration and are not form-authorable.
+                  </Typography>
+                </>
+              )}
             </Paper>
 
             {/* Step 2: action type */}
@@ -1260,7 +3362,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 2 · Respond with
               </Typography>
               <RadioGroup value={actionType} onChange={(e) => setActionType(e.target.value as ActionType)}>
-                {ACTION_TYPES.map((a) => (
+                {actionTypesForKind(kind as ActionKind).map((a) => (
                   <FormControlLabel
                     key={a.value}
                     value={a.value}
@@ -1306,6 +3408,30 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               {actionType === 'error' && (
                 <ErrorPanel state={errorState} setState={setErrorState} />
               )}
+              {actionType === 'forward_fallback' && (
+                <ForwardFallbackPanel state={forwardFallbackState} setState={setForwardFallbackState} />
+              )}
+              {actionType === 'websocket' && (
+                <WebSocketPanel state={websocketState} setState={setWebsocketState} />
+              )}
+              {actionType === 'sse' && (
+                <SsePanel state={sseState} setState={setSseState} />
+              )}
+              {actionType === 'binary_response' && (
+                <BinaryResponsePanel state={binaryResponseState} setState={setBinaryResponseState} />
+              )}
+              {actionType === 'dns_response' && (
+                <DnsResponsePanel state={dnsResponseState} setState={setDnsResponseState} />
+              )}
+              {actionType === 'forward_template' && (
+                <ForwardTemplatePanel state={forwardTemplateState} setState={setForwardTemplateState} />
+              )}
+              {actionType === 'forward_class_callback' && (
+                <ForwardClassCallbackPanel state={forwardClassCallbackState} setState={setForwardClassCallbackState} />
+              )}
+              {actionType === 'grpc_stream' && (
+                <GrpcStreamPanel state={grpcStreamState} setState={setGrpcStreamState} />
+              )}
             </Paper>
 
             {/* Chaos / fault injection — optional, cross-cutting. Not shown
@@ -1338,6 +3464,78 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               </Paper>
             )}
 
+            {/* Side-effect actions (before / after) — optional, cross-cutting.
+                Disabled when Steps mode is active (they conflict). */}
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Tooltip title={stepsEnabled ? 'Side-effects cannot be combined with steps mode' : ''}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={sideEffectsEnabled}
+                      disabled={stepsEnabled}
+                      onChange={(e) => {
+                        setSideEffectsEnabled(e.target.checked);
+                        if (!e.target.checked) setSideEffects([]);
+                      }}
+                    />
+                  }
+                  label={
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: stepsEnabled ? 'text.disabled' : 'text.secondary' }}>
+                      Before &amp; after actions (optional)
+                    </Typography>
+                  }
+                  sx={{ m: 0 }}
+                />
+              </Tooltip>
+              <Collapse in={sideEffectsEnabled && !stepsEnabled} unmountOnExit>
+                <Box sx={{ mt: 1.5 }}>
+                  <SideEffectsPanel sideEffects={sideEffects} setSideEffects={setSideEffects} />
+                </Box>
+              </Collapse>
+            </Paper>
+
+            {/* Steps pipeline — ordered multi-action (M1 increment-2).
+                When enabled, overrides both the top-level action and before/after actions. */}
+            <Paper variant="outlined" sx={{ p: 2 }} data-testid="steps-section">
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={stepsEnabled}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setStepsEnabled(enabled);
+                      if (enabled) {
+                        // Disable side-effects — steps replace both action + side-effects
+                        setSideEffectsEnabled(false);
+                        setSideEffects([]);
+                      } else {
+                        setStepsState([]);
+                      }
+                    }}
+                  />
+                }
+                label={
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.78rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
+                    Steps pipeline (advanced, optional)
+                  </Typography>
+                }
+                sx={{ m: 0 }}
+              />
+              {stepsEnabled && (
+                <Alert severity="info" variant="outlined" sx={{ fontSize: '0.72rem', mt: 1, mb: 0.5 }}>
+                  Steps mode replaces the top-level response action and before/after side-effects
+                  with an ordered pipeline. The action type above is ignored when steps are active.
+                </Alert>
+              )}
+              <Collapse in={stepsEnabled} unmountOnExit>
+                <Box sx={{ mt: 1.5 }}>
+                  <StepsPanel steps={stepsState} setSteps={setStepsState} />
+                </Box>
+              </Collapse>
+            </Paper>
+
             {/* Step 4: review & register — shows the generated Java / JSON /
                 curl, then the single Register button (mirrors the
                 LLM Conversation form's review-and-register section). */}
@@ -1346,19 +3544,60 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               if (actionType === 'static') currentAction.static = staticState;
               if (actionType === 'forward') currentAction.forward = forwardState;
               if (actionType === 'forward_override') currentAction.forwardOverride = forwardOverrideState;
+              if (actionType === 'forward_fallback') currentAction.forwardFallback = forwardFallbackState;
               if (actionType === 'callback') currentAction.callback = callbackState;
               if (actionType === 'template') currentAction.template = templateState;
               if (actionType === 'error') currentAction.error = errorState;
+              if (actionType === 'websocket') currentAction.websocket = {
+                subprotocol: websocketState.subprotocol,
+                messages: websocketState.messages,
+                closeConnection: websocketState.closeConnection,
+                matchers: websocketState.matchers,
+              };
+              if (actionType === 'sse') currentAction.sse = sseState;
+              if (actionType === 'binary_response') currentAction.binaryResponse = binaryResponseState;
+              if (actionType === 'dns_response') currentAction.dnsResponse = dnsResponseState;
+              if (actionType === 'forward_template') currentAction.forwardTemplate = forwardTemplateState;
+              if (actionType === 'forward_class_callback') currentAction.forwardClassCallback = forwardClassCallbackState;
+              if (actionType === 'grpc_stream') currentAction.grpcStream = grpcStreamState;
               if (chaosEnabled && actionType !== 'error') currentAction.chaos = chaosState;
+              // Steps override top-level side-effects
+              if (stepsEnabled && stepsState.length > 0) {
+                currentAction.steps = stepsState;
+              } else if (sideEffectsEnabled && sideEffects.length > 0) {
+                currentAction.sideEffects = sideEffects;
+              }
 
-              const dispatchRegister = () => void handleRegister(currentAction);
+              // Build the effective matcher: for DNS kind, attach the DNS
+              // matcher fields so buildExpectationJson emits { dnsName, ... }
+              // instead of the HTTP request matcher shape.
+              const effectiveMatcher = kind === 'dns'
+                ? { ...matcher, dns: dnsMatcher }
+                : matcher;
 
-              // Per-action validation
-              const canRegister = (() => {
-                if (matcher.path.trim().length === 0) return false;
+              const dispatchRegister = () => void handleRegister(currentAction, effectiveMatcher);
+
+              // Per-action validation — returns why the Register button is disabled (or null when
+              // it's enabled), so the disabled state always has a visible reason (tooltip below).
+              // DNS kind validates dnsName instead of matcher.path.
+              const disabledReason: string | null = (() => {
+                if (kind === 'dns') {
+                  if (dnsMatcher.dnsName.trim().length === 0) return 'Enter a DNS name to match';
+                } else {
+                  if (matcher.path.trim().length === 0) return 'Enter a request path to match';
+                }
+
+                // Steps mode validation — exactly one responder required
+                if (stepsEnabled) {
+                  if (stepsState.length === 0) return 'Add at least one step';
+                  const responderCount = stepsState.filter((s) => s.responder).length;
+                  if (responderCount === 0) return 'Exactly one step must be the responder';
+                  if (responderCount > 1) return 'Only one step can be the responder';
+                  return null;
+                }
                 switch (actionType) {
-                  case 'static': return true;
-                  case 'forward': return forwardState.host.trim().length > 0 && forwardState.port > 0;
+                  case 'static': return null;
+                  case 'forward': return (forwardState.host.trim().length > 0 && forwardState.port > 0) ? null : 'Enter a forward host and port';
                   case 'forward_override':
                     return (
                       forwardOverrideState.overrideMethod.trim().length > 0 ||
@@ -1368,13 +3607,35 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                       forwardOverrideState.overrideQueryString.trim().length > 0 ||
                       forwardOverrideState.overrideHeaders.trim().length > 0 ||
                       forwardOverrideState.overrideBody.trim().length > 0
-                    );
-                  case 'callback': return callbackState.callbackClass.trim().length > 0;
-                  case 'template': return templateState.template.trim().length > 0;
+                    ) ? null : 'Set at least one override field';
+                  case 'forward_fallback':
+                    return (forwardFallbackState.host.trim().length > 0 && forwardFallbackState.port > 0) ? null : 'Enter a fallback host and port';
+                  case 'callback': return callbackState.callbackClass.trim().length > 0 ? null : 'Enter the callback class name';
+                  case 'template': return templateState.template.trim().length > 0 ? null : 'Enter a response template';
                   case 'error':
-                    return errorState.dropConnection || errorState.responseBytesB64.trim().length > 0;
+                    return (errorState.dropConnection || errorState.responseBytesB64.trim().length > 0) ? null : 'Enable drop-connection or enter response bytes';
+                  case 'websocket': return null;
+                  case 'sse': return sseState.events.some((ev) => ev.data.trim().length > 0 || ev.event.trim().length > 0) ? null : 'Add at least one SSE event';
+                  case 'binary_response': return binaryResponseState.binaryData.trim().length > 0 ? null : 'Enter base64 binary data';
+                  case 'dns_response': {
+                    // Surface invalid answer-records JSON instead of silently dropping it (the
+                    // codegen omits unparseable records, which would register an empty DNS answer).
+                    const recs = dnsResponseState.answerRecords.trim();
+                    if (recs.length > 0) {
+                      try {
+                        if (!Array.isArray(JSON.parse(recs))) return 'Answer records must be a JSON array';
+                      } catch {
+                        return 'Answer records must be valid JSON (an array of records)';
+                      }
+                    }
+                    return null;
+                  }
+                  case 'forward_template': return forwardTemplateState.template.trim().length > 0 ? null : 'Enter a forward template';
+                  case 'forward_class_callback': return forwardClassCallbackState.callbackClass.trim().length > 0 ? null : 'Enter the forward callback class name';
+                  case 'grpc_stream': return null;
                 }
               })();
+              const canRegister = disabledReason === null;
 
               const editingExisting = matcher.id.trim().length > 0;
 
@@ -1385,23 +3646,28 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                   </Typography>
                   <Divider sx={{ mb: 1 }} />
                   <StandardReview
-                    matcher={matcher}
+                    matcher={effectiveMatcher}
                     action={currentAction}
                     baseUrl={baseUrl(connectionParams)}
                   />
                   <Box sx={{ mt: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={dispatchRegister}
-                      disabled={registering || !canRegister}
-                    >
-                      {registering
-                        ? 'Registering…'
-                        : editingExisting
-                          ? 'Update expectation'
-                          : 'Register expectation'}
-                    </Button>
+                    <Tooltip title={!registering && disabledReason ? disabledReason : ''}>
+                      {/* span wrapper so the tooltip works while the button is disabled */}
+                      <span>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={dispatchRegister}
+                          disabled={registering || !canRegister}
+                        >
+                          {registering
+                            ? 'Registering…'
+                            : editingExisting
+                              ? 'Update expectation'
+                              : 'Register expectation'}
+                        </Button>
+                      </span>
+                    </Tooltip>
                     {editingExisting ? (
                       <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
                         Editing — the Expectation ID will be reused so this updates in place.
@@ -1415,6 +3681,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                 </Paper>
               );
             })()}
+
           </>
         )}
 

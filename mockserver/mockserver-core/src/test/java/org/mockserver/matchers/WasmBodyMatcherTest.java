@@ -1,0 +1,61 @@
+package org.mockserver.matchers;
+
+import org.junit.After;
+import org.junit.Test;
+import org.mockserver.wasm.WasmStore;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+
+/**
+ * Tests for {@link WasmBodyMatcher}.
+ * <p>
+ * Real WASM module execution is not tested here — chicory integration
+ * tests would require building a valid WASM binary. Instead, these tests
+ * verify fail-closed behaviour and basic wiring.
+ */
+public class WasmBodyMatcherTest {
+
+    @After
+    public void resetStore() {
+        WasmStore.getInstance().reset();
+    }
+
+    @Test
+    public void shouldReturnFalseWhenModuleNotLoaded() {
+        WasmBodyMatcher matcher = new WasmBodyMatcher("nonexistent");
+        assertThat(matcher.matches(null, "some body"), is(false));
+    }
+
+    @Test
+    public void shouldReturnFalseWhenModuleBytesAreInvalidWasm() {
+        // Store invalid WASM bytes — callMatch should fail closed
+        WasmStore.getInstance().put("invalid", new byte[]{0x00, 0x01, 0x02, 0x03});
+        WasmBodyMatcher matcher = new WasmBodyMatcher("invalid");
+        assertThat(matcher.matches(null, "hello"), is(false));
+    }
+
+    @Test
+    public void shouldReturnFalseWhenModuleNameIsNull() {
+        WasmBodyMatcher matcher = new WasmBodyMatcher(null);
+        assertThat(matcher.matches(null, "body"), is(false));
+    }
+
+    @Test
+    public void shouldReportBlankWhenModuleNameIsNull() {
+        WasmBodyMatcher matcher = new WasmBodyMatcher(null);
+        assertThat(matcher.isBlank(), is(true));
+    }
+
+    @Test
+    public void shouldReportBlankWhenModuleNameIsEmpty() {
+        WasmBodyMatcher matcher = new WasmBodyMatcher("");
+        assertThat(matcher.isBlank(), is(true));
+    }
+
+    @Test
+    public void shouldReportNotBlankWhenModuleNameIsSet() {
+        WasmBodyMatcher matcher = new WasmBodyMatcher("myModule");
+        assertThat(matcher.isBlank(), is(false));
+    }
+}

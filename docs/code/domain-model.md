@@ -144,6 +144,12 @@ classDiagram
         +validateResponse: Boolean
         +validationMode: ValidationMode
     }
+    class HttpForwardWithFallback {
+        +httpForward: HttpForward
+        +fallbackResponse: HttpResponse
+        +fallbackOnStatusCodes: List~Integer~
+        +fallbackOnTimeout: Boolean
+    }
     class HttpSseResponse {
         +statusCode: Integer
         +headers: Headers
@@ -153,7 +159,13 @@ classDiagram
     class HttpWebSocketResponse {
         +subprotocol: String
         +messages: List~WebSocketMessage~
+        +matchers: List~WebSocketMessageMatcher~
         +closeConnection: Boolean
+    }
+    class WebSocketMessageMatcher {
+        +frameType: WebSocketFrameType
+        +textMatcher: NottableString
+        +responses: List~WebSocketMessage~
     }
 
     class BinaryResponse {
@@ -231,6 +243,7 @@ classDiagram
 
     Action <|-- HttpError
     Action <|-- HttpForwardValidateAction
+    Action <|-- HttpForwardWithFallback
     Action <|-- HttpSseResponse
     Action <|-- HttpWebSocketResponse
     Action <|-- GrpcStreamResponse
@@ -292,8 +305,41 @@ Static factory: `FileBody.fileBody(filePath)`, `FileBody.fileBody(filePath, cont
 | `query` | `String` | GraphQL query string, normalized before comparison (whitespace collapsed, comments stripped) |
 | `operationName` | `String` | Optional operation name filter; supports exact match or regex |
 | `variablesSchema` | `String` | Optional JSON Schema that the request's `variables` object must validate against |
+| `selectionSetMatchType` | `SelectionSetMatchType` | Controls how the selection set is compared (default: `NORMALISED_STRING`) |
+| `fields` | `List<String>` | Explicit list of top-level field names to match (optional; extracted from `query` if not set) |
 
 `GraphQLMatcher` (`org.mockserver.matchers.GraphQLMatcher`) parses the incoming request body as JSON, extracts the `query`, `operationName`, and `variables` fields, and matches each against the expectation. The `GraphQLBodyDTO` handles serialization. Static factory: `GraphQLBody.graphQL(query)`, `GraphQLBody.graphQL(query, operationName)`, `GraphQLBody.graphQL(query, operationName, variablesSchema)`.
+
+##### SelectionSetMatchType
+
+The `SelectionSetMatchType` enum (`org.mockserver.model.SelectionSetMatchType`) controls how GraphQL body matching compares the selection set:
+
+| Value | Behaviour |
+|-------|-----------|
+| `NORMALISED_STRING` | Default. Whitespace-normalised string comparison of the full query (existing behaviour). |
+| `AST_EXACT` | Extracts operation type, operation name, and top-level field names; all must match exactly. Whitespace and nested field details are ignored. |
+| `AST_SUBSET` | Like `AST_EXACT`, but the expected fields only need to be a *subset* of the actual request's top-level fields. Useful for matching requests that contain additional fields beyond what the test cares about. |
+
+AST modes use a lightweight parser (`GraphQLAstMatcher`) that extracts operation type/name and top-level fields without a full GraphQL grammar dependency. It handles comments, string literals, argument lists, and nested braces.
+
+**Example -- AST_SUBSET matching:**
+
+```java
+GraphQLBody.graphQL("query { users { id } }")
+    .withSelectionSetMatchType(SelectionSetMatchType.AST_SUBSET)
+    .withFields("users");
+// Matches any query with operation type "query" that includes a top-level "users" field,
+// regardless of what other fields are present.
+```
+
+**Example -- AST_EXACT matching:**
+
+```java
+GraphQLBody.graphQL("query GetUser { user profile }")
+    .withSelectionSetMatchType(SelectionSetMatchType.AST_EXACT);
+// Matches only queries with operation type "query", name "GetUser", and exactly
+// the top-level fields "user" and "profile" (in any order, with any sub-selections).
+```
 
 ### ConnectionOptions
 
@@ -371,22 +417,129 @@ Expectation.when(request)      // RequestDefinition
 
 Scenario fields are optional. When `scenarioName` and `scenarioState` are set, the expectation only matches when the named scenario is in the required state. After matching, the scenario transitions to `newScenarioState` (if set). All scenarios start in the `"Started"` state. State is managed by `ScenarioManager` in `RequestMatchers`.
 
+#### Timed and Triggered Scenario Flows
+
+Beyond expectation-driven transitions, scenarios support timed auto-transitions and external triggers via REST endpoints:
+
+**Timed auto-transitions** (`TimedScenarioTransition` model): A scenario can be configured to automatically advance from one state to another after a delay. The `ScenarioManager.scheduleTransition()` method accepts a `TimedScenarioTransition` and a `Scheduler`, using generation-based cancellation to ensure only the latest scheduled transition for a given scenario fires. The transition only fires if the scenario is still in the expected `currentState`.
+
+**REST endpoints for external control:**
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| `GET` | `/mockserver/scenario` | — | Lists all known scenarios: `{"scenarios": [{"scenarioName": "...", "currentState": "..."}, ...]}` |
+| `GET` | `/mockserver/scenario/{name}` | — | Returns `{"scenarioName": "...", "currentState": "..."}` |
+| `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running"}` | Sets state immediately |
+| `PUT` | `/mockserver/scenario/{name}` | `{"state": "Running", "transitionAfterMs": 5000, "nextState": "Finished"}` | Sets state and schedules timed transition |
+| `PUT` | `/mockserver/scenario/{name}/trigger` | `{"newState": "Step3"}` | Sets state to `newState` immediately (external trigger) |
+
+These endpoints are handled in `HttpState.handleScenarioPut()`, `HttpState.handleScenarioGet()`, and `HttpState.handleScenarioList()` (the no-name `GET /mockserver/scenario` form, used by the dashboard's Scenarios panel to list existing scenarios), authenticated via the control plane authentication handler.
+
 #### Sequential/Cycling Responses (`httpResponses`)
 
 An expectation can return multiple responses by setting `httpResponses` (a `List<HttpResponse>`) instead of `httpResponse`. Each match returns the next response, cycling back to the first after the last. The `responseMode` field (`ResponseMode.SEQUENTIAL` or `ResponseMode.RANDOM`) controls selection. Sequential mode uses `(matchCount - 1) % size` because `matchCount` is incremented in `consumeMatch()` before `getPrimaryAction()` is called.
 
-#### After-Actions (`afterActions`)
+#### Before & After Actions (`beforeActions` / `afterActions`)
 
-An expectation can specify `afterActions` — a `List<AfterAction>` executed after the primary response is sent. Each `AfterAction` can fire one of three targets (mutually exclusive):
+An expectation can carry two optional ordered side-effect lists, both `List<AfterAction>`: `beforeActions` run before the primary response (and can gate it), `afterActions` run after it (fire-and-forget). Each `AfterAction` fires one of three mutually-exclusive targets, with an optional delay:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `httpRequest` | `HttpRequest` | A fire-and-forget HTTP request to send |
+| `httpRequest` | `HttpRequest` | An HTTP request (webhook) to send |
 | `httpClassCallback` | `HttpClassCallback` | A Java class callback to invoke |
 | `httpObjectCallback` | `HttpObjectCallback` | A WebSocket object callback to invoke |
-| `delay` | `Delay` | Optional delay before executing the after-action |
+| `delay` | `Delay` | Optional delay before executing the action |
 
-Setting one target clears the others. After-actions are dispatched in `HttpActionHandler` as secondary actions following the primary response.
+Setting one target clears the others. `AfterAction` also carries three optional controls that are meaningful only for before-actions (after-actions ignore them):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `blocking` | `Boolean` | `true` (when null) | Whether the response waits for the action to complete |
+| `timeout` | `Delay` | `maxSocketTimeout` | Max wait for a blocking action; on expiry the action is treated as failed |
+| `failurePolicy` | `FailurePolicy` | `BEST_EFFORT` | `FAIL_FAST` aborts with `502` (primary action skipped); `BEST_EFFORT` logs and continues |
+
+Both lists are additive and optional (an expectation without them is unchanged), serialised via `AfterActionDTO`/`ExpectationDTO`, and validated against the shared `afterAction` JSON schema definition. Dispatch is handled in `HttpActionHandler` (`runBeforeActions` / `dispatchSideAction`) — see [request-processing.md](request-processing.md) for the before/after dispatch flow.
+
+#### Unified Ordered Steps (`steps`)
+
+As an alternative to separate `beforeActions` + primary action + `afterActions`, an expectation can declare a `List<ExpectationStep>` in the `steps` field. Each `ExpectationStep` carries:
+
+- Exactly one action target: `httpRequest` (webhook), `httpClassCallback`, `httpObjectCallback`, `httpForward`, `httpOverrideForwardedRequest`, `httpResponse`, or `httpError`.
+- A `responder` boolean flag — exactly one step must be the responder (the action that produces the HTTP response).
+- The same blocking/timeout/failurePolicy controls as before-actions, for pre-responder side-effect steps.
+
+**Validation rules** (enforced in `Expectation.validateSteps()`, called at upsert time in `HttpState.add()`):
+- Exactly one step must have `responder = true`.
+- `httpError` cannot be combined with other steps (must be sole step).
+- `httpRequest` (webhook) cannot be a responder (side-effect only).
+- Each step must have exactly one action target.
+
+**Dispatch order** (in `HttpActionHandler`):
+1. Pre-responder steps (blocking/async side-effects, like beforeActions).
+2. The responder step's action is dispatched via the normal `dispatchPrimaryAction` path.
+3. Post-responder steps run as fire-and-forget side-effects (like afterActions).
+
+Serialised via `ExpectationStepDTO`/`ExpectationDTO`, validated against `expectationStep.json` schema. Backward-compatible: when `steps` is null/empty, the existing beforeActions + primary action path is used unchanged.
+
+#### Bidirectional WebSocket Matching (`WebSocketMessageMatcher`)
+
+`HttpWebSocketResponse` supports bidirectional WebSocket mocking via `matchers` -- a list of `WebSocketMessageMatcher` objects that evaluate incoming WebSocket frames and send configured response messages when matched.
+
+Each `WebSocketMessageMatcher` specifies:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `frameType` | `WebSocketFrameType` | Frame type to match: `TEXT`, `BINARY`, `PING`, `PONG`, or `ANY` (default) |
+| `textMatcher` | `NottableString` | Text pattern to match against text frame content (exact or regex) |
+| `responses` | `List<WebSocketMessage>` | Response messages to send when the matcher matches |
+
+Matchers are evaluated in order; the first match wins and sends its responses. If no matcher matches, the frame is passed through to the next pipeline handler. When matchers are present, the connection remains open after initial messages are sent, enabling request-response patterns over WebSocket.
+
+The `BidirectionalWebSocketFrameHandler` (a Netty `SimpleChannelInboundHandler<WebSocketFrame>`) is installed in the pipeline after the WebSocket handshake completes, only when the `HttpWebSocketResponse` has matchers configured.
+
+#### GraphQL Subscriptions over WebSocket (`GraphQLSubscriptionHandler`)
+
+`HttpWebSocketResponse` supports GraphQL subscription mocking via the [graphql-transport-ws](https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md) protocol. When the negotiated subprotocol is `graphql-transport-ws` (or the legacy `graphql-ws`) and a `graphqlSubscriptionFilter` is configured, the `GraphQLSubscriptionHandler` is installed in the pipeline instead of the `BidirectionalWebSocketFrameHandler`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `graphqlSubscriptionFilter` | `GraphQLBody` | Subscription query to match against incoming `subscribe` messages using `GraphQLAstMatcher` |
+
+The handler implements the full graphql-transport-ws protocol state machine:
+
+| Client Message | Server Response | Description |
+|----------------|-----------------|-------------|
+| `connection_init` | `connection_ack` | Connection handshake |
+| `ping` | `pong` | Keepalive |
+| `subscribe` (matching) | `next`... `complete` | Pushes configured `messages` as `next` payloads, then sends `complete` |
+| `subscribe` (non-matching) | `error` | Sends error with diagnostic message |
+| `complete` | (cancels stream) | Stops pending pushes for that subscription ID |
+
+The `messages` from `HttpWebSocketResponse` are wrapped in the protocol envelope: each message's `text` is embedded as the `data` field inside `{"id":"...","type":"next","payload":{"data":...}}`. Per-message `delay` settings from `WebSocketMessage` are respected.
+
+The `graphqlSubscriptionFilter` uses the existing `GraphQLAstMatcher` for query matching. If no `selectionSetMatchType` is set on the filter, it defaults to `AST_SUBSET` for forgiving matching. The filter supports all match types: `AST_EXACT`, `AST_SUBSET`, and `NORMALISED_STRING`.
+
+Example expectation shape:
+
+```json
+{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/graphql"
+    },
+    "httpWebSocketResponse": {
+        "subprotocol": "graphql-transport-ws",
+        "graphqlSubscriptionFilter": {
+            "query": "subscription { userUpdated { id name } }",
+            "selectionSetMatchType": "AST_SUBSET"
+        },
+        "messages": [
+            {"text": "{\"id\": \"1\", \"name\": \"Alice\"}"},
+            {"text": "{\"id\": \"2\", \"name\": \"Bob\"}", "delay": {"timeUnit": "MILLISECONDS", "value": 500}}
+        ]
+    }
+}
+```
 
 #### Forward Validate Action (`HttpForwardValidateAction`)
 
@@ -403,6 +556,19 @@ Setting one target clears the others. After-actions are dispatched in `HttpActio
 | `validationMode` | `ValidationMode` | `STRICT` | `STRICT` fails the request on validation error; `LOG_ONLY` logs but still returns the response |
 
 Static factory: `HttpForwardValidateAction.forwardValidate()`
+
+#### Forward with Fallback (`HttpForwardWithFallback`)
+
+`HttpForwardWithFallback` forwards requests to an upstream host but returns a pre-configured fallback mock response when the upstream returns an error status code (default 500-599) or the request times out / connection fails. This combines MockServer's proxy and mock capabilities for resilience testing scenarios.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `httpForward` | `HttpForward` | — | The upstream target (host, port, scheme) |
+| `fallbackResponse` | `HttpResponse` | — | The mock response to return when fallback triggers |
+| `fallbackOnStatusCodes` | `List<Integer>` | `500-599` | HTTP status codes that trigger the fallback |
+| `fallbackOnTimeout` | `Boolean` | `true` | Whether to fall back on connection errors/timeouts |
+
+Static factory: `HttpForwardWithFallback.forwardWithFallback()`
 
 #### Match Count
 
@@ -446,6 +612,7 @@ classDiagram
     BodyMatcher <|-- BinaryMatcher
     BodyMatcher <|-- ParameterStringMatcher
     BodyMatcher <|-- GraphQLMatcher
+    GraphQLMatcher --> GraphQLAstMatcher : delegates AST modes
     BodyMatcher <|-- MultiValueMapMatcher
     BodyMatcher <|-- HashMapMatcher
     BodyMatcher <|-- BooleanMatcher
@@ -655,4 +822,68 @@ When `dnsEnabled` is `true`, MockServer starts a UDP DNS server on the specified
 | `grpcProtoDirectory` | `String` | `null` | Directory of `.proto` files to compile at startup |
 | `grpcProtocPath` | `String` | `"protoc"` | Path to the `protoc` compiler binary |
 
-When `grpcEnabled` is `true` (the default) and descriptors are loaded (via directory config or runtime API upload), MockServer inserts `GrpcToHttpRequestHandler` and `GrpcToHttpResponseHandler` into the HTTP/2 pipeline to intercept and convert gRPC requests. The `GrpcProtoDescriptorStore` is initialized in `HttpState` and provides method descriptors for protobuf↔JSON conversion.
+When `grpcEnabled` is `true` (the default) and descriptors are loaded (via directory config or runtime API upload), MockServer inserts `GrpcToHttpRequestHandler` and `GrpcToHttpResponseHandler` into the HTTP/2 pipeline to intercept and convert gRPC requests. The `GrpcProtoDescriptorStore` is initialized in `HttpState` and provides method descriptors for protobuf-to-JSON conversion.
+
+## Cross-Protocol Session Correlation
+
+Cross-protocol session correlation allows protocol events (DNS queries, WebSocket connects, gRPC requests, HTTP requests) to trigger scenario state transitions, enabling multi-protocol test flows.
+
+### Model
+
+| Class | Package | Description |
+|-------|---------|-------------|
+| `CrossProtocolTrigger` | `org.mockserver.model` | Enum: `DNS_QUERY`, `WEBSOCKET_CONNECT`, `GRPC_REQUEST`, `HTTP_REQUEST` |
+| `CrossProtocolScenario` | `org.mockserver.model` | Binds a trigger + optional match pattern to a scenario name and target state |
+| `CrossProtocolEventBus` | `org.mockserver.mock` | Singleton event bus: listeners register scenario transitions, `fire()` advances matching scenarios |
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Handler as Protocol Handler
+    participant Bus as CrossProtocolEventBus
+    participant SM as ScenarioManager
+    participant Matcher as RequestMatchers
+
+    Client->>Handler: DNS query / WS connect / gRPC / HTTP
+    Handler->>Bus: fire(trigger, identifier)
+    Bus->>SM: setState(scenarioName, targetState)
+    Note over SM: Scenario state advanced
+    Client->>Handler: Subsequent HTTP request
+    Handler->>Matcher: firstMatchingExpectation(request)
+    Note over Matcher: Matches expectation gated on new scenario state
+```
+
+### Configuration
+
+Cross-protocol scenarios are configured on expectations via the `crossProtocolScenarios` field:
+
+```json
+{
+  "httpRequest": { "path": "/api/users" },
+  "httpResponse": { "statusCode": 200 },
+  "crossProtocolScenarios": [
+    {
+      "trigger": "DNS_QUERY",
+      "matchPattern": "api.example.com",
+      "scenarioName": "DnsFlow",
+      "targetState": "DnsObserved"
+    }
+  ]
+}
+```
+
+Convenience builders are provided for common patterns:
+
+- `CrossProtocolScenario.onDnsQuery(queryName, scenarioName, targetState)`
+- `CrossProtocolScenario.onWebSocketConnect(scenarioName, targetState)`
+- `CrossProtocolScenario.onGrpcRequest(serviceName, scenarioName, targetState)`
+- `CrossProtocolScenario.onHttpPath(pathPattern, scenarioName, targetState)`
+
+### Event Bus Lifecycle
+
+- **Registration**: scenarios are registered with `CrossProtocolEventBus.getInstance()` when expectations are added (via `ExpectationDTO.buildObject()`)
+- **Firing**: protocol handlers call `fire(trigger, identifier)` on successful events
+- **Reset**: `HttpState.reset()` calls `CrossProtocolEventBus.getInstance().reset()` to clear all listeners
+- **Pattern matching**: if `matchPattern` is set, the event identifier must contain the pattern; if unset, all events of that trigger type match

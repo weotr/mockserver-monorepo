@@ -1,0 +1,101 @@
+---
+title: Testcontainers
+shortTitle: Testcontainers
+description: Run MockServer in your tests with Testcontainers using the MockServer-maintained mockserver-testcontainers module, with helpers for DNS, transparent proxy, HTTP/3, initialization JSON and a ready-wired client.
+layout: page
+pageOrder: 1.5
+section: 'General'
+subsection: true
+sitemap:
+  priority: 0.7
+  changefreq: 'monthly'
+  lastmod: 2026-06-03T08:00:00+01:00
+---
+
+<p>MockServer publishes its own <a href="https://testcontainers.com">Testcontainers</a> module, <strong>mockserver-testcontainers</strong>, that starts the official MockServer Docker image for the duration of a test and gives you a ready-wired client. It is the MockServer-maintained module and is kept in lockstep with each MockServer release.</p>
+
+<p><strong>Note:</strong> this module supersedes the older bundled <span class="inline_code"><code>org.testcontainers:mockserver</code></span> module. The bundled module exposes only a single port, pins an old default image, and has no configuration helpers. New projects should use <span class="inline_code"><code>org.mock-server:mockserver-testcontainers</code></span> described here.</p>
+
+<button id="button_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<p><strong>Maven</strong></p>
+
+<pre class="prettyprint lang-xml code"><code class="code">&lt;dependency&gt;
+    &lt;groupId&gt;org.mock-server&lt;/groupId&gt;
+    &lt;artifactId&gt;mockserver-testcontainers&lt;/artifactId&gt;
+    &lt;version&gt;{{ site.mockserver_version }}&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+
+<p><strong>Gradle</strong></p>
+
+<pre class="prettyprint lang-groovy code"><code class="code">testImplementation 'org.mock-server:mockserver-testcontainers:{{ site.mockserver_version }}'</code></pre>
+
+<p>The module brings in Testcontainers and the MockServer Java client transitively, so no other MockServer dependency is required for a test.</p>
+
+</div>
+
+<button id="button_basic_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<p>Start the container, set up an expectation through the wired client, then point the system under test at the container endpoint. By default the image tag is derived from the MockServer client library on the classpath, so the container and client always match.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.testcontainers.MockServerContainer;
+import org.junit.jupiter.api.Test;
+
+import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+
+class ExampleTest {
+
+    @Test
+    void shouldMockResponse() {
+        try (MockServerContainer mockServer = new MockServerContainer()) {
+            mockServer.start();
+
+            MockServerClient client = mockServer.getClient();
+            client
+                .when(request().withPath("/hello"))
+                .respond(response().withBody("world"));
+
+            // point the system under test at mockServer.getEndpoint()
+            // e.g. http://&lt;host&gt;:&lt;mapped-port&gt;/hello  ->  "world"
+        }
+    }
+}</code></pre>
+
+<p>Use <span class="inline_code"><code>getEndpoint()</code></span> / <span class="inline_code"><code>getSecureEndpoint()</code></span> for the HTTP / HTTPS base URL (MockServer serves both on the same port), and <span class="inline_code"><code>getServerPort()</code></span> for the mapped host port. The client returned by <span class="inline_code"><code>getClient()</code></span> is cached and stopped automatically when the container stops.</p>
+
+</div>
+
+<button id="button_configuration" class="accordion title"><strong>Configuration Helpers</strong></button>
+<div class="panel">
+
+<p>Fluent helpers configure the container before it starts. Each returns the container for chaining.</p>
+
+<table>
+    <thead>
+    <tr><th>Helper</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+    <tr><td><span class="inline_code"><code>withServerPort(int)</code></span></td><td>Change the port MockServer listens on inside the container.</td></tr>
+    <tr><td><span class="inline_code"><code>withDnsPort(int)</code></span></td><td>Enable the DNS resolver and expose the DNS port over UDP.</td></tr>
+    <tr><td><span class="inline_code"><code>withTransparentProxy()</code></span></td><td>Enable transparent proxy mode and add the <span class="inline_code"><code>NET_ADMIN</code></span> capability. iptables / redirect rules remain your responsibility.</td></tr>
+    <tr><td><span class="inline_code"><code>withHttp3(int)</code></span></td><td>Enable experimental HTTP/3 (QUIC) and expose the port over UDP.</td></tr>
+    <tr><td><span class="inline_code"><code>withInitializationJson(String)</code></span></td><td>Copy an initialization JSON file into the container and load its expectations at startup.</td></tr>
+    <tr><td><span class="inline_code"><code>withLogLevel(String)</code></span></td><td>Set the MockServer log level (e.g. <span class="inline_code"><code>DEBUG</code></span>).</td></tr>
+    <tr><td><span class="inline_code"><code>withProperty(key, value)</code></span> / <span class="inline_code"><code>withProperties(Map)</code></span></td><td>Set any MockServer configuration property by its environment-variable name (e.g. <span class="inline_code"><code>MOCKSERVER_MAX_EXPECTATIONS</code></span>).</td></tr>
+    </tbody>
+</table>
+
+<p>To connect MockServer to other containers (for example an AsyncAPI broker), use the standard Testcontainers <span class="inline_code"><code>withNetwork(Network)</code></span> and <span class="inline_code"><code>withNetworkAliases(String...)</code></span> methods inherited from <span class="inline_code"><code>GenericContainer</code></span>.</p>
+
+<p><strong>Pinning the image:</strong> to use a specific image instead of the version-matched default, pass a <span class="inline_code"><code>DockerImageName</code></span> to the constructor:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">new MockServerContainer(
+    DockerImageName.parse("mockserver/mockserver:mockserver-{{ site.mockserver_version }}")
+);</code></pre>
+
+</div>

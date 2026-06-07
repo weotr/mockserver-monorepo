@@ -9,21 +9,18 @@ import org.mockserver.mock.Expectation;
 import org.mockserver.mock.listeners.MockServerLogListener;
 import org.mockserver.serialization.model.ExpectationDTO;
 import org.mockserver.serialization.serializers.response.TimeToLiveDTOPersistenceSerializer;
+import org.mockserver.state.BlobStore;
 import org.slf4j.event.Level;
 
-import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.mockserver.serialization.ObjectMapperFactory.createObjectMapper;
@@ -36,15 +33,30 @@ public class RecordedExpectationFileSystemPersistence implements MockServerLogLi
     private final MockServerEventLog mockServerEventLog;
     private final ObjectWriter objectWriter;
     private final Path filePath;
-    private final ReentrantLock fileWriteLock = new ReentrantLock();
+    private final String blobKey;
+    private final BlobStore blobStore;
+    private final java.util.concurrent.locks.ReentrantLock writeOrderLock = new java.util.concurrent.locks.ReentrantLock();
 
-    public RecordedExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, MockServerEventLog mockServerEventLog) {
+    /**
+     * Creates persistence backed by the given {@link BlobStore}. The blob key
+     * is the absolute path of {@code configuration.persistedRecordedExpectationsPath()}
+     * so that the {@link org.mockserver.state.FilesystemBlobStore} writes to
+     * the exact same file as the previous direct-I/O implementation.
+     *
+     * @param configuration    the MockServer configuration
+     * @param mockServerLogger logger for diagnostics
+     * @param mockServerEventLog the event log to observe for recorded expectations
+     * @param blobStore        the blob store to delegate writes to
+     */
+    public RecordedExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, MockServerEventLog mockServerEventLog, BlobStore blobStore) {
         this.configuration = configuration;
         if (configuration.persistRecordedExpectations()) {
             this.mockServerLogger = mockServerLogger;
             this.mockServerEventLog = mockServerEventLog;
             this.objectWriter = createObjectMapper(true, false, new TimeToLiveDTOPersistenceSerializer());
             this.filePath = Paths.get(configuration.persistedRecordedExpectationsPath());
+            this.blobKey = filePath.toAbsolutePath().toString();
+            this.blobStore = blobStore;
             try {
                 Files.createFile(filePath);
             } catch (FileAlreadyExistsException ignore) {
@@ -70,7 +82,19 @@ public class RecordedExpectationFileSystemPersistence implements MockServerLogLi
             this.mockServerEventLog = null;
             this.objectWriter = null;
             this.filePath = null;
+            this.blobKey = null;
+            this.blobStore = null;
         }
+    }
+
+    /**
+     * Backwards-compatible constructor that creates a
+     * {@link org.mockserver.state.FilesystemBlobStore} internally, preserving
+     * the original direct-file-I/O behaviour for callers that do not supply
+     * a BlobStore (e.g. existing tests).
+     */
+    public RecordedExpectationFileSystemPersistence(Configuration configuration, MockServerLogger mockServerLogger, MockServerEventLog mockServerEventLog) {
+        this(configuration, mockServerLogger, mockServerEventLog, new org.mockserver.state.FilesystemBlobStore(mockServerLogger));
     }
 
     @Override
@@ -82,7 +106,7 @@ public class RecordedExpectationFileSystemPersistence implements MockServerLogLi
         mockServerLog.retrieveRecordedExpectations(null, future::complete);
         try {
             List<Expectation> expectations = future.get(30, TimeUnit.SECONDS);
-            writeToFile(expectations);
+            writeToBlob(expectations);
         } catch (Exception e) {
             if (mockServerLogger != null) {
                 mockServerLogger.logEvent(
@@ -95,50 +119,42 @@ public class RecordedExpectationFileSystemPersistence implements MockServerLogLi
         }
     }
 
-    private void writeToFile(List<Expectation> expectations) {
-        fileWriteLock.lock();
+    private void writeToBlob(List<Expectation> expectations) {
+        // The lock serialises serialize + write-to-blob as one atomic unit,
+        // matching the original fileWriteLock semantics. This is necessary
+        // because listener callbacks may be dispatched concurrently.
+        writeOrderLock.lock();
         try {
-            try (
-                FileOutputStream fileOutputStream = new FileOutputStream(filePath.toFile());
-                FileChannel fileChannel = fileOutputStream.getChannel();
-                FileLock fileLock = fileChannel.lock()
-            ) {
-                if (fileLock != null) {
-                    if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
-                        mockServerLogger.logEvent(
-                            new LogEntry()
-                                .setLogLevel(TRACE)
-                                .setMessageFormat("persisting recorded expectations{}to{}")
-                                .setArguments(expectations, configuration.persistedRecordedExpectationsPath())
-                        );
-                    } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
-                        mockServerLogger.logEvent(
-                            new LogEntry()
-                                .setLogLevel(DEBUG)
-                                .setMessageFormat("persisting recorded expectations to{}")
-                                .setArguments(configuration.persistedRecordedExpectationsPath())
-                        );
-                    }
-                    byte[] data = serialize(expectations).getBytes(UTF_8);
-                    ByteBuffer buffer = ByteBuffer.wrap(data);
-                    buffer.put(data);
-                    buffer.rewind();
-                    while (buffer.hasRemaining()) {
-                        fileChannel.write(buffer);
-                    }
+            try {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(TRACE)
+                            .setMessageFormat("persisting recorded expectations{}to{}")
+                            .setArguments(expectations, configuration.persistedRecordedExpectationsPath())
+                    );
+                } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(DEBUG)
+                            .setMessageFormat("persisting recorded expectations to{}")
+                            .setArguments(configuration.persistedRecordedExpectationsPath())
+                    );
+                }
+                byte[] data = serialize(expectations).getBytes(UTF_8);
+                blobStore.put(blobKey, data, Collections.emptyMap());
+            } catch (Throwable throwable) {
+                if (mockServerLogger != null) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.ERROR)
+                            .setMessageFormat("exception while persisting recorded expectations to " + filePath.toString())
+                            .setThrowable(throwable)
+                    );
                 }
             }
-        } catch (Throwable throwable) {
-            if (mockServerLogger != null) {
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setLogLevel(Level.ERROR)
-                        .setMessageFormat("exception while persisting recorded expectations to " + filePath.toString())
-                        .setThrowable(throwable)
-                );
-            }
         } finally {
-            fileWriteLock.unlock();
+            writeOrderLock.unlock();
         }
     }
 

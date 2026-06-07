@@ -16,6 +16,30 @@
  *   - Predicate pills        a showcase conversation expectation exercising every
  *                            predicate type (incl. semanticMatchAgainst + a
  *                            normalization block) and a chaos profile.
+ *   - Service chaos          a few service-scoped chaos registrations (varied fault
+ *                            types, two with an auto-revert TTL) for the Chaos tab.
+ *   - TCP chaos              a few TCP-layer chaos registrations (raw byte-stream
+ *                            faults, two with an auto-revert TTL) for the Chaos tab.
+ *   - gRPC health chaos      a few forced gRPC health-check serving statuses
+ *                            (NOT_SERVING / SERVICE_UNKNOWN / SERVING) for the Chaos tab.
+ *   - gRPC fault injection   a few gRPC fault-injection chaos registrations
+ *                            (status errors + latency + quota) for the Chaos tab.
+ *   - gRPC mocks             server-streaming, unary, and error gRPC expectations
+ *                            (Mocks page · gRPC kind).
+ *   - DNS mocks              A / AAAA / CNAME / NXDOMAIN DNS expectations
+ *                            (Mocks page · DNS kind).
+ *   - WASM module            an example Rust WASM match module uploaded to the
+ *                            store + a WASM-body-matched expectation (Library page).
+ *   - Side-effect exps       expectations with before-actions (blocking + non-blocking
+ *                            audit calls) and after-actions (fire-and-forget webhooks),
+ *                            loadable into the Composer's side-effects panel.
+ *   - Scenarios              seeded scenario state machines (incl. a timed auto-transition
+ *                            + a cross-protocol trigger expectation) listed in the
+ *                            Sessions · Scenarios panel.
+ *   - gRPC descriptors       a compiled protobuf FileDescriptorSet (greeting.dsc) uploaded
+ *                            so the Library · gRPC Descriptors tab lists the service/methods.
+ *   - Cassettes              example cassette fixtures (scripts/demo-cassettes/) registered in the
+ *                            server-side cassette registry so they list in Library · Cassettes.
  *
  * It talks to MockServer over its plain REST API (no extra dependencies — uses
  * the built-in global fetch in Node 18+). Safe to re-run: it resets first.
@@ -24,6 +48,13 @@
  *   node scripts/populate-demo-data.mjs [--url http://localhost:1080] [--quiet]
  *   MOCKSERVER_URL=http://localhost:1080 node scripts/populate-demo-data.mjs
  */
+
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Configuration & tiny CLI parsing
@@ -57,7 +88,7 @@ const SELF_HOST = TARGET.hostname;
 const SELF_PORT = Number(TARGET.port || (TARGET.protocol === 'https:' ? 443 : 80));
 const SELF_SCHEME = TARGET.protocol === 'https:' ? 'HTTPS' : 'HTTP';
 
-const counts = { expectations: 0, requests: 0, unmatched: 0 };
+const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0 };
 function log(msg) { if (!quiet) console.log(msg); }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +449,423 @@ async function conversationExpectations() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Service-scoped chaos (Chaos tab)
+// ---------------------------------------------------------------------------
+
+// Registered against the control-plane /mockserver/serviceChaos endpoint so the
+// dashboard's Chaos tab has example data: a mix of fault types, and two TTL-bearing
+// registrations so the live auto-revert countdown is visible. These are applied to
+// the matched-forward path keyed by Host, so they do not affect the demo's own
+// traffic — they exist to populate the Chaos tab's "active registrations" view.
+const SERVICE_CHAOS = [
+  {
+    host: 'payments.svc',
+    chaos: { errorStatus: 503, errorProbability: 0.3, latency: { timeUnit: 'MILLISECONDS', value: 500 } },
+    ttlMillis: 600000,
+  },
+  {
+    host: 'checkout.svc',
+    chaos: { errorStatus: 429, retryAfter: '30', errorProbability: 1.0 },
+    ttlMillis: 300000,
+  },
+  {
+    host: 'inventory.svc',
+    chaos: { dropConnectionProbability: 0.25 },
+  },
+  {
+    host: 'recommendations.svc',
+    chaos: { latency: { timeUnit: 'MILLISECONDS', value: 1200 } },
+  },
+  {
+    host: 'graphql-gateway.svc',
+    chaos: {
+      errorStatus: 200,
+      graphqlErrors: true,
+      graphqlErrorMessage: 'Rate limit exceeded',
+      graphqlErrorCode: 'RATE_LIMITED',
+      graphqlNullifyData: true,
+      seed: 42,
+      succeedFirst: 3,
+      failRequestCount: 10,
+    },
+    ttlMillis: 900000,
+  },
+];
+
+async function serviceChaosExamples() {
+  log('\n→ Service-scoped chaos (Chaos tab)');
+  for (const entry of SERVICE_CHAOS) {
+    const res = await api('PUT', '/mockserver/serviceChaos', entry);
+    if (!res.ok) throw new Error(`Failed to register service chaos for "${entry.host}": HTTP ${res.status}`);
+    counts.serviceChaos++;
+    log(`   ~ service chaos  ${entry.host}${entry.ttlMillis ? `  (ttl ${entry.ttlMillis}ms)` : ''}`);
+  }
+}
+
+// TCP-layer chaos registrations (Chaos tab → "TCP-Layer Chaos" section). These exercise
+// the raw byte-stream fault types (Toxiproxy-style) keyed by upstream host, distinct from
+// the HTTP-semantic faults above. Two carry an auto-revert TTL so the countdown is visible.
+const TCP_CHAOS = [
+  {
+    host: 'db.primary.svc',
+    chaos: { latencyMs: 800, bandwidthBytesPerSec: 65536 },
+    ttlMillis: 600000,
+  },
+  {
+    host: 'cache.svc',
+    chaos: { resetPeer: true },
+    ttlMillis: 300000,
+  },
+  {
+    host: 'queue.svc',
+    chaos: { timeout: true },
+  },
+  {
+    host: 'upload.svc',
+    chaos: { slicerChunkSize: 128, limitDataBytes: 1048576, slowClose: true },
+  },
+];
+
+async function tcpChaosExamples() {
+  log('\n→ TCP-layer chaos (Chaos tab)');
+  for (const entry of TCP_CHAOS) {
+    const res = await api('PUT', '/mockserver/tcpChaos', entry);
+    if (!res.ok) throw new Error(`Failed to register TCP chaos for "${entry.host}": HTTP ${res.status}`);
+    counts.tcpChaos++;
+    log(`   ~ tcp chaos      ${entry.host}${entry.ttlMillis ? `  (ttl ${entry.ttlMillis}ms)` : ''}`);
+  }
+}
+
+// gRPC health-check chaos (Chaos tab → "gRPC Health Chaos" section). Forcing a service's
+// health-check serving status simulates an unhealthy/degraded dependency so client and
+// orchestrator (K8s readiness/liveness) reactions can be exercised. Empty service name
+// sets the default status for all services.
+const GRPC_HEALTH = [
+  { service: 'payments.v1.PaymentService', status: 'NOT_SERVING' },
+  { service: 'inventory.v1.InventoryService', status: 'SERVICE_UNKNOWN' },
+  { service: 'catalog.v1.CatalogService', status: 'SERVING' },
+];
+
+async function grpcHealthExamples() {
+  log('\n→ gRPC health chaos (Chaos tab)');
+  for (const entry of GRPC_HEALTH) {
+    const res = await api('PUT', '/mockserver/grpc/health', entry);
+    if (!res.ok) throw new Error(`Failed to set gRPC health for "${entry.service}": HTTP ${res.status}`);
+    counts.grpcHealth++;
+    log(`   ~ grpc health    ${entry.service}  → ${entry.status}`);
+  }
+}
+
+// gRPC fault-injection chaos (Chaos tab -> "gRPC Fault Injection" section). These exercise
+// gRPC-level status errors and latency keyed by gRPC service name, distinct from gRPC health
+// overrides and HTTP-semantic faults. One carries an auto-revert TTL so the countdown is visible.
+const GRPC_CHAOS = [
+  {
+    service: 'payments.v1.PaymentService',
+    chaos: { errorStatusCode: 'UNAVAILABLE', errorProbability: 0.5, latencyMs: 200 },
+    ttlMillis: 600000,
+  },
+  {
+    service: 'orders.v1.OrderService',
+    chaos: { errorStatusCode: 'RESOURCE_EXHAUSTED', quotaName: 'orders', quotaLimit: 100, quotaWindowMillis: 60000 },
+  },
+  {
+    service: 'shipping.v1.ShippingService',
+    chaos: { errorStatusCode: 'DEADLINE_EXCEEDED', errorProbability: 1.0 },
+  },
+  {
+    service: 'streaming.v1.StreamService',
+    chaos: {
+      errorStatusCode: 'INTERNAL',
+      errorMessage: 'stream aborted mid-flight',
+      omitGrpcStatus: true,
+      customTrailers: { 'x-debug-id': 'chaos-demo-001', 'x-retry': 'false' },
+      abortAfterMessages: 5,
+      seed: 7,
+      succeedFirst: 2,
+      failRequestCount: 20,
+    },
+    ttlMillis: 450000,
+  },
+];
+
+async function grpcChaosExamples() {
+  log('\n→ gRPC fault injection chaos (Chaos tab)');
+  for (const entry of GRPC_CHAOS) {
+    const res = await api('PUT', '/mockserver/grpcChaos', entry);
+    if (!res.ok) throw new Error(`Failed to register gRPC chaos for "${entry.service}": HTTP ${res.status}`);
+    counts.grpcChaos++;
+    log(`   ~ grpc chaos     ${entry.service}${entry.ttlMillis ? `  (ttl ${entry.ttlMillis}ms)` : ''}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3c. gRPC mock expectations (Mocks page -> gRPC kind)
+// ---------------------------------------------------------------------------
+
+// gRPC requests are transcoded to HTTP and matched by path /package.Service/Method.
+// A server-streaming RPC uses a grpcStreamResponse action (multiple messages, each
+// with an optional inter-message delay); a unary RPC is just a normal httpResponse
+// carrying the grpc-status trailer header. These show up in the Mocks page gRPC list.
+async function grpcMockExpectations() {
+  log('\n→ gRPC mock expectations (Mocks page · gRPC kind)');
+
+  // Server-streaming RPC: stream three greetings, the later two delayed.
+  await expectation('gRPC stream  greeter.v1.Greeter/ListGreetings', {
+    httpRequest: {
+      method: 'POST',
+      path: '/greeter.v1.Greeter/ListGreetings',
+      headers: {
+        'x-grpc-service': ['greeter.v1.Greeter'],
+        'x-grpc-method': ['ListGreetings'],
+      },
+    },
+    grpcStreamResponse: {
+      statusName: 'OK',
+      messages: [
+        { json: '{"greeting":"Hello Alice"}' },
+        { json: '{"greeting":"Hello Bob"}', delay: { timeUnit: 'MILLISECONDS', value: 100 } },
+        { json: '{"greeting":"Hello Charlie"}', delay: { timeUnit: 'MILLISECONDS', value: 200 } },
+      ],
+    },
+  });
+
+  // Unary RPC: single response with the gRPC OK status trailer.
+  await expectation('gRPC unary   greeter.v1.Greeter/SayHello', {
+    httpRequest: {
+      method: 'POST',
+      path: '/greeter.v1.Greeter/SayHello',
+      headers: {
+        'x-grpc-service': ['greeter.v1.Greeter'],
+        'x-grpc-method': ['SayHello'],
+      },
+    },
+    httpResponse: {
+      statusCode: 200,
+      headers: { 'grpc-status': ['0'], 'content-type': ['application/grpc+json'] },
+      body: '{"greeting":"Hello World"}',
+    },
+  });
+
+  // Unary RPC that returns a gRPC error status (NOT_FOUND = 5) with a message.
+  await expectation('gRPC error   pay.v1.PaymentService/GetReceipt (NOT_FOUND)', {
+    httpRequest: {
+      method: 'POST',
+      path: '/pay.v1.PaymentService/GetReceipt',
+      headers: {
+        'x-grpc-service': ['pay.v1.PaymentService'],
+        'x-grpc-method': ['GetReceipt'],
+      },
+    },
+    grpcStreamResponse: {
+      statusName: 'NOT_FOUND',
+      statusMessage: 'no receipt for the supplied transaction id',
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 3d. DNS mock expectations (Mocks page -> DNS kind)
+// ---------------------------------------------------------------------------
+
+// DNS queries are matched by a DnsRequestDefinition (dnsName + record type + class),
+// carried in the request object via the dnsName key, and answered with a dnsResponse.
+async function dnsMockExpectations() {
+  log('\n→ DNS mock expectations (Mocks page · DNS kind)');
+
+  // A-record lookup.
+  await expectation('DNS A      api.example.com → 2 A records', {
+    httpRequest: { dnsName: 'api.example.com', dnsType: 'A', dnsClass: 'IN' },
+    dnsResponse: {
+      responseCode: 'NOERROR',
+      answerRecords: [
+        { name: 'api.example.com', type: 'A', ttl: 300, value: '93.184.216.34' },
+        { name: 'api.example.com', type: 'A', ttl: 300, value: '93.184.216.35' },
+      ],
+    },
+  });
+
+  // AAAA-record lookup.
+  await expectation('DNS AAAA   ipv6.example.com → AAAA record', {
+    httpRequest: { dnsName: 'ipv6.example.com', dnsType: 'AAAA', dnsClass: 'IN' },
+    dnsResponse: {
+      responseCode: 'NOERROR',
+      answerRecords: [
+        { name: 'ipv6.example.com', type: 'AAAA', ttl: 300, value: '2606:2800:220:1:248:1893:25c8:1946' },
+      ],
+    },
+  });
+
+  // CNAME alias.
+  await expectation('DNS CNAME  www.example.com → example.com', {
+    httpRequest: { dnsName: 'www.example.com', dnsType: 'CNAME', dnsClass: 'IN' },
+    dnsResponse: {
+      responseCode: 'NOERROR',
+      answerRecords: [
+        { name: 'www.example.com', type: 'CNAME', ttl: 600, value: 'example.com' },
+      ],
+    },
+  });
+
+  // NXDOMAIN: name that deliberately does not resolve.
+  await expectation('DNS NXDOMAIN  missing.example.com', {
+    httpRequest: { dnsName: 'missing.example.com', dnsType: 'A', dnsClass: 'IN' },
+    dnsResponse: { responseCode: 'NXDOMAIN' },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 3d-bis. WASM module + WASM-matched expectation (Library page · WASM Modules)
+// ---------------------------------------------------------------------------
+
+// Upload one of the repo's example WASM modules (the Rust `match` example) so the
+// Library page's "WASM Modules" section is populated, then register an expectation
+// that matches its request body via that module. WASM evaluation requires the
+// server to be started with -Dmockserver.wasmEnabled=true (the demo launcher sets
+// this); the upload + listing work regardless.
+async function wasmModuleExample() {
+  log('\n→ WASM module (Library · WASM Modules)');
+  const moduleName = 'match-demo';
+  // examples/wasm/rust/match.wasm lives at the repo root, two levels up from mockserver-ui/scripts.
+  const wasmPath = join(SCRIPT_DIR, '..', '..', 'examples', 'wasm', 'rust', 'match.wasm');
+  let bytes;
+  try {
+    bytes = await readFile(wasmPath);
+  } catch (e) {
+    log(`   ! skipped WASM module — could not read ${wasmPath} (${e.code || e.message})`);
+    return;
+  }
+  // Raw binary upload — do NOT use the JSON api() helper (it forces a JSON content-type).
+  const res = await fetch(`${BASE}/mockserver/wasm/modules?name=${encodeURIComponent(moduleName)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/wasm' },
+    body: bytes,
+  });
+  await res.text().catch(() => undefined);
+  if (!res.ok) throw new Error(`Failed to upload WASM module "${moduleName}": HTTP ${res.status}`);
+  counts.wasmModules++;
+  log(`   + wasm module    ${moduleName}  (${bytes.length} bytes, from examples/wasm/rust/match.wasm)`);
+
+  // An expectation whose request body is matched by the uploaded WASM module.
+  await expectation('WASM body match  POST /wasm/echo', {
+    httpRequest: {
+      method: 'POST',
+      path: '/wasm/echo',
+      body: { type: 'WASM', moduleName },
+    },
+    httpResponse: {
+      statusCode: 200,
+      headers: { 'content-type': ['application/json'] },
+      body: '{"matched":"by-wasm-module","module":"match-demo"}',
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 3e. Mock drift detection (Drift tab)
+// ---------------------------------------------------------------------------
+
+// Drift records are only produced by the proxy-forward path: MockServer compares
+// the real upstream response against a matching response-type stub ("baseline").
+// To generate examples self-contained, we spin up a throwaway local upstream that
+// returns responses deliberately diverging from the baseline stubs, register a
+// high-priority forward (to the upstream) plus a low-priority baseline stub for the
+// same path, then send one request per scenario so the DriftAnalyzer records the
+// divergence. The upstream is torn down immediately afterwards.
+//
+// Each scenario: { path, baseline (status/headers/body the stub claims), real
+// (status/headers/body the upstream actually returns) } — chosen to exercise the
+// status / schema-added / schema-removed / type-changed / header drift types.
+const DRIFT_SCENARIOS = [
+  {
+    path: '/drift/users',
+    note: 'status drift (200 → 503)',
+    baseline: { statusCode: 200, body: { id: 1, name: 'Alice', active: true } },
+    real: { statusCode: 503, body: { error: 'service unavailable' } },
+  },
+  {
+    path: '/drift/orders',
+    note: 'schema fields added (currency, tax)',
+    baseline: { statusCode: 200, body: { id: 7, total: 42 } },
+    real: { statusCode: 200, body: { id: 7, total: 42, currency: 'USD', tax: 3 } },
+  },
+  {
+    path: '/drift/profile',
+    note: 'schema field removed (role) + type changed (age number→string)',
+    baseline: { statusCode: 200, body: { id: 3, name: 'Bob', role: 'admin', age: 30 } },
+    real: { statusCode: 200, body: { id: 3, name: 'Bob', age: '30' } },
+  },
+  {
+    path: '/drift/inventory',
+    note: 'header drift (x-api-version v1 → v2)',
+    baseline: { statusCode: 200, headers: { 'x-api-version': ['v1'] }, body: { sku: 'A-1', qty: 5 } },
+    real: { statusCode: 200, headers: { 'x-api-version': 'v2' }, body: { sku: 'A-1', qty: 5 } },
+  },
+];
+
+async function driftExamples() {
+  log('\n→ Mock drift detection (Drift tab)');
+
+  // Throwaway upstream returning the deliberately-divergent "real" responses.
+  const byPath = new Map(DRIFT_SCENARIOS.map((s) => [s.path, s.real]));
+  const upstream = http.createServer((req, res) => {
+    const real = byPath.get((req.url || '').split('?')[0]);
+    if (!real) {
+      res.writeHead(404).end();
+      return;
+    }
+    const headers = { 'content-type': 'application/json', ...(real.headers || {}) };
+    res.writeHead(real.statusCode, headers);
+    res.end(JSON.stringify(real.body));
+  });
+
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamPort = upstream.address().port;
+
+  try {
+    for (const s of DRIFT_SCENARIOS) {
+      // High-priority forward to the throwaway upstream (this is what actually serves).
+      const fwd = await api('PUT', '/mockserver/expectation', {
+        priority: 10,
+        httpRequest: { method: 'GET', path: s.path },
+        httpForward: { host: '127.0.0.1', port: upstreamPort, scheme: 'HTTP' },
+      });
+      if (!fwd.ok) throw new Error(`drift forward setup failed for ${s.path}: HTTP ${fwd.status}`);
+
+      // Low-priority baseline stub — never serves (forward wins) but is the drift
+      // comparison baseline that the real upstream response is diffed against.
+      const base = await api('PUT', '/mockserver/expectation', {
+        priority: 0,
+        httpRequest: { method: 'GET', path: s.path },
+        httpResponse: {
+          statusCode: s.baseline.statusCode,
+          headers: s.baseline.headers,
+          body: { type: 'JSON', json: s.baseline.body },
+        },
+      });
+      if (!base.ok) throw new Error(`drift baseline setup failed for ${s.path}: HTTP ${base.status}`);
+
+      // Send the request → forwarded to the upstream → DriftAnalyzer records divergence.
+      await api('GET', s.path);
+      counts.drift++;
+      log(`   ~ drift          ${s.path}  (${s.note})`);
+    }
+    // Drift analysis runs asynchronously on a scheduler thread after each forward
+    // completes, so give those tasks a moment to record before we remove the baseline
+    // stubs they compare against (clearing too early would race the analysis and could
+    // drop records). A short settle delay makes the seeding deterministic.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+
+    // The /drift/* forward+baseline expectations are throwaway scaffolding (the forward
+    // target is about to close); the drift records persist independently in the DriftStore,
+    // so clear the scaffolding to keep the Library/expectations view clean.
+    await api('PUT', '/mockserver/clear?type=expectations', { path: '/drift/.*' });
+  } finally {
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. Recorded traffic (Traffic view, token/cost, unmatched diagnostics)
 // ---------------------------------------------------------------------------
 
@@ -493,6 +941,205 @@ async function agentLoops() {
 }
 
 // ---------------------------------------------------------------------------
+// 5. Side-effect expectations (before / after actions)
+// ---------------------------------------------------------------------------
+
+// An expectation can fire extra HTTP side-effects around its primary response:
+//   - beforeActions run BEFORE the response is written. A blocking before-action
+//     (blocking:true) makes the primary response wait for it, with a timeout and a
+//     failurePolicy (FAIL_FAST aborts the response on failure; BEST_EFFORT continues).
+//   - afterActions are always fire-and-forget AFTER the response is written.
+// Each action's httpRequest is dispatched by MockServer's HTTP client, so it carries a
+// socketAddress telling MockServer where to send it — here we point them back at this
+// same MockServer (self) and add tiny stubs for the audit / webhook targets so the
+// side-effects resolve cleanly offline. These load into the Composer's side-effects panel.
+async function sideEffectExpectations() {
+  log('\n→ Side-effect expectations (before / after actions)');
+
+  // Targets for the side-effect calls (so they resolve to 200 rather than 404).
+  await expectation('audit sink   POST /audit/log', {
+    httpRequest: { method: 'POST', path: '/audit/log' },
+    httpResponse: { statusCode: 200, body: { json: { logged: true } } },
+  });
+  await expectation('webhook sink POST /webhooks/order-created', {
+    httpRequest: { method: 'POST', path: '/webhooks/order-created' },
+    httpResponse: { statusCode: 202, body: { json: { accepted: true } } },
+  });
+
+  const selfSocket = { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME };
+
+  // Primary expectation with a blocking before-action (audit) and a fire-and-forget
+  // after-action (webhook). The response waits up to 2s for the audit call; if it fails
+  // the response is still sent (BEST_EFFORT).
+  await expectation('POST /api/orders (before: audit · after: webhook)', {
+    httpRequest: { method: 'POST', path: '/api/orders' },
+    httpResponse: {
+      statusCode: 201,
+      headers: { location: ['/api/orders/5001'] },
+      body: { json: { id: 5001, status: 'confirmed' } },
+    },
+    beforeActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/audit/log',
+          body: { json: { event: 'order.create.attempt', source: 'demo' } },
+          socketAddress: selfSocket,
+        },
+        blocking: true,
+        timeout: { timeUnit: 'MILLISECONDS', value: 2000 },
+        failurePolicy: 'BEST_EFFORT',
+      },
+    ],
+    afterActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/webhooks/order-created',
+          body: { json: { event: 'order.created', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+      },
+    ],
+  });
+
+  // A second expectation showing a non-blocking before-action plus a delayed after-action.
+  await expectation('DELETE /api/orders/5001 (before: non-blocking audit · after: delayed webhook)', {
+    httpRequest: { method: 'DELETE', path: '/api/orders/5001' },
+    httpResponse: { statusCode: 204 },
+    beforeActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/audit/log',
+          body: { json: { event: 'order.delete', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+        blocking: false,
+      },
+    ],
+    afterActions: [
+      {
+        httpRequest: {
+          method: 'POST',
+          path: '/webhooks/order-created',
+          body: { json: { event: 'order.deleted', orderId: 5001 } },
+          socketAddress: selfSocket,
+        },
+        delay: { timeUnit: 'MILLISECONDS', value: 250 },
+      },
+    ],
+  });
+
+  counts.sideEffects += 2;
+}
+
+// ---------------------------------------------------------------------------
+// 6. Scenario state machines (Sessions · Scenarios panel)
+// ---------------------------------------------------------------------------
+
+// Seed a handful of named scenario state machines via PUT /mockserver/scenario/{name}
+// so the Scenarios panel's "Existing scenarios" list (GET /mockserver/scenario) is
+// populated. One sets a timed auto-transition so the countdown chip is visible, plus a
+// companion checkout stub whose scenario state can be advanced from the Scenarios panel.
+const SCENARIO_STATES = [
+  { name: 'checkout-flow', state: 'cart' },
+  { name: 'payment-gateway', state: 'healthy' },
+  { name: 'feature-rollout', state: 'disabled' },
+  { name: 'order-fulfilment', state: 'received' },
+];
+
+async function scenarioStateExamples() {
+  log('\n→ Scenario state machines (Sessions · Scenarios panel)');
+
+  for (const s of SCENARIO_STATES) {
+    const res = await api('PUT', `/mockserver/scenario/${encodeURIComponent(s.name)}`, { state: s.state });
+    if (!res.ok) throw new Error(`Failed to set scenario "${s.name}": HTTP ${res.status}`);
+    counts.scenarios++;
+    log(`   ~ scenario       ${s.name}  → ${s.state}`);
+  }
+
+  // A scenario with a scheduled auto-transition so the live countdown is visible.
+  const timed = await api('PUT', '/mockserver/scenario/nightly-batch', {
+    state: 'running',
+    transitionAfterMs: 600000,
+    nextState: 'idle',
+  });
+  if (!timed.ok) throw new Error(`Failed to set timed scenario "nightly-batch": HTTP ${timed.status}`);
+  counts.scenarios++;
+  log('   ~ scenario       nightly-batch  → running  (auto → idle in 600000ms)');
+
+  // A companion stub for the checkout flow. The scenario state is driven manually from
+  // the Scenarios panel (Set State / Trigger) — advance checkout-flow to "paid" there to
+  // see the list update.
+  await expectation('POST /api/checkout/pay (checkout-flow stub)', {
+    httpRequest: { method: 'POST', path: '/api/checkout/pay' },
+    httpResponse: { statusCode: 200, body: { json: { status: 'paid' } } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Cassettes (Library · Cassettes tab)
+// ---------------------------------------------------------------------------
+
+// Register the example cassette fixtures (scripts/demo-cassettes/*.json) in MockServer's
+// server-side cassette registry (PUT /mockserver/cassettes) so the Library · Cassettes tab lists
+// them — the dashboard merges the server registry with its per-browser localStorage list. Each
+// cassette's expectationCount is read from the file. The actual expectations are not loaded here;
+// use the Cassettes · Load tab (or load_expectations_from_file) to replay them.
+const DEMO_CASSETTES = ['rest-api-crud.json', 'llm-anthropic-weather.json'];
+
+async function cassetteExamples() {
+  log('\n→ Cassettes (Library · Cassettes tab)');
+  const cassetteDir = join(SCRIPT_DIR, 'demo-cassettes');
+  for (const filename of DEMO_CASSETTES) {
+    const path = join(cassetteDir, filename);
+    let expectationCount = -1;
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8'));
+      expectationCount = Array.isArray(parsed) ? parsed.length : -1;
+    } catch (e) {
+      log(`   ! skipped cassette ${filename} — could not read (${e.code || e.message})`);
+      continue;
+    }
+    const res = await api('PUT', '/mockserver/cassettes', { path, filename, expectationCount, origin: 'loaded' });
+    if (!res.ok) throw new Error(`Failed to register cassette "${filename}": HTTP ${res.status}`);
+    counts.cassettes++;
+    log(`   + cassette       ${filename}  (${expectationCount} expectations)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. gRPC descriptor set (Library · gRPC Descriptors tab)
+// ---------------------------------------------------------------------------
+
+// Upload a compiled protobuf FileDescriptorSet (the repo's greeting.dsc test fixture) so
+// the Library page's "gRPC Descriptors" tab lists the service and its methods (unary,
+// server-/client-streaming, bidi). The endpoint takes the raw descriptor-set bytes.
+async function grpcDescriptorExample() {
+  log('\n→ gRPC descriptor set (Library · gRPC Descriptors tab)');
+  // greeting.dsc lives in mockserver-core test resources, two levels up from mockserver-ui/scripts.
+  const dscPath = join(SCRIPT_DIR, '..', '..', 'mockserver', 'mockserver-core', 'src', 'test', 'resources', 'grpc', 'greeting.dsc');
+  let bytes;
+  try {
+    bytes = await readFile(dscPath);
+  } catch (e) {
+    log(`   ! skipped gRPC descriptors — could not read ${dscPath} (${e.code || e.message})`);
+    return;
+  }
+  // Raw binary upload — do NOT use the JSON api() helper.
+  const res = await fetch(`${BASE}/mockserver/grpc/descriptors`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: bytes,
+  });
+  await res.text().catch(() => undefined);
+  if (!res.ok) throw new Error(`Failed to upload gRPC descriptor set: HTTP ${res.status}`);
+  counts.grpcServices++;
+  log(`   + grpc descriptors  com.example.grpc.GreetingService  (${bytes.length} bytes, from greeting.dsc)`);
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -524,6 +1171,18 @@ async function main() {
   await proxyExpectations();
   await llmExpectations();
   await conversationExpectations();
+  await serviceChaosExamples();
+  await tcpChaosExamples();
+  await grpcHealthExamples();
+  await grpcChaosExamples();
+  await grpcMockExpectations();
+  await dnsMockExpectations();
+  await wasmModuleExample();
+  await sideEffectExpectations();
+  await scenarioStateExamples();
+  await cassetteExamples();
+  await grpcDescriptorExample();
+  await driftExamples();
   await plainHttpTraffic();
   await proxyTraffic();
   await llmTraffic();
@@ -534,11 +1193,35 @@ async function main() {
   log('========================================');
   log(` Expectations created : ${counts.expectations}`);
   log(` Requests sent        : ${counts.requests} (incl. ~${counts.unmatched} intentionally unmatched)`);
+  log(` Service chaos hosts  : ${counts.serviceChaos} (incl. GraphQL-semantic chaos + auto-revert TTL)`);
+  log(` TCP chaos hosts      : ${counts.tcpChaos} (2 with an auto-revert TTL countdown)`);
+  log(` gRPC health statuses : ${counts.grpcHealth} (NOT_SERVING / SERVICE_UNKNOWN / SERVING)`);
+  log(` gRPC chaos services  : ${counts.grpcChaos} (incl. streaming/trailer faults + auto-revert TTL)`);
+  log(` WASM modules         : ${counts.wasmModules} (example Rust match module + a WASM-matched expectation)`);
+  log(` Side-effect exps     : ${counts.sideEffects} (before-actions [blocking/non-blocking] + after-actions [webhook])`);
+  log(` Scenarios            : ${counts.scenarios} (incl. one timed auto-transition; listed in the Scenarios panel)`);
+  log(` gRPC descriptor sets : ${counts.grpcServices} (greeting.dsc → com.example.grpc.GreetingService, 4 methods)`);
+  log(` Cassettes            : ${counts.cassettes} (registered server-side; listed in Library · Cassettes)`);
+  log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
   log('');
+
+  // The example cassettes are registered in the server-side registry (so they appear in the
+  // Cassettes tab automatically). Their expectations are not loaded — use the Cassettes · Load tab
+  // (or load_expectations_from_file) with these paths to replay them:
+  const cassetteDir = join(SCRIPT_DIR, 'demo-cassettes');
+  log(' Example cassette files (load via Library → Cassettes → Load to replay their expectations):');
+  for (const filename of DEMO_CASSETTES) {
+    log(`   ${join(cassetteDir, filename)}`);
+  }
+  log('');
+
   log(' Try these views in the dashboard:');
-  log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills)');
+  log('   Dashboard / Library — active expectations (HTTP, forward, LLM, conversation pills, before/after actions) + WASM modules + gRPC Descriptors tab');
+  log('   Mocks              — HTTP, gRPC (stream/unary), DNS (A/AAAA/CNAME/NXDOMAIN) mocks listed per kind');
   log('   Traffic            — recorded + proxied (forwarded) requests, incl. a lane per LLM provider + token/cost');
-  log('   Sessions           — agent-001 / agent-002 loops + their call graphs');
+  log('   Sessions           — agent-001 / agent-002 loops + call graphs; Scenarios panel lists the seeded scenario state machines');
+  log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos');
+  log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
   log('');
 }
 

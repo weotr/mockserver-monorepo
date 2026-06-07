@@ -3,12 +3,20 @@ from __future__ import annotations
 import pytest
 
 from mockserver.models import (
+    AfterAction,
+    BinaryResponse,
     Body,
     ConnectionOptions,
     Delay,
     DelayDistribution,
+    DnsRecord,
+    DnsResponse,
     Expectation,
     ExpectationId,
+    GrpcBidiResponse,
+    GrpcBidiRule,
+    GrpcStreamMessage,
+    GrpcStreamResponse,
     HttpChaosProfile,
     HttpClassCallback,
     HttpError,
@@ -1648,6 +1656,42 @@ class TestExpectation:
         assert restored.http_error.drop_connection is True
         assert restored.http_error.response_bytes == "YWJj"
 
+    def test_round_trip_before_and_after_actions(self):
+        original = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_response=HttpResponse(status_code=200, body="ok"),
+            before_actions=[
+                AfterAction(
+                    http_request=HttpRequest(path="/hook"),
+                    blocking=True,
+                    timeout=Delay(time_unit="SECONDS", value=2),
+                    failure_policy="FAIL_FAST",
+                )
+            ],
+            after_actions=[AfterAction(http_request=HttpRequest(path="/after"))],
+        )
+        d = original.to_dict()
+        assert d["beforeActions"][0]["blocking"] is True
+        assert d["beforeActions"][0]["failurePolicy"] == "FAIL_FAST"
+        restored = Expectation.from_dict(d)
+        before = restored.before_actions[0]
+        assert before.http_request.path == "/hook"
+        assert before.blocking is True
+        assert before.timeout.value == 2
+        assert before.failure_policy == "FAIL_FAST"
+        assert restored.after_actions[0].http_request.path == "/after"
+
+    def test_before_action_controls_omitted_when_unset(self):
+        e = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_response=HttpResponse(status_code=200),
+            before_actions=[AfterAction(http_request=HttpRequest(path="/hook"))],
+        )
+        before = e.to_dict()["beforeActions"][0]
+        assert "blocking" not in before
+        assert "timeout" not in before
+        assert "failurePolicy" not in before
+
     def test_with_chaos(self):
         chaos = HttpChaosProfile(
             error_status=503,
@@ -2288,6 +2332,487 @@ class TestHttpChaosProfile:
         assert restored.outage_duration_millis == 10000
 
 
+class TestGrpcStreamMessage:
+    def test_defaults(self):
+        msg = GrpcStreamMessage()
+        assert msg.json is None
+        assert msg.delay is None
+
+    def test_construction(self):
+        msg = GrpcStreamMessage(json='{"id": 1}', delay=Delay(time_unit="SECONDS", value=1))
+        assert msg.json == '{"id": 1}'
+        assert msg.delay.time_unit == "SECONDS"
+
+    def test_to_dict(self):
+        msg = GrpcStreamMessage(json='{"hello": "world"}')
+        assert msg.to_dict() == {"json": '{"hello": "world"}'}
+
+    def test_to_dict_with_delay(self):
+        msg = GrpcStreamMessage(json='{"id": 1}', delay=Delay(time_unit="MILLISECONDS", value=500))
+        result = msg.to_dict()
+        assert result == {
+            "json": '{"id": 1}',
+            "delay": {"timeUnit": "MILLISECONDS", "value": 500},
+        }
+
+    def test_to_dict_empty(self):
+        msg = GrpcStreamMessage()
+        assert msg.to_dict() == {}
+
+    def test_from_dict(self):
+        msg = GrpcStreamMessage.from_dict({"json": '{"id": 2}', "delay": {"timeUnit": "SECONDS", "value": 1}})
+        assert msg.json == '{"id": 2}'
+        assert msg.delay.time_unit == "SECONDS"
+        assert msg.delay.value == 1
+
+    def test_from_dict_none(self):
+        assert GrpcStreamMessage.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = GrpcStreamMessage(json='{"test": true}', delay=Delay(time_unit="SECONDS", value=2))
+        restored = GrpcStreamMessage.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+
+class TestGrpcStreamResponse:
+    def test_defaults(self):
+        resp = GrpcStreamResponse()
+        assert resp.status_name is None
+        assert resp.status_message is None
+        assert resp.headers is None
+        assert resp.messages is None
+        assert resp.close_connection is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = GrpcStreamResponse(
+            status_name="OK",
+            status_message="Success",
+            messages=[GrpcStreamMessage(json='{"id": 1}')],
+            close_connection=True,
+        )
+        assert resp.status_name == "OK"
+        assert resp.status_message == "Success"
+        assert len(resp.messages) == 1
+        assert resp.close_connection is True
+
+    def test_to_dict(self):
+        resp = GrpcStreamResponse(
+            status_name="OK",
+            messages=[
+                GrpcStreamMessage(json='{"id": 1}'),
+                GrpcStreamMessage(json='{"id": 2}', delay=Delay(time_unit="MILLISECONDS", value=100)),
+            ],
+            close_connection=True,
+        )
+        result = resp.to_dict()
+        assert result["statusName"] == "OK"
+        assert result["closeConnection"] is True
+        assert len(result["messages"]) == 2
+        assert result["messages"][0] == {"json": '{"id": 1}'}
+        assert result["messages"][1] == {
+            "json": '{"id": 2}',
+            "delay": {"timeUnit": "MILLISECONDS", "value": 100},
+        }
+
+    def test_to_dict_empty(self):
+        resp = GrpcStreamResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = GrpcStreamResponse.from_dict({
+            "statusName": "OK",
+            "statusMessage": "Done",
+            "messages": [
+                {"json": '{"id": 1}'},
+                {"json": '{"id": 2}', "delay": {"timeUnit": "SECONDS", "value": 1}},
+            ],
+            "closeConnection": True,
+        })
+        assert resp.status_name == "OK"
+        assert resp.status_message == "Done"
+        assert len(resp.messages) == 2
+        assert resp.messages[1].delay.time_unit == "SECONDS"
+        assert resp.close_connection is True
+
+    def test_from_dict_none(self):
+        assert GrpcStreamResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = GrpcStreamResponse(
+            status_name="OK",
+            status_message="Completed",
+            messages=[
+                GrpcStreamMessage(json='{"result": "a"}'),
+                GrpcStreamMessage(json='{"result": "b"}', delay=Delay(time_unit="MILLISECONDS", value=200)),
+            ],
+            close_connection=False,
+            delay=Delay(time_unit="SECONDS", value=1),
+        )
+        restored = GrpcStreamResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'grpcStreamResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/grpc"),
+            grpc_stream_response=GrpcStreamResponse(
+                status_name="OK",
+                messages=[GrpcStreamMessage(json='{"id": 1}')],
+            ),
+        )
+        result = e.to_dict()
+        assert "grpcStreamResponse" in result
+        assert result["grpcStreamResponse"]["statusName"] == "OK"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'grpcStreamResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/grpc"},
+            "grpcStreamResponse": {
+                "statusName": "OK",
+                "messages": [{"json": '{"id": 1}'}],
+            },
+        })
+        assert e.grpc_stream_response is not None
+        assert e.grpc_stream_response.status_name == "OK"
+        assert len(e.grpc_stream_response.messages) == 1
+
+
+class TestGrpcBidiRule:
+    def test_defaults(self):
+        rule = GrpcBidiRule()
+        assert rule.match_json is None
+        assert rule.responses is None
+
+    def test_round_trip(self):
+        rule = GrpcBidiRule(
+            match_json='{"name": "Alice"}',
+            responses=[GrpcStreamMessage(json='{"greeting": "Hello Alice"}')],
+        )
+        d = rule.to_dict()
+        assert d["matchJson"] == '{"name": "Alice"}'
+        assert len(d["responses"]) == 1
+        restored = GrpcBidiRule.from_dict(d)
+        assert restored.to_dict() == d
+
+    def test_from_dict_none(self):
+        assert GrpcBidiRule.from_dict(None) is None
+
+
+class TestGrpcBidiResponse:
+    def test_defaults(self):
+        resp = GrpcBidiResponse()
+        assert resp.status_name is None
+        assert resp.status_message is None
+        assert resp.headers is None
+        assert resp.messages is None
+        assert resp.rules is None
+        assert resp.close_connection is None
+        assert resp.primary is None
+
+    def test_construction_and_round_trip(self):
+        original = GrpcBidiResponse(
+            status_name="OK",
+            messages=[GrpcStreamMessage(json='{"greeting": "Hello"}')],
+            rules=[
+                GrpcBidiRule(
+                    match_json='{"name": "Bob"}',
+                    responses=[GrpcStreamMessage(json='{"greeting": "Hello Bob"}')],
+                ),
+            ],
+            close_connection=False,
+        )
+        d = original.to_dict()
+        assert d["statusName"] == "OK"
+        assert len(d["messages"]) == 1
+        assert len(d["rules"]) == 1
+        assert d["rules"][0]["matchJson"] == '{"name": "Bob"}'
+        restored = GrpcBidiResponse.from_dict(d)
+        assert restored.to_dict() == d
+
+    def test_from_dict_none(self):
+        assert GrpcBidiResponse.from_dict(None) is None
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'grpcBidiResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/grpc"),
+            grpc_bidi_response=GrpcBidiResponse(
+                status_name="OK",
+                messages=[GrpcStreamMessage(json='{"id": 1}')],
+            ),
+        )
+        result = e.to_dict()
+        assert "grpcBidiResponse" in result
+        assert result["grpcBidiResponse"]["statusName"] == "OK"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'grpcBidiResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/grpc"},
+            "grpcBidiResponse": {
+                "statusName": "OK",
+                "messages": [{"json": '{"id": 1}'}],
+                "rules": [
+                    {"matchJson": '{"name": "test"}', "responses": [{"json": '{"reply": "ok"}'}]},
+                ],
+            },
+        })
+        assert e.grpc_bidi_response is not None
+        assert e.grpc_bidi_response.status_name == "OK"
+        assert len(e.grpc_bidi_response.messages) == 1
+        assert len(e.grpc_bidi_response.rules) == 1
+        assert e.grpc_bidi_response.rules[0].match_json == '{"name": "test"}'
+
+
+class TestBinaryResponse:
+    def test_defaults(self):
+        resp = BinaryResponse()
+        assert resp.binary_data is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = BinaryResponse(binary_data="AQID")
+        assert resp.binary_data == "AQID"
+
+    def test_to_dict(self):
+        resp = BinaryResponse(binary_data="AQID")
+        assert resp.to_dict() == {"binaryData": "AQID"}
+
+    def test_to_dict_with_delay(self):
+        resp = BinaryResponse(
+            binary_data="AQID",
+            delay=Delay(time_unit="MILLISECONDS", value=100),
+        )
+        result = resp.to_dict()
+        assert result == {
+            "binaryData": "AQID",
+            "delay": {"timeUnit": "MILLISECONDS", "value": 100},
+        }
+
+    def test_to_dict_empty(self):
+        resp = BinaryResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = BinaryResponse.from_dict({"binaryData": "dGVzdA=="})
+        assert resp.binary_data == "dGVzdA=="
+
+    def test_from_dict_none(self):
+        assert BinaryResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = BinaryResponse(
+            binary_data="SGVsbG8=",
+            delay=Delay(time_unit="SECONDS", value=1),
+        )
+        restored = BinaryResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'binaryResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/bin"),
+            binary_response=BinaryResponse(binary_data="AQID"),
+        )
+        result = e.to_dict()
+        assert "binaryResponse" in result
+        assert result["binaryResponse"]["binaryData"] == "AQID"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'binaryResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/bin"},
+            "binaryResponse": {"binaryData": "AQID"},
+        })
+        assert e.binary_response is not None
+        assert e.binary_response.binary_data == "AQID"
+
+
+class TestDnsRecord:
+    def test_defaults(self):
+        rec = DnsRecord()
+        assert rec.name is None
+        assert rec.type is None
+        assert rec.dns_class is None
+        assert rec.ttl is None
+        assert rec.value is None
+        assert rec.priority is None
+        assert rec.weight is None
+        assert rec.port is None
+
+    def test_a_record_factory(self):
+        rec = DnsRecord.a_record("example.com", "1.2.3.4")
+        assert rec.name == "example.com"
+        assert rec.type == "A"
+        assert rec.value == "1.2.3.4"
+
+    def test_aaaa_record_factory(self):
+        rec = DnsRecord.aaaa_record("example.com", "::1")
+        assert rec.type == "AAAA"
+
+    def test_cname_record_factory(self):
+        rec = DnsRecord.cname_record("www.example.com", "example.com")
+        assert rec.type == "CNAME"
+        assert rec.value == "example.com"
+
+    def test_mx_record_factory(self):
+        rec = DnsRecord.mx_record("example.com", 10, "mail.example.com")
+        assert rec.type == "MX"
+        assert rec.priority == 10
+        assert rec.value == "mail.example.com"
+
+    def test_srv_record_factory(self):
+        rec = DnsRecord.srv_record("_sip._tcp.example.com", 10, 20, 5060, "sip.example.com")
+        assert rec.type == "SRV"
+        assert rec.priority == 10
+        assert rec.weight == 20
+        assert rec.port == 5060
+        assert rec.value == "sip.example.com"
+
+    def test_txt_record_factory(self):
+        rec = DnsRecord.txt_record("example.com", "v=spf1 include:_spf.google.com ~all")
+        assert rec.type == "TXT"
+
+    def test_ptr_record_factory(self):
+        rec = DnsRecord.ptr_record("4.3.2.1.in-addr.arpa", "host.example.com")
+        assert rec.type == "PTR"
+
+    def test_to_dict(self):
+        rec = DnsRecord(name="example.com", type="A", value="1.2.3.4", ttl=300, dns_class="IN")
+        result = rec.to_dict()
+        assert result == {
+            "name": "example.com",
+            "type": "A",
+            "dnsClass": "IN",
+            "ttl": 300,
+            "value": "1.2.3.4",
+        }
+
+    def test_to_dict_empty(self):
+        rec = DnsRecord()
+        assert rec.to_dict() == {}
+
+    def test_from_dict(self):
+        rec = DnsRecord.from_dict({
+            "name": "example.com",
+            "type": "A",
+            "dnsClass": "IN",
+            "ttl": 300,
+            "value": "1.2.3.4",
+        })
+        assert rec.name == "example.com"
+        assert rec.type == "A"
+        assert rec.dns_class == "IN"
+        assert rec.ttl == 300
+        assert rec.value == "1.2.3.4"
+
+    def test_from_dict_none(self):
+        assert DnsRecord.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = DnsRecord(name="example.com", type="MX", priority=10, value="mail.example.com", ttl=600)
+        restored = DnsRecord.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+
+class TestDnsResponse:
+    def test_defaults(self):
+        resp = DnsResponse()
+        assert resp.response_code is None
+        assert resp.answer_records is None
+        assert resp.authority_records is None
+        assert resp.additional_records is None
+        assert resp.delay is None
+        assert resp.primary is None
+
+    def test_construction(self):
+        resp = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+        )
+        assert resp.response_code == "NOERROR"
+        assert len(resp.answer_records) == 1
+
+    def test_to_dict(self):
+        resp = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[
+                DnsRecord(name="example.com", type="A", value="1.2.3.4"),
+            ],
+            authority_records=[
+                DnsRecord(name="example.com", type="CNAME", value="other.com"),
+            ],
+        )
+        result = resp.to_dict()
+        assert result["responseCode"] == "NOERROR"
+        assert len(result["answerRecords"]) == 1
+        assert result["answerRecords"][0]["type"] == "A"
+        assert len(result["authorityRecords"]) == 1
+
+    def test_to_dict_empty(self):
+        resp = DnsResponse()
+        assert resp.to_dict() == {}
+
+    def test_from_dict(self):
+        resp = DnsResponse.from_dict({
+            "responseCode": "NXDOMAIN",
+            "answerRecords": [
+                {"name": "example.com", "type": "A", "value": "1.2.3.4"},
+            ],
+        })
+        assert resp.response_code == "NXDOMAIN"
+        assert len(resp.answer_records) == 1
+        assert resp.answer_records[0].value == "1.2.3.4"
+
+    def test_from_dict_none(self):
+        assert DnsResponse.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = DnsResponse(
+            response_code="NOERROR",
+            answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+            authority_records=[DnsRecord.cname_record("www.example.com", "example.com")],
+            additional_records=[DnsRecord.txt_record("example.com", "v=spf1")],
+            delay=Delay(time_unit="MILLISECONDS", value=50),
+        )
+        restored = DnsResponse.from_dict(original.to_dict())
+        assert restored.to_dict() == original.to_dict()
+
+    def test_expectation_to_dict_key(self):
+        """Verify the expectation serialises under the 'dnsResponse' key."""
+        e = Expectation(
+            http_request=HttpRequest(path="/dns"),
+            dns_response=DnsResponse(
+                response_code="NOERROR",
+                answer_records=[DnsRecord.a_record("example.com", "1.2.3.4")],
+            ),
+        )
+        result = e.to_dict()
+        assert "dnsResponse" in result
+        assert result["dnsResponse"]["responseCode"] == "NOERROR"
+        assert "httpResponse" not in result
+
+    def test_expectation_from_dict_key(self):
+        """Verify the expectation deserialises from 'dnsResponse' key."""
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/dns"},
+            "dnsResponse": {
+                "responseCode": "NOERROR",
+                "answerRecords": [{"name": "example.com", "type": "A", "value": "1.2.3.4"}],
+            },
+        })
+        assert e.dns_response is not None
+        assert e.dns_response.response_code == "NOERROR"
+        assert len(e.dns_response.answer_records) == 1
+
+
 class TestRequestDefinitionAlias:
     def test_is_http_request(self):
         assert RequestDefinition is HttpRequest
@@ -2301,3 +2826,295 @@ class TestRequestDefinitionAlias:
         r = RequestDefinition.request("/alias")
         assert isinstance(r, HttpRequest)
         assert r.path == "/alias"
+
+
+class TestExpectationStep:
+    def test_defaults(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep()
+        assert s.http_request is None
+        assert s.http_response is None
+        assert s.http_forward is None
+        assert s.http_error is None
+        assert s.http_class_callback is None
+        assert s.http_object_callback is None
+        assert s.http_override_forwarded_request is None
+        assert s.responder is None
+        assert s.delay is None
+        assert s.blocking is None
+        assert s.timeout is None
+        assert s.failure_policy is None
+
+    def test_responder_step_with_http_response(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_response=HttpResponse(status_code=200, body="ok"),
+            responder=True,
+        )
+        result = s.to_dict()
+        assert result == {
+            "httpResponse": {"statusCode": 200, "body": "ok"},
+            "responder": True,
+        }
+
+    def test_side_effect_step_with_http_request(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_request=HttpRequest(method="POST", path="/webhook"),
+            blocking=True,
+            timeout=Delay(time_unit="SECONDS", value=5),
+            failure_policy="FAIL_FAST",
+        )
+        result = s.to_dict()
+        assert result["httpRequest"] == {"method": "POST", "path": "/webhook"}
+        assert result["blocking"] is True
+        assert result["timeout"] == {"timeUnit": "SECONDS", "value": 5}
+        assert result["failurePolicy"] == "FAIL_FAST"
+        assert "responder" not in result
+
+    def test_step_with_http_forward(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_forward=HttpForward(host="example.com", port=8080),
+            responder=True,
+            delay=Delay(time_unit="MILLISECONDS", value=100),
+        )
+        result = s.to_dict()
+        assert result["httpForward"] == {"host": "example.com", "port": 8080}
+        assert result["responder"] is True
+        assert result["delay"] == {"timeUnit": "MILLISECONDS", "value": 100}
+
+    def test_step_with_http_class_callback(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_class_callback=HttpClassCallback(callback_class="com.example.Cb"),
+        )
+        result = s.to_dict()
+        assert result["httpClassCallback"] == {"callbackClass": "com.example.Cb"}
+
+    def test_step_with_http_object_callback(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_object_callback=HttpObjectCallback(client_id="ws-1"),
+        )
+        result = s.to_dict()
+        assert result["httpObjectCallback"] == {"clientId": "ws-1"}
+
+    def test_step_with_http_override_forwarded_request(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_override_forwarded_request=HttpOverrideForwardedRequest(
+                http_request=HttpRequest(path="/override"),
+            ),
+            responder=True,
+        )
+        result = s.to_dict()
+        assert result["httpOverrideForwardedRequest"] == {"httpRequest": {"path": "/override"}}
+        assert result["responder"] is True
+
+    def test_step_with_http_error(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_error=HttpError(drop_connection=True),
+            responder=True,
+        )
+        result = s.to_dict()
+        assert result["httpError"] == {"dropConnection": True}
+        assert result["responder"] is True
+
+    def test_to_dict_strips_none(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_response=HttpResponse(status_code=200),
+            responder=True,
+        )
+        result = s.to_dict()
+        assert "httpRequest" not in result
+        assert "httpForward" not in result
+        assert "httpError" not in result
+        assert "blocking" not in result
+        assert "timeout" not in result
+        assert "failurePolicy" not in result
+        assert "delay" not in result
+
+    def test_to_dict_failure_policy_best_effort(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep(
+            http_request=HttpRequest(path="/hook"),
+            blocking=False,
+            failure_policy="BEST_EFFORT",
+        )
+        result = s.to_dict()
+        assert result["failurePolicy"] == "BEST_EFFORT"
+        assert result["blocking"] is False
+
+    def test_from_dict(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep.from_dict({
+            "httpResponse": {"statusCode": 200, "body": "ok"},
+            "responder": True,
+            "delay": {"timeUnit": "SECONDS", "value": 1},
+        })
+        assert s.http_response.status_code == 200
+        assert s.responder is True
+        assert s.delay.time_unit == "SECONDS"
+        assert s.delay.value == 1
+
+    def test_from_dict_with_side_effect_controls(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep.from_dict({
+            "httpRequest": {"path": "/hook"},
+            "blocking": True,
+            "timeout": {"timeUnit": "SECONDS", "value": 5},
+            "failurePolicy": "FAIL_FAST",
+        })
+        assert s.http_request.path == "/hook"
+        assert s.blocking is True
+        assert s.timeout.value == 5
+        assert s.failure_policy == "FAIL_FAST"
+
+    def test_from_dict_with_http_forward(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep.from_dict({
+            "httpForward": {"host": "example.com"},
+            "responder": True,
+        })
+        assert s.http_forward.host == "example.com"
+        assert s.responder is True
+
+    def test_from_dict_with_callbacks(self):
+        from mockserver.models import ExpectationStep
+        s = ExpectationStep.from_dict({
+            "httpClassCallback": {"callbackClass": "com.example.Cb"},
+        })
+        assert s.http_class_callback.callback_class == "com.example.Cb"
+
+    def test_from_dict_none(self):
+        from mockserver.models import ExpectationStep
+        assert ExpectationStep.from_dict(None) is None
+
+    def test_round_trip(self):
+        from mockserver.models import ExpectationStep
+        original = ExpectationStep(
+            http_request=HttpRequest(method="POST", path="/webhook"),
+            blocking=True,
+            timeout=Delay(time_unit="SECONDS", value=3),
+            failure_policy="BEST_EFFORT",
+            delay=Delay(time_unit="MILLISECONDS", value=50),
+        )
+        restored = ExpectationStep.from_dict(original.to_dict())
+        assert restored.http_request.method == "POST"
+        assert restored.http_request.path == "/webhook"
+        assert restored.blocking is True
+        assert restored.timeout.value == 3
+        assert restored.failure_policy == "BEST_EFFORT"
+        assert restored.delay.value == 50
+
+    def test_round_trip_responder(self):
+        from mockserver.models import ExpectationStep
+        original = ExpectationStep(
+            http_response=HttpResponse(status_code=201, body="created"),
+            responder=True,
+        )
+        restored = ExpectationStep.from_dict(original.to_dict())
+        assert restored.http_response.status_code == 201
+        assert restored.http_response.body == "created"
+        assert restored.responder is True
+
+
+class TestExpectationWithSteps:
+    def test_expectation_with_steps_to_dict(self):
+        from mockserver.models import ExpectationStep
+        e = Expectation(
+            http_request=HttpRequest(path="/api"),
+            steps=[
+                ExpectationStep(
+                    http_request=HttpRequest(method="POST", path="/webhook"),
+                    blocking=True,
+                    timeout=Delay(time_unit="SECONDS", value=5),
+                    failure_policy="FAIL_FAST",
+                ),
+                ExpectationStep(
+                    http_response=HttpResponse(status_code=200, body="ok"),
+                    responder=True,
+                ),
+            ],
+        )
+        result = e.to_dict()
+        assert "steps" in result
+        assert len(result["steps"]) == 2
+        assert result["steps"][0]["httpRequest"] == {"method": "POST", "path": "/webhook"}
+        assert result["steps"][0]["blocking"] is True
+        assert result["steps"][0]["failurePolicy"] == "FAIL_FAST"
+        assert result["steps"][1]["httpResponse"] == {"statusCode": 200, "body": "ok"}
+        assert result["steps"][1]["responder"] is True
+
+    def test_expectation_with_steps_from_dict(self):
+        from mockserver.models import ExpectationStep
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/api"},
+            "steps": [
+                {
+                    "httpRequest": {"method": "POST", "path": "/webhook"},
+                    "blocking": True,
+                    "timeout": {"timeUnit": "SECONDS", "value": 5},
+                    "failurePolicy": "FAIL_FAST",
+                },
+                {
+                    "httpResponse": {"statusCode": 200, "body": "ok"},
+                    "responder": True,
+                },
+            ],
+        })
+        assert e.steps is not None
+        assert len(e.steps) == 2
+        assert e.steps[0].http_request.path == "/webhook"
+        assert e.steps[0].blocking is True
+        assert e.steps[0].failure_policy == "FAIL_FAST"
+        assert e.steps[1].http_response.status_code == 200
+        assert e.steps[1].responder is True
+
+    def test_expectation_without_steps(self):
+        e = Expectation(
+            http_request=HttpRequest(path="/test"),
+            http_response=HttpResponse(status_code=200),
+        )
+        result = e.to_dict()
+        assert "steps" not in result
+
+    def test_expectation_from_dict_without_steps(self):
+        e = Expectation.from_dict({
+            "httpRequest": {"path": "/test"},
+            "httpResponse": {"statusCode": 200},
+        })
+        assert e.steps is None
+
+    def test_round_trip_with_steps(self):
+        from mockserver.models import ExpectationStep
+        original = Expectation(
+            id="steps-test",
+            http_request=HttpRequest(path="/api"),
+            steps=[
+                ExpectationStep(
+                    http_request=HttpRequest(method="POST", path="/hook"),
+                    delay=Delay(time_unit="MILLISECONDS", value=100),
+                    blocking=True,
+                    timeout=Delay(time_unit="SECONDS", value=3),
+                    failure_policy="BEST_EFFORT",
+                ),
+                ExpectationStep(
+                    http_forward=HttpForward(host="backend.local", port=9090),
+                    responder=True,
+                ),
+            ],
+        )
+        restored = Expectation.from_dict(original.to_dict())
+        assert restored.id == "steps-test"
+        assert len(restored.steps) == 2
+        assert restored.steps[0].http_request.path == "/hook"
+        assert restored.steps[0].delay.value == 100
+        assert restored.steps[0].blocking is True
+        assert restored.steps[0].timeout.value == 3
+        assert restored.steps[0].failure_policy == "BEST_EFFORT"
+        assert restored.steps[1].http_forward.host == "backend.local"
+        assert restored.steps[1].responder is True

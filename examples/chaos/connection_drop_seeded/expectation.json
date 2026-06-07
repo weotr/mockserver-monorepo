@@ -1,0 +1,14 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/api/health"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": "{\"healthy\": true}"
+  },
+  "chaos": {
+    "dropConnectionProbability": 0.5,
+    "seed": 42
+  }
+}

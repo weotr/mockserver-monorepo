@@ -19,6 +19,7 @@ import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mappers.JDKCertificateToMockServerX509Certificate;
+import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.HttpState;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.serialization.ObjectMapperFactory;
@@ -504,6 +505,7 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
 
         JsonNode arguments = params.path("arguments");
         JsonNode toolResult = toolRegistry.callTool(toolName, arguments.isMissingNode() ? null : arguments);
+        Metrics.incrementMcpToolCall(toolName);
 
         ObjectNode result = objectMapper.createObjectNode();
         ArrayNode content = result.putArray("content");

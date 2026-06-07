@@ -25,7 +25,29 @@ beforeEach(() => {
   clearCassettes();
   vi.restoreAllMocks();
   _clearMcpSessionCache();
+  // Default fetch stub so CassetteManagerBody's mount-time server-cassette fetch is hermetic
+  // (returns an empty list) rather than hitting a real MockServer that may be running on the
+  // default localhost:1080. Tests that need specific responses re-stub fetch, overriding this.
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true,
+    headers: { get: () => null },
+    json: () => Promise.resolve({ cassettes: [] }),
+  }));
 });
+
+// Find the MCP `tools/call` request among all fetch calls. The cassette manager also issues
+// cassette-registry requests (a GET on mount, a best-effort PUT after record/load), so the
+// tools/call is no longer at a fixed index.
+function findMcpToolCall(): [string, { body: string }] {
+  const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls as [string, { body?: string }][];
+  const match = calls.find(
+    (c) => c[0] === 'http://localhost:1080/mockserver/mcp'
+      && typeof c[1]?.body === 'string'
+      && c[1].body.includes('"tools/call"'),
+  );
+  if (!match) throw new Error('no MCP tools/call fetch found');
+  return match as [string, { body: string }];
+}
 
 function renderDialog(overrides: Partial<Parameters<typeof CassetteManager>[0]> = {}) {
   const defaults = {
@@ -157,8 +179,9 @@ describe('CassetteManager', () => {
     const recordBtn = screen.getByRole('button', { name: 'Record' });
     await user.click(recordBtn);
 
-    expect(fetch).toHaveBeenCalledTimes(3);
-    const toolCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[2]!;
+    // Locate the MCP tools/call among all fetch calls — there are also cassette-registry calls
+    // (a GET on mount + a best-effort PUT mirroring the recording server-side).
+    const toolCall = findMcpToolCall();
     expect(toolCall[0]).toBe('http://localhost:1080/mockserver/mcp');
 
     const body = JSON.parse(toolCall[1].body as string) as Record<string, unknown>;
@@ -193,9 +216,7 @@ describe('CassetteManager', () => {
     const loadBtn = screen.getByRole('button', { name: 'Load Expectations' });
     await user.click(loadBtn);
 
-    expect(fetch).toHaveBeenCalledTimes(3);
-    const toolCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[2]!;
-
+    const toolCall = findMcpToolCall();
     const body = JSON.parse(toolCall[1].body as string) as Record<string, unknown>;
     const params = body['params'] as Record<string, unknown>;
     expect(params['name']).toBe('load_expectations_from_file');

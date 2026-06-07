@@ -116,6 +116,37 @@ public class CrudActionHandler {
         }
     }
 
+    public HttpResponse handlePatch(HttpRequest request) {
+        try {
+            String id = extractIdFromPath(request);
+            if (id == null) {
+                return response()
+                    .withStatusCode(400)
+                    .withBody("{\"error\":\"missing id\"}", MediaType.JSON_UTF_8);
+            }
+            String body = request.getBodyAsString();
+            if (body == null || body.isEmpty()) {
+                return response()
+                    .withStatusCode(400)
+                    .withBody("{\"error\":\"request body is required\"}", MediaType.JSON_UTF_8);
+            }
+            ObjectNode partial = (ObjectNode) objectMapper.readTree(body);
+            ObjectNode patched = store.patch(id, partial);
+            if (patched == null) {
+                return response()
+                    .withStatusCode(404)
+                    .withBody("{\"error\":\"not found\"}", MediaType.JSON_UTF_8);
+            }
+            return response()
+                .withStatusCode(200)
+                .withBody(objectMapper.writeValueAsString(patched), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response()
+                .withStatusCode(400)
+                .withBody("{\"error\":\"invalid request body\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
     public HttpResponse handleDelete(HttpRequest request) {
         try {
             String id = extractIdFromPath(request);

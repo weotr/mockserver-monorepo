@@ -92,6 +92,15 @@ function escapeJava(s: string): string {
 }
 
 /**
+ * Render a number as a Java `double` literal. A whole number such as `1` would be an `int`
+ * literal that does not autobox to the `Double` parameters on LlmChaosProfile, so force a
+ * decimal point.
+ */
+function javaDouble(n: number): string {
+  return Number.isInteger(n) ? `${n}.0` : String(n);
+}
+
+/**
  * Build the wire `normalization` object for JSON / MCP, or undefined when the
  * draft carries nothing meaningful. Booleans are emitted only when defined so
  * the backend defaults (collapseWhitespace / sortJsonKeys on) apply otherwise.
@@ -153,6 +162,10 @@ export function conversationToJava(draft: ConversationDraft): string {
   if (draft.turns.some((t) => t.predicates.latestMessageMatches)) {
     lines.push('import java.util.regex.Pattern;');
   }
+  // latestMessageRole predicates reference ParsedMessage.Role (org.mockserver.llm).
+  if (draft.turns.some((t) => t.predicates.latestMessageRole)) {
+    lines.push('import org.mockserver.llm.ParsedMessage;');
+  }
   lines.push('');
 
   // Start builder chain
@@ -201,7 +214,10 @@ export function conversationToJava(draft: ConversationDraft): string {
         const list = n.dropVolatileFields.map((f) => `"${escapeJava(f)}"`).join(', ');
         normParts.push(`.withDropVolatileFields(java.util.Arrays.asList(${list}))`);
       }
-      lines.push(`        .withNormalization(${normParts.join('')})`);
+      lines.push('        .withNormalization(');
+      lines.push(`            ${normParts[0]}`);
+      for (const part of normParts.slice(1)) lines.push(`                ${part}`);
+      lines.push('        )');
     }
 
     // Response
@@ -223,19 +239,25 @@ export function conversationToJava(draft: ConversationDraft): string {
       completionParts.push('.streaming()');
     }
 
-    lines.push(`        .respondingWith(${completionParts.join('\n            ')})`);
+    lines.push('        .respondingWith(');
+    lines.push(`            ${completionParts[0]}`);
+    for (const part of completionParts.slice(1)) lines.push(`                ${part}`);
+    lines.push('        )');
 
     if (chaosToObject(turn.chaos)) {
       const c = turn.chaos!;
       const chaosParts: string[] = ['org.mockserver.model.LlmChaosProfile.llmChaosProfile()'];
       if (c.errorStatus != null) chaosParts.push(`.withErrorStatus(${c.errorStatus})`);
       if (c.retryAfter != null && c.retryAfter !== '') chaosParts.push(`.withRetryAfter("${escapeJava(c.retryAfter)}")`);
-      if (c.errorProbability != null) chaosParts.push(`.withErrorProbability(${c.errorProbability})`);
+      if (c.errorProbability != null) chaosParts.push(`.withErrorProbability(${javaDouble(c.errorProbability)})`);
       if (c.truncateMode != null && c.truncateMode !== 'NONE') chaosParts.push(`.withTruncateMode(org.mockserver.model.LlmChaosProfile.TruncateMode.${c.truncateMode})`);
-      if (c.truncateAtFraction != null) chaosParts.push(`.withTruncateAtFraction(${c.truncateAtFraction})`);
+      if (c.truncateAtFraction != null) chaosParts.push(`.withTruncateAtFraction(${javaDouble(c.truncateAtFraction)})`);
       if (c.malformedSse != null) chaosParts.push(`.withMalformedSse(${c.malformedSse})`);
       if (c.seed != null) chaosParts.push(`.withSeed(${c.seed}L)`);
-      lines.push(`        .withChaos(${chaosParts.join('')})`);
+      lines.push('        .withChaos(');
+      lines.push(`            ${chaosParts[0]}`);
+      for (const part of chaosParts.slice(1)) lines.push(`                ${part}`);
+      lines.push('        )');
     }
 
     if (i < draft.turns.length - 1) {
@@ -311,9 +333,6 @@ export function conversationToJson(draft: ConversationDraft): string {
 
     const llmResponse: Record<string, unknown> = {
       provider: draft.provider,
-      scenarioName,
-      scenarioState,
-      newScenarioState,
     };
     if (draft.model) {
       llmResponse['model'] = draft.model;
@@ -329,12 +348,18 @@ export function conversationToJson(draft: ConversationDraft): string {
       llmResponse['chaos'] = jsonChaos;
     }
 
+    // scenarioName / scenarioState / newScenarioState are top-level Expectation fields, not
+    // part of httpLlmResponse. Both schemas use additionalProperties:false, so nesting them
+    // inside httpLlmResponse makes PUT /mockserver/expectation reject the payload.
     expectations.push({
       httpRequest: {
         method: 'POST',
         path: draft.path,
       },
       httpLlmResponse: llmResponse,
+      scenarioName,
+      scenarioState,
+      newScenarioState,
     });
   }
 
@@ -594,7 +619,9 @@ export function draftFromScenarioExpectations(
         text: typeof completion['text'] === 'string' ? (completion['text'] as string) : '',
         toolCalls,
         stopReason: typeof completion['stopReason'] === 'string' ? (completion['stopReason'] as string) : '',
-        streaming: llm['streaming'] === true,
+        // streaming lives inside the completion object (Completion.streaming), matching what
+        // conversationToJson / the server write — not at the httpLlmResponse top level.
+        streaming: completion['streaming'] === true,
       },
       chaos: parseChaos(llm['chaos']),
     };

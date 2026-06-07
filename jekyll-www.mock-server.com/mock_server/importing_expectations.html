@@ -1,0 +1,158 @@
+---
+title: Importing Expectations from HAR & Postman
+description: Import expectations into MockServer from HAR (HTTP Archive) or Postman Collection files via a single PUT /mockserver/import request, with format auto-detection.
+shortTitle: Import HAR / Postman
+layout: page
+pageOrder: 3.5
+section: 'Mock Server'
+subsection: true
+sitemap:
+  priority: 0.7
+  changefreq: 'monthly'
+  lastmod: 2026-06-02T00:00:00+00:00
+---
+
+<p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files and <strong>Postman Collection v2.x</strong> files. This lets you record real HTTP traffic in your browser or Postman, then replay it through MockServer without writing expectations by hand.</p>
+
+<p>Common use cases:</p>
+<ul>
+    <li><strong>Record-and-replay</strong> &mdash; capture traffic with browser DevTools (Export HAR) or Postman, then import it to create a mock that replays the recorded responses</li>
+    <li><strong>Migrate existing collections</strong> &mdash; teams with an existing Postman collection can import their saved example responses into MockServer</li>
+    <li><strong>Bootstrap mocks quickly</strong> &mdash; import a HAR from staging traffic to get a working mock in seconds, then fine-tune individual expectations as needed</li>
+</ul>
+
+<a id="import_endpoint" class="anchor" href="#import_endpoint">&nbsp;</a>
+
+<h2>Import Endpoint</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/import</span> with the HAR or Postman JSON document as the request body. MockServer creates one expectation per entry (HAR) or per saved example response (Postman) and returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+
+<a id="format_detection" class="anchor" href="#format_detection">&nbsp;</a>
+
+<h3>Format detection</h3>
+
+<p>MockServer <strong>auto-detects the format</strong> from the JSON structure:</p>
+<ul>
+    <li>If the body contains <span class="inline_code">log.entries</span>, it is treated as HAR</li>
+    <li>If the body contains <span class="inline_code">info</span> and <span class="inline_code">item</span>, it is treated as a Postman Collection</li>
+</ul>
+
+<p>You can also override auto-detection with the <span class="inline_code">format</span> query parameter:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Query parameter</th>
+            <th>Value</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">har</span></td>
+            <td>Force HAR parsing</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">postman</span></td>
+            <td>Force Postman Collection parsing</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>If auto-detection fails and no <span class="inline_code">format</span> parameter is provided, MockServer returns <span class="inline_code">400 Bad Request</span> with a message suggesting you specify the format explicitly.</p>
+
+<p><strong>Insomnia collections are not supported.</strong> Attempting to import an Insomnia export returns a clear error message. Convert Insomnia collections to HAR or Postman format first.</p>
+
+<a id="import_har" class="anchor" href="#import_har">&nbsp;</a>
+
+<h2>Importing from HAR</h2>
+
+<p>Each entry in the HAR's <span class="inline_code">log.entries[]</span> array produces one expectation. The request matcher uses the method, path, and query parameters from the recorded request. The response uses the recorded status code, headers, and body.</p>
+
+<h3>Volatile header filtering</h3>
+
+<p>Not all recorded headers make sense in a mock expectation. MockServer automatically filters out <strong>volatile headers</strong> that would over-constrain matching or produce stale responses:</p>
+
+<ul>
+    <li><strong>Request headers excluded from matching:</strong> <span class="inline_code">Host</span>, <span class="inline_code">Date</span>, <span class="inline_code">User-Agent</span>, <span class="inline_code">Accept</span>, <span class="inline_code">Accept-Encoding</span>, <span class="inline_code">Cookie</span>, <span class="inline_code">Authorization</span>, <span class="inline_code">Connection</span>, <span class="inline_code">Content-Length</span>, <span class="inline_code">Referer</span>, <span class="inline_code">Origin</span>, trace headers, and others</li>
+    <li><strong>Response headers excluded:</strong> <span class="inline_code">Date</span>, <span class="inline_code">Transfer-Encoding</span>, <span class="inline_code">Content-Length</span>, <span class="inline_code">Connection</span>, <span class="inline_code">Set-Cookie</span>, <span class="inline_code">Server</span>, <span class="inline_code">Vary</span>, trace headers, and others</li>
+</ul>
+
+<p>Non-volatile headers (such as <span class="inline_code">Content-Type</span>, <span class="inline_code">Accept-Language</span>) are preserved and included in the generated expectations.</p>
+
+<h3>Request body handling</h3>
+
+<p>When a HAR entry has <span class="inline_code">postData.text</span>, it is included in the request matcher if the body is reasonably sized (under 4 KB). Larger request bodies are omitted from matching to keep expectations permissive.</p>
+
+<h3>Base64 response bodies</h3>
+
+<p>HAR files sometimes encode response bodies as Base64 (indicated by <span class="inline_code">content.encoding: "base64"</span>). MockServer automatically decodes these back to plain text for the generated response body.</p>
+
+<button id="button_import_har" class="accordion">import expectations from a HAR file</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import" \
+  -H "Content-Type: application/json" \
+  --data-binary @traffic.har</code></pre>
+        <p>Or explicitly specify the format:</p>
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=har" \
+  -H "Content-Type: application/json" \
+  --data-binary @traffic.har</code></pre>
+        <p>MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>
+
+<a id="import_postman" class="anchor" href="#import_postman">&nbsp;</a>
+
+<h2>Importing from Postman</h2>
+
+<p>MockServer supports Postman Collection v2.0 and v2.1 formats. Collections are walked recursively, so requests inside folders are imported correctly.</p>
+
+<p>For each request item that has <strong>saved example responses</strong> (the <span class="inline_code">response[]</span> array), one expectation is created per example. Requests without saved examples are skipped (with a count logged), since there is no response to mock.</p>
+
+<p>The Postman <span class="inline_code">url</span> field is handled whether it appears as a plain string or as the structured object format with <span class="inline_code">path[]</span> and <span class="inline_code">query[]</span> arrays.</p>
+
+<button id="button_import_postman" class="accordion">import expectations from a Postman Collection</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=postman" \
+  -H "Content-Type: application/json" \
+  --data-binary @my-collection.postman_collection.json</code></pre>
+        <p>MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>
+
+<a id="import_what_is_generated" class="anchor" href="#import_what_is_generated">&nbsp;</a>
+
+<h2>What gets generated</h2>
+
+<p>Each imported expectation is assigned a stable ID based on the source format and entry index (e.g. <span class="inline_code">har-0</span>, <span class="inline_code">har-1</span>, or <span class="inline_code">postman-0-get-users</span>). Re-importing the same file updates the existing expectations in place rather than creating duplicates.</p>
+
+<p>The generated expectations use <strong>unlimited times</strong> and <strong>unlimited time-to-live</strong>, so they will match repeatedly until cleared or reset. You can modify individual expectations after import using the standard <span class="inline_code">PUT /mockserver/expectation</span> endpoint.</p>
+
+<a id="import_errors" class="anchor" href="#import_errors">&nbsp;</a>
+
+<h2>Error responses</h2>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Cause</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>201</td>
+            <td>Import succeeded; body contains the generated expectations as JSON</td>
+        </tr>
+        <tr>
+            <td>400</td>
+            <td>Empty body, invalid JSON, unrecognised format, or missing required structure (<span class="inline_code">log.entries</span> for HAR, <span class="inline_code">info</span>/<span class="inline_code">item</span> for Postman)</td>
+        </tr>
+    </tbody>
+</table>

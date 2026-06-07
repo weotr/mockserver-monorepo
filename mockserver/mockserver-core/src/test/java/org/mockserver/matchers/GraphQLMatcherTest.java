@@ -1,6 +1,7 @@
 package org.mockserver.matchers;
 
 import org.junit.Test;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.logging.MockServerLogger;
 
 import static junit.framework.TestCase.*;
@@ -11,6 +12,28 @@ public class GraphQLMatcherTest {
     @Test
     public void shouldMatchSimpleGraphQLQuery() {
         assertTrue(new GraphQLMatcher(new MockServerLogger(), "{ user(id: 1) { name } }", null, null).matches(null, "{\"query\": \"{ user(id: 1) { name } }\"}"));
+    }
+
+    @Test
+    public void shouldReturnFalseOnReDoSOperationNamePatternRatherThanHanging() {
+        long previousTimeout = ConfigurationProperties.regexMatchingTimeoutMillis();
+        try {
+            ConfigurationProperties.regexMatchingTimeoutMillis(200L);
+            // catastrophic-backtracking regex + non-matching input that would otherwise hang for a long time
+            String evilOperationName = "(a+)+$";
+            String evilInput = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!";
+            String query = "query GetUser { user(id: 1) { name } }";
+            String requestBody = "{\"query\": \"query GetUser { user(id: 1) { name } }\", \"operationName\": \"" + evilInput + "\"}";
+
+            long startMillis = System.currentTimeMillis();
+            boolean matched = new GraphQLMatcher(new MockServerLogger(), query, evilOperationName, null).matches(null, requestBody);
+            long elapsedMillis = System.currentTimeMillis() - startMillis;
+
+            assertFalse("ReDoS operationName pattern must not match the request", matched);
+            assertTrue("regex evaluation should be bounded by the timeout but took " + elapsedMillis + "ms", elapsedMillis < 2_000L);
+        } finally {
+            ConfigurationProperties.regexMatchingTimeoutMillis(previousTimeout);
+        }
     }
 
     @Test

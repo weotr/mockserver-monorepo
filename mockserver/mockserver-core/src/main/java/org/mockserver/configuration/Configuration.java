@@ -40,13 +40,19 @@ public class Configuration {
     private Boolean metricsEnabled;
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
+    private Boolean otelPropagateTraceContext;
+    private Boolean otelGenerateTraceId;
     private Boolean mcpEnabled;
+    private Boolean wasmEnabled;
+    private Integer wasmMaxMemoryPages;
     private String grpcDescriptorDirectory;
     private String grpcProtoDirectory;
     private Boolean grpcEnabled;
     private String grpcProtocPath;
+    private Boolean grpcBidiStreamingEnabled;
     private Boolean dnsEnabled;
     private Integer dnsPort;
+    private Integer http3Port;
     private Map<String, String> logLevelOverrides;
     private Boolean compactLogFormat;
 
@@ -58,6 +64,7 @@ public class Configuration {
     private String memoryUsageCsvDirectory;
 
     // scalability
+    private Boolean useNativeTransport;
     private Integer nioEventLoopThreadCount;
     private Integer actionHandlerThreadCount;
     private Integer clientNioEventLoopThreadCount;
@@ -79,6 +86,8 @@ public class Configuration {
     private Integer maxRequestBodySize;
     private Integer maxResponseBodySize;
     private Integer maxLlmConversationBodySize;
+    private Boolean driftSemanticAnalysisEnabled;
+    private Long driftResponseTimeThresholdMs;
     private Boolean useSemicolonAsQueryParameterSeparator;
     private Boolean assumeAllRequestsAreHttp;
     private Boolean http2Enabled;
@@ -128,12 +137,23 @@ public class Configuration {
     private Boolean persistRecordedExpectations;
     private String persistedRecordedExpectationsPath;
 
+    // state backend (G10 phase 2a)
+    private String stateBackend;
+    private String blobStoreType;
+
+    // clustering (G10 phase 2c) — opt-in, default OFF
+    private Boolean clusterEnabled;
+    private String clusterName;
+    private String clusterTransportConfig;
+
     // verification
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Boolean detailedVerificationFailures;
 
     // proxy
-    private Boolean attemptToProxyIfNoMatchingExpectation;
+    // volatile: mutated at runtime via PUT /mockserver/mode (control-plane thread) and read on the
+    // Netty request path (HttpActionHandler), so the write must be visible across I/O threads
+    private volatile Boolean attemptToProxyIfNoMatchingExpectation;
     private InetSocketAddress forwardHttpProxy;
     private InetSocketAddress forwardHttpsProxy;
     private InetSocketAddress forwardSocksProxy;
@@ -207,6 +227,15 @@ public class Configuration {
     // outbound - fixed private key & x509
     private String forwardProxyPrivateKey;
     private String forwardProxyCertificateChain;
+
+    // service mesh / sidecar
+    private Boolean transparentProxyEnabled;
+    private Boolean transparentProxyTproxy;
+
+    // async messaging defaults
+    private String asyncKafkaBootstrapServers;
+    private String asyncMqttBrokerUrl;
+    private Integer asyncRecordedMessageMaxEntries;
 
 
     public Level logLevel() {
@@ -370,6 +399,42 @@ public class Configuration {
         return this;
     }
 
+    public Boolean otelPropagateTraceContext() {
+        if (otelPropagateTraceContext == null) {
+            return ConfigurationProperties.otelPropagateTraceContext();
+        }
+        return otelPropagateTraceContext;
+    }
+
+    /**
+     * When true, MockServer copies the incoming W3C traceparent and tracestate
+     * headers into mock responses. Off by default.
+     *
+     * @param otelPropagateTraceContext enable trace context propagation to responses
+     */
+    public Configuration otelPropagateTraceContext(Boolean otelPropagateTraceContext) {
+        this.otelPropagateTraceContext = otelPropagateTraceContext;
+        return this;
+    }
+
+    public Boolean otelGenerateTraceId() {
+        if (otelGenerateTraceId == null) {
+            return ConfigurationProperties.otelGenerateTraceId();
+        }
+        return otelGenerateTraceId;
+    }
+
+    /**
+     * When true, MockServer generates a new W3C trace ID for incoming requests
+     * that do not carry a traceparent header. Off by default.
+     *
+     * @param otelGenerateTraceId enable trace ID generation for requests without traceparent
+     */
+    public Configuration otelGenerateTraceId(Boolean otelGenerateTraceId) {
+        this.otelGenerateTraceId = otelGenerateTraceId;
+        return this;
+    }
+
     public Boolean mcpEnabled() {
         if (mcpEnabled == null) {
             return ConfigurationProperties.mcpEnabled();
@@ -379,6 +444,30 @@ public class Configuration {
 
     public Configuration mcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
+        return this;
+    }
+
+    public Boolean wasmEnabled() {
+        if (wasmEnabled == null) {
+            return ConfigurationProperties.wasmEnabled();
+        }
+        return wasmEnabled;
+    }
+
+    public Configuration wasmEnabled(Boolean wasmEnabled) {
+        this.wasmEnabled = wasmEnabled;
+        return this;
+    }
+
+    public Integer wasmMaxMemoryPages() {
+        if (wasmMaxMemoryPages == null) {
+            return ConfigurationProperties.wasmMaxMemoryPages();
+        }
+        return wasmMaxMemoryPages;
+    }
+
+    public Configuration wasmMaxMemoryPages(Integer wasmMaxMemoryPages) {
+        this.wasmMaxMemoryPages = wasmMaxMemoryPages;
         return this;
     }
 
@@ -430,6 +519,29 @@ public class Configuration {
         return this;
     }
 
+    public Boolean grpcBidiStreamingEnabled() {
+        if (grpcBidiStreamingEnabled == null) {
+            return ConfigurationProperties.grpcBidiStreamingEnabled();
+        }
+        return grpcBidiStreamingEnabled;
+    }
+
+    /**
+     * If true the HTTP/2 pipeline uses Http2FrameCodec + Http2MultiplexHandler instead of
+     * HttpToHttp2ConnectionHandler + InboundHttp2ToHttpAdapter for connections where gRPC
+     * descriptors are loaded. This is required for true client-streaming and bidirectional-streaming
+     * gRPC in a future phase. In Phase 0 the multiplex branch re-aggregates frames so behaviour
+     * is identical to the connection-level adapter.
+     * <p>
+     * Default is false
+     *
+     * @param grpcBidiStreamingEnabled enable the multiplex HTTP/2 pipeline for gRPC bidi-streaming support
+     */
+    public Configuration grpcBidiStreamingEnabled(Boolean grpcBidiStreamingEnabled) {
+        this.grpcBidiStreamingEnabled = grpcBidiStreamingEnabled;
+        return this;
+    }
+
     public Boolean dnsEnabled() {
         if (dnsEnabled == null) {
             return ConfigurationProperties.dnsEnabled();
@@ -451,6 +563,18 @@ public class Configuration {
 
     public Configuration dnsPort(Integer dnsPort) {
         this.dnsPort = dnsPort;
+        return this;
+    }
+
+    public Integer http3Port() {
+        if (http3Port == null) {
+            return ConfigurationProperties.http3Port();
+        }
+        return http3Port;
+    }
+
+    public Configuration http3Port(Integer http3Port) {
+        this.http3Port = http3Port;
         return this;
     }
 
@@ -575,6 +699,27 @@ public class Configuration {
      */
     public Configuration memoryUsageCsvDirectory(String memoryUsageCsvDirectory) {
         this.memoryUsageCsvDirectory = memoryUsageCsvDirectory;
+        return this;
+    }
+
+    public Boolean useNativeTransport() {
+        if (useNativeTransport == null) {
+            return ConfigurationProperties.useNativeTransport();
+        }
+        return useNativeTransport;
+    }
+
+    /**
+     * If true (the default) MockServer will use the native epoll transport on Linux
+     * for higher performance and to enable transparent-proxy SO_ORIGINAL_DST resolution.
+     * Set to false to force the NIO transport on all platforms.
+     * <p>
+     * This property is read at start-up only.
+     *
+     * @param useNativeTransport enable native transport when available
+     */
+    public Configuration useNativeTransport(Boolean useNativeTransport) {
+        this.useNativeTransport = useNativeTransport;
         return this;
     }
 
@@ -893,6 +1038,45 @@ public class Configuration {
      */
     public Configuration maxLlmConversationBodySize(Integer maxLlmConversationBodySize) {
         this.maxLlmConversationBodySize = maxLlmConversationBodySize;
+        return this;
+    }
+
+    public Boolean driftSemanticAnalysisEnabled() {
+        if (driftSemanticAnalysisEnabled == null) {
+            return ConfigurationProperties.driftSemanticAnalysisEnabled();
+        }
+        return driftSemanticAnalysisEnabled;
+    }
+
+    /**
+     * Whether to enable LLM-powered semantic drift analysis. When enabled and
+     * a runtime LLM backend is available, each structural drift record is enriched
+     * with a severity classification (BREAKING/WARNING/INFORMATIONAL) and an
+     * explanation. Default false (opt-in).
+     *
+     * @param driftSemanticAnalysisEnabled true to enable semantic drift analysis
+     */
+    public Configuration driftSemanticAnalysisEnabled(Boolean driftSemanticAnalysisEnabled) {
+        this.driftSemanticAnalysisEnabled = driftSemanticAnalysisEnabled;
+        return this;
+    }
+
+    public Long driftResponseTimeThresholdMs() {
+        if (driftResponseTimeThresholdMs == null) {
+            return ConfigurationProperties.driftResponseTimeThresholdMs();
+        }
+        return driftResponseTimeThresholdMs;
+    }
+
+    /**
+     * p95 response time threshold (in milliseconds) for performance drift detection.
+     * When positive, a PERFORMANCE drift record is emitted whenever the p95 response
+     * time for an expectation exceeds this threshold. Default 0 (disabled).
+     *
+     * @param driftResponseTimeThresholdMs threshold in milliseconds, 0 to disable
+     */
+    public Configuration driftResponseTimeThresholdMs(Long driftResponseTimeThresholdMs) {
+        this.driftResponseTimeThresholdMs = driftResponseTimeThresholdMs;
         return this;
     }
 
@@ -1475,6 +1659,119 @@ public class Configuration {
      */
     public Configuration persistedRecordedExpectationsPath(String persistedRecordedExpectationsPath) {
         this.persistedRecordedExpectationsPath = persistedRecordedExpectationsPath;
+        return this;
+    }
+
+    /**
+     * Returns the state backend type. Currently only "memory" is supported
+     * (default). Phase 2b will add "infinispan" for clustered state.
+     */
+    public String stateBackend() {
+        if (stateBackend == null) {
+            return ConfigurationProperties.stateBackend();
+        }
+        return stateBackend;
+    }
+
+    /**
+     * Sets the state backend type. Currently only "memory" is supported.
+     *
+     * @param stateBackend the backend type (e.g. "memory")
+     */
+    public Configuration stateBackend(String stateBackend) {
+        this.stateBackend = stateBackend;
+        return this;
+    }
+
+    /**
+     * Returns the blob store type. "filesystem" (default) delegates to the
+     * existing file persistence paths so on-disk behaviour is unchanged;
+     * "memory" keeps blobs in-memory only (lost on process exit).
+     */
+    public String blobStoreType() {
+        if (blobStoreType == null) {
+            return ConfigurationProperties.blobStoreType();
+        }
+        return blobStoreType;
+    }
+
+    /**
+     * Sets the blob store type.
+     *
+     * @param blobStoreType the blob store type (e.g. "memory", "filesystem")
+     */
+    public Configuration blobStoreType(String blobStoreType) {
+        this.blobStoreType = blobStoreType;
+        return this;
+    }
+
+    // --- clustering (G10 phase 2c) ---
+
+    /**
+     * Returns whether clustering is enabled. When {@code true} and
+     * {@code stateBackend=infinispan}, the Infinispan backend starts
+     * a JGroups transport for multi-node state replication. Default is
+     * {@code false} (single-node LOCAL mode, identical to today).
+     */
+    public boolean clusterEnabled() {
+        if (clusterEnabled == null) {
+            return ConfigurationProperties.clusterEnabled();
+        }
+        return clusterEnabled;
+    }
+
+    /**
+     * Enables or disables clustering.
+     *
+     * @param clusterEnabled true to enable JGroups transport
+     */
+    public Configuration clusterEnabled(boolean clusterEnabled) {
+        this.clusterEnabled = clusterEnabled;
+        return this;
+    }
+
+    /**
+     * Returns the cluster name used as the JGroups cluster identifier.
+     * All nodes with the same cluster name form a single cluster.
+     * Default is {@code "mockserver-cluster"}.
+     */
+    public String clusterName() {
+        if (clusterName == null) {
+            return ConfigurationProperties.clusterName();
+        }
+        return clusterName;
+    }
+
+    /**
+     * Sets the JGroups cluster name.
+     *
+     * @param clusterName the cluster identifier
+     */
+    public Configuration clusterName(String clusterName) {
+        this.clusterName = clusterName;
+        return this;
+    }
+
+    /**
+     * Returns the optional path to a JGroups XML transport configuration
+     * file. When set, this overrides the default in-JVM loopback stack.
+     * When {@code null}, the Infinispan module uses its built-in
+     * embedded-friendly JGroups configuration.
+     */
+    public String clusterTransportConfig() {
+        if (clusterTransportConfig == null) {
+            return ConfigurationProperties.clusterTransportConfig();
+        }
+        return clusterTransportConfig;
+    }
+
+    /**
+     * Sets the path to a custom JGroups XML transport configuration.
+     *
+     * @param clusterTransportConfig path to JGroups XML, or null for default
+     */
+    public Configuration clusterTransportConfig(String clusterTransportConfig) {
+        this.clusterTransportConfig = clusterTransportConfig;
         return this;
     }
 
@@ -2483,6 +2780,103 @@ public class Configuration {
     public Configuration forwardProxyCertificateChain(String forwardProxyCertificateChain) {
         fileExists(forwardProxyCertificateChain);
         this.forwardProxyCertificateChain = forwardProxyCertificateChain;
+        return this;
+    }
+
+    public Boolean transparentProxyEnabled() {
+        if (transparentProxyEnabled == null) {
+            return ConfigurationProperties.transparentProxyEnabled();
+        }
+        return transparentProxyEnabled;
+    }
+
+    /**
+     * Enable transparent HTTP proxy mode where all connections are treated as proxy
+     * requests using the Host header as the forwarding target. This enables
+     * iptables REDIRECT-based interception without CONNECT.
+     * <p>
+     * The default is false
+     *
+     * @param transparentProxyEnabled enable transparent proxy mode
+     */
+    public Configuration transparentProxyEnabled(Boolean transparentProxyEnabled) {
+        this.transparentProxyEnabled = transparentProxyEnabled;
+        return this;
+    }
+
+    public Boolean transparentProxyTproxy() {
+        if (transparentProxyTproxy == null) {
+            return ConfigurationProperties.transparentProxyTproxy();
+        }
+        return transparentProxyTproxy;
+    }
+
+    /**
+     * Enable TPROXY (IP_TRANSPARENT) mode for transparent proxy original destination
+     * resolution. When enabled, the listener socket is bound with IP_TRANSPARENT and
+     * the original destination is read from the socket's local address. Requires
+     * Linux + epoll + CAP_NET_ADMIN + TPROXY iptables rules.
+     *
+     * @param transparentProxyTproxy enable TPROXY mode
+     */
+    public Configuration transparentProxyTproxy(Boolean transparentProxyTproxy) {
+        this.transparentProxyTproxy = transparentProxyTproxy;
+        return this;
+    }
+
+    // async messaging defaults
+
+    public String asyncKafkaBootstrapServers() {
+        if (asyncKafkaBootstrapServers == null) {
+            return ConfigurationProperties.asyncKafkaBootstrapServers();
+        }
+        return asyncKafkaBootstrapServers;
+    }
+
+    /**
+     * Default Kafka bootstrap servers for async messaging. Used when a
+     * {@code PUT /mockserver/asyncapi} request omits {@code brokerConfig.kafkaBootstrapServers}.
+     *
+     * @param asyncKafkaBootstrapServers the default Kafka bootstrap servers
+     */
+    public Configuration asyncKafkaBootstrapServers(String asyncKafkaBootstrapServers) {
+        this.asyncKafkaBootstrapServers = asyncKafkaBootstrapServers;
+        return this;
+    }
+
+    public String asyncMqttBrokerUrl() {
+        if (asyncMqttBrokerUrl == null) {
+            return ConfigurationProperties.asyncMqttBrokerUrl();
+        }
+        return asyncMqttBrokerUrl;
+    }
+
+    /**
+     * Default MQTT broker URL for async messaging. Used when a
+     * {@code PUT /mockserver/asyncapi} request omits {@code brokerConfig.mqttBrokerUrl}.
+     *
+     * @param asyncMqttBrokerUrl the default MQTT broker URL
+     */
+    public Configuration asyncMqttBrokerUrl(String asyncMqttBrokerUrl) {
+        this.asyncMqttBrokerUrl = asyncMqttBrokerUrl;
+        return this;
+    }
+
+    public Integer asyncRecordedMessageMaxEntries() {
+        if (asyncRecordedMessageMaxEntries == null) {
+            return ConfigurationProperties.asyncRecordedMessageMaxEntries();
+        }
+        return asyncRecordedMessageMaxEntries;
+    }
+
+    /**
+     * Maximum number of recorded messages retained per channel in async
+     * messaging subscribers. Default is 1000.
+     *
+     * @param asyncRecordedMessageMaxEntries the maximum entries per channel
+     */
+    public Configuration asyncRecordedMessageMaxEntries(Integer asyncRecordedMessageMaxEntries) {
+        this.asyncRecordedMessageMaxEntries = asyncRecordedMessageMaxEntries;
         return this;
     }
 

@@ -70,4 +70,31 @@ describe('useConnectionParams', () => {
     const { result } = renderHook(() => useConnectionParams());
     expect(result.current.port).toBe('80');
   });
+
+  it('derives basePath by stripping the /mockserver/dashboard suffix', () => {
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { hostname: 'h', port: '1080', protocol: 'http:', search: '', pathname: '/proxy/ms/mockserver/dashboard' },
+    });
+    const { result } = renderHook(() => useConnectionParams());
+    expect(result.current.basePath).toBe('/proxy/ms');
+  });
+
+  it('basePath is empty when served at the root', () => {
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { hostname: 'h', port: '1080', protocol: 'http:', search: '', pathname: '/mockserver/dashboard' },
+    });
+    const { result } = renderHook(() => useConnectionParams());
+    expect(result.current.basePath).toBe('');
+  });
+
+  it('a ?basePath= query param overrides the derived path', () => {
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { hostname: 'h', port: '1080', protocol: 'http:', search: '?basePath=/api/v2', pathname: '/whatever' },
+    });
+    const { result } = renderHook(() => useConnectionParams());
+    expect(result.current.basePath).toBe('/api/v2');
+  });
 });

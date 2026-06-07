@@ -14,18 +14,23 @@ import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.httpclient.SocketCommunicationException;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.mock.CrossProtocolEventBus;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
 import org.mockserver.mock.crud.CrudDispatcher;
 import org.mockserver.model.*;
 import org.mockserver.model.StreamingBody;
 import org.mockserver.openapi.OpenAPIResponseValidator;
+import org.mockserver.openapi.OpenApiRuntimeExpressionResolver;
 import org.mockserver.proxyconfiguration.NoProxyHostsUtils;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
 import org.mockserver.responsewriter.ResponseWriter;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.curl.HttpRequestToCurlSerializer;
 import org.mockserver.socket.tls.NettySslContextFactory;
+import org.mockserver.telemetry.RequestSpans;
+import org.mockserver.telemetry.TraceContextAttributes;
+import org.mockserver.telemetry.W3CTraceContext;
 import org.slf4j.event.Level;
 
 import java.net.InetSocketAddress;
@@ -72,6 +77,7 @@ public class HttpActionHandler {
     private HttpForwardObjectCallbackActionHandler httpForwardObjectCallbackActionHandler;
     private HttpOverrideForwardedRequestActionHandler httpOverrideForwardedRequestCallbackActionHandler;
     private HttpForwardValidateActionHandler httpForwardValidateActionHandler;
+    private HttpForwardWithFallbackActionHandler httpForwardWithFallbackActionHandler;
     private HttpSseResponseActionHandler httpSseResponseActionHandler;
     private HttpLlmResponseActionHandler httpLlmResponseActionHandler;
     private HttpWebSocketResponseActionHandler httpWebSocketResponseActionHandler;
@@ -198,9 +204,50 @@ public class HttpActionHandler {
 
         if (expectation != null && expectation.getAction() != null) {
 
-            dispatchPrimaryAction(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+            // steps-based dispatch supersedes beforeActions+primary when steps are configured
+            if (expectation.getSteps() != null && !expectation.getSteps().isEmpty()) {
+                final Expectation matchedExpectation = expectation;
+                scheduler.submit(() -> {
+                    if (runStepsPreResponder(matchedExpectation, request, responseWriter)) {
+                        dispatchPrimaryAction(matchedExpectation, request, responseWriter, ctx, synchronous, () -> {
+                            // post-process and dispatch post-responder steps (like after-actions)
+                            if (postProcessed.compareAndSet(false, true)) {
+                                httpStateHandler.postProcess(matchedExpectation);
+                                dispatchPostResponderSteps(matchedExpectation, request);
+                                if (matchedExpectation.getAfterActions() != null) {
+                                    for (AfterAction afterAction : matchedExpectation.getAfterActions()) {
+                                        dispatchAfterAction(afterAction, request);
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        expectationPostProcessor.run();
+                    }
+                }, synchronous);
+            } else {
+                final List<AfterAction> beforeActions = expectation.getBeforeActions();
+                if (beforeActions != null && !beforeActions.isEmpty()) {
+                    // run before-actions ahead of the primary action; blocking before-actions may gate
+                    // (fail-fast) the response. Wrapped in scheduler.submit so any blocking wait happens
+                    // off the event loop (async) or inline (synchronous), mirroring forward-action threading.
+                    final Expectation matchedExpectation = expectation;
+                    scheduler.submit(() -> {
+                        if (runBeforeActions(matchedExpectation, request, responseWriter)) {
+                            dispatchPrimaryAction(matchedExpectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+                        } else {
+                            // fail-fast abort: the 502 is the response, so still post-process to clear
+                            // responseInProgress, remove exhausted expectations, and fire after-actions
+                            // (idempotent via compareAndSet).
+                            expectationPostProcessor.run();
+                        }
+                    }, synchronous);
+                } else {
+                    dispatchPrimaryAction(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+                }
+            }
 
-        } else if (CORSHeaders.isPreflightRequest(configuration, request) && (configuration.enableCORSForAPI() || configuration.enableCORSForAllResponses())) {
+        } else if (CORSHeaders.isPreflightRequest(configuration, request) && (configuration.enableCORSForAPI() || configuration.enableCORSForAllResponses() || isControlPlanePreflight(request))) {
 
             responseWriter.writeResponse(request, OK);
             if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
@@ -229,11 +276,27 @@ public class HttpActionHandler {
     }
 
     /**
+     * Whether an (unmatched) preflight targets a control-plane / dashboard endpoint, identified by
+     * the {@code /mockserver} path prefix the dashboard always uses. Such preflights are answered
+     * with a CORS response regardless of {@code enableCORSForAPI}, so the dashboard works
+     * cross-origin (e.g. pointed at a different MockServer via its host/port fields) without
+     * requiring users to enable CORS explicitly. Scoped to the prefix so unmatched OPTIONS on a
+     * user's own mocked paths still fall through to normal matching / not-found handling.
+     */
+    private boolean isControlPlanePreflight(HttpRequest request) {
+        return request.getPath() != null
+            && request.getPath().getValue() != null
+            && request.getPath().getValue().startsWith(org.mockserver.mock.HttpState.PATH_PREFIX);
+    }
+
+    /**
      * Dispatches the matched expectation's primary action to the appropriate per-type handler.
      * Extracted from {@link #processAction} so the high-level request flow stays readable; the
      * action-type switch and secondary-action fan-out live here.
      */
     private void dispatchPrimaryAction(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter, final ChannelHandlerContext ctx, final boolean synchronous, final Runnable expectationPostProcessor) {
+        // fire cross-protocol scenario transitions when this expectation has them
+        fireCrossProtocolEvents(expectation, request);
         final Action action = expectation.getAction();
         // capture matchCount before scheduling to avoid race with concurrent requests
         final int capturedMatchCount = expectation.getMatchCount();
@@ -293,6 +356,10 @@ public class HttpActionHandler {
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case FORWARD_VALIDATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 final HttpForwardActionResult responseFuture = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) action, request);
+                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+            case FORWARD_WITH_FALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
+                final HttpForwardActionResult responseFuture = getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) action, request);
                 writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
             }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
             case SSE_RESPONSE -> {
@@ -366,12 +433,25 @@ public class HttpActionHandler {
                                     || Boolean.TRUE.equals(llmAction.getChaos().getMalformedSse()))) {
                                     metrics.increment(org.mockserver.metrics.Metrics.Name.LLM_CHAOS_INJECTED_COUNT);
                                 }
+                                org.mockserver.llm.StreamingFormat streamingFormat = getHttpLlmResponseActionHandler().streamingFormatFor(llmAction.getProvider());
+                                String contentType;
+                                switch (streamingFormat) {
+                                    case NDJSON:
+                                        contentType = "application/x-ndjson";
+                                        break;
+                                    case AWS_EVENT_STREAM:
+                                        contentType = org.mockserver.llm.codec.BedrockEventStreamEncoder.CONTENT_TYPE;
+                                        break;
+                                    default:
+                                        contentType = "text/event-stream";
+                                        break;
+                                }
                                 HttpSseResponse sseResponse = HttpSseResponse.sseResponse()
                                     .withStatusCode(200)
-                                    .withHeader("content-type", "text/event-stream")
+                                    .withHeader("content-type", contentType)
                                     .withHeader("cache-control", "no-cache")
                                     .withEvents(sseEvents);
-                                getHttpSseResponseActionHandler().handle(sseResponse, ctx, request);
+                                getHttpSseResponseActionHandler().handle(sseResponse, ctx, request, streamingFormat);
                             } catch (Throwable throwable) {
                                 if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
                                     mockServerLogger.logEvent(
@@ -505,6 +585,22 @@ public class HttpActionHandler {
                     }, synchronous, combineWithGlobalDelay(action.getDelay()));
                 }
             }
+            case GRPC_BIDI_RESPONSE -> {
+                if (ctx == null) {
+                    writeResponseActionResponse(
+                        response().withStatusCode(501).withBody("gRPC bidi streaming is not supported in WAR deployments"),
+                        responseWriter, request, action, synchronous, null, expectationPostProcessor
+                    );
+                } else {
+                    // The normal bidi flow is driven by GrpcBidiRouterHandler/GrpcBidiStreamHandler
+                    // at the Netty layer when grpcBidiStreamingEnabled is on. If the action reaches
+                    // HttpActionHandler (flag off or non-multiplex transport), respond with 501.
+                    writeResponseActionResponse(
+                        response().withStatusCode(501).withBody("gRPC bidi streaming requires the multiplex pipeline (grpcBidiStreamingEnabled=true)"),
+                        responseWriter, request, action, synchronous, null, expectationPostProcessor
+                    );
+                }
+            }
             case ERROR -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
                 getHttpErrorActionHandler().handle((HttpError) action, ctx);
                 mockServerLogger.logEvent(
@@ -609,10 +705,7 @@ public class HttpActionHandler {
                                     HttpResponse logResponse = streamingResponse.clone();
                                     byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                     setCapturedStreamingBody(logResponse, captured);
-                                    logResponse.withHeader("x-mockserver-streamed", "true");
-                                    if (streamingResponse.getStreamingBody().isTruncated()) {
-                                        logResponse.withHeader("x-mockserver-stream-truncated", "true");
-                                    }
+                                    attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
                                     mockServerLogger.logEvent(
                                         new LogEntry()
                                             .setType(FORWARDED_REQUEST)
@@ -736,10 +829,7 @@ public class HttpActionHandler {
                                 HttpResponse logResponse = streamingResponse.clone();
                                 byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                 setCapturedStreamingBody(logResponse, captured);
-                                logResponse.withHeader("x-mockserver-streamed", "true");
-                                if (streamingResponse.getStreamingBody().isTruncated()) {
-                                    logResponse.withHeader("x-mockserver-stream-truncated", "true");
-                                }
+                                attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
                                 mockServerLogger.logEvent(
                                     new LogEntry()
                                         .setType(FORWARDED_REQUEST)
@@ -774,6 +864,18 @@ public class HttpActionHandler {
             }
         }
         return false;
+    }
+
+    /**
+     * If the matched expectation carries cross-protocol scenario triggers,
+     * fire the HTTP_REQUEST event so registered listeners can advance
+     * scenario state.
+     */
+    private void fireCrossProtocolEvents(Expectation expectation, HttpRequest request) {
+        if (expectation.getCrossProtocolScenarios() != null && !expectation.getCrossProtocolScenarios().isEmpty()) {
+            String path = request.getPath() != null ? request.getPath().getValue() : "/";
+            CrossProtocolEventBus.getInstance().fire(CrossProtocolTrigger.HTTP_REQUEST, path);
+        }
     }
 
     private void handleAnyException(HttpRequest request, ResponseWriter responseWriter, boolean synchronous, Action action, Runnable processAction, Runnable postProcessor) {
@@ -850,6 +952,10 @@ public class HttpActionHandler {
                         HttpForwardActionResult result = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) secondaryAction, request);
                         logForwardResultAsync(result, request, secondaryAction);
                     }
+                    case FORWARD_WITH_FALLBACK -> {
+                        HttpForwardActionResult result = getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) secondaryAction, request);
+                        logForwardResultAsync(result, request, secondaryAction);
+                    }
                     case ERROR -> { }
                     default -> { }
                 }
@@ -888,10 +994,23 @@ public class HttpActionHandler {
     }
 
     private void dispatchAfterAction(final AfterAction afterAction, final HttpRequest request) {
+        dispatchSideAction(afterAction, request, "after-action");
+    }
+
+    /**
+     * Fire-and-forget dispatch of a side-effect action (used by after-actions and by
+     * non-blocking before-actions). The side-effect's response, if any, is discarded; failures are
+     * logged but never propagated to the client. {@code label} only flavours the log messages.
+     */
+    private void dispatchSideAction(final AfterAction action, final HttpRequest request, final String label) {
         scheduler.submitAsync(() -> {
             try {
-                if (afterAction.getHttpRequest() != null) {
-                    httpClient.sendRequest(afterAction.getHttpRequest())
+                if (action.getHttpRequest() != null) {
+                    // Resolve OpenAPI runtime expressions (no-op when none present)
+                    HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(
+                        action.getHttpRequest(), request
+                    );
+                    httpClient.sendRequest(callbackRequest)
                         .whenComplete((response, throwable) -> {
                             if (throwable != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                                 mockServerLogger.logEvent(
@@ -900,16 +1019,16 @@ public class HttpActionHandler {
                                         .setLogLevel(Level.INFO)
                                         .setCorrelationId(request.getLogCorrelationId())
                                         .setHttpRequest(request)
-                                        .setMessageFormat("after-action webhook failed for request{} - " + throwable.getMessage())
-                                        .setArguments(afterAction.getHttpRequest())
+                                        .setMessageFormat(label + " webhook failed for request{} - " + throwable.getMessage())
+                                        .setArguments(callbackRequest)
                                         .setThrowable(throwable)
                                 );
                             }
                         });
-                } else if (afterAction.getHttpClassCallback() != null) {
-                    getHttpResponseClassCallbackActionHandler().handle(afterAction.getHttpClassCallback(), request);
-                } else if (afterAction.getHttpObjectCallback() != null) {
-                    HttpObjectCallback callback = afterAction.getHttpObjectCallback();
+                } else if (action.getHttpClassCallback() != null) {
+                    getHttpResponseClassCallbackActionHandler().handle(action.getHttpClassCallback(), request);
+                } else if (action.getHttpObjectCallback() != null) {
+                    HttpObjectCallback callback = action.getHttpObjectCallback();
                     callback.withActionType(Action.Type.RESPONSE_OBJECT_CALLBACK);
                     String clientId = callback.getClientId();
                     if (LocalCallbackRegistry.responseClientExists(clientId)) {
@@ -924,12 +1043,207 @@ public class HttpActionHandler {
                             .setLogLevel(Level.INFO)
                             .setCorrelationId(request.getLogCorrelationId())
                             .setHttpRequest(request)
-                            .setMessageFormat("exception dispatching after-action - " + e.getMessage())
+                            .setMessageFormat("exception dispatching " + label + " - " + e.getMessage())
                             .setThrowable(e)
                     );
                 }
             }
-        }, afterAction.getDelay());
+        }, action.getDelay());
+    }
+
+    /**
+     * Runs an expectation's before-actions ahead of its primary action.
+     *
+     * <p>Each before-action is either <em>blocking</em> (default) — the response waits for it to
+     * complete — or non-blocking (started but not waited for). Only HTTP-request (webhook)
+     * before-actions can be awaited; class/object-callback before-actions are always dispatched
+     * fire-and-forget. When a blocking webhook fails or times out its {@code failurePolicy}
+     * decides the outcome: {@link FailurePolicy#FAIL_FAST} writes a 502 and aborts (returns
+     * {@code false}); {@link FailurePolicy#BEST_EFFORT} (the default) logs and continues.</p>
+     *
+     * @return {@code true} to proceed to the primary action, {@code false} if a fail-fast
+     * before-action already wrote an error response.
+     */
+    private boolean runBeforeActions(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter) {
+        for (AfterAction beforeAction : expectation.getBeforeActions()) {
+            final boolean blocking = beforeAction.getBlocking() == null || beforeAction.getBlocking();
+            final FailurePolicy failurePolicy = beforeAction.getFailurePolicy() == null
+                ? FailurePolicy.BEST_EFFORT
+                : beforeAction.getFailurePolicy();
+
+            if (!blocking || beforeAction.getHttpRequest() == null) {
+                // non-blocking, or a callback before-action (no awaitable result in increment 1):
+                // dispatch fire-and-forget, started before the response
+                if (blocking && beforeAction.getHttpRequest() == null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("ignoring blocking=true on a callback before-action - only httpRequest (webhook) before-actions can block the response; dispatching fire-and-forget")
+                    );
+                }
+                dispatchSideAction(beforeAction, request, "before-action");
+                continue;
+            }
+
+            // blocking webhook before-action: send and wait, honouring the optional timeout
+            final HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(beforeAction.getHttpRequest(), request);
+            final long timeoutMillis = beforeAction.getTimeout() != null
+                ? beforeAction.getTimeout().getTimeUnit().toMillis(beforeAction.getTimeout().getValue())
+                : configuration.maxSocketTimeoutInMillis();
+            try {
+                httpClient.sendRequest(callbackRequest, timeoutMillis, MILLISECONDS);
+            } catch (Exception e) {
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("blocking before-action webhook failed for request{} - " + e.getMessage())
+                            .setArguments(callbackRequest)
+                            .setThrowable(e)
+                    );
+                }
+                if (failurePolicy == FailurePolicy.FAIL_FAST) {
+                    responseWriter.writeResponse(request, badGatewayResponse().withBody("before-action failed: " + e.getMessage()), false);
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Runs the pre-responder steps from the expectation's steps list. Each pre-responder step
+     * is a side-effect (webhook/callback/forward) that runs before the responder. Follows the
+     * same blocking/timeout/failurePolicy semantics as {@link #runBeforeActions}.
+     *
+     * @return {@code true} to proceed to the responder step, {@code false} if a fail-fast
+     * step already wrote an error response
+     */
+    private boolean runStepsPreResponder(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter) {
+        List<ExpectationStep> preSteps = expectation.getPreResponderSteps();
+        for (ExpectationStep step : preSteps) {
+            // Convert step to an AfterAction-like dispatch: reuse the same blocking/timeout/failurePolicy logic
+            final boolean blocking = step.getBlocking() == null || step.getBlocking();
+            final FailurePolicy failurePolicy = step.getFailurePolicy() == null
+                ? FailurePolicy.BEST_EFFORT
+                : step.getFailurePolicy();
+
+            if (!blocking || step.getHttpRequest() == null) {
+                // non-blocking, or a callback/forward step: dispatch fire-and-forget
+                if (blocking && step.getHttpRequest() == null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("ignoring blocking=true on a non-webhook step - only httpRequest (webhook) steps can block the response; dispatching fire-and-forget")
+                    );
+                }
+                dispatchStepSideEffect(step, request);
+                continue;
+            }
+
+            // blocking webhook step: send and wait
+            final HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(step.getHttpRequest(), request);
+            final long timeoutMillis = step.getTimeout() != null
+                ? step.getTimeout().getTimeUnit().toMillis(step.getTimeout().getValue())
+                : configuration.maxSocketTimeoutInMillis();
+            try {
+                httpClient.sendRequest(callbackRequest, timeoutMillis, MILLISECONDS);
+            } catch (Exception e) {
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("blocking step webhook failed for request{} - " + e.getMessage())
+                            .setArguments(callbackRequest)
+                            .setThrowable(e)
+                    );
+                }
+                if (failurePolicy == FailurePolicy.FAIL_FAST) {
+                    responseWriter.writeResponse(request, badGatewayResponse().withBody("step failed: " + e.getMessage()), false);
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Dispatches post-responder steps (steps that come after the responder in the list)
+     * as fire-and-forget side-effects, similar to after-actions.
+     */
+    private void dispatchPostResponderSteps(final Expectation expectation, final HttpRequest request) {
+        List<ExpectationStep> postSteps = expectation.getPostResponderSteps();
+        for (ExpectationStep step : postSteps) {
+            dispatchStepSideEffect(step, request);
+        }
+    }
+
+    /**
+     * Dispatches a single step as a fire-and-forget side-effect. Supports webhook
+     * (httpRequest), class callback, object callback, forward, and forward-replace targets.
+     */
+    private void dispatchStepSideEffect(final ExpectationStep step, final HttpRequest request) {
+        scheduler.submitAsync(() -> {
+            try {
+                if (step.getHttpRequest() != null) {
+                    HttpRequest callbackRequest = OpenApiRuntimeExpressionResolver.resolve(
+                        step.getHttpRequest(), request
+                    );
+                    httpClient.sendRequest(callbackRequest)
+                        .whenComplete((response, throwable) -> {
+                            if (throwable != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(WARN)
+                                        .setLogLevel(Level.INFO)
+                                        .setCorrelationId(request.getLogCorrelationId())
+                                        .setHttpRequest(request)
+                                        .setMessageFormat("step webhook failed for request{} - " + throwable.getMessage())
+                                        .setArguments(callbackRequest)
+                                        .setThrowable(throwable)
+                                );
+                            }
+                        });
+                } else if (step.getHttpClassCallback() != null) {
+                    getHttpResponseClassCallbackActionHandler().handle(step.getHttpClassCallback(), request);
+                } else if (step.getHttpObjectCallback() != null) {
+                    HttpObjectCallback callback = step.getHttpObjectCallback();
+                    callback.withActionType(Action.Type.RESPONSE_OBJECT_CALLBACK);
+                    String clientId = callback.getClientId();
+                    if (LocalCallbackRegistry.responseClientExists(clientId)) {
+                        LocalCallbackRegistry.retrieveResponseCallback(clientId).handle(request);
+                    }
+                } else if (step.getHttpForward() != null) {
+                    getHttpForwardActionHandler().handle(step.getHttpForward(), request);
+                } else if (step.getHttpOverrideForwardedRequest() != null) {
+                    getHttpOverrideForwardedRequestCallbackActionHandler().handle(step.getHttpOverrideForwardedRequest(), request);
+                }
+            } catch (Exception e) {
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(WARN)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(request.getLogCorrelationId())
+                            .setHttpRequest(request)
+                            .setMessageFormat("exception dispatching step side-effect - " + e.getMessage())
+                            .setThrowable(e)
+                    );
+                }
+            }
+        }, step.getDelay());
     }
 
     void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous) {
@@ -1078,18 +1392,33 @@ public class HttpActionHandler {
         if (response == null || chaos == null || !chaos.countWindowEligible(matchCount)) {
             return response;
         }
+        // GraphQL error envelope: when graphqlErrors is true, build a structured GraphQL
+        // error body and set status 200. This takes precedence over truncate/malformed body
+        // corruption because the envelope IS the intended body -- truncating or appending
+        // garbage to it would defeat the purpose of simulating a realistic GraphQL error.
+        // Slow-response (dribble) still composes with the GraphQL envelope since it only
+        // affects delivery timing, not body content.
+        final boolean graphql = Boolean.TRUE.equals(chaos.getGraphqlErrors());
         final Double fraction = chaos.getTruncateBodyAtFraction();
         final boolean malformed = Boolean.TRUE.equals(chaos.getMalformedBody());
-        final boolean corruptBody = fraction != null || malformed;
+        // When graphqlErrors is set, skip truncate/malformed body corruption
+        final boolean corruptBody = !graphql && (fraction != null || malformed);
         final boolean slow = chaos.getSlowResponseChunkSize() != null && chaos.getSlowResponseChunkDelay() != null;
-        if (!corruptBody && !slow) {
+        if (!corruptBody && !slow && !graphql) {
             return response;
         }
         if (response.getStreamingBody() != null) {
             return response;
         }
         HttpResponse out = response.clone();
-        if (corruptBody) {
+        if (graphql) {
+            String envelopeJson = buildGraphqlErrorEnvelope(chaos, response);
+            out.withStatusCode(200);
+            out.withBody(envelopeJson);
+            out.replaceHeader("content-type", "application/json");
+            out.removeHeader("content-length");
+            org.mockserver.metrics.Metrics.incrementHttpChaosInjected("graphql");
+        } else if (corruptBody) {
             // getBodyAsRawBytes() returns an empty array (never null) when there is no body
             byte[] corrupted = response.getBodyAsRawBytes();
             if (fraction != null) {
@@ -1123,6 +1452,58 @@ public class HttpActionHandler {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("slow");
         }
         return out;
+    }
+
+    /**
+     * Builds the JSON body for a GraphQL error envelope. Uses Jackson ObjectMapper
+     * so the message and code strings are properly escaped.
+     *
+     * @param chaos    the chaos profile with graphql fields
+     * @param response the original response (used to attempt data preservation when graphqlNullifyData=false)
+     * @return the JSON string for the GraphQL error envelope
+     */
+    private String buildGraphqlErrorEnvelope(final HttpChaosProfile chaos, final HttpResponse response) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode root = mapper.createObjectNode();
+
+            // data: null (default) or the original body JSON when graphqlNullifyData=false
+            boolean nullifyData = !Boolean.FALSE.equals(chaos.getGraphqlNullifyData());
+            if (nullifyData) {
+                root.putNull("data");
+            } else {
+                // attempt to preserve original body as JSON data value
+                byte[] bodyBytes = response.getBodyAsRawBytes();
+                if (bodyBytes != null && bodyBytes.length > 0) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode originalData = mapper.readTree(bodyBytes);
+                        root.set("data", originalData);
+                    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                        // original body is not valid JSON — fall back to data:null
+                        root.putNull("data");
+                    }
+                } else {
+                    root.putNull("data");
+                }
+            }
+
+            // errors array with a single error object
+            com.fasterxml.jackson.databind.node.ArrayNode errorsArray = root.putArray("errors");
+            com.fasterxml.jackson.databind.node.ObjectNode errorObj = errorsArray.addObject();
+            String message = chaos.getGraphqlErrorMessage();
+            errorObj.put("message", message != null ? message : "simulated GraphQL error");
+
+            // extensions.code only when graphqlErrorCode is set
+            if (chaos.getGraphqlErrorCode() != null) {
+                com.fasterxml.jackson.databind.node.ObjectNode extensions = errorObj.putObject("extensions");
+                extensions.put("code", chaos.getGraphqlErrorCode());
+            }
+
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            // fallback: hand-build a minimal envelope (should never happen with Jackson)
+            return "{\"data\":null,\"errors\":[{\"message\":\"simulated GraphQL error\"}]}";
+        }
     }
 
     /**
@@ -1205,6 +1586,7 @@ public class HttpActionHandler {
                 );
                 validateOpenAPIResponse(effectiveResponse, request, action, requestDefinition);
                 responseWriter.writeResponse(request, effectiveResponse, false);
+                emitRequestSpan(request, effectiveResponse, action, ctx, 0);
             } finally {
                 if (postProcessor != null) {
                     postProcessor.run();
@@ -1299,7 +1681,9 @@ public class HttpActionHandler {
     void writeForwardActionResponse(final HttpForwardActionResult responseFuture, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final Runnable postProcessor, final HttpChaosProfile chaos, int matchCount, final ChannelHandlerContext ctx) {
         scheduler.submit(responseFuture, () -> {
             try {
+                long forwardStartNanos = System.nanoTime();
                 HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+                long responseTimeMs = (System.nanoTime() - forwardStartNanos) / 1_000_000;
 
                 // chaos: drop connection takes priority over error and latency
                 if (shouldDropConnection(chaos, matchCount)) {
@@ -1330,6 +1714,14 @@ public class HttpActionHandler {
                 if (chaosLatency != null) {
                     org.mockserver.metrics.Metrics.incrementHttpChaosInjected("latency");
                 }
+
+                // Drift detection: asynchronously compare the real upstream response against
+                // any response-type stub expectations matching this request.
+                // responseTimeMs already captured at line above via nanoTime delta.
+                analyseDrift(request, response, responseTimeMs);
+
+                // OpenTelemetry: emit a request-level span for the forwarded request
+                emitRequestSpan(request, effectiveResponse, action, ctx, responseTimeMs);
 
                 // Factor the write (streaming vs non-streaming) into a single command so
                 // it can be dispatched either directly or via the non-blocking scheduler.
@@ -1392,10 +1784,7 @@ public class HttpActionHandler {
                 HttpResponse logResponse = response.clone();
                 byte[] captured = streamingBody.capturedBytes();
                 setCapturedStreamingBody(logResponse, captured);
-                logResponse.withHeader("x-mockserver-streamed", "true");
-                if (streamingBody.isTruncated()) {
-                    logResponse.withHeader("x-mockserver-stream-truncated", "true");
-                }
+                attachStreamingHeaders(logResponse, streamingBody);
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setType(FORWARDED_REQUEST)
@@ -1626,6 +2015,32 @@ public class HttpActionHandler {
         logResponse.withBody(captured);
     }
 
+    /**
+     * Attach internal streaming metadata headers to a log response. This must be called
+     * consistently from every streaming completion path so that the log entry (and any
+     * fixture derived from it) carries the same set of headers.
+     *
+     * @param logResponse   the cloned response that will be stored in the event log
+     * @param streamingBody the streaming body that captured bytes and timestamps
+     */
+    private static void attachStreamingHeaders(HttpResponse logResponse, StreamingBody streamingBody) {
+        logResponse.withHeader("x-mockserver-streamed", "true");
+        if (streamingBody.isTruncated()) {
+            logResponse.withHeader("x-mockserver-stream-truncated", "true");
+        }
+        List<Long> interChunkDelays = streamingBody.interChunkDelaysMillis();
+        if (interChunkDelays != null && !interChunkDelays.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < interChunkDelays.size(); i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(interChunkDelays.get(i));
+            }
+            logResponse.withHeader("x-mockserver-chunk-delays-ms", sb.toString());
+        }
+    }
+
     private HttpResponseActionHandler getHttpResponseActionHandler() {
         if (httpResponseActionHandler == null) {
             httpResponseActionHandler = new HttpResponseActionHandler();
@@ -1694,6 +2109,13 @@ public class HttpActionHandler {
             httpForwardValidateActionHandler = new HttpForwardValidateActionHandler(mockServerLogger, configuration, httpClient);
         }
         return httpForwardValidateActionHandler;
+    }
+
+    private HttpForwardWithFallbackActionHandler getHttpForwardWithFallbackActionHandler() {
+        if (httpForwardWithFallbackActionHandler == null) {
+            httpForwardWithFallbackActionHandler = new HttpForwardWithFallbackActionHandler(mockServerLogger, configuration, httpClient);
+        }
+        return httpForwardWithFallbackActionHandler;
     }
 
     private HttpSseResponseActionHandler getHttpSseResponseActionHandler() {
@@ -1774,6 +2196,70 @@ public class HttpActionHandler {
     public static void setRemoteAddress(final ChannelHandlerContext ctx, final InetSocketAddress inetSocketAddress) {
         if (ctx != null && ctx.channel() != null) {
             ctx.channel().attr(REMOTE_SOCKET).set(inetSocketAddress);
+        }
+    }
+
+    /**
+     * Asynchronously compares a forwarded upstream response against any response-type
+     * stub expectations that match the same request, recording structural drift
+     * (status, headers, JSON schema) and performance drift into the
+     * {@link org.mockserver.mock.drift.DriftStore}.
+     */
+    private void analyseDrift(final HttpRequest request, final HttpResponse realResponse, final long responseTimeMs) {
+        if (realResponse == null) {
+            return;
+        }
+        scheduler.submit(() -> {
+            try {
+                List<Expectation> matching = httpStateHandler.allMatchingExpectation(request);
+                org.mockserver.mock.drift.DriftAnalyzer analyzer = org.mockserver.mock.drift.DriftAnalyzer.getInstance();
+                for (Expectation expectation : matching) {
+                    if (expectation.getAction() instanceof HttpResponse) {
+                        analyzer.analyse(expectation, realResponse);
+                        // Record response time and check for performance drift
+                        org.mockserver.mock.drift.PercentileTracker.getInstance()
+                            .record(expectation.getId(), responseTimeMs);
+                        analyzer.checkPerformanceDrift(expectation.getId(), responseTimeMs,
+                            org.mockserver.time.TimeService.currentTimeMillis());
+                    }
+                }
+            } catch (Exception e) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(TRACE)
+                            .setHttpRequest(request)
+                            .setMessageFormat("exception during drift analysis - " + e.getMessage())
+                            .setThrowable(e)
+                    );
+                }
+            }
+        });
+    }
+
+    /**
+     * Emit an OpenTelemetry SERVER span for a served HTTP request when
+     * {@link RequestSpans} is enabled. Fail-soft: telemetry must never
+     * affect the served response. The span is parented to the inbound
+     * W3C trace context when available on the channel.
+     */
+    private void emitRequestSpan(HttpRequest request, HttpResponse response, Action action,
+                                 ChannelHandlerContext ctx, long responseTimeMs) {
+        if (!RequestSpans.isEnabled()) {
+            return;
+        }
+        try {
+            String method = request.getMethod() != null ? request.getMethod().getValue() : null;
+            String path = request.getPath() != null ? request.getPath().getValue() : null;
+            Integer statusCode = response != null ? response.getStatusCode() : null;
+            String expectationId = action != null ? action.getExpectationId() : null;
+            W3CTraceContext parentContext = null;
+            if (ctx != null) {
+                parentContext = ctx.channel().attr(TraceContextAttributes.TRACE_CONTEXT).get();
+            }
+            RequestSpans.recordRequest(method, path, statusCode, expectationId, responseTimeMs, parentContext);
+        } catch (Exception e) {
+            // fail-soft: telemetry must never affect the served response
         }
     }
 }

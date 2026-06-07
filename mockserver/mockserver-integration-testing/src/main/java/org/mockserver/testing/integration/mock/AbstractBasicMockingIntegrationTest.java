@@ -2769,9 +2769,10 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractMockin
             "" + NEW_LINE +
             " schema validation errors:" + NEW_LINE +
             "" + NEW_LINE +
-            "  20 errors:" + NEW_LINE +
+            "  23 errors:" + NEW_LINE +
             "   - $.binaryResponse: is missing but it is required" + NEW_LINE +
             "   - $.dnsResponse: is missing but it is required" + NEW_LINE +
+            "   - $.grpcBidiResponse: is missing, but is required, if specifying action of type GrpcBidiResponse" + NEW_LINE +
             "   - $.grpcStreamResponse: is missing, but is required, if specifying action of type GrpcStreamResponse" + NEW_LINE +
             "   - $.httpError: is missing, but is required, if specifying action of type Error" + NEW_LINE +
             "   - $.httpForward: is missing, but is required, if specifying action of type Forward" + NEW_LINE +
@@ -2779,6 +2780,7 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractMockin
             "   - $.httpForwardObjectCallback: is missing, but is required, if specifying action of type ForwardObjectCallback" + NEW_LINE +
             "   - $.httpForwardTemplate: is missing, but is required, if specifying action of type ForwardTemplate" + NEW_LINE +
             "   - $.httpForwardValidateAction: is missing, but is required, if specifying action of type ForwardValidateAction" + NEW_LINE +
+            "   - $.httpForwardWithFallback: is missing, but is required, if specifying action of type ForwardWithFallback" + NEW_LINE +
             "   - $.httpLlmResponse: is missing, but is required, if specifying action of type LlmResponse" + NEW_LINE +
             "   - $.httpOverrideForwardedRequest: is missing, but is required, if specifying action of type OverrideForwardedRequest" + NEW_LINE +
             "   - $.httpResponse: is missing, but is required, if specifying action of type Response" + NEW_LINE +
@@ -2789,7 +2791,8 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractMockin
             "   - $.httpSseResponse: is missing, but is required, if specifying action of type SseResponse" + NEW_LINE +
             "   - $.httpWebSocketResponse: is missing, but is required, if specifying action of type WebSocketResponse" + NEW_LINE +
             "   - $.incorrectField: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-            "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
+            "   - $.steps: is missing but it is required" + NEW_LINE +
+            "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
             "  " + NEW_LINE +
             "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  ")));
     }

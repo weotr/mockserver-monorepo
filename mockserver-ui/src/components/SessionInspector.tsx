@@ -15,6 +15,7 @@ import { getModelLabel, getTokenSummary } from '../lib/llmTraffic';
 import { AnthropicConversationView, OpenAiConversationView } from './ConversationView';
 import AgentRunGraph from './AgentRunGraph';
 import { CompareRunsBody } from './CompareRunsDialog';
+import ScenarioPanel from './ScenarioPanel';
 
 // ---------------------------------------------------------------------------
 // Status colour for request chips
@@ -277,6 +278,7 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
           sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5, fontSize: '0.8rem' } }}
         >
           <Tab label="Sessions" />
+          <Tab label="Scenarios" />
           <Tab label="Compare" />
         </Tabs>
 
@@ -354,6 +356,12 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
         )}
 
         {tab === 1 && (
+          <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, p: 1 }}>
+            <ScenarioPanel connectionParams={connectionParams} />
+          </Box>
+        )}
+
+        {tab === 2 && (
           <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, p: 2 }}>
             <CompareRunsBody />
           </Box>

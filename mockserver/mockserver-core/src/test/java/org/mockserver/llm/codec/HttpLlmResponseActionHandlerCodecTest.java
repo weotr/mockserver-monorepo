@@ -3,6 +3,7 @@ package org.mockserver.llm.codec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
+import org.mockserver.llm.StreamingFormat;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.action.http.HttpLlmResponseActionHandler;
 import org.mockserver.model.*;
@@ -176,5 +177,64 @@ public class HttpLlmResponseActionHandlerCodecTest {
         // then
         assertThat(response.getStatusCode(), is(400));
         assertThat(response.getBodyAsString(), containsString("Anthropic does not expose an embeddings endpoint"));
+    }
+
+    // --- Streaming Format Routing ---
+
+    @Test
+    public void shouldReturnNdjsonFormatForOllama() {
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        assertThat(handler.streamingFormatFor(Provider.OLLAMA), is(StreamingFormat.NDJSON));
+    }
+
+    @Test
+    public void shouldReturnAwsEventStreamFormatForBedrock() {
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        assertThat(handler.streamingFormatFor(Provider.BEDROCK), is(StreamingFormat.AWS_EVENT_STREAM));
+    }
+
+    @Test
+    public void shouldReturnSseFormatForNonOllamaAndNonBedrockProviders() {
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        assertThat(handler.streamingFormatFor(Provider.ANTHROPIC), is(StreamingFormat.SSE));
+        assertThat(handler.streamingFormatFor(Provider.OPENAI), is(StreamingFormat.SSE));
+        assertThat(handler.streamingFormatFor(Provider.GEMINI), is(StreamingFormat.SSE));
+        assertThat(handler.streamingFormatFor(Provider.AZURE_OPENAI), is(StreamingFormat.SSE));
+        assertThat(handler.streamingFormatFor(Provider.OPENAI_RESPONSES), is(StreamingFormat.SSE));
+    }
+
+    @Test
+    public void shouldHandleOllamaStreamingRouting() throws Exception {
+        // given
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.OLLAMA)
+            .withModel("llama3.1")
+            .withCompletion(completion()
+                .withText("streaming test")
+                .withStreaming(true));
+        HttpRequest request = request().withPath("/api/chat");
+
+        // when — handleStreaming returns events for Ollama
+        List<SseEvent> events = handler.handleStreaming(llmResponse, request);
+
+        // then — events should be present and parseable as NDJSON lines
+        assertThat(events, is(notNullValue()));
+        assertThat(events.size(), is(greaterThan(0)));
+
+        // Ollama events should NOT have named SSE event types
+        for (SseEvent event : events) {
+            assertThat(event.getEvent(), is(nullValue()));
+        }
+
+        // Each event's data should be valid JSON (no SSE framing)
+        for (SseEvent event : events) {
+            JsonNode parsed = OBJECT_MAPPER.readTree(event.getData());
+            assertThat(parsed.isObject(), is(true));
+        }
+
+        // Last event should have done:true
+        JsonNode lastChunk = OBJECT_MAPPER.readTree(events.get(events.size() - 1).getData());
+        assertThat(lastChunk.get("done").asBoolean(), is(true));
     }
 }

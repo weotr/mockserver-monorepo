@@ -1,18 +1,24 @@
 # LLM Codec Golden-File Testing
 
-This document describes the golden-file refresh process for LLM provider codecs.
-Golden files capture real provider API responses and are diffed against the
-MockServer codec's encode output to detect format drift.
+This document describes the automated golden-file drift-detection process for
+LLM provider codecs. Golden files are **codec-generated** (no API keys needed),
+normalized to remove volatile fields, and committed to the repository. The test
+`LlmCodecGoldenFileTest` asserts them on every test run to catch wire-format
+drift in our codecs.
 
-> **Current state (M5):** the fixture directories below ship with `.gitkeep`
-> placeholders only — no captured responses are committed yet. Capturing them
-> requires real API keys for each of the seven providers, which is deliberately
-> deferred until those credentials are available in an isolated environment.
-> The codec unit tests already verify wire-shape correctness via Jackson
-> structural assertions, so the absence of fixtures does not weaken the
-> existing test guarantees; the fixtures are an additional drift-detection
-> layer planned for the next iteration. Until they land, treat per-provider
-> wire-format changes as a manual review concern when bumping codec versions.
+## How it works
+
+1. **Fixed canonical inputs** -- the test encodes two fixed `Completion` objects
+   (text-completion and tool-call) through each provider codec's `encode()` and
+   `encodeStreaming()` methods.
+2. **Normalization** -- volatile fields (IDs, timestamps, usage counts) are
+   replaced with deterministic placeholders so goldens are stable across runs.
+3. **Golden comparison** -- the normalized output is compared byte-for-byte
+   against the committed golden file. Any mismatch fails the test with a
+   line-by-line diff.
+4. **Refresh switch** -- when system property `mockserver.updateLlmGoldens`
+   (or env `MOCKSERVER_UPDATE_LLM_GOLDENS`) is `true`, the test writes the
+   normalized output to the golden files instead of asserting, then passes.
 
 ## Where fixtures live
 
@@ -25,16 +31,84 @@ One subdirectory per provider: `anthropic`, `openai`, `openai-responses`,
 
 Each directory contains:
 
-- `text-completion.json` -- a simple text completion response
-- `tool-call.json` -- a response containing a tool call / function call
-- `streaming-text.jsonl` -- the full SSE event stream for a streaming text completion (one JSON object per line, prefixed with the SSE event type)
-- `streaming-tool-call.jsonl` -- the full SSE event stream for a streaming tool-call response
-- `embeddings.json` -- (OpenAI only) an embeddings API response
+- `text-completion.json` -- normalized non-streaming encode of a text completion
+- `tool-call.json` -- normalized non-streaming encode of a tool-call completion
+- `streaming-text.jsonl` -- normalized streaming encode of a text completion (one event per line)
+- `streaming-tool-call.jsonl` -- normalized streaming encode of a tool-call completion
 
-## How to capture a fresh fixture
+## Regenerating golden files
 
-Use `curl` (or the provider's CLI) to make a real API call and save the
-response. Examples:
+After intentional codec changes, regenerate goldens:
+
+```bash
+mvn -pl mockserver/mockserver-core test \
+  -Dtest=LlmCodecGoldenFileTest \
+  -Dmockserver.updateLlmGoldens=true
+```
+
+Or set the environment variable:
+
+```bash
+MOCKSERVER_UPDATE_LLM_GOLDENS=true mvn -pl mockserver/mockserver-core test \
+  -Dtest=LlmCodecGoldenFileTest
+```
+
+Then review the diff with `git diff` and commit the updated golden files
+alongside the codec changes.
+
+## Asserting golden files (normal test run)
+
+```bash
+mvn -pl mockserver/mockserver-core test \
+  -Dtest=LlmCodecGoldenFileTest
+```
+
+The test also runs as part of the standard `mvn test` suite.
+
+## Normalization rules
+
+The following fields are replaced with deterministic placeholders before
+writing/comparing:
+
+| Field | Applies to | Placeholder |
+|-------|-----------|-------------|
+| `id`, `item_id`, `tool_call_id` | All providers | `"<id>"` |
+| String values matching `chatcmpl-*`, `msg_*`, `resp_*`, `call_*`, `toolu_*`, `fc_*` | All providers | `"<id>"` |
+| `created` (numeric) | OpenAI, Azure OpenAI, OpenAI Responses | `0` |
+| `created_at` (numeric) | OpenAI Responses | `0` |
+| `created_at` (ISO 8601 string) | Ollama | `"<timestamp>"` |
+| `system_fingerprint` | OpenAI | `"<fp>"` |
+| `usage.*`, `usageMetadata.*` (numeric values) | All providers | `0` (structure preserved) |
+| `*_duration` fields | Ollama | `0` |
+| `prompt_eval_count`, `eval_count`, `prompt_eval_duration`, `eval_duration` | Ollama | `0` |
+
+## Streaming golden file format
+
+Streaming goldens use JSONL (one entry per line):
+
+- **SSE with event types** (Anthropic, OpenAI Responses): each line is a JSON
+  object `{"event":"<type>","data":<normalized-json>}` capturing both the SSE
+  event name and normalized payload.
+- **SSE without event types** (OpenAI, Azure OpenAI, Gemini): each line is the
+  normalized JSON payload directly. Non-JSON sentinels (e.g. `[DONE]`) are
+  quoted as JSON strings.
+- **NDJSON** (Ollama): each line is the normalized JSON chunk directly.
+- **AWS_EVENT_STREAM** (Bedrock): uses the same SSE-with-events format as
+  Anthropic (since Bedrock delegates to the Anthropic codec internally). The
+  binary event-stream framing is not exercised in this test -- it is covered by
+  `BedrockEventStreamEncoderTest`.
+
+## Streaming physics
+
+The test passes `null` for `StreamingPhysics` so no timing delays are injected.
+This ensures the golden files capture only the wire-format content, not timing
+behavior.
+
+## Live provider capture (optional)
+
+The golden-file test does NOT require API keys -- it tests our codec output.
+For additional confidence, you can optionally diff against real provider
+responses. The `curl` recipes below require real API keys:
 
 ### Anthropic
 
@@ -47,7 +121,7 @@ curl -s https://api.anthropic.com/v1/messages \
     "model": "claude-sonnet-4-20250514",
     "max_tokens": 256,
     "messages": [{"role": "user", "content": "Say hello in one sentence."}]
-  }' | jq . > mockserver-core/src/test/resources/llm/fixtures/anthropic/text-completion.json
+  }' | jq .
 ```
 
 ### OpenAI Chat Completions
@@ -59,87 +133,21 @@ curl -s https://api.openai.com/v1/chat/completions \
   -d '{
     "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Say hello in one sentence."}]
-  }' | jq . > mockserver-core/src/test/resources/llm/fixtures/openai/text-completion.json
+  }' | jq .
 ```
 
-### Streaming
-
-For streaming responses, use `curl --no-buffer` and capture the raw SSE
-output:
-
-```bash
-curl -sN https://api.anthropic.com/v1/messages \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-version: 2024-10-22" \
-  -H "content-type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4-20250514",
-    "max_tokens": 256,
-    "stream": true,
-    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
-  }' > mockserver-core/src/test/resources/llm/fixtures/anthropic/streaming-text.jsonl
-```
-
-## How to diff against the codec output
-
-This is a manual JSON-diff step. Automated drift detection is planned as a
-follow-up.
-
-1. Run the codec unit test that calls `encode()` or `encodeStreaming()` for
-   the provider under test and capture the JSON output. The test classes live
-   at:
-   ```
-   mockserver/mockserver-core/src/test/java/org/mockserver/llm/codec/<ProviderCodec>Test.java
-   ```
-2. Write the test output to a scratch file, for example:
-   ```bash
-   # run one test class and capture stdout
-   mvn -pl mockserver/mockserver-core test \
-     -Dtest="AnthropicCodecTest#testEncodeTextCompletion" \
-     -Dsurefire.failIfNoSpecifiedTests=false 2>&1 \
-     | grep '^{' > .tmp/anthropic-encode-output.json
-   ```
-3. Use a JSON-diff tool to compare the codec output against the captured
-   fixture. Ignore the volatile fields listed below:
-   ```bash
-   jq 'del(.id, .created, .usage, .system_fingerprint)' \
-     mockserver/mockserver-core/src/test/resources/llm/fixtures/anthropic/text-completion.json \
-     > .tmp/anthropic-fixture-normalised.json
-   # repeat for the codec output, then diff
-   diff .tmp/anthropic-fixture-normalised.json .tmp/anthropic-encode-normalised.json
-   ```
-4. Focus on structural fields: presence/absence of keys, value types, and
-   nesting depth. Exact token counts, IDs, and timestamps are expected to
-   differ.
-
-## Fields expected to differ (normalisation strategy)
-
-The following fields vary between runs and should be normalised or
-ignored when diffing:
-
-| Field | Provider(s) | Strategy |
-|-------|-------------|----------|
-| `id` / `msg_*` / `chatcmpl-*` / `resp_*` | All | Ignore -- random ID per response |
-| `created` / `created_at` | All | Ignore -- timestamp |
-| `usage.*` | All | Compare structure only, not exact values |
-| `model` | All | May differ in minor version suffix |
-| `system_fingerprint` | OpenAI | Ignore -- server-side build ID |
+Focus on structural fields when comparing live output: presence/absence of
+keys, value types, nesting depth. Exact token counts, IDs, and timestamps
+will differ.
 
 ## Refresh cadence
 
-Refresh fixtures every 3-6 months, or immediately when a provider announces
-a breaking API change. The Anthropic `anthropic-version` header and OpenAI
-API date headers pin the format version; check those headers are still
-current when refreshing.
-
-After capturing new fixtures, run the full codec test suite to confirm no
-structural regressions:
+Regenerate goldens whenever codec encode logic changes. Also check when
+providers announce breaking API changes. After regenerating, run the full
+codec test suite to confirm no regressions:
 
 ```bash
 mvn -pl mockserver/mockserver-core test \
   -Dtest="*CodecTest" \
   -Dsurefire.failIfNoSpecifiedTests=false
 ```
-
-Commit the updated fixture files alongside any codec changes that motivated
-the refresh so reviewers can diff fixture content directly.

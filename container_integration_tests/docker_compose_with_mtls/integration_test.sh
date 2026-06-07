@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 source "${SCRIPT_DIR}/../docker-compose.sh"
 source "${SCRIPT_DIR}/../logging.sh"
 
-EXAMPLE_DIR="${SCRIPT_DIR}/../../mockserver/mockserver-examples/docker_compose_examples/docker_compose_with_mtls"
+EXAMPLE_DIR="${SCRIPT_DIR}/../../examples/docker-compose/docker_compose_with_mtls"
 
 printMessage "Start: \"${SCRIPT_DIR/\//}\""
 

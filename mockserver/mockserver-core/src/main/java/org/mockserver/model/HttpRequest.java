@@ -30,6 +30,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
     private Parameters pathParameters;
     private Parameters queryStringParameters;
     private Body body = null;
+    private byte[] originalBody = null;
     private Headers headers;
     private Cookies cookies;
     private Boolean keepAlive = null;
@@ -870,6 +871,32 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
         return this.body != null ? this.body.getRawBytes() : new byte[0];
     }
 
+    /**
+     * When a request arrived with a Content-Encoding (e.g. gzip) and MockServer decompressed it, this holds the
+     * original bytes exactly as received on the wire (still compressed). It is null when the request body was not
+     * compressed, so {@link #getBodyAsRawBytes()} (the decompressed body) and this value together let you inspect
+     * both representations. A BinaryBody expectation matches against either representation.
+     */
+    public byte[] getOriginalBody() {
+        return originalBody;
+    }
+
+    /**
+     * @return the original on-the-wire (compressed) body bytes when the request was compressed, otherwise the
+     * decompressed raw bytes — i.e. always the bytes as the client sent them.
+     */
+    @JsonIgnore
+    public byte[] getBodyAsOriginalRawBytes() {
+        return this.originalBody != null ? this.originalBody : getBodyAsRawBytes();
+    }
+
+    public HttpRequest withOriginalBody(byte[] originalBody) {
+        // originalBody is intentionally excluded from equals/hashCode (it is a wire-representation
+        // detail, not a matching key), so the cached hashCode does not need to be reset here
+        this.originalBody = originalBody;
+        return this;
+    }
+
     @JsonIgnore
     public String getBodyAsString() {
         if (body != null) {
@@ -1216,6 +1243,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
             .withPathParameters(pathParameters)
             .withQueryStringParameters(queryStringParameters)
             .withBody(body)
+            .withOriginalBody(originalBody)
             .withHeaders(headers)
             .withCookies(cookies)
             .withKeepAlive(keepAlive)
@@ -1237,6 +1265,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
             .withPathParameters(pathParameters != null ? pathParameters.clone() : null)
             .withQueryStringParameters(queryStringParameters != null ? queryStringParameters.clone() : null)
             .withBody(body)
+            .withOriginalBody(originalBody)
             .withHeaders(headers != null ? headers.clone() : null)
             .withCookies(cookies != null ? cookies.clone() : null)
             .withKeepAlive(keepAlive)

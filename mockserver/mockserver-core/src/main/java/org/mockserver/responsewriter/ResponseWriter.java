@@ -55,9 +55,13 @@ public abstract class ResponseWriter {
         if (response == null) {
             response = notFoundResponse();
         }
-        if (configuration.enableCORSForAllResponses()) {
-            corsHeaders.addCORSHeaders(request, response);
-        } else if (apiResponse && configuration.enableCORSForAPI()) {
+        // Control-plane / dashboard responses (apiResponse == true) always carry CORS headers so
+        // the dashboard works cross-origin — e.g. when it is pointed at a different MockServer via
+        // its host/port fields, or served from a separate dev server. This is consistent with the
+        // dashboard-specific endpoints that already add CORS unconditionally, and independent of
+        // enableCORSForAPI. Mock/proxy responses (apiResponse == false) remain governed solely by
+        // enableCORSForAllResponses so mocked APIs are unaffected unless explicitly opted in.
+        if (configuration.enableCORSForAllResponses() || apiResponse) {
             corsHeaders.addCORSHeaders(request, response);
         }
         String contentLengthHeader = response.getFirstHeader(CONTENT_LENGTH.toString());
