@@ -167,9 +167,34 @@ bundle exec jekyll build
 
 ## Deployment
 
+> **Resolve the live target dynamically — do not trust hard-coded bucket/distribution
+> names.** The `versioned-site` release step (`scripts/release/components/versioned-site.sh`)
+> repoints the `mock-server.com` + `www.mock-server.com` CNAME aliases at the **newest
+> _versioned_ bucket and distribution** on every release. So "the current site" moves
+> with each release: as of 7.0.0 it is bucket `aws-website-mockserver-7-0` /
+> distribution `ED1HOMPC7011S`, and the previous current site (`nb9hq` /
+> `E3R1W2C7JJIMNR`) is now frozen as the `5-15.mock-server.com` **archive** — uploading
+> to it corrupts that archive. Older docs and `~/mockserver-aws-ids.md` may name the
+> wrong "current" bucket; always re-resolve before deploying:
+>
+> ```bash
+> # Live bucket + distribution serving www.mock-server.com:
+> aws cloudfront list-distributions --profile mockserver-website \
+>   --query "DistributionList.Items[?contains(Aliases.Items,'www.mock-server.com')].{Id:Id,Origin:Origins.Items[0].DomainName}" \
+>   --output table
+> ```
+
 1. Build: `bundle exec jekyll build`
-2. Upload `_site/` contents to the main website S3 bucket (see `~/mockserver-aws-ids.md`)
-3. Invalidate CloudFront cache (`/*` pattern) for the main distribution (see `~/mockserver-aws-ids.md`)
+2. Resolve the live bucket + distribution with the command above.
+3. Upload `_site/` to that bucket (`aws s3 cp` for a targeted page deploy, or
+   `aws s3 sync --delete` for a full publish).
+4. Invalidate that distribution — `/*` for a full publish, or the specific changed
+   paths for a targeted deploy (CloudFront ignores query strings, so a `?cb=`
+   cache-buster does **not** flush the edge; you must invalidate).
+
+The `mockserver-website` profile authenticates directly into the website account
+(`014848309742`) as admin, so manual deploys do **not** need the cross-account
+`assume_website_role` that CI (`scripts/release/`) uses.
 
 See [AWS Infrastructure](../infrastructure/aws-infrastructure.md) and [Release Process](release-process.md) for details.
 
