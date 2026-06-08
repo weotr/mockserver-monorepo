@@ -62,6 +62,8 @@ curl http://localhost:1080/pets
 
 The same can be done from any client library or the dashboard at <http://localhost:1080/mockserver/dashboard>. For more configuration options see the [Docker documentation](https://www.mock-server.com/where/docker.html).
 
+For every way to run MockServer yourself — Docker, docker-compose recipes, the `mockserver` CLI, the JVM-less binary bundle, Helm/Kubernetes, the JAR, and Testcontainers — see the [Self-Hosting MockServer guide](https://www.mock-server.com/mock_server/self_hosting_mockserver.html).
+
 ### Documentation
 
 For usage guide please see: [www.mock-server.com](https://www.mock-server.com/)
