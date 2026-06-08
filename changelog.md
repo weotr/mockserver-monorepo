@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GHCR image mirror** — every release now mirrors the multi-arch images to `ghcr.io/mock-server/mockserver` (copied from Docker Hub by digest, cosign-signed). Error-isolated: a GHCR failure never affects the Docker Hub / ECR publish.
 - **Automated MCP registry publishing** — the release pipeline publishes `server.json` to `registry.modelcontextprotocol.io` under the DNS-verified `com.mock-server/mockserver` namespace (non-interactive auth via an ed25519 key in Secrets Manager + an apex TXT record). Soft-fail — never blocks a release.
 - **Release pipeline distribution channels** — soft-fail release components that publish the new clients, Testcontainers modules and editor extensions (NuGet, crates.io, Packagist, pkg.go.dev, npm, PyPI, VS Code Marketplace / Open VSX, JetBrains Marketplace), with post-release liveness checks.
+- **One-command quick-start recipes** — curated `docker compose up` recipes under `examples/docker-compose/` for the most common use cases (`mock-from-openapi`, `record-replay-proxy`, `validation-proxy`, `chaos-proxy`), each self-contained with a short README and a "Getting started in 60 seconds" path in the repository README.
 
 ### Changed
 - **CI** — the build pipeline now runs unit tests for the new Go, .NET, Rust and PHP libraries, the five Testcontainers modules and the editor extensions (each in its language toolchain Docker image), triggered by changes under their paths.

@@ -21,25 +21,16 @@ MockServer is an HTTP(S) **mock server** and **proxy** for testing, with support
 
 See the [changelog](changelog.md) for what has shipped in each version.
 
-### Quick Start
+### Getting started in 60 seconds
 
-Run MockServer with Docker in seconds:
+Run MockServer with Docker, then mock an endpoint and call it:
 
 ```bash
+# 1. Start MockServer
 docker run -d --rm -p 1080:1080 mockserver/mockserver
-```
 
-…or, on macOS / Linux, install it with [Homebrew](https://brew.sh/) and run the `mockserver` command:
-
-```bash
-brew install mockserver
-mockserver -serverPort 1080
-```
-
-Then create your first expectation and call it (MockServer exposes a REST control plane on the same port):
-
-```bash
-# 1. Mock an endpoint: GET /hello -> 200 "Hello World"
+# 2. Mock an endpoint: GET /hello -> 200 "Hello World"
+#    (MockServer exposes a REST control plane on the same port)
 curl -X PUT http://localhost:1080/mockserver/expectation \
   -H 'Content-Type: application/json' \
   -d '{
@@ -47,9 +38,26 @@ curl -X PUT http://localhost:1080/mockserver/expectation \
         "httpResponse": { "statusCode": 200, "body": "Hello World" }
       }'
 
-# 2. Call your mock
+# 3. Call your mock
 curl http://localhost:1080/hello
 # -> Hello World
+```
+
+…or, on macOS / Linux, install it with [Homebrew](https://brew.sh/) and run the `mockserver` command directly:
+
+```bash
+brew install mockserver
+mockserver run --port 1080
+```
+
+#### One-command recipes
+
+For common end-to-end setups, the [`examples/docker-compose`](examples/docker-compose) recipes are a single `docker compose up` each — mock from an OpenAPI spec, a record/replay proxy, a contract-validating proxy, or a chaos proxy:
+
+```bash
+cd examples/docker-compose/mock-from-openapi
+docker compose up
+curl http://localhost:1080/pets
 ```
 
 The same can be done from any client library or the dashboard at <http://localhost:1080/mockserver/dashboard>. For more configuration options see the [Docker documentation](https://www.mock-server.com/where/docker.html).

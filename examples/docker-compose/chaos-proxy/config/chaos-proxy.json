@@ -1,0 +1,24 @@
+[ {
+  "httpRequest" : {
+    "path" : "/.*"
+  },
+  "httpForward" : {
+    "host" : "upstream",
+    "port" : 1090,
+    "scheme" : "HTTP"
+  },
+  "chaos" : {
+    "latency" : {
+      "timeUnit" : "MILLISECONDS",
+      "value" : 0,
+      "distribution" : {
+        "type" : "GAUSSIAN",
+        "mean" : 400,
+        "stdDev" : 100
+      }
+    },
+    "errorStatus" : 503,
+    "retryAfter" : "5",
+    "errorProbability" : 0.3
+  }
+} ]

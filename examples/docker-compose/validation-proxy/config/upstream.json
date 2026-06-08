@@ -1,0 +1,13 @@
+[ {
+  "httpRequest" : {
+    "method" : "GET",
+    "path" : "/api/greeting"
+  },
+  "httpResponse" : {
+    "statusCode" : 200,
+    "headers" : {
+      "content-type" : [ "application/json" ]
+    },
+    "body" : "{\"message\": \"hello\"}"
+  }
+} ]

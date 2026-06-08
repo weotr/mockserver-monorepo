@@ -214,6 +214,8 @@ For example to add all jar files in the current directory, map <strong>$(pwd)</s
 
 <p>MockServer can be run using <a target="_blank" href="https://docs.docker.com/compose/" rel="noopener noreferrer">docker compose</a> by adding the container as a service.</p>
 
+<p>For ready-to-run, one-command starting points &mdash; mock from an OpenAPI spec, a record/replay proxy, a contract-validating proxy, or a chaos proxy &mdash; see the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose" rel="noopener noreferrer">Docker Compose recipes</a>.</p>
+
 <p>The MockServer container uses an <span class="keyword">entrypoint</span>, so it is possible to configure the MockServer by specifying the command line flags using by specifying the <span class="keyword">command</span>, as follows:</p>
 
 <pre class="prettyprint lang-yaml code"><code class="code">services:

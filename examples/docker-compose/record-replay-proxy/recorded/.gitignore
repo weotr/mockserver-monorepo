@@ -1,0 +1,4 @@
+# The recorded expectations file is generated at runtime — keep the directory,
+# ignore its contents.
+*
+!.gitignore
