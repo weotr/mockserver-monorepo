@@ -470,7 +470,7 @@ public class Main {
     static class VersionCommand implements Runnable {
         @Override
         public void run() {
-            systemOut.println(Version.getVersion());
+            systemOut.println("MockServer " + Version.getVersion());
         }
     }
 
@@ -603,22 +603,10 @@ public class Main {
         proxyRemotePort("PROXY_REMOTE_PORT"),
         logLevel("LOG_LEVEL");
 
-        final static CaseInsensitiveList names = new CaseInsensitiveList();
-
-        static {
-            for (Arguments arguments : values()) {
-                names.add(arguments.name());
-            }
-        }
-
         private final String shortEnvironmentVariableName;
 
         Arguments(String shortEnvironmentVariableName) {
             this.shortEnvironmentVariableName = shortEnvironmentVariableName;
-        }
-
-        public static CaseInsensitiveList names() {
-            return names;
         }
 
         public String shortEnvironmentVariableName() {
@@ -631,22 +619,6 @@ public class Main {
 
         public String systemPropertyName() {
             return "mockserver." + name();
-        }
-    }
-
-    static class CaseInsensitiveList extends ArrayList<String> {
-
-        CaseInsensitiveList() {
-            super();
-        }
-
-        boolean containsIgnoreCase(String matcher) {
-            for (String listItem : this) {
-                if (listItem.equalsIgnoreCase(matcher)) {
-                    return true;
-                }
-            }
-            return false;
         }
     }
 

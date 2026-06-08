@@ -204,8 +204,8 @@ public class MainCliTest {
             Main.main("version");
 
             String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
-            String expectedVersion = Version.getVersion();
-            assertThat("version output should contain the value from Version.getVersion()",
+            String expectedVersion = "MockServer " + Version.getVersion();
+            assertThat("version subcommand output should match the --version output",
                 output.trim(), is(expectedVersion));
         } finally {
             Main.systemOut = originalOut;
