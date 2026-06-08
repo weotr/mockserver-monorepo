@@ -1,5 +1,14 @@
 # Artifact Hub — Official Status Request Issue
 
+## ✅ STATUS: SUBMITTED 2026-06-08 → https://github.com/artifacthub/hub/issues/4818
+Awaiting an Artifact Hub maintainer to review and grant the `official` badge (it's granted by an AH
+maintainer, not by a repo deploy/annotation). MockServer qualifies cleanly: the publisher (James D
+Bloom / the `mock-server` org) owns the MockServer software the chart installs — the publisher-owns-
+the-software case the status is for. Field values submitted: repository name `mockserver`, official
+packages = empty (the repo holds only the official `mockserver` chart), project https://www.mock-server.com,
+not a CNCF project, source https://github.com/mock-server/mockserver-monorepo. No further action
+needed unless the maintainer asks a follow-up on the issue.
+
 ## TL;DR
 
 File an issue on `artifacthub/hub` using their official-status template once the **Verified

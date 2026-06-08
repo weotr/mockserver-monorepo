@@ -27,6 +27,17 @@ annotations:
   # Artifact Hub listing metadata (https://artifacthub.io). name/description/keywords/home/sources/
   # maintainers/icon above are read natively; these add the license and quick links.
   artifacthub.io/license: Apache-2.0
+  # Populates the Artifact Hub "Changelog" tab for this version (without it the
+  # changelog view is empty). Update per release with the notable changes.
+  artifacthub.io/changes: |
+    - kind: added
+      description: First-class LLM / AI-agent mocking (Anthropic, OpenAI, Azure OpenAI, Gemini, Bedrock, Ollama) with streaming, conversations and an MCP toolset
+    - kind: added
+      description: HTTP/3 (QUIC) streaming responses and an optional clustered state backend (mockserver-state-infinispan)
+    - kind: added
+      description: HTTP chaos / fault injection attachable to mocked or forwarded responses
+    - kind: changed
+      description: Platform modernised to Java 17 baseline, Netty 4.2 and Jackson 2.22
   artifacthub.io/links: |
     - name: Documentation
       url: https://www.mock-server.com

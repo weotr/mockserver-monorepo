@@ -315,7 +315,9 @@ Every released version is published to GHCR — the canonical, always-current li
 | Version | Chart Archive (legacy `.tgz`) |
 |---------|---------------|
 | 7.0.0 (latest) | [mockserver-7.0.0.tgz](https://www.mock-server.com/mockserver-7.0.0.tgz) |
+| 6.1.0 | [mockserver-6.1.0.tgz](https://www.mock-server.com/mockserver-6.1.0.tgz) |
 | 6.0.0 | [mockserver-6.0.0.tgz](https://www.mock-server.com/mockserver-6.0.0.tgz) |
+| 5.15.0 | [mockserver-5.15.0.tgz](https://www.mock-server.com/mockserver-5.15.0.tgz) |
 | 5.14.0 | [mockserver-5.14.0.tgz](https://www.mock-server.com/mockserver-5.14.0.tgz) |
 | 5.13.2 | [mockserver-5.13.2.tgz](https://www.mock-server.com/mockserver-5.13.2.tgz) |
 | 5.13.1 | [mockserver-5.13.1.tgz](https://www.mock-server.com/mockserver-5.13.1.tgz) |
