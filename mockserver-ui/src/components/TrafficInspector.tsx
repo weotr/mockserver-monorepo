@@ -31,7 +31,7 @@ import {
 } from './ConversationView';
 import type { ScriptedTurn } from './ConversationView';
 import type { JsonListItem } from '../types';
-import { isLlmTraffic } from '../lib/expectationFromCapture';
+import { isCapturableTraffic } from '../lib/expectationFromCapture';
 import {
   summarizeTraffic,
   getModelLabel,
@@ -763,7 +763,7 @@ function buildTabs(parsed: ParsedTraffic, hasScriptedTurns: boolean): string[] {
 function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPaneProps) {
   const tabs = buildTabs(summary.parsed, scriptedTurns.length > 0);
   const [detailTab, setDetailTab] = useState(0);
-  const canCapture = isLlmTraffic(summary.parsed);
+  const canCapture = isCapturableTraffic(summary.parsed);
 
   // For generic traffic, render Raw JSON directly — no tab bar needed
   if (tabs.length === 0) {
@@ -771,10 +771,20 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         <LlmUsageDetail parsed={summary.parsed} />
         {summary.timing && <TimingWaterfall timing={summary.timing} />}
-        <Box sx={{ px: 1, py: 0.5, flexShrink: 0 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, flexShrink: 0 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem', flexGrow: 1 }}>
             Raw JSON
           </Typography>
+          {canCapture && onCaptureAsMock && (
+            <Button
+              size="small"
+              startIcon={<SaveAltIcon sx={{ fontSize: '0.875rem' }} />}
+              onClick={onCaptureAsMock}
+              sx={{ fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              Capture as mock
+            </Button>
+          )}
         </Box>
         <Divider />
         <Box sx={{ flex: 1, overflowY: 'auto', p: 1 }}>
@@ -1109,13 +1119,14 @@ export default function TrafficInspector() {
       )}
 
       {/* Capture as mock dialog */}
-      {selectedEntry && isLlmTraffic(selectedEntry.summary.parsed) && (
+      {selectedEntry && isCapturableTraffic(selectedEntry.summary.parsed) && (
         <CaptureAsMockDialog
           open={captureDialogOpen}
           onClose={() => setCaptureDialogOpen(false)}
           parsed={selectedEntry.summary.parsed}
           path={selectedEntry.summary.path ?? ''}
           connectionParams={connectionParams}
+          itemValue={selectedEntry.item.value}
         />
       )}
 

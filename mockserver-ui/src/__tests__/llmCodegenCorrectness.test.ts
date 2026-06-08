@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { expectationToJava } from '../lib/llmExpectationCodegen';
-import type { ExpectationDraft } from '../lib/expectationFromCapture';
+import type { LlmExpectationDraft } from '../lib/expectationFromCapture';
 import {
   conversationToJava,
   conversationToJson,
@@ -20,9 +20,9 @@ import {
   type ConversationDraft,
 } from '../lib/conversationCodegen';
 
-function singleDraft(overrides?: Partial<ExpectationDraft>): ExpectationDraft {
+function singleDraft(overrides?: Partial<LlmExpectationDraft>): LlmExpectationDraft {
   return {
-    provider: 'ANTHROPIC', path: '/v1/messages', model: 'claude-sonnet-4-20250514',
+    kind: 'llm', provider: 'ANTHROPIC', path: '/v1/messages', model: 'claude-sonnet-4-20250514',
     text: 'hi', toolCalls: [], stopReason: 'end_turn', streaming: false, ...overrides,
   };
 }

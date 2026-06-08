@@ -5,7 +5,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
 import CaptureAsMockDialog from '../components/CaptureAsMockDialog';
 import { _clearMcpSessionCache } from '../lib/mcpClient';
-import type { AnthropicParsed, OpenAiParsed } from '../lib/llmTraffic';
+import type { AnthropicParsed, OpenAiParsed, GenericParsed } from '../lib/llmTraffic';
 
 function renderDialog(overrides: Partial<Parameters<typeof CaptureAsMockDialog>[0]> = {}) {
   const defaults = {
@@ -171,5 +171,158 @@ describe('CaptureAsMockDialog', () => {
     const body = JSON.parse(toolCall[1].body);
     expect(body.params.name).toBe('mock_llm_completion');
     expect(body.params.arguments.provider).toBe('ANTHROPIC');
+  });
+
+  // -------------------------------------------------------------------------
+  // Generic HTTP capture mode
+  // -------------------------------------------------------------------------
+
+  it('renders generic HTTP fields for non-LLM traffic', () => {
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200, body: '{"status":"ok"}' },
+      },
+    });
+
+    // Should show Method and Path fields, not Provider/Model
+    expect(screen.getByLabelText('Method')).toHaveValue('GET');
+    expect(screen.getByLabelText('Path')).toHaveValue('/api/health');
+    expect(screen.getByLabelText('Status Code')).toHaveValue(200);
+    expect(screen.queryByLabelText('Provider')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+  });
+
+  it('shows matcher precision toggle for generic traffic', () => {
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'POST',
+      path: '/api/data',
+      statusCode: 201,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/data',
+      itemValue: {
+        httpRequest: { method: 'POST', path: '/api/data' },
+        httpResponse: { statusCode: 201 },
+      },
+    });
+
+    // Should show the matcher precision buttons
+    expect(screen.getByText('Matcher Precision')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Exact precision' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Moderate precision' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Loose precision' })).toBeInTheDocument();
+  });
+
+  it('switches matcher precision and updates JSON output', async () => {
+    const user = userEvent.setup();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'POST',
+      path: '/api/data',
+      statusCode: 200,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/data',
+      itemValue: {
+        httpRequest: {
+          method: 'POST',
+          path: '/api/data',
+          body: { type: 'STRING', string: '{"key":"val"}' },
+        },
+        httpResponse: { statusCode: 200, body: '{"result":true}' },
+      },
+    });
+
+    // Click Loose precision
+    await user.click(screen.getByRole('button', { name: 'Loose precision' }));
+
+    // Switch to JSON tab
+    await user.click(screen.getByRole('tab', { name: 'Copy as JSON' }));
+
+    // In loose mode, the httpRequest block should only contain method + path
+    const pre = screen.getByText(/httpRequest/);
+    const json = JSON.parse(pre.textContent!);
+    expect(json.httpRequest).toEqual({ method: 'POST', path: '/api/data' });
+    expect(json.httpRequest).not.toHaveProperty('body');
+  });
+
+  it('calls PUT /mockserver/expectation for generic traffic Register', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve(''),
+    }));
+
+    renderDialog({
+      onClose,
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200, body: '{"status":"ok"}' },
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    // Generic path uses PUT /mockserver/expectation, not MCP
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const call = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[0]).toBe('http://localhost:1080/mockserver/expectation');
+    expect(call[1].method).toBe('PUT');
+
+    const body = JSON.parse(call[1].body);
+    expect(body).toHaveProperty('httpRequest');
+    expect(body).toHaveProperty('httpResponse');
+    expect(body).not.toHaveProperty('httpLlmResponse');
+  });
+
+  it('generates Java code for generic traffic', async () => {
+    const user = userEvent.setup();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200, body: '{"status":"ok"}' },
+      },
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Copy as Java' }));
+
+    // Should use HttpResponse imports, not LLM
+    expect(screen.getByText(/import static org.mockserver.model.HttpResponse.response/)).toBeInTheDocument();
+    expect(screen.getByText(/withStatusCode\(200\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/llmResponse/)).not.toBeInTheDocument();
   });
 });

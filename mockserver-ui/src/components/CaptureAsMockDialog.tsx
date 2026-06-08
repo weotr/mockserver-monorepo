@@ -17,18 +17,26 @@ import IconButton from '@mui/material/IconButton';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import Typography from '@mui/material/Typography';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import Tooltip from '@mui/material/Tooltip';
 import type { ParsedTraffic } from '../lib/llmTraffic';
 import {
   PROVIDERS,
+  MATCHER_PRECISIONS,
   extractExpectationFromCapture,
   type ExpectationDraft,
+  type LlmExpectationDraft,
+  type GenericExpectationDraft,
   type ProviderName,
   type ToolCallDraft,
+  type MatcherPrecision,
 } from '../lib/expectationFromCapture';
 import {
   expectationToJson,
   expectationToJava,
   expectationToMcpArgs,
+  expectationToJsonObject,
 } from '../lib/llmExpectationCodegen';
 import { callMcpTool, buildBaseUrl } from '../lib/mcpClient';
 import CopyButton from './CopyButton';
@@ -43,7 +51,25 @@ interface CaptureAsMockDialogProps {
   parsed: ParsedTraffic;
   path: string;
   connectionParams: { host: string; port: string; secure: boolean };
+  /** The raw item value — needed for generic HTTP extraction. */
+  itemValue?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Matcher precision labels
+// ---------------------------------------------------------------------------
+
+const PRECISION_LABELS: Record<MatcherPrecision, string> = {
+  exact: 'Exact',
+  moderate: 'Moderate',
+  loose: 'Loose',
+};
+
+const PRECISION_DESCRIPTIONS: Record<MatcherPrecision, string> = {
+  exact: 'Method + Path + Query + Headers + Body',
+  moderate: 'Method + Path + Query + Body',
+  loose: 'Method + Path only',
+};
 
 // ---------------------------------------------------------------------------
 // Component
@@ -55,11 +81,12 @@ export default function CaptureAsMockDialog({
   parsed,
   path,
   connectionParams,
+  itemValue,
 }: CaptureAsMockDialogProps) {
   // Extract default draft from the capture
   const defaultDraft = useMemo(
-    () => extractExpectationFromCapture(parsed, path),
-    [parsed, path],
+    () => extractExpectationFromCapture(parsed, path, itemValue),
+    [parsed, path, itemValue],
   );
 
   // Editable state
@@ -78,35 +105,57 @@ export default function CaptureAsMockDialog({
     setError(null);
   }
 
-  const updateDraft = useCallback(
-    (partial: Partial<ExpectationDraft>) => setDraft((d) => ({ ...d, ...partial })),
+  // ---- LLM draft helpers ----
+  const updateLlmDraft = useCallback(
+    (partial: Partial<LlmExpectationDraft>) => setDraft((d) => {
+      if (d.kind !== 'llm') return d;
+      return { ...d, ...partial };
+    }),
     [],
   );
 
   const updateToolCall = useCallback(
     (index: number, partial: Partial<ToolCallDraft>) =>
-      setDraft((d) => ({
-        ...d,
-        toolCalls: d.toolCalls.map((tc, i) => (i === index ? { ...tc, ...partial } : tc)),
-      })),
+      setDraft((d) => {
+        if (d.kind !== 'llm') return d;
+        return {
+          ...d,
+          toolCalls: d.toolCalls.map((tc, i) => (i === index ? { ...tc, ...partial } : tc)),
+        };
+      }),
     [],
   );
 
   const addToolCall = useCallback(
     () =>
-      setDraft((d) => ({
-        ...d,
-        toolCalls: [...d.toolCalls, { name: '', arguments: '' }],
-      })),
+      setDraft((d) => {
+        if (d.kind !== 'llm') return d;
+        return {
+          ...d,
+          toolCalls: [...d.toolCalls, { name: '', arguments: '' }],
+        };
+      }),
     [],
   );
 
   const removeToolCall = useCallback(
     (index: number) =>
-      setDraft((d) => ({
-        ...d,
-        toolCalls: d.toolCalls.filter((_, i) => i !== index),
-      })),
+      setDraft((d) => {
+        if (d.kind !== 'llm') return d;
+        return {
+          ...d,
+          toolCalls: d.toolCalls.filter((_, i) => i !== index),
+        };
+      }),
+    [],
+  );
+
+  // ---- Generic draft helpers ----
+  const updateGenericDraft = useCallback(
+    (partial: Partial<GenericExpectationDraft>) => setDraft((d) => {
+      if (d.kind !== 'generic') return d;
+      return { ...d, ...partial };
+    }),
     [],
   );
 
@@ -120,17 +169,36 @@ export default function CaptureAsMockDialog({
     setError(null);
     try {
       const baseUrl = buildBaseUrl(connectionParams);
-      const args = expectationToMcpArgs(draft);
-      const result = await callMcpTool(baseUrl, 'mock_llm_completion', args);
-      if (result.ok) {
-        setSnackOpen(true);
-        onClose();
+
+      if (draft.kind === 'llm') {
+        // LLM: use MCP tool
+        const args = expectationToMcpArgs(draft);
+        const result = await callMcpTool(baseUrl, 'mock_llm_completion', args);
+        if (result.ok) {
+          setSnackOpen(true);
+          onClose();
+        } else {
+          setError(
+            typeof result.error === 'string'
+              ? result.error
+              : JSON.stringify(result.error, null, 2),
+          );
+        }
       } else {
-        setError(
-          typeof result.error === 'string'
-            ? result.error
-            : JSON.stringify(result.error, null, 2),
-        );
+        // Generic HTTP: use PUT /mockserver/expectation
+        const body = JSON.stringify(expectationToJsonObject(draft));
+        const response = await fetch(`${baseUrl}/mockserver/expectation`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+        if (response.ok) {
+          setSnackOpen(true);
+          onClose();
+        } else {
+          const text = await response.text();
+          setError(`Registration failed (${response.status}): ${text}`);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -138,6 +206,13 @@ export default function CaptureAsMockDialog({
       setRegistering(false);
     }
   }, [connectionParams, draft, onClose]);
+
+  // Determine if Register button should be disabled
+  const registerDisabled = useMemo(() => {
+    if (registering) return true;
+    if (draft.kind === 'llm') return !draft.path || !draft.provider;
+    return !draft.path;
+  }, [registering, draft]);
 
   const tabLabels = ['Edit', 'Copy as JSON', 'Copy as Java'];
 
@@ -162,15 +237,15 @@ export default function CaptureAsMockDialog({
             ))}
           </Tabs>
 
-          {/* Tab 0: Editable fields */}
-          {tab === 0 && (
+          {/* Tab 0: Editable fields — LLM mode */}
+          {tab === 0 && draft.kind === 'llm' && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <TextField
                 label="Path"
                 size="small"
                 fullWidth
                 value={draft.path}
-                onChange={(e) => updateDraft({ path: e.target.value })}
+                onChange={(e) => updateLlmDraft({ path: e.target.value })}
               />
               <TextField
                 label="Provider"
@@ -178,7 +253,7 @@ export default function CaptureAsMockDialog({
                 select
                 fullWidth
                 value={draft.provider}
-                onChange={(e) => updateDraft({ provider: e.target.value as ProviderName })}
+                onChange={(e) => updateLlmDraft({ provider: e.target.value as ProviderName })}
               >
                 {PROVIDERS.map((p) => (
                   <MenuItem key={p} value={p}>
@@ -191,7 +266,7 @@ export default function CaptureAsMockDialog({
                 size="small"
                 fullWidth
                 value={draft.model}
-                onChange={(e) => updateDraft({ model: e.target.value })}
+                onChange={(e) => updateLlmDraft({ model: e.target.value })}
               />
               <TextField
                 label="Text"
@@ -201,7 +276,7 @@ export default function CaptureAsMockDialog({
                 minRows={2}
                 maxRows={8}
                 value={draft.text}
-                onChange={(e) => updateDraft({ text: e.target.value })}
+                onChange={(e) => updateLlmDraft({ text: e.target.value })}
               />
 
               {/* Tool calls */}
@@ -244,16 +319,100 @@ export default function CaptureAsMockDialog({
                 size="small"
                 fullWidth
                 value={draft.stopReason}
-                onChange={(e) => updateDraft({ stopReason: e.target.value })}
+                onChange={(e) => updateLlmDraft({ stopReason: e.target.value })}
               />
               <FormControlLabel
                 control={
                   <Switch
                     checked={draft.streaming}
-                    onChange={(e) => updateDraft({ streaming: e.target.checked })}
+                    onChange={(e) => updateLlmDraft({ streaming: e.target.checked })}
                   />
                 }
                 label="Streaming"
+              />
+            </Box>
+          )}
+
+          {/* Tab 0: Editable fields — Generic HTTP mode */}
+          {tab === 0 && draft.kind === 'generic' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {/* Matcher precision toggle */}
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Matcher Precision
+                </Typography>
+                <ToggleButtonGroup
+                  value={draft.matcherPrecision}
+                  exclusive
+                  onChange={(_, v: MatcherPrecision | null) => {
+                    if (v !== null) updateGenericDraft({ matcherPrecision: v });
+                  }}
+                  size="small"
+                  aria-label="Matcher precision"
+                >
+                  {MATCHER_PRECISIONS.map((p) => (
+                    <Tooltip key={p} title={PRECISION_DESCRIPTIONS[p]} arrow>
+                      <ToggleButton value={p} aria-label={`${PRECISION_LABELS[p]} precision`}>
+                        {PRECISION_LABELS[p]}
+                      </ToggleButton>
+                    </Tooltip>
+                  ))}
+                </ToggleButtonGroup>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {PRECISION_DESCRIPTIONS[draft.matcherPrecision]}
+                </Typography>
+              </Box>
+
+              {/* Request fields */}
+              <Typography variant="subtitle2" sx={{ mt: 1, mb: -1 }}>Request Matcher</Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <TextField
+                  label="Method"
+                  size="small"
+                  value={draft.method}
+                  onChange={(e) => updateGenericDraft({ method: e.target.value })}
+                  sx={{ width: 120 }}
+                />
+                <TextField
+                  label="Path"
+                  size="small"
+                  fullWidth
+                  value={draft.path}
+                  onChange={(e) => updateGenericDraft({ path: e.target.value })}
+                />
+              </Box>
+              {draft.matcherPrecision !== 'loose' && draft.body && (
+                <TextField
+                  label="Request Body"
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  maxRows={6}
+                  value={draft.body}
+                  onChange={(e) => updateGenericDraft({ body: e.target.value })}
+                />
+              )}
+
+              {/* Response fields */}
+              <Typography variant="subtitle2" sx={{ mt: 1, mb: -1 }}>Response</Typography>
+              <TextField
+                label="Status Code"
+                size="small"
+                type="number"
+                value={draft.responseStatusCode}
+                onChange={(e) => { const v = parseInt(e.target.value, 10); updateGenericDraft({ responseStatusCode: isNaN(v) ? 200 : v }); }}
+                sx={{ width: 120 }}
+              />
+              <TextField
+                label="Response Body"
+                size="small"
+                fullWidth
+                multiline
+                minRows={2}
+                maxRows={8}
+                value={draft.responseBody}
+                onChange={(e) => updateGenericDraft({ responseBody: e.target.value })}
               />
             </Box>
           )}
@@ -326,7 +485,7 @@ export default function CaptureAsMockDialog({
           <Button
             variant="contained"
             onClick={() => void handleRegister()}
-            disabled={registering || !draft.path || !draft.provider}
+            disabled={registerDisabled}
           >
             {registering ? 'Registering...' : 'Register'}
           </Button>
