@@ -8,18 +8,18 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-06-06T00:00:00+01:00
+  lastmod: 2026-06-08T00:00:00+01:00
 ---
 
 <p>MockServer has a real-time dashboard that gives you full visibility into what MockServer is doing. Ten views are available from the navigation bar at the top of the page:</p>
 
 <ul>
     <li><strong><a href="#ui_dashboard_section">Dashboard</a></strong> — four panels showing log messages, active expectations, received requests, and proxied requests</li>
-    <li><strong><a href="#ui_traffic_section">Traffic</a></strong> — every captured request in a master list, with a rich detail pane on the right for LLM and MCP traffic</li>
+    <li><strong><a href="#ui_traffic_section">Traffic</a></strong> — every captured request in a master list, with a rich detail pane on the right for LLM and MCP traffic, plus a <strong>Compare</strong> toggle to diff two requests field-by-field</li>
     <li><strong><a href="#ui_sessions_section">Sessions</a></strong> — isolated LLM conversation sessions grouped into swim-lanes, plus a <strong>Compare</strong> tab for diffing two captured runs side-by-side</li>
     <li><strong><a href="#ui_composer_section">Mocks</a></strong> — create or edit expectations of every kind (HTTP, gRPC, DNS, MCP, LLM) and import them (OpenAPI, WSDL, HAR, Postman) without writing any code</li>
     <li><strong><a href="#ui_library_section">Library</a></strong> — manage cassette files, WASM modules, and export traffic</li>
-    <li><strong><a href="#ui_chaos_section">Chaos</a></strong> — configure and inject HTTP, gRPC, and TCP faults (added latency, error responses, dropped connections) that apply to all forwarded requests to a given upstream host or service, with a TTL so chaos auto-expires</li>
+    <li><strong><a href="#ui_chaos_section">Chaos</a></strong> — configure and inject HTTP, gRPC, and TCP faults that apply to all forwarded requests to a given upstream host or service. The HTTP fault set covers error responses, dropped connections, latency, body corruption, slow-response chunking, quotas/rate limits, count and time windows, gradual degradation, and a GraphQL error envelope, with a TTL so chaos auto-expires</li>
     <li><strong><a href="#ui_drift_section">Drift</a></strong> — review mock drift records where stubbed responses diverge from the real upstream</li>
     <li><strong><a href="#ui_verification_section">Verification</a></strong> — assert that MockServer received the requests you expected (a single request a given number of times, or an ordered sequence) without writing test code</li>
     <li><strong><a href="#ui_async_section">AsyncAPI</a></strong> — inspect the AsyncAPI broker mock: loaded spec, active channels, and messages recorded from broker subscriptions</li>
@@ -253,6 +253,21 @@ sitemap:
 
 <p>A <strong>Capture as mock</strong> button appears in the top-right of the detail pane for any LLM-kind request. Clicking it creates a mock expectation directly from the captured traffic — the next matching request will receive the same response without hitting the real API.</p>
 
+<a id="ui_traffic_compare_section" class="anchor" href="#ui_traffic_compare_section">&nbsp;</a>
+
+<h3>Compare Two Requests</h3>
+
+<p>The master list toolbar has a <strong>Compare</strong> toggle for diffing two captured requests field-by-field — useful for spotting why two seemingly similar requests behaved differently (a missing header, a changed query parameter, a different body field).</p>
+
+<ol>
+    <li>Click <strong>Compare</strong> to enter compare mode. Rows in the master list become selectable.</li>
+    <li>Pick exactly two requests. The button next to the toggle shows the running count (<strong>Diff (1/2)</strong>, <strong>Diff (2/2)</strong>) and only enables once two are selected.</li>
+    <li>Click <strong>Diff</strong> to open the <em>Diff two requests</em> dialog. The two selected requests are pre-filled as JSON into the <strong>Expected request</strong> and <strong>Actual request</strong> boxes — you can edit either, or hand-author one. Click the dialog's <strong>Compare</strong> button to run the comparison.</li>
+    <li>The result is shown as a table of the fields that differ — <strong>Field</strong>, <strong>Expected</strong>, <strong>Actual</strong>, and a <strong>Type</strong> chip (<code>ADDED</code>, <code>REMOVED</code>, or <code>CHANGED</code>) — with a count of the differences. When the two requests match, it reports that they are identical.</li>
+</ol>
+
+<p>Click <strong>Compare</strong> again to leave compare mode and clear the selection. The diff is computed server-side via the <code>PUT /mockserver/diff</code> endpoint, which takes an <code>expected</code> and an <code>actual</code> request and returns the field-level differences, so the dashboard shows exactly what the server sees.</p>
+
 <a id="ui_sessions_section" class="anchor" href="#ui_sessions_section">&nbsp;</a>
 
 <h2>Sessions</h2>
@@ -359,16 +374,58 @@ sitemap:
 
 <p>It lets you inject <strong>service-scoped chaos</strong> — faults that MockServer applies to <em>every</em> request it forwards to a given upstream host or service, rather than to a single expectation. This is useful for resilience and SRE testing, where you want all proxied traffic to a dependency to fail or slow down for a while without editing individual mocks.</p>
 
-<p>Under <strong>Register chaos for a host</strong>, enter the upstream <strong>Host</strong> and any combination of the following faults, then click <strong>Register</strong>:</p>
+<p>Under <strong>Register chaos for a host</strong>, enter the upstream <strong>Host</strong> and any combination of the faults below, then click <strong>Register</strong>. The form exposes the full HTTP service-chaos fault set; leave a field blank to skip that fault. Each registration is sent to the server as one chaos profile via the <code>PUT /mockserver/serviceChaos</code> endpoint.</p>
+
+<h4>Error and connection faults</h4>
 
 <ul>
-    <li><strong>Error status</strong> — an HTTP error status code (e.g. <code>503</code>) returned instead of forwarding, optionally with an <strong>Error prob</strong> (0&ndash;1) so only a fraction of requests fail.</li>
-    <li><strong>Drop prob</strong> — a probability (0&ndash;1) that MockServer drops the connection instead of responding.</li>
-    <li><strong>Latency ms</strong> — milliseconds of delay added to every matched forward.</li>
+    <li><strong>Error status</strong> — an HTTP error status code (e.g. <code>503</code>) returned instead of forwarding.</li>
+    <li><strong>Error prob (0&ndash;1)</strong> — the fraction of requests that receive the error status, so only some requests fail. Applies alongside an error status.</li>
+    <li><strong>Retry-After</strong> — value for the <code>Retry-After</code> response header sent with the injected error (meaningful with statuses such as <code>429</code> or <code>503</code>).</li>
+    <li><strong>Drop prob (0&ndash;1)</strong> — probability that MockServer drops the connection instead of responding.</li>
+    <li><strong>Latency ms</strong> — milliseconds of delay added before each matched response.</li>
+    <li><strong>Seed</strong> — fixes the random draw used by the probabilistic faults so a fractional probability is reproducible across runs.</li>
+</ul>
+
+<h4>Response-body corruption</h4>
+
+<ul>
+    <li><strong>Truncate body (0&ndash;1)</strong> — keep only this leading fraction of the response body bytes, simulating a cut-off response.</li>
+    <li><strong>Malformed body</strong> — append a broken-JSON fragment to corrupt the body, for testing client-side parsing resilience.</li>
+    <li><strong>Slow chunk bytes</strong> + <strong>Slow chunk delay ms</strong> — dribble the response body in chunks of the given size with the given delay between chunks, for testing read timeouts on a trickling response.</li>
+</ul>
+
+<h4>Quota / rate limit</h4>
+
+<p>A fixed-window rate limit: once <strong>Quota limit</strong> requests have been seen within <strong>Quota window ms</strong>, further requests are rejected. Expectations and registrations that share a <strong>Quota name</strong> share one counter.</p>
+
+<ul>
+    <li><strong>Quota name</strong> — the shared counter key.</li>
+    <li><strong>Quota limit</strong> — maximum requests allowed per window.</li>
+    <li><strong>Quota window ms</strong> — window length in milliseconds.</li>
+    <li><strong>Quota error status</strong> — status returned when the quota is exceeded (default <code>429</code>).</li>
+</ul>
+
+<h4>Count and time windows</h4>
+
+<ul>
+    <li><strong>Succeed first</strong> — the first N matching requests are not faulted (the service appears healthy at first).</li>
+    <li><strong>Fail count</strong> — after the "succeed first" requests, the next M requests are eligible for faults, then the service recovers.</li>
+    <li><strong>Outage after ms</strong> / <strong>Outage duration ms</strong> — a self-healing time window measured from the first match: chaos starts after "outage after" milliseconds and (when a duration is set) stops after "outage duration" milliseconds.</li>
+    <li><strong>Degradation ramp ms</strong> — ramp the error and drop probabilities linearly from <code>0</code> up to their configured values over this many milliseconds, so a dependency appears to deteriorate gradually rather than failing all at once.</li>
+</ul>
+
+<h4>GraphQL error envelope</h4>
+
+<p>Enable <strong>GraphQL errors</strong> to rewrite the response as a GraphQL error envelope (HTTP <code>200</code> with a <code>{"data": null, "errors": [...]}</code> body) instead of an HTTP error status — the way a GraphQL API typically signals failure. Optionally set an <strong>Error message</strong> and an <strong>Error code</strong> (placed under <code>errors[0].extensions.code</code>).</p>
+
+<h4>TTL</h4>
+
+<ul>
     <li><strong>TTL ms</strong> — how long the chaos stays active, in milliseconds. When the TTL elapses MockServer automatically reverts the fault (a dead-man's switch), so a forgotten chaos run cannot break later tests.</li>
 </ul>
 
-<p>The <strong>Active registrations</strong> panel lists each host with chaos in force and its remaining auto-revert countdown (or shows <em>No service-scoped chaos registered</em> when none is set). Remove a single host's chaos with its remove icon (trash), or use the section's <strong>Clear HTTP</strong> / <strong>Clear gRPC</strong> / <strong>Clear TCP</strong> button to remove everything in that section at once. Injected faults are also counted in the <a href="#ui_metrics_section">Metrics</a> view under <strong>HTTP Chaos Faults</strong>.</p>
+<p>The <strong>Active registrations</strong> panel lists each host with chaos in force and its remaining auto-revert countdown (or shows <em>No service-scoped chaos registered</em> when none is set). Each registration can be edited in place or removed with its remove icon (trash), or use the section's <strong>Clear HTTP</strong> / <strong>Clear gRPC</strong> / <strong>Clear TCP</strong> button to remove everything in that section at once. Injected faults are also counted in the <a href="#ui_metrics_section">Metrics</a> view under <strong>HTTP Chaos Faults</strong>.</p>
 
 <a id="ui_drift_section" class="anchor" href="#ui_drift_section">&nbsp;</a>
 
