@@ -1,6 +1,7 @@
 namespace Testcontainers.MockServer;
 
 using Docker.DotNet.Models;
+using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Configurations;
 
 /// <inheritdoc cref="ContainerConfiguration" />
@@ -47,6 +48,6 @@ public sealed class MockServerConfiguration : ContainerConfiguration
     public MockServerConfiguration(MockServerConfiguration oldValue, MockServerConfiguration newValue)
         : base(oldValue, newValue)
     {
-        LogLevel = newValue.LogLevel ?? oldValue.LogLevel;
+        LogLevel = BuildConfiguration.Combine(oldValue.LogLevel, newValue.LogLevel);
     }
 }

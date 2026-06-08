@@ -155,8 +155,7 @@ public sealed class MockServerContainerTest : IAsyncLifetime
         try
         {
             // Attempt to create and start a minimal container to verify Docker is reachable.
-            var container = new ContainerBuilder()
-                .WithImage("alpine:3.19")
+            var container = new ContainerBuilder("alpine:3.19")
                 .WithEntrypoint("true")
                 .Build();
 

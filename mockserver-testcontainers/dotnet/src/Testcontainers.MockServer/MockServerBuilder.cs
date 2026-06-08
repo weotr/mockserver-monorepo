@@ -81,7 +81,11 @@ public sealed class MockServerBuilder
             .WithPortBinding(MockServerPort, true)
             .WithEnvironment("SERVER_PORT", MockServerPort.ToString())
             .WithWaitStrategy(Wait.ForUnixContainer()
-                .UntilPortIsAvailable(MockServerPort));
+                .UntilHttpRequestIsSucceeded(request => request
+                    .ForPort((ushort)MockServerPort)
+                    .ForPath("/mockserver/status")
+                    .WithMethod(HttpMethod.Put)
+                    .ForStatusCode(System.Net.HttpStatusCode.OK)));
     }
 
     /// <inheritdoc />
