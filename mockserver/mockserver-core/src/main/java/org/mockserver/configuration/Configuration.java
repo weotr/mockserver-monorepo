@@ -135,6 +135,7 @@ public class Configuration {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
     // mock persistence
@@ -1680,6 +1681,26 @@ public class Configuration {
      */
     public Configuration openAPIResponseValidation(Boolean openAPIResponseValidation) {
         this.openAPIResponseValidation = openAPIResponseValidation;
+        return this;
+    }
+
+    public Boolean generateRealisticExampleValues() {
+        if (generateRealisticExampleValues == null) {
+            return ConfigurationProperties.generateRealisticExampleValues();
+        }
+        return generateRealisticExampleValues;
+    }
+
+    /**
+     * <p>If enabled, OpenAPI example generation uses realistic, schema/format-aware values (via Datafaker) instead of static placeholder strings.</p>
+     * <p>When disabled (the default), the existing static example values are used (e.g. "some_string_value", "some_email@mockserver.com").</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param generateRealisticExampleValues if enabled OpenAPI examples will use realistic generated values
+     */
+    public Configuration generateRealisticExampleValues(Boolean generateRealisticExampleValues) {
+        this.generateRealisticExampleValues = generateRealisticExampleValues;
         return this;
     }
 

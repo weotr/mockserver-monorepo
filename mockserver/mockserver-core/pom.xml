@@ -460,6 +460,8 @@
                              single-threaded removes the contention without weakening the prod timeout. -->
                         <exclude>**/MustacheTemplateEngineTest.java</exclude>
                         <exclude>**/VelocityTemplateEngineTest.java</exclude>
+                        <!-- Mutates global ConfigurationProperties.generateRealisticExampleValues -->
+                        <exclude>**/ExampleBuilderRealisticValuesTest.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -501,6 +503,7 @@
                                 <!-- XPath-in-template tests: sequential to avoid flaky timeout under contention -->
                                 <include>**/MustacheTemplateEngineTest.java</include>
                                 <include>**/VelocityTemplateEngineTest.java</include>
+                                <include>**/ExampleBuilderRealisticValuesTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

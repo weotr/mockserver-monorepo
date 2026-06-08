@@ -70,6 +70,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
     private Boolean persistExpectations;
@@ -191,6 +192,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.initializationOpenAPIPath = configuration.initializationOpenAPIPath();
             this.openAPIContextPathPrefix = configuration.openAPIContextPathPrefix();
             this.openAPIResponseValidation = configuration.openAPIResponseValidation();
+            this.generateRealisticExampleValues = configuration.generateRealisticExampleValues();
             this.watchInitializationJson = configuration.watchInitializationJson();
 
             this.persistExpectations = configuration.persistExpectations();
@@ -358,6 +360,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.initializationOpenAPIPath(initializationOpenAPIPath);
         configuration.openAPIContextPathPrefix(openAPIContextPathPrefix);
         configuration.openAPIResponseValidation(openAPIResponseValidation);
+        configuration.generateRealisticExampleValues(generateRealisticExampleValues);
         configuration.watchInitializationJson(watchInitializationJson);
 
         configuration.persistExpectations(persistExpectations);
@@ -572,6 +575,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (openAPIResponseValidation != null) {
             target.openAPIResponseValidation(openAPIResponseValidation);
+        }
+        if (generateRealisticExampleValues != null) {
+            target.generateRealisticExampleValues(generateRealisticExampleValues);
         }
         if (watchInitializationJson != null) {
             target.watchInitializationJson(watchInitializationJson);
@@ -1153,6 +1159,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setOpenAPIResponseValidation(Boolean openAPIResponseValidation) {
         this.openAPIResponseValidation = openAPIResponseValidation;
+        return this;
+    }
+
+    public Boolean getGenerateRealisticExampleValues() {
+        return generateRealisticExampleValues;
+    }
+
+    public ConfigurationDTO setGenerateRealisticExampleValues(Boolean generateRealisticExampleValues) {
+        this.generateRealisticExampleValues = generateRealisticExampleValues;
         return this;
     }
 

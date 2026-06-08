@@ -171,6 +171,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_INITIALIZATION_OPENAPI_PATH = "mockserver.initializationOpenAPIPath";
     private static final String MOCKSERVER_OPENAPI_CONTEXT_PATH_PREFIX = "mockserver.openAPIContextPathPrefix";
     private static final String MOCKSERVER_OPENAPI_RESPONSE_VALIDATION = "mockserver.openAPIResponseValidation";
+    private static final String MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES = "mockserver.generateRealisticExampleValues";
     private static final String MOCKSERVER_WATCH_INITIALIZATION_JSON = "mockserver.watchInitializationJson";
 
     // mock persistence
@@ -1954,6 +1955,22 @@ public class ConfigurationProperties {
      */
     public static void openAPIResponseValidation(boolean enable) {
         setProperty(MOCKSERVER_OPENAPI_RESPONSE_VALIDATION, "" + enable);
+    }
+
+    public static boolean generateRealisticExampleValues() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES, "MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES", "" + false));
+    }
+
+    /**
+     * <p>If enabled, OpenAPI example generation uses realistic, schema/format-aware values (via Datafaker) instead of static placeholder strings.</p>
+     * <p>When disabled (the default), the existing static example values are used (e.g. "some_string_value", "some_email@mockserver.com").</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param enable if enabled OpenAPI examples will use realistic generated values
+     */
+    public static void generateRealisticExampleValues(boolean enable) {
+        setProperty(MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES, "" + enable);
     }
 
     public static boolean watchInitializationJson() {
