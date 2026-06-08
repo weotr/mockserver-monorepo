@@ -59,7 +59,7 @@ func (c *MockServerContainer) ServerPort(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("mockserver: failed to get mapped port: %w", err)
 	}
-	return port.Int(), nil
+	return int(port.Num()), nil
 }
 
 // Run creates and starts a MockServer container. The image parameter specifies the Docker
