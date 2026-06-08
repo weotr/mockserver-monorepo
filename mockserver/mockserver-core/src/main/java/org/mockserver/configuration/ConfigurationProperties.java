@@ -295,6 +295,30 @@ public class ConfigurationProperties {
 
     // properties file
     private static final String MOCKSERVER_PROPERTY_FILE = "mockserver.propertyFile";
+
+    // Declared BEFORE PROPERTIES on purpose: the PROPERTIES initialiser runs readPropertyFile() during
+    // <clinit>, which redacts sensitive values via isSensitivePropertyName() — and that reads these two
+    // fields. Java initialises static fields in textual order, so moving these below PROPERTIES leaves
+    // them null when readPropertyFile() runs and throws NoClassDefFoundError at startup whenever a
+    // property file has entries (regression #2338). Keep them above PROPERTIES.
+    static final String REDACTED_VALUE = "***REDACTED***";
+
+    private static final Set<String> SENSITIVE_SUBSTRINGS = Stream.of(
+        "password",
+        "secret",
+        "accesskey",
+        "access_key",
+        "apikey",
+        "api_key",
+        "connectionstring",
+        "connection_string",
+        "token",
+        "privatekey",
+        "private_key",
+        "credential",
+        "passphrase"
+    ).collect(Collectors.toCollection(LinkedHashSet::new));
+
     public static final Properties PROPERTIES = readPropertyFile();
 
     static {
@@ -3241,24 +3265,6 @@ public class ConfigurationProperties {
             return defaultValue;
         }
     }
-
-    static final String REDACTED_VALUE = "***REDACTED***";
-
-    private static final Set<String> SENSITIVE_SUBSTRINGS = Stream.of(
-        "password",
-        "secret",
-        "accesskey",
-        "access_key",
-        "apikey",
-        "api_key",
-        "connectionstring",
-        "connection_string",
-        "token",
-        "privatekey",
-        "private_key",
-        "credential",
-        "passphrase"
-    ).collect(Collectors.toCollection(LinkedHashSet::new));
 
     /**
      * Returns {@code true} when the property name (with or without the
