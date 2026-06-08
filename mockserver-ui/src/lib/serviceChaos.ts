@@ -161,7 +161,8 @@ export function summarizeChaosProfile(profile: HttpChaosProfileDTO): string[] {
   // probability is shown only as a modifier of that status.
   if (profile.errorStatus != null) {
     const prob = profile.errorProbability != null ? ` @ ${pct(profile.errorProbability)}` : '';
-    parts.push(`error ${profile.errorStatus}${prob}`);
+    const retry = profile.retryAfter ? ` retry-after=${profile.retryAfter}` : '';
+    parts.push(`error ${profile.errorStatus}${prob}${retry}`);
   }
   if (profile.dropConnectionProbability != null) {
     parts.push(`drop @ ${pct(profile.dropConnectionProbability)}`);

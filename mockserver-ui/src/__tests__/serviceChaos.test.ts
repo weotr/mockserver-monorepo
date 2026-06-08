@@ -41,6 +41,7 @@ describe('summarizeChaosProfile', () => {
   it('summarises each populated facet', () => {
     expect(summarizeChaosProfile({ errorStatus: 503, errorProbability: 0.5 })).toEqual(['error 503 @ 50%']);
     expect(summarizeChaosProfile({ errorStatus: 500 })).toEqual(['error 500']);
+    expect(summarizeChaosProfile({ errorStatus: 429, retryAfter: '120' })).toEqual(['error 429 retry-after=120']);
     expect(summarizeChaosProfile({ dropConnectionProbability: 0.25 })).toEqual(['drop @ 25%']);
     expect(summarizeChaosProfile({ latency: { timeUnit: 'MILLISECONDS', value: 250 } })).toEqual(['+250ms latency']);
     expect(summarizeChaosProfile({ latency: { timeUnit: 'SECONDS', value: 2 } })).toEqual(['+2000ms latency']);
