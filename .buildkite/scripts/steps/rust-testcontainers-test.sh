@@ -9,7 +9,6 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -i rust:1 \
   -w /build/mockserver-testcontainers/rust \
   --docker-socket \
-  --root \
   -- bash -ec "rustup component add clippy >/dev/null 2>&1 || true
     cargo test --all-targets
     cargo clippy --all-targets -- -D warnings"

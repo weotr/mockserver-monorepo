@@ -15,17 +15,17 @@ ENTRYPOINT=""
 ENV_VARS=()
 VOLUMES=()
 CACHE_TYPES=()
-# Security posture (hardening for untrusted PR builds):
-#  - Containers run as the host agent UID by default (non-root), so a process
-#    escaping the build cannot be root on the host and cannot leave root-owned
-#    files in the checkout (which break the next build's git clean). Pass --root
-#    only for steps that genuinely need root inside the container (e.g. apt-get).
-#  - no-new-privileges + cap-drop=ALL shrink the breakout surface. Add specific
-#    capabilities back per-step with --cap-add when a tool needs one (e.g.
-#    SYS_ADMIN for a Chromium sandbox, NET_ADMIN for transparent-proxy tests).
-RUN_AS_ROOT=false
+# Security posture (hardening for untrusted PR builds), opt-in via --harden:
+#  - --harden runs the container as the host agent UID (non-root) with HOME=/tmp,
+#    plus no-new-privileges + cap-drop=ALL. A breakout is then unprivileged and
+#    leaves no root-owned files in the checkout. Add a capability back with
+#    --cap-add when a tool needs one. Default (no --harden) preserves the legacy
+#    behaviour (root, full caps) so a step opts into hardening only once it has
+#    been validated non-root.
+#  - The Docker socket (-s) is ALWAYS withheld from PR builds (L3) regardless of
+#    --harden, since that is the highest-value protection and a safe skip.
+HARDEN=false
 CAP_ADDS=()
-NO_HARDEN=false
 
 usage() {
   cat <<EOF
@@ -44,9 +44,8 @@ Options:
   -v, --volume SRC:DST     Additional volume mount
   --cache TYPE             Mount dependency cache (maven|npm|pip|bundler|gradle|go|cargo|nuget)
   --network NAME           Docker network to connect to
-  --root                   Run the container as root (default: host agent UID, non-root)
-  --cap-add CAP            Add a Linux capability back (default caps are all dropped)
-  --no-harden              Disable no-new-privileges + cap-drop (escape hatch)
+  --harden                 Run non-root (host agent UID) + no-new-privileges + cap-drop=ALL
+  --cap-add CAP            With --harden, add a Linux capability back
   -h, --help               Show this help
 
 Examples:
@@ -67,9 +66,8 @@ while [[ $# -gt 0 ]]; do
     -v|--volume)  VOLUMES+=("$2"); shift 2 ;;
     --cache)      CACHE_TYPES+=("$2"); shift 2 ;;
     --network)    NETWORK="$2"; shift 2 ;;
-    --root)       RUN_AS_ROOT=true; shift ;;
+    --harden)     HARDEN=true; shift ;;
     --cap-add)    CAP_ADDS+=("$2"); shift 2 ;;
-    --no-harden)  NO_HARDEN=true; shift ;;
     -h|--help)    usage ;;
     --)           shift; COMMAND_ARGS=("$@"); break ;;
     *)            COMMAND_ARGS=("$@"); break ;;
@@ -91,15 +89,14 @@ DOCKER_ARGS+=(-v "$REPO_ROOT:/build")
 DOCKER_ARGS+=(-w "$WORKDIR")
 
 # ---------------------------------------------------------------------------
-# User + HOME (non-root by default)
+# Hardening (opt-in via --harden): non-root UID + writable HOME + dropped caps
 # ---------------------------------------------------------------------------
-# Non-root: run as the host agent UID so anything written to the bind-mounted
-# workspace/caches is owned by the agent (not root) and a breakout is
-# unprivileged. An arbitrary UID has no /etc/passwd entry, so point HOME at a
-# writable dir (/tmp). Tools then use $HOME/.m2, $HOME/.npm, $HOME/.gradle, etc.
-if [[ "$RUN_AS_ROOT" == "true" ]]; then
-  HOME_DIR="/root"
-else
+# With --harden the container runs as the host agent UID so anything written to
+# the bind-mounted workspace/caches is owned by the agent (not root) and a
+# breakout is unprivileged. An arbitrary UID has no /etc/passwd entry, so HOME
+# points at a writable dir (/tmp); tools then use $HOME/.m2, $HOME/.npm, etc.
+# Without --harden the legacy behaviour (root, HOME=/root, full caps) is kept.
+if [[ "$HARDEN" == "true" ]]; then
   HOME_DIR="/tmp"
   DOCKER_ARGS+=(--user "$(id -u):$(id -g)")
   DOCKER_ARGS+=(-e "HOME=${HOME_DIR}")
@@ -108,20 +105,13 @@ else
   # images that don't use them.
   DOCKER_ARGS+=(-e "DOTNET_CLI_HOME=${HOME_DIR}" -e "DOTNET_NOLOGO=1")
   DOCKER_ARGS+=(-e "XDG_CACHE_HOME=${HOME_DIR}/.cache")
-fi
-
-# ---------------------------------------------------------------------------
-# Hardening (no-new-privileges + drop all capabilities)
-# ---------------------------------------------------------------------------
-# Untrusted PR code runs in these containers; dropping privilege escalation and
-# all capabilities shrinks the breakout surface. Steps that need a specific
-# capability add it back with --cap-add (e.g. a Chromium sandbox, NET_ADMIN).
-if [[ "$NO_HARDEN" != "true" ]]; then
   DOCKER_ARGS+=(--security-opt no-new-privileges)
   DOCKER_ARGS+=(--cap-drop ALL)
   for cap in "${CAP_ADDS[@]+"${CAP_ADDS[@]}"}"; do
     DOCKER_ARGS+=(--cap-add "$cap")
   done
+else
+  HOME_DIR="/root"
 fi
 
 if [[ -n "$MEMORY" ]]; then
@@ -190,11 +180,11 @@ for cache_type in "${CACHE_TYPES[@]+"${CACHE_TYPES[@]}"}"; do
     cargo)   DOCKER_ARGS+=(-v "${host_dir}:${HOME_DIR}/.cargo/registry") ;;
     nuget)   DOCKER_ARGS+=(-v "${host_dir}:${HOME_DIR}/.nuget/packages") ;;
     bundler)
-      if [[ "$RUN_AS_ROOT" == "true" ]]; then
-        DOCKER_ARGS+=(-v "${host_dir}:/usr/local/bundle/cache")
-      else
+      if [[ "$HARDEN" == "true" ]]; then
         DOCKER_ARGS+=(-v "${host_dir}:${HOME_DIR}/bundle/cache")
         DOCKER_ARGS+=(-e "BUNDLE_PATH=${HOME_DIR}/bundle" -e "GEM_HOME=${HOME_DIR}/bundle")
+      else
+        DOCKER_ARGS+=(-v "${host_dir}:/usr/local/bundle/cache")
       fi
       ;;
     *)       echo "[run-in-docker] WARNING: unknown cache type '${cache_type}' -- ignored" >&2 ;;

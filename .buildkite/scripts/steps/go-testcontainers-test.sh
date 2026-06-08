@@ -8,5 +8,4 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -i golang:1.23 \
   -w /build/mockserver-testcontainers/go \
   --docker-socket \
-  --root \
   -- bash -c "go vet ./... && go test ./... -v -count=1 -timeout 300s"

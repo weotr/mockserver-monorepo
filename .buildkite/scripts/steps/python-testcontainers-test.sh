@@ -7,6 +7,5 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -i python:3.12 \
   -w /build/mockserver-testcontainers/python \
   -s \
-  --root \
   --cache pip \
   -- bash -c 'pip install -e ".[test]" && pytest -m "not docker" -v'
