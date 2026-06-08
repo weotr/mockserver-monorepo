@@ -194,6 +194,42 @@ Two picocli exception handlers are registered in `main()`:
 5. If the subcommand starts MockServer, delegate to `RunCommand.run()` by populating a `RunCommand` instance (as `ProxyCommand` and `OpenApiCommand` do) rather than calling `startServer()` directly — this keeps validation and new-flag wiring in one place.
 6. Update this document and the consumer-facing CLI page.
 
+## JVM-less binary distribution (jlink bundle)
+
+The CLI can be shipped as a self-contained, cross-platform bundle that runs with **no
+pre-installed JVM and no Docker**, built by `scripts/build-binary-bundle.sh`.
+
+```mermaid
+flowchart LR
+    A["mockserver-netty fat jar\n(Main-Class: org.mockserver.cli.Main)"] --> Z["build-binary-bundle.sh"]
+    J["host jlink + target JDK jmods"] --> Z
+    Z --> R["runtime/ (trimmed JRE)"]
+    Z --> L["lib/mockserver.jar"]
+    Z --> B["bin/mockserver (launcher)"]
+    R --> T["mockserver-<ver>-<os>-<arch>.tar.gz + .sha256"]
+    L --> T
+    B --> T
+```
+
+**Why jlink, not GraalVM native-image:** MockServer loads user-supplied classes at runtime
+(`initializationClass`, `RESPONSE_CLASS_CALLBACK`, `FORWARD_CLASS_CALLBACK`), generates TLS
+certificates dynamically via BouncyCastle, and embeds scripting engines — all of which violate
+native-image's closed-world assumption. A jlink-trimmed runtime is the real HotSpot JVM, so
+feature parity is 100% with zero reachability-metadata maintenance.
+
+**Runtime module set** (validated end-to-end — HTTP, HTTPS/BouncyCastle dynamic certs, and DNS
+all confirmed): `java.se` (runtime aggregator) plus `jdk.unsupported` (Netty `sun.misc.Unsafe`),
+`jdk.crypto.ec` + `jdk.crypto.cryptoki` (TLS), `jdk.naming.dns`, `jdk.zipfs`. Trimmed runtime is
+~54 MB.
+
+**Launcher** (`bin/mockserver`) execs the bundled `runtime/bin/java -jar lib/mockserver.jar "$@"`,
+so every CLI subcommand and flag documented above works identically; `MOCKSERVER_JAVA_OPTS`
+overrides JVM options.
+
+**Cross-build from one host:** jlink targets another OS/arch by using the host `jlink` with the
+target JDK's `--jmods` (host and target JDK must share the major version). `--os`/`--arch` name the
+archive; Windows produces a `.zip` with `bin/mockserver.bat`.
+
 ## Source files
 
 | File | Role |
