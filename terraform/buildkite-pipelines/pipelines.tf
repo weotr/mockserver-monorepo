@@ -44,6 +44,41 @@ locals {
       emoji       = ":ruby:"
       trigger     = "none"
     }
+    "go" = {
+      name        = "MockServer Go"
+      description = "Go client and testcontainers module — unit tests"
+      file        = ".buildkite/pipeline-go.yml"
+      emoji       = ":golang:"
+      trigger     = "none"
+    }
+    "dotnet" = {
+      name        = "MockServer Dotnet"
+      description = ".NET client and testcontainers module — unit tests"
+      file        = ".buildkite/pipeline-dotnet.yml"
+      emoji       = ":dotnet:"
+      trigger     = "none"
+    }
+    "rust" = {
+      name        = "MockServer Rust"
+      description = "Rust client and testcontainers module — tests and clippy"
+      file        = ".buildkite/pipeline-rust.yml"
+      emoji       = ":rust:"
+      trigger     = "none"
+    }
+    "php" = {
+      name        = "MockServer PHP"
+      description = "PHP client — unit tests"
+      file        = ".buildkite/pipeline-php.yml"
+      emoji       = ":php:"
+      trigger     = "none"
+    }
+    "editors" = {
+      name        = "MockServer Editors"
+      description = "VS Code extension and JetBrains plugin — build and test"
+      file        = ".buildkite/pipeline-editors.yml"
+      emoji       = ":vscode:"
+      trigger     = "none"
+    }
     "maven-plugin" = {
       name        = "MockServer Maven Plugin"
       description = "Maven plugin build and test"
@@ -169,6 +204,11 @@ locals {
     "python",       # mockserver-python — lint/test only
     "ruby",         # mockserver-ruby — lint/test only
     "maven-plugin", # mockserver-maven-plugin — build/test only
+    "go",           # mockserver-go — lint/test only
+    "dotnet",       # mockserver-dotnet — lint/test only
+    "rust",         # mockserver-rust — lint/test only
+    "php",          # mockserver-php — lint/test only
+    "editors",      # mockserver-editors — lint/test only
   ])
 }
 

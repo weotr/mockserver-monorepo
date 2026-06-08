@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release pipeline distribution channels** — soft-fail release components that publish the new clients, Testcontainers modules and editor extensions (NuGet, crates.io, Packagist, pkg.go.dev, npm, PyPI, VS Code Marketplace / Open VSX, JetBrains Marketplace), with post-release liveness checks.
 
 ### Changed
+- **CI** — the build pipeline now runs unit tests for the new Go, .NET, Rust and PHP libraries, the five Testcontainers modules and the editor extensions (each in its language toolchain Docker image), triggered by changes under their paths.
 
 ### Fixed
 

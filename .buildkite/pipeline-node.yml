@@ -27,6 +27,10 @@ steps:
     command: ".buildkite/scripts/steps/node-launcher-test.sh"
     timeout_in_minutes: 15
 
+  - label: ":node: testcontainers-node build + unit tests"
+    command: ".buildkite/scripts/steps/node-testcontainers-test.sh"
+    timeout_in_minutes: 10
+
   - wait: ~
     continue_on_failure: true
 

@@ -1,0 +1,9 @@
+steps:
+  - label: ":vscode: VS Code extension compile + lint"
+    command: ".buildkite/scripts/steps/vscode-test.sh"
+    timeout_in_minutes: 10
+
+  - label: ":intellij: JetBrains plugin tests"
+    command: ".buildkite/scripts/steps/jetbrains-test.sh"
+    timeout_in_minutes: 20
+    soft_fail: true

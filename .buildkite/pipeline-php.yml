@@ -1,0 +1,4 @@
+steps:
+  - label: ":php: PHP client unit tests"
+    command: ".buildkite/scripts/steps/php-unit-test.sh"
+    timeout_in_minutes: 10

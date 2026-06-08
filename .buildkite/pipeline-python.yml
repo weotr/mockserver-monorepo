@@ -18,6 +18,10 @@ steps:
       - "mockserver-client-python/test-reports/*.xml"
     timeout_in_minutes: 20
 
+  - label: ":python: testcontainers-python unit tests"
+    command: ".buildkite/scripts/steps/python-testcontainers-test.sh"
+    timeout_in_minutes: 10
+
   - wait: ~
     continue_on_failure: true
 
