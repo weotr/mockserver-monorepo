@@ -52,7 +52,6 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
     "test": "node ./out/test/extension.test.js",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package",

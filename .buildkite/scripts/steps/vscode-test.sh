@@ -7,4 +7,4 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -i node:20 \
   -w /build/mockserver-vscode \
   --cache npm \
-  -- bash -c "npm ci && npm run compile && npm run lint"
+  -- bash -c "npm ci && npm run compile && npm test"

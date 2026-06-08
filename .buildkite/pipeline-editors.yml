@@ -1,5 +1,5 @@
 steps:
-  - label: ":vscode: VS Code extension compile + lint"
+  - label: ":vscode: VS Code extension compile + test"
     command: ".buildkite/scripts/steps/vscode-test.sh"
     timeout_in_minutes: 10
 
