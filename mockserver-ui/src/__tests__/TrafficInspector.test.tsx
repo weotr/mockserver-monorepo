@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
@@ -370,5 +370,105 @@ describe('TrafficInspector — per-request timing display', () => {
     expect(screen.getByText('connect 8ms')).toBeInTheDocument();
     expect(screen.getByText('TTFB 1200ms')).toBeInTheDocument();
     expect(screen.getByText('total 1500ms')).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — compare two requests (diff)', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'req-a',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'req-b',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 201 },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('lets the user pick two requests and diffs them via PUT /mockserver/diff', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        diffCount: 1,
+        identical: false,
+        diffs: [{ field: 'method', expectedValue: 'GET', actualValue: 'POST', diffType: 'CHANGED' }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+
+    // No compare checkboxes until compare mode is enabled.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+
+    // Diff button disabled until exactly two are picked.
+    const diffButton = screen.getByRole('button', { name: /Diff \(/ });
+    expect(diffButton).toBeDisabled();
+
+    await user.click(checkboxes[0]!);
+    expect(screen.getByRole('button', { name: /Diff \(1\/2\)/ })).toBeDisabled();
+    await user.click(checkboxes[1]!);
+
+    const ready = screen.getByRole('button', { name: /Diff \(2\/2\)/ });
+    expect(ready).toBeEnabled();
+    await user.click(ready);
+
+    // Dialog opens pre-populated; Compare submits the two picked requests to the diff endpoint.
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Compare' }));
+
+    expect(await within(dialog).findByText('Request Diff')).toBeInTheDocument();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toMatch(/\/mockserver\/diff$/);
+    expect((init as RequestInit).method).toBe('PUT');
+    const body = JSON.parse((init as RequestInit).body as string);
+    // First pick (req-a) maps to expected, second pick (req-b) to actual, sending the httpRequest definitions.
+    expect(body.expected).toMatchObject({ method: 'GET', path: '/api/users' });
+    expect(body.actual).toMatchObject({ method: 'POST', path: '/api/users' });
+  });
+
+  it('caps the selection at two requests', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      recordedRequests: [
+        { key: 'r1', value: { httpRequest: { method: 'GET', path: '/a' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r2', value: { httpRequest: { method: 'GET', path: '/b' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r3', value: { httpRequest: { method: 'GET', path: '/c' }, httpResponse: { statusCode: 200 } } },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[0]!);
+    await user.click(checkboxes[1]!);
+
+    // Once two are picked, the remaining unchecked checkbox is disabled.
+    expect(checkboxes[2]!).toBeDisabled();
+    // Already-checked ones remain interactive so the user can deselect.
+    expect(checkboxes[0]!).toBeEnabled();
   });
 });

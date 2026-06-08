@@ -16,19 +16,28 @@ const PLACEHOLDER = '{\n  "method": "GET",\n  "path": "/api/users",\n  "headers"
 
 /**
  * Compare two captured requests field-by-field via PUT /mockserver/diff and render the result with
- * the shared DiffPanel. Paste each request as JSON (e.g. copied from the Traffic inspector).
+ * the shared DiffPanel. Paste each request as JSON (e.g. copied from the Traffic inspector), or open
+ * the dialog pre-populated by picking two requests in the Traffic inspector ("Compare" mode).
+ *
+ * The textareas are seeded once from `initialExpected`/`initialActual` (lazy state initialisers).
+ * To re-seed with a different pair of selected requests, the parent passes a changing `key` so this
+ * component remounts with the new initial values rather than relying on a sync effect.
  */
 export default function DiffRequestsDialog({
   open,
   onClose,
   connectionParams,
+  initialExpected,
+  initialActual,
 }: {
   open: boolean;
   onClose: () => void;
   connectionParams: ConnectionParams;
+  initialExpected?: string;
+  initialActual?: string;
 }) {
-  const [expected, setExpected] = useState('');
-  const [actual, setActual] = useState('');
+  const [expected, setExpected] = useState(() => initialExpected ?? '');
+  const [actual, setActual] = useState(() => initialActual ?? '');
   const [result, setResult] = useState<DiffResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

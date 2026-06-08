@@ -10,12 +10,16 @@ import Tab from '@mui/material/Tab';
 import Divider from '@mui/material/Divider';
 import Button from '@mui/material/Button';
 import Tooltip from '@mui/material/Tooltip';
+import Checkbox from '@mui/material/Checkbox';
+import ToggleButton from '@mui/material/ToggleButton';
 import SearchIcon from '@mui/icons-material/Search';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { useDashboardStore } from '../store';
 import { useConnectionParams } from '../hooks/useConnectionParams';
 import JsonViewer from './JsonViewer';
 import CaptureAsMockDialog from './CaptureAsMockDialog';
+import DiffRequestsDialog from './DiffRequestsDialog';
 import LlmUsageDetail from './LlmUsageDetail';
 import {
   AnthropicConversationView,
@@ -195,9 +199,23 @@ interface TrafficRowProps {
   index: number;
   selected: boolean;
   onClick: () => void;
+  /** When set, a comparison checkbox is rendered and reflects this checked state. */
+  compareMode?: boolean;
+  compareChecked?: boolean;
+  compareDisabled?: boolean;
+  onCompareToggle?: () => void;
 }
 
-function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
+function TrafficRow({
+  summary,
+  index,
+  selected,
+  onClick,
+  compareMode,
+  compareChecked,
+  compareDisabled,
+  onCompareToggle,
+}: TrafficRowProps) {
   const model = getModelLabel(summary.parsed);
   const tokens = getTokenSummary(summary.parsed);
   const timingLabel = getTimingLabel(summary.timing);
@@ -220,6 +238,17 @@ function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
         flexWrap: 'wrap',
       }}
     >
+      {compareMode && (
+        <Checkbox
+          size="small"
+          checked={!!compareChecked}
+          disabled={!compareChecked && compareDisabled}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onCompareToggle?.()}
+          slotProps={{ input: { 'aria-label': `Select request ${index} to compare` } }}
+          sx={{ p: 0.25, flexShrink: 0 }}
+        />
+      )}
       <Typography
         variant="caption"
         sx={{ fontFamily: 'monospace', color: 'text.secondary', minWidth: 24, flexShrink: 0 }}
@@ -854,6 +883,28 @@ export default function TrafficInspector() {
   const connectionParams = useConnectionParams();
   const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
 
+  // Compare mode: pick two requests from the list and diff them field-by-field via the shared
+  // DiffRequestsDialog (PUT /mockserver/diff). compareKeys holds the (max two) selected item keys.
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareKeys, setCompareKeys] = useState<string[]>([]);
+  const [diffDialogOpen, setDiffDialogOpen] = useState(false);
+
+  const toggleCompareMode = useCallback(() => {
+    setCompareMode((prev) => {
+      // Leaving compare mode clears any pending selection.
+      if (prev) setCompareKeys([]);
+      return !prev;
+    });
+  }, []);
+
+  const toggleCompareKey = useCallback((key: string) => {
+    setCompareKeys((prev) => {
+      if (prev.includes(key)) return prev.filter((k) => k !== key);
+      if (prev.length >= 2) return prev; // cap at two; row checkbox is disabled past this
+      return [...prev, key];
+    });
+  }, []);
+
   // Gather scripted turns from active expectations
   const scriptedTurns = useMemo(
     () => gatherScriptedTurns(activeExpectations),
@@ -894,6 +945,22 @@ export default function TrafficInspector() {
     [selectedKey, setSelectedKey],
   );
 
+  // Resolve the two selected requests to the JSON the diff endpoint expects (the request
+  // definition — `httpRequest` if present, otherwise the whole captured value). Preserve the
+  // user's pick order: the first selected is "expected", the second "actual".
+  const compareJson = useMemo(() => {
+    const toRequestJson = (item: JsonListItem): string => {
+      const request = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? item.value;
+      return JSON.stringify(request, null, 2);
+    };
+    return compareKeys.map((key) => {
+      const entry = allRequests.find((item) => item.key === key);
+      return entry ? toRequestJson(entry) : '';
+    });
+  }, [compareKeys, allRequests]);
+
+  const canDiff = compareKeys.length === 2;
+
   return (
     <Box
       sx={{
@@ -911,7 +978,7 @@ export default function TrafficInspector() {
         sx={{
           display: 'flex',
           flexDirection: 'column',
-          width: selectedEntry ? '40%' : '100%',
+          width: selectedEntry && !compareMode ? '40%' : '100%',
           minWidth: 300,
           overflow: 'hidden',
           transition: 'width 0.2s ease',
@@ -962,6 +1029,30 @@ export default function TrafficInspector() {
               '& .MuiSvgIcon-root': { fontSize: '0.875rem' },
             }}
           />
+          <Tooltip title="Pick two requests to diff field-by-field">
+            <ToggleButton
+              value="compare"
+              size="small"
+              selected={compareMode}
+              onChange={toggleCompareMode}
+              aria-label="Compare requests"
+              sx={{ height: 28, px: 1, fontSize: '0.7rem', textTransform: 'none', flexShrink: 0 }}
+            >
+              <CompareArrowsIcon sx={{ fontSize: '0.95rem', mr: 0.5 }} />
+              Compare
+            </ToggleButton>
+          </Tooltip>
+          {compareMode && (
+            <Button
+              size="small"
+              variant="contained"
+              disabled={!canDiff}
+              onClick={() => setDiffDialogOpen(true)}
+              sx={{ height: 28, px: 1, fontSize: '0.7rem', textTransform: 'none', flexShrink: 0 }}
+            >
+              Diff ({compareKeys.length}/2)
+            </Button>
+          )}
         </Box>
         <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: 'background.default' }}>
           {filtered.length === 0 ? (
@@ -974,16 +1065,22 @@ export default function TrafficInspector() {
                 key={item.key}
                 summary={summary}
                 index={filtered.length - index}
-                selected={selectedKey === item.key}
-                onClick={() => handleRowClick(item.key)}
+                selected={compareMode ? compareKeys.includes(item.key) : selectedKey === item.key}
+                onClick={() =>
+                  compareMode ? toggleCompareKey(item.key) : handleRowClick(item.key)
+                }
+                compareMode={compareMode}
+                compareChecked={compareKeys.includes(item.key)}
+                compareDisabled={compareKeys.length >= 2}
+                onCompareToggle={() => toggleCompareKey(item.key)}
               />
             ))
           )}
         </Box>
       </Paper>
 
-      {/* Detail pane */}
-      {selectedEntry && (
+      {/* Detail pane (hidden while picking requests to compare) */}
+      {selectedEntry && !compareMode && (
         <Paper
           variant="outlined"
           sx={{
@@ -1012,6 +1109,19 @@ export default function TrafficInspector() {
           parsed={selectedEntry.summary.parsed}
           path={selectedEntry.summary.path ?? ''}
           connectionParams={connectionParams}
+        />
+      )}
+
+      {/* Diff two picked requests, reusing the shared dialog + PUT /mockserver/diff endpoint.
+          Mount only while open and key on the selection so the dialog seeds fresh inputs each time. */}
+      {diffDialogOpen && (
+        <DiffRequestsDialog
+          key={compareKeys.join('|')}
+          open
+          onClose={() => setDiffDialogOpen(false)}
+          connectionParams={connectionParams}
+          initialExpected={compareJson[0] ?? ''}
+          initialActual={compareJson[1] ?? ''}
         />
       )}
 
