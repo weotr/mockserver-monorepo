@@ -140,6 +140,32 @@ rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 
 Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`registerChaosCounter` / `registerActiveServiceChaosGauge`) so OTLP-only consumers can observe them without a Prometheus scrape.
 
+### Chaos Auto-Halt Counter
+
+`mock_server_chaos_auto_halt` is a Prometheus `Counter` that increments each time the chaos auto-halt circuit-breaker triggers. The circuit-breaker is a safety mechanism that automatically disables all active service-scoped chaos profiles when the number of chaos-injected errors within a sliding window exceeds a configured threshold. This prevents chaos experiments from driving cascading outages.
+
+The auto-halt feature is controlled by three configuration properties (all off/inert by default):
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `chaosAutoHaltEnabled` | `false` | Master switch for the circuit-breaker |
+| `chaosAutoHaltErrorThreshold` | `50` | Number of errors in the window that triggers halt |
+| `chaosAutoHaltWindowMillis` | `60000` | Sliding window duration in milliseconds |
+
+When the circuit-breaker fires:
+1. All active service-scoped chaos profiles are removed via `ServiceChaosRegistry.reset()` (the same path used by TTL expiry)
+2. The `mock_server_chaos_auto_halt` counter is incremented
+3. The `mock_server_active_service_chaos` gauge drops to 0 for all fault types
+4. A WARN-level log event is emitted with the error count, window, and threshold
+5. The sliding window is cleared so the breaker does not immediately re-trigger
+
+The auto-halt is evaluated per chaos fault injection (called from `Metrics.incrementHttpChaosInjected`). It uses a lock-free `ConcurrentLinkedDeque` of timestamps and does not block the event loop. When the feature is disabled (`chaosAutoHaltEnabled=false`), the evaluation is a no-op with zero overhead.
+
+Example PromQL alert rule:
+```promql
+increase(mock_server_chaos_auto_halt[5m]) > 0
+```
+
 ### Async Message Counters
 
 Two Prometheus `Counter`s track broker message flow for the optional `mockserver-async` (AsyncAPI broker-mocking) module, each labelled by `channel` (the broker topic/channel). Both are registered once when `metricsEnabled` is `true`.
@@ -206,6 +232,7 @@ The dashboard **Metrics** view renders these on a dedicated **"Async message act
 | `MetricsHandler` | mockserver-core | `org.mockserver.metrics.MetricsHandler` |
 | `BuildInfoCollector` | mockserver-core | `org.mockserver.metrics.BuildInfoCollector` |
 | `JvmMetricsCollector` | mockserver-core | `org.mockserver.metrics.JvmMetricsCollector` |
+| `ChaosAutoHaltMonitor` | mockserver-core | `org.mockserver.mock.action.http.ChaosAutoHaltMonitor` |
 | `MemoryMonitoring` | mockserver-core | `org.mockserver.memory.MemoryMonitoring` |
 | `Summary` | mockserver-core | `org.mockserver.memory.Summary` |
 | `Detail` | mockserver-core | `org.mockserver.memory.Detail` |

@@ -229,6 +229,84 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetChaosAutoHaltEnabled() {
+        boolean original = ConfigurationProperties.chaosAutoHaltEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltEnabled"), equalTo("true"));
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(true));
+            ConfigurationProperties.chaosAutoHaltEnabled(original);
+
+            // when - setter
+            configuration.chaosAutoHaltEnabled(true);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(true));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetChaosAutoHaltErrorThreshold() {
+        long original = ConfigurationProperties.chaosAutoHaltErrorThreshold();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(50L));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(100);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltErrorThreshold(), equalTo(100L));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltErrorThreshold"), equalTo("100"));
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(100L));
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(original);
+
+            // when - setter
+            configuration.chaosAutoHaltErrorThreshold(200L);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(200L));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetChaosAutoHaltWindowMillis() {
+        long original = ConfigurationProperties.chaosAutoHaltWindowMillis();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(60_000L));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltWindowMillis(30_000);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltWindowMillis(), equalTo(30_000L));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltWindowMillis"), equalTo("30000"));
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(30_000L));
+            ConfigurationProperties.chaosAutoHaltWindowMillis(original);
+
+            // when - setter
+            configuration.chaosAutoHaltWindowMillis(120_000L);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(120_000L));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltWindowMillis(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetMaxExpectations() {
         int original = ConfigurationProperties.maxExpectations();
         try {

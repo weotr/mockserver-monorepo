@@ -57,6 +57,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_METRICS_ENABLED = "mockserver.metricsEnabled";
     private static final String MOCKSERVER_SLOW_REQUEST_THRESHOLD_MILLIS = "mockserver.slowRequestThresholdMillis";
     private static final String MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS = "mockserver.metricsRequestDurationRouteLabels";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_ENABLED = "mockserver.chaosAutoHaltEnabled";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD = "mockserver.chaosAutoHaltErrorThreshold";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS = "mockserver.chaosAutoHaltWindowMillis";
     private static final String MOCKSERVER_MCP_ENABLED = "mockserver.mcpEnabled";
     private static final String MOCKSERVER_LOG_LEVEL_OVERRIDES = "mockserver.logLevelOverrides";
     private static final String MOCKSERVER_COMPACT_LOG_FORMAT = "mockserver.compactLogFormat";
@@ -545,6 +548,49 @@ public class ConfigurationProperties {
      */
     public static void metricsRequestDurationRouteLabels(boolean enable) {
         setProperty(MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS, "" + enable);
+    }
+
+    public static boolean chaosAutoHaltEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CHAOS_AUTO_HALT_ENABLED, "MOCKSERVER_CHAOS_AUTO_HALT_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable the chaos auto-halt circuit-breaker. When enabled, if the number of chaos-injected
+     * errors within a sliding window exceeds the configured threshold, all active service-scoped
+     * chaos profiles are automatically disabled. Default is false (feature off).
+     *
+     * @param enable enable chaos auto-halt
+     */
+    public static void chaosAutoHaltEnabled(boolean enable) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_ENABLED, "" + enable);
+    }
+
+    public static long chaosAutoHaltErrorThreshold() {
+        return readLongProperty(MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD, "MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD", 50L);
+    }
+
+    /**
+     * The number of chaos-injected errors within the sliding window that triggers an
+     * automatic halt of all active service-scoped chaos profiles. Default is 50.
+     *
+     * @param threshold error count threshold
+     */
+    public static void chaosAutoHaltErrorThreshold(long threshold) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD, "" + threshold);
+    }
+
+    public static long chaosAutoHaltWindowMillis() {
+        return readLongProperty(MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS, "MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS", 60_000L);
+    }
+
+    /**
+     * The sliding window duration in milliseconds over which chaos-injected errors are
+     * counted for the auto-halt circuit-breaker. Default is 60000 (60 seconds).
+     *
+     * @param millis window duration in milliseconds
+     */
+    public static void chaosAutoHaltWindowMillis(long millis) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS, "" + millis);
     }
 
     public static boolean mcpEnabled() {

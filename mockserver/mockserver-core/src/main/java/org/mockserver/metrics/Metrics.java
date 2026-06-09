@@ -9,6 +9,7 @@ import org.mockserver.configuration.Configuration;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
+import org.mockserver.mock.action.http.ChaosAutoHaltMonitor;
 import org.mockserver.mock.action.http.ServiceChaosRegistry;
 import org.mockserver.model.Action;
 
@@ -37,6 +38,8 @@ public class Metrics {
     private static volatile Counter slowRequestTotal;
     // Counter for HTTP chaos faults injected (error or latency). Null until metrics are enabled.
     private static volatile Counter httpChaosInjectedTotal;
+    // Counter for chaos auto-halt events. Null until metrics are enabled.
+    private static volatile Counter chaosAutoHaltTotal;
     // Counter for MCP tool calls, labeled by tool name. Null until metrics are enabled.
     private static volatile Counter mcpToolCallsTotal;
     // Counters for async/broker messages published to and consumed from a broker,
@@ -73,6 +76,10 @@ public class Metrics {
                 .name("mock_server_http_chaos_injected")
                 .help("Total HTTP chaos faults injected by type")
                 .labelNames("fault_type")
+                .register();
+            chaosAutoHaltTotal = Counter.builder()
+                .name("mock_server_chaos_auto_halt")
+                .help("Total number of times the chaos auto-halt circuit-breaker triggered")
                 .register();
             mcpToolCallsTotal = Counter.builder()
                 .name("mock_server_mcp_tool_calls")
@@ -161,6 +168,7 @@ public class Metrics {
         requestDurationByMethodSeconds = null;
         slowRequestTotal = null;
         httpChaosInjectedTotal = null;
+        chaosAutoHaltTotal = null;
         mcpToolCallsTotal = null;
         asyncMessagesPublishedTotal = null;
         asyncMessagesConsumedTotal = null;
@@ -273,6 +281,29 @@ public class Metrics {
         if (counter != null && faultType != null) {
             counter.labelValues(faultType).inc();
         }
+        // Evaluate the chaos auto-halt circuit-breaker on every chaos fault injection.
+        // ChaosAutoHaltMonitor.recordError() is a no-op when the feature is disabled.
+        ChaosAutoHaltMonitor.getInstance().recordError();
+    }
+
+    /**
+     * Increment the chaos auto-halt counter. Called by
+     * {@link ChaosAutoHaltMonitor} when the circuit-breaker triggers.
+     * No-op when metrics are disabled (counter not registered).
+     */
+    public static void incrementChaosAutoHalt() {
+        Counter counter = chaosAutoHaltTotal;
+        if (counter != null) {
+            counter.inc();
+        }
+    }
+
+    /**
+     * Return the current chaos auto-halt count, or 0 if metrics are disabled.
+     */
+    public static long getChaosAutoHaltCount() {
+        Counter counter = chaosAutoHaltTotal;
+        return counter != null ? (long) counter.get() : 0L;
     }
 
     /**

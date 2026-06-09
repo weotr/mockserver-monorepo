@@ -40,6 +40,9 @@ public class Configuration {
     private Boolean metricsEnabled;
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
+    private Boolean chaosAutoHaltEnabled;
+    private Long chaosAutoHaltErrorThreshold;
+    private Long chaosAutoHaltWindowMillis;
     private Boolean otelPropagateTraceContext;
     private Boolean otelGenerateTraceId;
     private Boolean mcpEnabled;
@@ -424,6 +427,61 @@ public class Configuration {
      */
     public Configuration metricsRequestDurationRouteLabels(Boolean metricsRequestDurationRouteLabels) {
         this.metricsRequestDurationRouteLabels = metricsRequestDurationRouteLabels;
+        return this;
+    }
+
+    public Boolean chaosAutoHaltEnabled() {
+        if (chaosAutoHaltEnabled == null) {
+            return ConfigurationProperties.chaosAutoHaltEnabled();
+        }
+        return chaosAutoHaltEnabled;
+    }
+
+    /**
+     * Enable the chaos auto-halt circuit-breaker. When enabled, if the number of chaos-injected
+     * errors within a sliding window exceeds the configured threshold, all active service-scoped
+     * chaos profiles are automatically disabled. Default is false (feature off).
+     *
+     * @param chaosAutoHaltEnabled enable chaos auto-halt
+     */
+    public Configuration chaosAutoHaltEnabled(Boolean chaosAutoHaltEnabled) {
+        this.chaosAutoHaltEnabled = chaosAutoHaltEnabled;
+        return this;
+    }
+
+    public Long chaosAutoHaltErrorThreshold() {
+        if (chaosAutoHaltErrorThreshold == null) {
+            return ConfigurationProperties.chaosAutoHaltErrorThreshold();
+        }
+        return chaosAutoHaltErrorThreshold;
+    }
+
+    /**
+     * The number of chaos-injected errors within the sliding window that triggers an
+     * automatic halt of all active service-scoped chaos profiles. Default is 50.
+     *
+     * @param chaosAutoHaltErrorThreshold error count threshold
+     */
+    public Configuration chaosAutoHaltErrorThreshold(Long chaosAutoHaltErrorThreshold) {
+        this.chaosAutoHaltErrorThreshold = chaosAutoHaltErrorThreshold;
+        return this;
+    }
+
+    public Long chaosAutoHaltWindowMillis() {
+        if (chaosAutoHaltWindowMillis == null) {
+            return ConfigurationProperties.chaosAutoHaltWindowMillis();
+        }
+        return chaosAutoHaltWindowMillis;
+    }
+
+    /**
+     * The sliding window duration in milliseconds over which chaos-injected errors are
+     * counted for the auto-halt circuit-breaker. Default is 60000 (60 seconds).
+     *
+     * @param chaosAutoHaltWindowMillis window duration in milliseconds
+     */
+    public Configuration chaosAutoHaltWindowMillis(Long chaosAutoHaltWindowMillis) {
+        this.chaosAutoHaltWindowMillis = chaosAutoHaltWindowMillis;
         return this;
     }
 

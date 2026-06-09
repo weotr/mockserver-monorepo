@@ -20,6 +20,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean detailedMatchFailures;
     private Boolean launchUIForLogLevelDebug;
     private Boolean metricsEnabled;
+    private Boolean chaosAutoHaltEnabled;
+    private Long chaosAutoHaltErrorThreshold;
+    private Long chaosAutoHaltWindowMillis;
     private Boolean mcpEnabled;
     private Map<String, String> logLevelOverrides;
     private Boolean compactLogFormat;
@@ -143,6 +146,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.detailedMatchFailures = configuration.detailedMatchFailures();
             this.launchUIForLogLevelDebug = configuration.launchUIForLogLevelDebug();
             this.metricsEnabled = configuration.metricsEnabled();
+            this.chaosAutoHaltEnabled = configuration.chaosAutoHaltEnabled();
+            this.chaosAutoHaltErrorThreshold = configuration.chaosAutoHaltErrorThreshold();
+            this.chaosAutoHaltWindowMillis = configuration.chaosAutoHaltWindowMillis();
             this.mcpEnabled = configuration.mcpEnabled();
             Map<String, String> overrides = configuration.logLevelOverrides();
             this.logLevelOverrides = overrides != null && !overrides.isEmpty() ? overrides : null;
@@ -316,6 +322,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.detailedMatchFailures(detailedMatchFailures);
         configuration.launchUIForLogLevelDebug(launchUIForLogLevelDebug);
         configuration.metricsEnabled(metricsEnabled);
+        configuration.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
+        configuration.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
+        configuration.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
         configuration.mcpEnabled(mcpEnabled);
         configuration.logLevelOverrides(logLevelOverrides);
         configuration.compactLogFormat(compactLogFormat);
@@ -461,6 +470,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (metricsEnabled != null) {
             target.metricsEnabled(metricsEnabled);
+        }
+        if (chaosAutoHaltEnabled != null) {
+            target.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
+        }
+        if (chaosAutoHaltErrorThreshold != null) {
+            target.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
+        }
+        if (chaosAutoHaltWindowMillis != null) {
+            target.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
         }
         if (mcpEnabled != null) {
             target.mcpEnabled(mcpEnabled);
@@ -802,6 +820,33 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMetricsEnabled(Boolean metricsEnabled) {
         this.metricsEnabled = metricsEnabled;
+        return this;
+    }
+
+    public Boolean getChaosAutoHaltEnabled() {
+        return chaosAutoHaltEnabled;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltEnabled(Boolean chaosAutoHaltEnabled) {
+        this.chaosAutoHaltEnabled = chaosAutoHaltEnabled;
+        return this;
+    }
+
+    public Long getChaosAutoHaltErrorThreshold() {
+        return chaosAutoHaltErrorThreshold;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltErrorThreshold(Long chaosAutoHaltErrorThreshold) {
+        this.chaosAutoHaltErrorThreshold = chaosAutoHaltErrorThreshold;
+        return this;
+    }
+
+    public Long getChaosAutoHaltWindowMillis() {
+        return chaosAutoHaltWindowMillis;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltWindowMillis(Long chaosAutoHaltWindowMillis) {
+        this.chaosAutoHaltWindowMillis = chaosAutoHaltWindowMillis;
         return this;
     }
 

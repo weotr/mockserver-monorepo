@@ -1140,6 +1140,38 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftResponseTimeThresholdMs="500"</code></pre>
 </div>
 
+<button id="button_configuration_chaos_auto_halt" class="accordion title"><strong>Chaos Auto-Halt Circuit-Breaker</strong></button>
+<div class="panel title">
+    <p>A safety circuit-breaker for service-scoped chaos experiments. When enabled, MockServer counts chaos-injected errors (from chaos profiles) in a sliding time window. If the count exceeds the configured threshold, all active service-scoped chaos profiles are automatically disabled, preventing a chaos experiment from causing cascading failures.</p>
+    <p>This provides the "steady-state guardrail" SREs expect: chaos experiments automatically stop if they produce too many errors too quickly. The auto-halt state is reflected in the <code>mock_server_active_service_chaos</code> gauge (all values drop to 0) and a <code>mock_server_chaos_auto_halt</code> counter is incremented.</p>
+    <p><strong>Enable chaos auto-halt</strong> &mdash; master switch for the circuit-breaker. Default is <code>false</code> (feature off &mdash; no overhead when disabled).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_ENABLED=...</code></pre>
+    <p><strong>Error threshold</strong> &mdash; the number of chaos-injected errors within the window that triggers the halt. Default is <code>50</code>.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">50</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltErrorThreshold(long threshold)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltErrorThreshold=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD=...</code></pre>
+    <p><strong>Window duration</strong> &mdash; the sliding window in milliseconds over which errors are counted. Default is <code>60000</code> (60 seconds).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">60000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltWindowMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltWindowMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS=...</code></pre>
+    <p>Example (halt chaos if more than 20 errors in 30 seconds):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltEnabled="true" -Dmockserver.chaosAutoHaltErrorThreshold="20" -Dmockserver.chaosAutoHaltWindowMillis="30000"</code></pre>
+</div>
+
 <button id="button_configuration_otel" class="accordion title"><strong>OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</strong></button>
 <div class="panel title">
     <p>MockServer can export to an OpenTelemetry (OTLP) collector, in two independent parts that are each <strong>off by default</strong> and <strong>fail-soft</strong> (a startup error logs one line and never stops the server or affects a response). Both use the OTLP HTTP/protobuf exporter with the JDK HTTP client (no gRPC/OkHttp) and share the same endpoint.</p>
