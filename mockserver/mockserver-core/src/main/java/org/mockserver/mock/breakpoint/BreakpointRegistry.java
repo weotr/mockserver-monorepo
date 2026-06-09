@@ -147,13 +147,22 @@ public class BreakpointRegistry {
     }
 
     /**
-     * Resolves a paused exchange as MODIFY (forward a replacement request).
+     * Resolves a REQUEST-phase paused exchange as MODIFY (forward a replacement request).
      *
-     * @return true if the exchange was found and resolved
+     * <p>If the exchange is in RESPONSE phase, this is a no-op (returns false) to
+     * prevent type-confusion — a request-modify payload against a response-phase id
+     * would complete the future with a null {@code modifiedRequest}, causing a
+     * downstream NPE.
+     *
+     * @return true if the exchange was found, was in REQUEST phase, and was resolved
      */
     public boolean resolveModify(String correlationId, HttpRequest modifiedRequest) {
         PausedExchange exchange = held.get(correlationId);
         if (exchange == null) {
+            return false;
+        }
+        if (exchange.getPhase() != Phase.REQUEST) {
+            LOG.info("rejecting resolveModify (request) against RESPONSE-phase exchange, correlation={}", correlationId);
             return false;
         }
         return exchange.getDecisionFuture().complete(BreakpointDecision.modify(modifiedRequest));
@@ -162,11 +171,20 @@ public class BreakpointRegistry {
     /**
      * Resolves a RESPONSE-phase paused exchange as MODIFY (write a replacement response).
      *
-     * @return true if the exchange was found and resolved
+     * <p>If the exchange is in REQUEST phase, this is a no-op (returns false) to
+     * prevent type-confusion — a response-modify payload against a request-phase id
+     * would complete the future with a null {@code modifiedResponse}, causing the
+     * switch to fall through to the original response (masking the caller's intent).
+     *
+     * @return true if the exchange was found, was in RESPONSE phase, and was resolved
      */
     public boolean resolveModifyResponse(String correlationId, HttpResponse modifiedResponse) {
         PausedExchange exchange = held.get(correlationId);
         if (exchange == null) {
+            return false;
+        }
+        if (exchange.getPhase() != Phase.RESPONSE) {
+            LOG.info("rejecting resolveModifyResponse against REQUEST-phase exchange, correlation={}", correlationId);
             return false;
         }
         return exchange.getDecisionFuture().complete(BreakpointDecision.modifyResponse(modifiedResponse));

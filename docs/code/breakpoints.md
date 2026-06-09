@@ -84,6 +84,23 @@ response-phase exchanges, a `response` summary with `statusCode` and `reasonPhra
 - `HttpActionHandler.executeUnmatchedForward` — response-phase breakpoint intercept (unmatched)
 - `HttpState.handleBreakpointContinue/Modify/Abort` — control-plane handlers
 
+## Behavioural notes
+
+- **Response chaos-latency is not re-applied after manual resolution.** When a
+  response breakpoint is resolved (CONTINUE, MODIFY, or ABORT), any configured
+  response chaos-latency for the matched expectation is bypassed. The manual
+  resolution supersedes automatic chaos injection because the user has already
+  inspected and approved (or replaced) the response.
+- **`httpResponse` takes precedence in the modify endpoint.** If a client sends
+  both `httpRequest` and `httpResponse` fields in a modify payload, the
+  `httpResponse` field is used (response-phase modify). The `httpRequest` field
+  is silently ignored for response-phase exchanges.
+- **Phase guards prevent type-confusion.** `resolveModify(id, httpRequest)` is
+  rejected (returns false) if the exchange is in RESPONSE phase, and
+  `resolveModifyResponse(id, httpResponse)` is rejected if the exchange is in
+  REQUEST phase. This prevents completing a decision future with the wrong type,
+  which would cause a downstream NPE.
+
 ## Follow-up (not yet implemented)
 
 - INC-11: Java client-library (`MockServerClient`) methods for the breakpoint endpoints

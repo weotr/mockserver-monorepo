@@ -499,6 +499,83 @@ public class BreakpointRegistryTest {
         boundedPool.shutdown();
     }
 
+    // ===== Phase-guard tests (INC-05) =====
+
+    @Test
+    public void shouldRejectResolveModifyRequestAgainstResponsePhaseExchange() throws Exception {
+        Configuration config = configWith(true, 30000, 50);
+        PausedExchange respExchange = BreakpointRegistry.getInstance().pauseResponse(
+            "phase-guard-1", request().withPath("/test"), response().withStatusCode(200), null, config
+        );
+        assertThat(respExchange, is(notNullValue()));
+        assertThat(respExchange.getPhase(), is(PausedExchange.Phase.RESPONSE));
+
+        // Attempt a request-modify against a response-phase exchange — should be rejected
+        boolean resolved = BreakpointRegistry.getInstance().resolveModify(
+            "phase-guard-1-response", request().withPath("/modified")
+        );
+        assertThat("resolveModify should be rejected for RESPONSE-phase exchange", resolved, is(false));
+
+        // Exchange should still be held (not resolved)
+        assertThat(BreakpointRegistry.getInstance().size(), is(1));
+        assertThat(respExchange.getDecisionFuture().isDone(), is(false));
+
+        // Clean up: resolve with the correct method
+        BreakpointRegistry.getInstance().resolveContinue("phase-guard-1-response");
+    }
+
+    @Test
+    public void shouldRejectResolveModifyResponseAgainstRequestPhaseExchange() throws Exception {
+        Configuration config = configWith(true, 30000, 50);
+        PausedExchange reqExchange = BreakpointRegistry.getInstance().pause(
+            "phase-guard-2", request().withPath("/test"), null, config
+        );
+        assertThat(reqExchange, is(notNullValue()));
+        assertThat(reqExchange.getPhase(), is(PausedExchange.Phase.REQUEST));
+
+        // Attempt a response-modify against a request-phase exchange — should be rejected
+        boolean resolved = BreakpointRegistry.getInstance().resolveModifyResponse(
+            "phase-guard-2", response().withStatusCode(201)
+        );
+        assertThat("resolveModifyResponse should be rejected for REQUEST-phase exchange", resolved, is(false));
+
+        // Exchange should still be held (not resolved)
+        assertThat(BreakpointRegistry.getInstance().size(), is(1));
+        assertThat(reqExchange.getDecisionFuture().isDone(), is(false));
+
+        // Clean up: resolve with the correct method
+        BreakpointRegistry.getInstance().resolveContinue("phase-guard-2");
+    }
+
+    @Test
+    public void shouldAllowCorrectPhaseModifyCalls() throws Exception {
+        Configuration config = configWith(true, 30000, 50);
+
+        // Request-phase: resolveModify should work
+        PausedExchange reqExchange = BreakpointRegistry.getInstance().pause(
+            "phase-ok-1", request().withPath("/test"), null, config
+        );
+        boolean reqResolved = BreakpointRegistry.getInstance().resolveModify(
+            "phase-ok-1", request().withPath("/modified")
+        );
+        assertThat("resolveModify should succeed for REQUEST-phase exchange", reqResolved, is(true));
+        BreakpointDecision reqDecision = reqExchange.getDecisionFuture().get(1, TimeUnit.SECONDS);
+        assertThat(reqDecision.getAction(), is(BreakpointDecision.Action.MODIFY));
+        assertThat(reqDecision.getModifiedRequest().getPath().getValue(), is("/modified"));
+
+        // Response-phase: resolveModifyResponse should work
+        PausedExchange respExchange = BreakpointRegistry.getInstance().pauseResponse(
+            "phase-ok-2", request().withPath("/test"), response().withStatusCode(200), null, config
+        );
+        boolean respResolved = BreakpointRegistry.getInstance().resolveModifyResponse(
+            "phase-ok-2-response", response().withStatusCode(201)
+        );
+        assertThat("resolveModifyResponse should succeed for RESPONSE-phase exchange", respResolved, is(true));
+        BreakpointDecision respDecision = respExchange.getDecisionFuture().get(1, TimeUnit.SECONDS);
+        assertThat(respDecision.getAction(), is(BreakpointDecision.Action.MODIFY));
+        assertThat(respDecision.getModifiedResponse().getStatusCode(), is(201));
+    }
+
     @Test
     public void shouldHandleMixedRequestAndResponseExchanges() throws Exception {
         Configuration config = configWith(true, 30000, 50);

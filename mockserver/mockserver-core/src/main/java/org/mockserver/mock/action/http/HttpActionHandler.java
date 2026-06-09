@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
@@ -858,43 +859,20 @@ public class HttpActionHandler {
                                     java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                                         ? scheduler.getExecutorService()
                                         : Runnable::run;
-                                    responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
-                                        try {
-                                            HttpResponse responseToWrite;
-                                            switch (decision.getAction()) {
-                                                case ABORT:
-                                                    responseToWrite = decision.getAbortResponse();
-                                                    if (responseToWrite == null) {
-                                                        responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
-                                                    }
-                                                    break;
-                                                case MODIFY:
-                                                    responseToWrite = decision.getModifiedResponse();
-                                                    if (responseToWrite == null) {
-                                                        responseToWrite = capturedResponse;
-                                                    }
-                                                    break;
-                                                case CONTINUE:
-                                                default:
-                                                    responseToWrite = capturedResponse;
-                                                    break;
-                                            }
-                                            mockServerLogger.logEvent(
-                                                new LogEntry()
-                                                    .setType(FORWARDED_REQUEST)
-                                                    .setLogLevel(Level.INFO)
-                                                    .setCorrelationId(request.getLogCorrelationId())
-                                                    .setHttpRequest(request)
-                                                    .setHttpResponse(responseToWrite)
-                                                    .setExpectation(request, responseToWrite)
-                                                    .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                                    .setArguments(responseToWrite, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
-                                            );
-                                            responseWriter.writeResponse(request, responseToWrite, false);
-                                        } catch (Throwable t) {
-                                            returnBadGateway(responseWriter, request, "response breakpoint continuation failed: " + t.getMessage());
-                                        }
-                                    }, continuationExecutor);
+                                    chainResponseBreakpointContinuation(responsePaused, request, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                                        mockServerLogger.logEvent(
+                                            new LogEntry()
+                                                .setType(FORWARDED_REQUEST)
+                                                .setLogLevel(Level.INFO)
+                                                .setCorrelationId(request.getLogCorrelationId())
+                                                .setHttpRequest(request)
+                                                .setHttpResponse(responseToWrite)
+                                                .setExpectation(request, responseToWrite)
+                                                .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                                                .setArguments(responseToWrite, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                                        );
+                                        responseWriter.writeResponse(request, responseToWrite, false);
+                                    }, null);
                                     return; // do NOT block — continuation is async
                                 }
                                 // cap reached — fall through to normal write
@@ -1049,43 +1027,20 @@ public class HttpActionHandler {
                         java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                             ? scheduler.getExecutorService()
                             : Runnable::run;
-                        responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
-                            try {
-                                HttpResponse responseToWrite;
-                                switch (decision.getAction()) {
-                                    case ABORT:
-                                        responseToWrite = decision.getAbortResponse();
-                                        if (responseToWrite == null) {
-                                            responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
-                                        }
-                                        break;
-                                    case MODIFY:
-                                        responseToWrite = decision.getModifiedResponse();
-                                        if (responseToWrite == null) {
-                                            responseToWrite = capturedResponse;
-                                        }
-                                        break;
-                                    case CONTINUE:
-                                    default:
-                                        responseToWrite = capturedResponse;
-                                        break;
-                                }
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setType(FORWARDED_REQUEST)
-                                        .setLogLevel(Level.INFO)
-                                        .setCorrelationId(originalRequest.getLogCorrelationId())
-                                        .setHttpRequest(originalRequest)
-                                        .setHttpResponse(responseToWrite)
-                                        .setExpectation(originalRequest, responseToWrite)
-                                        .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                        .setArguments(responseToWrite, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
-                                );
-                                responseWriter.writeResponse(originalRequest, responseToWrite, false);
-                            } catch (Throwable t) {
-                                returnBadGateway(responseWriter, originalRequest, "response breakpoint continuation failed: " + t.getMessage());
-                            }
-                        }, continuationExecutor);
+                        chainResponseBreakpointContinuation(responsePaused, originalRequest, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(FORWARDED_REQUEST)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(originalRequest.getLogCorrelationId())
+                                    .setHttpRequest(originalRequest)
+                                    .setHttpResponse(responseToWrite)
+                                    .setExpectation(originalRequest, responseToWrite)
+                                    .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                                    .setArguments(responseToWrite, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                            );
+                            responseWriter.writeResponse(originalRequest, responseToWrite, false);
+                        }, null);
                         return; // do NOT block — continuation is async
                     }
                     // cap reached — fall through to normal write
@@ -2136,63 +2091,24 @@ public class HttpActionHandler {
                             : Runnable::run;
                         final HttpResponse capturedEffective = effectiveResponse;
                         final boolean capturedChaosErrorInjected = chaosErrorInjected;
-                        responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
-                            try {
-                                HttpResponse responseToWrite;
-                                switch (decision.getAction()) {
-                                    case ABORT:
-                                        responseToWrite = decision.getAbortResponse();
-                                        if (responseToWrite == null) {
-                                            responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
-                                        }
-                                        break;
-                                    case MODIFY:
-                                        responseToWrite = decision.getModifiedResponse();
-                                        if (responseToWrite == null) {
-                                            responseToWrite = capturedEffective;
-                                        }
-                                        break;
-                                    case CONTINUE:
-                                    default:
-                                        responseToWrite = capturedEffective;
-                                        break;
-                                }
-                                responseWriter.writeResponse(request, responseToWrite, false);
-                                String logMessageFormat = capturedChaosErrorInjected
-                                    ? "returning chaos-injected error response:{}replacing forwarded response" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}"
-                                    : "returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}";
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setType(FORWARDED_REQUEST)
-                                        .setLogLevel(Level.INFO)
-                                        .setCorrelationId(request.getLogCorrelationId())
-                                        .setHttpRequest(request)
-                                        .setHttpResponse(responseToWrite)
-                                        .setExpectation(request, responseToWrite)
-                                        .setExpectationId(action != null ? action.getExpectationId() : null)
-                                        .setMessageFormat(logMessageFormat)
-                                        .setArguments(responseToWrite, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action != null ? action.getExpectationId() : null)
-                                );
-                                if (postProcessor != null) {
-                                    postProcessor.run();
-                                }
-                            } catch (Throwable t) {
-                                if (mockServerLogger.isEnabledForInstance(Level.ERROR)) {
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setType(EXCEPTION)
-                                            .setLogLevel(Level.ERROR)
-                                            .setCorrelationId(request.getLogCorrelationId())
-                                            .setHttpRequest(request)
-                                            .setMessageFormat("response breakpoint continuation failed: " + t.getMessage())
-                                            .setThrowable(t)
-                                    );
-                                }
-                                if (postProcessor != null) {
-                                    postProcessor.run();
-                                }
-                            }
-                        }, continuationExecutor);
+                        chainResponseBreakpointContinuation(responsePaused, request, capturedEffective, responseWriter, continuationExecutor, responseToWrite -> {
+                            responseWriter.writeResponse(request, responseToWrite, false);
+                            String logMessageFormat = capturedChaosErrorInjected
+                                ? "returning chaos-injected error response:{}replacing forwarded response" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}"
+                                : "returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}";
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(FORWARDED_REQUEST)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setHttpResponse(responseToWrite)
+                                    .setExpectation(request, responseToWrite)
+                                    .setExpectationId(action != null ? action.getExpectationId() : null)
+                                    .setMessageFormat(logMessageFormat)
+                                    .setArguments(responseToWrite, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action != null ? action.getExpectationId() : null)
+                            );
+                        }, postProcessor);
                         // Return immediately — do NOT block the scheduler worker thread
                         return;
                     }
@@ -2362,6 +2278,65 @@ public class HttpActionHandler {
             );
             returnBadGateway(responseWriter, request, exception != null ? exception.getMessage() : null);
         }
+    }
+
+    /**
+     * Shared continuation for response breakpoints. Chains the CONTINUE/MODIFY/ABORT
+     * decision handling onto the paused exchange's future, executing asynchronously on
+     * the given executor. On the success path the caller-supplied {@code onResolved}
+     * callback receives the resolved response (to log + write in the caller's preferred
+     * order). On failure a 502 Bad Gateway is ALWAYS written to the client — this
+     * prevents the client connection from hanging on a continuation error.
+     *
+     * @param responsePaused       the paused response-phase exchange
+     * @param request              the original inbound request (for error responses)
+     * @param capturedResponse     the upstream response held at the breakpoint
+     * @param responseWriter       writer for the client channel
+     * @param continuationExecutor executor for the async continuation
+     * @param onResolved           callback receiving the resolved response (log + write)
+     * @param postProcessor        optional post-processing (e.g. chaos-latency scheduling); always invoked
+     */
+    private void chainResponseBreakpointContinuation(
+        org.mockserver.mock.breakpoint.PausedExchange responsePaused,
+        HttpRequest request,
+        HttpResponse capturedResponse,
+        ResponseWriter responseWriter,
+        java.util.concurrent.Executor continuationExecutor,
+        Consumer<HttpResponse> onResolved,
+        Runnable postProcessor
+    ) {
+        responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
+            try {
+                HttpResponse responseToWrite;
+                switch (decision.getAction()) {
+                    case ABORT:
+                        responseToWrite = decision.getAbortResponse();
+                        if (responseToWrite == null) {
+                            responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                        }
+                        break;
+                    case MODIFY:
+                        responseToWrite = decision.getModifiedResponse();
+                        if (responseToWrite == null) {
+                            responseToWrite = capturedResponse;
+                        }
+                        break;
+                    case CONTINUE:
+                    default:
+                        responseToWrite = capturedResponse;
+                        break;
+                }
+                onResolved.accept(responseToWrite);
+                if (postProcessor != null) {
+                    postProcessor.run();
+                }
+            } catch (Throwable t) {
+                returnBadGateway(responseWriter, request, "response breakpoint continuation failed: " + t.getMessage());
+                if (postProcessor != null) {
+                    postProcessor.run();
+                }
+            }
+        }, continuationExecutor);
     }
 
     private void returnBadGateway(ResponseWriter responseWriter, HttpRequest request, String error) {
