@@ -2,16 +2,17 @@
 
 ## TL;DR
 
-MockServer is listed in the CNCF Landscape under **App Definition and Development →
-Continuous Integration & Delivery** (the subcategory that holds testing tools such as k6, Keploy,
-and Fortio). The entry adds one YAML block to `landscape.yml` plus a monochrome SVG to
+MockServer is cross-listed in the CNCF Landscape under **two** subcategories: **App Definition and
+Development → Continuous Integration & Delivery** (holds testing tools such as k6, Keploy, Fortio)
+and **Observability and Analysis → Chaos Engineering** (it has fault/chaos injection). The entry
+adds an identical YAML block in each subcategory of `landscape.yml`, plus a monochrome SVG to
 `hosted_logos/`, and references the live Crunchbase organisation
 [`mockserver`](https://www.crunchbase.com/organization/mockserver).
 
 **Current status (2026-06):** PR submitted —
-[`cncf/landscape#4868`](https://github.com/cncf/landscape/pull/4868) (OPEN, not draft; DCO and
-Preview checks green). Raised from fork `jamesdbloom/landscape`, branch `add-mockserver`
-(commit `b1aa623e`, DCO-signed). Awaiting CNCF maintainer review/merge.
+[`cncf/landscape#4868`](https://github.com/cncf/landscape/pull/4868) (OPEN, not draft; DCO green).
+Raised from fork `jamesdbloom/landscape`, branch `add-mockserver` (3 commits, tip `99443a20`,
+DCO-signed). Awaiting CNCF maintainer review/merge.
 
 ---
 
@@ -19,30 +20,35 @@ Preview checks green). Raised from fork `jamesdbloom/landscape`, branch `add-moc
 
 | Item | Value |
 |------|-------|
-| Category → Subcategory | `App Definition and Development` → `Continuous Integration & Delivery` |
-| Placement | Alphabetical by `name`, between **Mergify** and **Northflank** |
+| Categories → Subcategories | `App Definition and Development` → `Continuous Integration & Delivery`; **and** `Observability and Analysis` → `Chaos Engineering` |
+| Placement | CI&D: between **Mergify** and **Northflank**. Chaos Engineering: between **Litmus** and **PowerfulSeal** |
 | `homepage_url` | `https://www.mock-server.com` |
 | `repo_url` | `https://github.com/mock-server/mockserver-monorepo` |
 | `crunchbase` | `https://www.crunchbase.com/organization/mockserver` (live) |
 | `logo` | `mockserver.svg` in `hosted_logos/` (see [Logo](#logo) below) |
 
-> **Why CI&D and not "Testing":** the CNCF Landscape has no standalone *Testing* subcategory.
+> **Why CI&D (not "Testing"):** the CNCF Landscape has no standalone *Testing* subcategory.
 > Mock/test/load tools (k6, Keploy, Fortio) live under *App Definition and Development →
-> Continuous Integration & Delivery*, so that is the correct home.
+> Continuous Integration & Delivery*, so that is the primary home.
+>
+> **Why also Chaos Engineering:** MockServer ships fault/chaos injection (latency, error, connection
+> and rate-limit faults, plus fault profiles), so it is cross-listed there too. The landscape
+> supports the same item in multiple subcategories — the **same** item block is used in both.
 
 ### Exact `landscape.yml` block
 
 ```yaml
           - item:
             name: MockServer
-            description: HTTP(S)/REST/gRPC/LLM mock server and proxy for integration and chaos testing.
+            description: Mocking, debugging proxy and chaos engineering for HTTP, HTTPS, gRPC, TCP and more.
             homepage_url: https://www.mock-server.com
             repo_url: https://github.com/mock-server/mockserver-monorepo
             logo: mockserver.svg
             crunchbase: https://www.crunchbase.com/organization/mockserver
 ```
 
-(Indentation is 10 spaces for `- item:` and 12 for the fields, matching the surrounding entries.)
+This identical block is inserted in **both** subcategories (CI&D and Chaos Engineering).
+Indentation is 10 spaces for `- item:` and 12 for the fields, matching the surrounding entries.
 
 ---
 
@@ -81,7 +87,8 @@ recipe produces the website/dashboard "M" icons (`favicon.svg`, `favicon.ico`, `
 
 The PR is open: **[cncf/landscape#4868](https://github.com/cncf/landscape/pull/4868)** — *Add
 MockServer to Continuous Integration & Delivery* (from `jamesdbloom/landscape:add-mockserver`).
-DCO and the Preview-card check are green.
+The branch now also cross-lists MockServer under Chaos Engineering (PR title unchanged). DCO checks
+are green.
 
 **Remaining:** respond to CNCF maintainer / bot feedback (typical asks: logo size, description
 length, or repo activity thresholds) until merged. Any follow-up commits must also be DCO-signed
