@@ -64,6 +64,10 @@ public class MockServerClientTest {
     private VerificationSerializer mockVerificationSerializer;
     @Mock
     private VerificationSequenceSerializer mockVerificationSequenceSerializer;
+    @Mock
+    private HttpRequestSerializer mockHttpRequestSerializer;
+    @Mock
+    private HttpResponseSerializer mockHttpResponseSerializer;
     @InjectMocks
     private MockServerClient mockServerClient;
 
@@ -1639,6 +1643,167 @@ public class MockServerClientTest {
     @Test
     public void shouldThrowIllegalArgumentForNullVerifyAsyncMessage() {
         assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyAsyncMessage(null));
+    }
+
+    // -------------------------------------------------------------------
+    // Breakpoint Control
+    // -------------------------------------------------------------------
+
+    @Test
+    public void shouldSendListBreakpointsRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("{\"pausedExchanges\":[],\"count\":0}"));
+
+        // when
+        String result = mockServerClient.listBreakpoints();
+
+        // then
+        verify(mockHttpClient).sendRequest(
+            request()
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("GET")
+                .withPath("/mockserver/breakpoint"),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+        assertThat(result, containsString("pausedExchanges"));
+    }
+
+    @Test
+    public void shouldSendContinueBreakpointRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("{\"status\":\"continued\",\"id\":\"abc-123\"}"));
+
+        // when
+        mockServerClient.continueBreakpoint("abc-123");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
+        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
+        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/continue"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
+        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForBlankContinueBreakpointId() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.continueBreakpoint(""));
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.continueBreakpoint(null));
+    }
+
+    @Test
+    public void shouldSendModifyBreakpointRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("{\"status\":\"modified\",\"id\":\"abc-123\"}"));
+        HttpRequest modifiedRequest = request().withMethod("POST").withPath("/modified");
+        when(mockHttpRequestSerializer.serialize(modifiedRequest)).thenReturn("{\"method\":\"POST\",\"path\":\"/modified\"}");
+
+        // when
+        mockServerClient.modifyBreakpoint("abc-123", modifiedRequest);
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
+        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
+        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/modify"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
+        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"httpRequest\""));
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForBlankModifyBreakpointId() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.modifyBreakpoint("", request()));
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForNullModifyBreakpointRequest() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.modifyBreakpoint("abc-123", null));
+    }
+
+    @Test
+    public void shouldSendAbortBreakpointRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("{\"status\":\"aborted\",\"id\":\"abc-123\"}"));
+
+        // when
+        mockServerClient.abortBreakpoint("abc-123");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
+        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
+        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/abort"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
+        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
+        // no httpResponse field when response is null
+        assertThat(sentRequest.getBodyAsString(), not(containsString("\"httpResponse\"")));
+    }
+
+    @Test
+    public void shouldSendAbortBreakpointRequestWithResponse() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("{\"status\":\"aborted\",\"id\":\"abc-123\"}"));
+        HttpResponse abortResponse = response().withStatusCode(503).withBody("Service Unavailable");
+        when(mockHttpResponseSerializer.serialize(abortResponse)).thenReturn("{\"statusCode\":503,\"body\":\"Service Unavailable\"}");
+
+        // when
+        mockServerClient.abortBreakpoint("abc-123", abortResponse);
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
+        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
+        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/abort"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
+        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
+        assertThat(sentRequest.getBodyAsString(), containsString("\"httpResponse\""));
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForBlankAbortBreakpointId() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.abortBreakpoint(""));
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.abortBreakpoint(null));
+    }
+
+    // -------------------------------------------------------------------
+    // Replay
+    // -------------------------------------------------------------------
+
+    @Test
+    public void shouldSendReplayRequest() {
+        // given
+        HttpRequest requestToReplay = request().withMethod("GET").withPath("/api/data");
+        when(mockHttpRequestSerializer.serialize(requestToReplay)).thenReturn("{\"method\":\"GET\",\"path\":\"/api/data\"}");
+        HttpResponse upstreamResponse = response().withStatusCode(200).withBody("ok");
+        String serializedUpstreamResponse = "{\"statusCode\":200,\"body\":\"ok\"}";
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody(serializedUpstreamResponse));
+        when(mockHttpResponseSerializer.deserialize(serializedUpstreamResponse)).thenReturn(upstreamResponse);
+
+        // when
+        HttpResponse result = mockServerClient.replay(requestToReplay);
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
+        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
+        assertThat(sentRequest.getPath().getValue(), is("/mockserver/replay"));
+        assertThat(sentRequest.getBodyAsString(), is("{\"method\":\"GET\",\"path\":\"/api/data\"}"));
+        assertThat(result, is(upstreamResponse));
+        verify(mockHttpResponseSerializer).deserialize(serializedUpstreamResponse);
+    }
+
+    @Test
+    public void shouldThrowIllegalArgumentForNullReplayRequest() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.replay(null));
     }
 
 }
