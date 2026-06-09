@@ -1,9 +1,18 @@
 /**
  * Pure function that extracts a mock expectation draft from a captured
- * LLM request/response pair parsed by `llmTraffic.ts`.
+ * request/response pair.
  *
- * The resulting draft contains sensible defaults that a user can edit
- * before registering on the server.
+ * Supports two modes:
+ * - **LLM mode** — for recognised LLM provider traffic (Anthropic, OpenAI, etc.)
+ *   the draft targets `httpLlmResponse` with provider-specific fields.
+ * - **Generic HTTP mode** — for any other traffic the draft targets a plain
+ *   `httpResponse` with status, headers and body extracted from the capture.
+ *
+ * A **matcher precision** setting controls how tightly the generated
+ * `httpRequest` matcher is bound:
+ * - `exact` — method + path + queryString + headers + body
+ * - `moderate` — method + path + queryString + body  (default)
+ * - `loose` — method + path only
  */
 
 import type {
@@ -16,9 +25,19 @@ import type {
 } from './llmTraffic';
 
 // ---------------------------------------------------------------------------
+// Matcher precision
+// ---------------------------------------------------------------------------
+
+export const MATCHER_PRECISIONS = ['exact', 'moderate', 'loose'] as const;
+
+export type MatcherPrecision = (typeof MATCHER_PRECISIONS)[number];
+
+// ---------------------------------------------------------------------------
 // Provider enum (matches Java org.mockserver.model.Provider)
 // ---------------------------------------------------------------------------
 
+// BEDROCK and AZURE_OPENAI are user-selectable-only — kindToProvider() never
+// auto-detects them because no parser kind maps to those providers.
 export const PROVIDERS = [
   'ANTHROPIC',
   'OPENAI',
@@ -40,7 +59,23 @@ export interface ToolCallDraft {
   arguments?: string;
 }
 
-export interface ExpectationDraft {
+/** Header as used in the draft (matches MockServer's { name, values } shape). */
+export interface HeaderDraft {
+  name: string;
+  values: string[];
+}
+
+/** Query-string parameter in the draft. */
+export interface QueryParamDraft {
+  name: string;
+  values: string[];
+}
+
+/**
+ * LLM expectation draft — for recognised LLM provider traffic.
+ */
+export interface LlmExpectationDraft {
+  kind: 'llm';
   path: string;
   provider: ProviderName;
   model: string;
@@ -49,6 +84,26 @@ export interface ExpectationDraft {
   stopReason: string;
   streaming: boolean;
 }
+
+/**
+ * Generic HTTP expectation draft — for arbitrary HTTP/gRPC/GraphQL traffic.
+ */
+export interface GenericExpectationDraft {
+  kind: 'generic';
+  method: string;
+  path: string;
+  queryStringParameters: QueryParamDraft[];
+  headers: HeaderDraft[];
+  body: string;
+  /** Response fields */
+  responseStatusCode: number;
+  responseHeaders: HeaderDraft[];
+  responseBody: string;
+  /** Controls how much of the request is matched. */
+  matcherPrecision: MatcherPrecision;
+}
+
+export type ExpectationDraft = LlmExpectationDraft | GenericExpectationDraft;
 
 // ---------------------------------------------------------------------------
 // Provider detection from ParsedTraffic kind
@@ -75,7 +130,7 @@ function kindToProvider(kind: ParsedTraffic['kind']): ProviderName {
 // Per-provider extraction
 // ---------------------------------------------------------------------------
 
-function extractAnthropic(parsed: AnthropicParsed): Partial<ExpectationDraft> {
+function extractAnthropic(parsed: AnthropicParsed): Partial<LlmExpectationDraft> {
   const textParts: string[] = [];
   const toolCalls: ToolCallDraft[] = [];
 
@@ -103,7 +158,7 @@ function extractAnthropic(parsed: AnthropicParsed): Partial<ExpectationDraft> {
   };
 }
 
-function extractOpenAi(parsed: OpenAiParsed): Partial<ExpectationDraft> {
+function extractOpenAi(parsed: OpenAiParsed): Partial<LlmExpectationDraft> {
   const textParts: string[] = [];
   const toolCalls: ToolCallDraft[] = [];
   let stopReason = '';
@@ -139,7 +194,7 @@ function extractOpenAi(parsed: OpenAiParsed): Partial<ExpectationDraft> {
   };
 }
 
-function extractOpenAiResponses(parsed: OpenAiResponsesParsed): Partial<ExpectationDraft> {
+function extractOpenAiResponses(parsed: OpenAiResponsesParsed): Partial<LlmExpectationDraft> {
   const textParts: string[] = [];
   const toolCalls: ToolCallDraft[] = [];
 
@@ -177,7 +232,7 @@ function extractOpenAiResponses(parsed: OpenAiResponsesParsed): Partial<Expectat
   };
 }
 
-function extractGemini(parsed: GeminiParsed): Partial<ExpectationDraft> {
+function extractGemini(parsed: GeminiParsed): Partial<LlmExpectationDraft> {
   const textParts: string[] = [];
   const toolCalls: ToolCallDraft[] = [];
 
@@ -212,7 +267,7 @@ function extractGemini(parsed: GeminiParsed): Partial<ExpectationDraft> {
   };
 }
 
-function extractOllama(parsed: OllamaParsed): Partial<ExpectationDraft> {
+function extractOllama(parsed: OllamaParsed): Partial<LlmExpectationDraft> {
   let text = '';
   const toolCalls: ToolCallDraft[] = [];
 
@@ -252,7 +307,7 @@ function extractOllama(parsed: OllamaParsed): Partial<ExpectationDraft> {
 
 /**
  * Returns `true` if the parsed traffic is LLM traffic (not generic or MCP)
- * and can therefore be converted into a mock expectation.
+ * and can therefore be converted into an LLM mock expectation.
  */
 export function isLlmTraffic(parsed: ParsedTraffic): boolean {
   return (
@@ -265,19 +320,27 @@ export function isLlmTraffic(parsed: ParsedTraffic): boolean {
 }
 
 /**
- * Extract an editable expectation draft from a captured and parsed
+ * Returns `true` if the parsed traffic can be captured as any kind of
+ * mock expectation (LLM or generic HTTP).
+ */
+export function isCapturableTraffic(parsed: ParsedTraffic): boolean {
+  return parsed.kind !== 'mcp'; // MCP JSON-RPC not yet supported
+}
+
+/**
+ * Extract an editable LLM expectation draft from a captured and parsed
  * LLM request/response pair.
  *
  * @param parsed   The parsed traffic from `parseTraffic()`.
  * @param path     The captured request path.
- * @returns An `ExpectationDraft` with defaults populated from the capture.
+ * @returns A `LlmExpectationDraft` with defaults populated from the capture.
  */
-export function extractExpectationFromCapture(
+export function extractLlmExpectationFromCapture(
   parsed: ParsedTraffic,
   path: string,
-): ExpectationDraft {
+): LlmExpectationDraft {
   const provider = kindToProvider(parsed.kind);
-  let extracted: Partial<ExpectationDraft> = {};
+  let extracted: Partial<LlmExpectationDraft> = {};
 
   switch (parsed.kind) {
     case 'anthropic':
@@ -298,6 +361,7 @@ export function extractExpectationFromCapture(
   }
 
   return {
+    kind: 'llm',
     path,
     provider,
     model: extracted.model ?? '',
@@ -306,4 +370,140 @@ export function extractExpectationFromCapture(
     stopReason: extracted.stopReason ?? '',
     streaming: extracted.streaming ?? false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for extracting raw body/headers from a captured request value
+// ---------------------------------------------------------------------------
+
+/** Extract headers from MockServer's array-of-{name,values} format. */
+function extractHeaders(headers: unknown): HeaderDraft[] {
+  if (!Array.isArray(headers)) return [];
+  const result: HeaderDraft[] = [];
+  for (const h of headers) {
+    if (typeof h === 'object' && h !== null) {
+      const entry = h as Record<string, unknown>;
+      const name = entry['name'];
+      const values = entry['values'];
+      if (typeof name === 'string' && Array.isArray(values)) {
+        result.push({ name, values: values.map(String) });
+      }
+    }
+  }
+  return result;
+}
+
+/** Extract query-string parameters from MockServer's format. */
+function extractQueryParams(params: unknown): QueryParamDraft[] {
+  if (!Array.isArray(params)) return [];
+  const result: QueryParamDraft[] = [];
+  for (const p of params) {
+    if (typeof p === 'object' && p !== null) {
+      const entry = p as Record<string, unknown>;
+      const name = entry['name'];
+      const values = entry['values'];
+      if (typeof name === 'string' && Array.isArray(values)) {
+        result.push({ name, values: values.map(String) });
+      }
+    }
+  }
+  return result;
+}
+
+/** Unwrap a MockServer body wrapper to a string. */
+function bodyToString(body: unknown): string {
+  if (typeof body === 'string') return body;
+  if (typeof body !== 'object' || body === null) return '';
+  const obj = body as Record<string, unknown>;
+  if ('string' in obj && typeof obj['string'] === 'string') return obj['string'];
+  if ('json' in obj) {
+    const json = obj['json'];
+    return typeof json === 'string' ? json : JSON.stringify(json, null, 2);
+  }
+  if ('xml' in obj && typeof obj['xml'] === 'string') return obj['xml'];
+  if (obj['type'] === 'BINARY' && typeof obj['base64Bytes'] === 'string') {
+    try {
+      const bytes = atob(obj['base64Bytes'] as string);
+      return new TextDecoder().decode(Uint8Array.from(bytes, (c) => c.charCodeAt(0)));
+    } catch { return obj['base64Bytes'] as string; }
+  }
+  // Fall back to stringifying the body object
+  return JSON.stringify(body, null, 2);
+}
+
+/** Well-known hop-by-hop and infrastructure headers to exclude from captured expectations. */
+const EXCLUDED_HEADERS = new Set([
+  'host', 'connection', 'content-length', 'transfer-encoding',
+  'accept-encoding', 'keep-alive', 'proxy-connection',
+  'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host',
+]);
+
+/** Filter out hop-by-hop and infrastructure headers. */
+function filterSignificantHeaders(headers: HeaderDraft[]): HeaderDraft[] {
+  return headers.filter((h) => !EXCLUDED_HEADERS.has(h.name.toLowerCase()));
+}
+
+/**
+ * Extract a generic HTTP expectation draft from a captured request/response
+ * item (the raw `JsonListItem.value`).
+ */
+export function extractGenericExpectationFromCapture(
+  itemValue: Record<string, unknown>,
+  defaultPrecision: MatcherPrecision = 'moderate',
+): GenericExpectationDraft {
+  const httpRequest = (typeof itemValue['httpRequest'] === 'object' && itemValue['httpRequest'] !== null)
+    ? itemValue['httpRequest'] as Record<string, unknown>
+    : {};
+  const httpResponse = (typeof itemValue['httpResponse'] === 'object' && itemValue['httpResponse'] !== null)
+    ? itemValue['httpResponse'] as Record<string, unknown>
+    : {};
+
+  const method = typeof httpRequest['method'] === 'string' ? httpRequest['method'] : 'GET';
+  const path = typeof httpRequest['path'] === 'string' ? httpRequest['path'] : '/';
+  const queryStringParameters = extractQueryParams(httpRequest['queryStringParameters']);
+  const headers = filterSignificantHeaders(extractHeaders(httpRequest['headers']));
+  const body = bodyToString(httpRequest['body']);
+
+  const responseStatusCode = typeof httpResponse['statusCode'] === 'number'
+    ? httpResponse['statusCode']
+    : 200;
+  const responseHeaders = filterSignificantHeaders(extractHeaders(httpResponse['headers']));
+  const responseBody = bodyToString(httpResponse['body']);
+
+  return {
+    kind: 'generic',
+    method,
+    path,
+    queryStringParameters,
+    headers,
+    body,
+    responseStatusCode,
+    responseHeaders,
+    responseBody,
+    matcherPrecision: defaultPrecision,
+  };
+}
+
+/**
+ * Extract an editable expectation draft from a captured request/response pair.
+ * Dispatches to LLM or generic extraction based on the parsed traffic kind.
+ *
+ * @param parsed     The parsed traffic from `parseTraffic()`.
+ * @param path       The captured request path.
+ * @param itemValue  The raw `JsonListItem.value` (needed for generic extraction).
+ * @returns An `ExpectationDraft` (either LLM or generic) with defaults populated from the capture.
+ */
+export function extractExpectationFromCapture(
+  parsed: ParsedTraffic,
+  path: string,
+  itemValue?: Record<string, unknown>,
+): ExpectationDraft {
+  if (isLlmTraffic(parsed)) {
+    return extractLlmExpectationFromCapture(parsed, path);
+  }
+  // Generic HTTP traffic — need the raw item value
+  return extractGenericExpectationFromCapture(
+    itemValue ?? {},
+    'moderate',
+  );
 }

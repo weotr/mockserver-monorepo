@@ -3,9 +3,10 @@ package org.mockserver.matchers;
 import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 
-import static junit.framework.TestCase.*;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.NotMatcher.notMatcher;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -39,9 +40,9 @@ public class JsonPathMatcherTest {
             "    }," + NEW_LINE +
             "    \"expensive\": 10" + NEW_LINE +
             "}";
-        assertTrue(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price <= $['expensive'])]").matches(null, matched));
-        assertTrue(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.isbn)]").matches(null, matched));
-        assertTrue(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.color)]").matches(null, matched));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price <= $['expensive'])]").matches(null, matched), is(true));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.isbn)]").matches(null, matched), is(true));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.color)]").matches(null, matched), is(true));
     }
 
     @Test
@@ -71,25 +72,25 @@ public class JsonPathMatcherTest {
             "    }," + NEW_LINE +
             "    \"expensive\": 10" + NEW_LINE +
             "}";
-        assertFalse(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price <= $['expensive'])]")).matches(null, matched));
-        assertFalse(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.isbn)]")).matches(null, matched));
-        assertFalse(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.color)]")).matches(null, matched));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price <= $['expensive'])]")).matches(null, matched), is(false));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.isbn)]")).matches(null, matched), is(false));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.color)]")).matches(null, matched), is(false));
     }
 
     @Test
     public void shouldMatchMatchingString() {
-        assertTrue(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, "some_value"));
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, "some_other_value"));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, "some_value"), is(true));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, "some_other_value"), is(false));
     }
 
     @Test
     public void shouldNotMatchNullExpectation() {
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), null).matches(null, "some_value"));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), null).matches(null, "some_value"), is(false));
     }
 
     @Test
     public void shouldNotMatchEmptyExpectation() {
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "").matches(null, "some_value"));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "").matches(null, "some_value"), is(false));
     }
 
     @Test
@@ -119,9 +120,9 @@ public class JsonPathMatcherTest {
             "    }," + NEW_LINE +
             "    \"expensive\": 10" + NEW_LINE +
             "}";
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price > $['expensive'])]").matches(null, matched));
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.color)]").matches(null, matched));
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.isbn)]").matches(null, matched));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price > $['expensive'])]").matches(null, matched), is(false));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.color)]").matches(null, matched), is(false));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.isbn)]").matches(null, matched), is(false));
     }
 
     @Test
@@ -151,24 +152,24 @@ public class JsonPathMatcherTest {
             "    }," + NEW_LINE +
             "    \"expensive\": 10" + NEW_LINE +
             "}";
-        assertTrue(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price > $['expensive'])]")).matches(null, matched));
-        assertTrue(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.color)]")).matches(null, matched));
-        assertTrue(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.isbn)]")).matches(null, matched));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.price > $['expensive'])]")).matches(null, matched), is(true));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..book[?(@.color)]")).matches(null, matched), is(true));
+        assertThat(notMatcher(new JsonPathMatcher(new MockServerLogger(), "$..bicycle[?(@.isbn)]")).matches(null, matched), is(true));
     }
 
     @Test
     public void shouldNotMatchNullTest() {
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, null));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, null), is(false));
     }
 
     @Test
     public void shouldNotMatchEmptyTest() {
-        assertFalse(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, ""));
+        assertThat(new JsonPathMatcher(new MockServerLogger(), "some_value").matches(null, ""), is(false));
     }
 
     @Test
     public void showHaveCorrectEqualsBehaviour() {
         MockServerLogger mockServerLogger = new MockServerLogger();
-        assertEquals(new JsonPathMatcher(mockServerLogger, "some_value"), new JsonPathMatcher(mockServerLogger, "some_value"));
+        assertThat(new JsonPathMatcher(mockServerLogger, "some_value"), is(new JsonPathMatcher(mockServerLogger, "some_value")));
     }
 }

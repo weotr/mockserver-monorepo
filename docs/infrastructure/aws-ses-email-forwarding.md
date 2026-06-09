@@ -94,7 +94,9 @@ sequenceDiagram
 | Resource | Details |
 |----------|---------|
 | Role | `mock-server-com-email-forwarder` |
-| Permissions | `s3:GetObject` (mail bucket), `ses:SendRawEmail`, CloudWatch Logs create/put |
+| Permissions | `s3:GetObject` (mail bucket), `ses:SendRawEmail`, CloudWatch Logs create/put (scoped to specific log group in `var.region`) |
+
+**SES sandbox + `ses:SendRawEmail` scope:** the account runs in the SES sandbox (no production access). In the sandbox, SES authorises `ses:SendRawEmail` against **both** the sender identity (the domain) **and** every recipient identity. The IAM policy therefore scopes the action to `identity/<domain>` **plus** one `identity/<address>` per `forward_to` recipient — scoping to the domain alone fails every forward with `AccessDenied` on the recipient identity.
 
 ### DNS Records
 
@@ -103,7 +105,7 @@ sequenceDiagram
 | `mock-server.com` | MX | `10 inbound-smtp.us-east-1.amazonaws.com` | Route inbound email to SES |
 | `_amazonses.mock-server.com` | TXT | SES verification token | Domain identity verification |
 | `<token>._domainkey.mock-server.com` (x3) | CNAME | `<token>.dkim.amazonses.com` | DKIM signing |
-| `_dmarc.mock-server.com` | TXT | `v=DMARC1; p=none;` | DMARC policy |
+| `_dmarc.mock-server.com` | TXT | `v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@mock-server.com; ruf=mailto:dmarc-reports@mock-server.com; fo=1;` | DMARC policy |
 
 **Not managed by this stack:** The apex TXT record (contains `google-site-verification`) is not created or modified. SPF can be manually merged into the existing apex TXT record if desired.
 
@@ -152,6 +154,8 @@ sequenceDiagram
 - **Lambda error alarm**: A CloudWatch alarm monitors the forwarder Lambda `Errors` metric. When any error occurs (threshold >= 1 in a 5-minute period), an SNS notification is sent to the configured `alarm_email` address. This ensures failed forwards are noticed rather than silently lost.
 - **Raw email retention**: The raw MIME email is stored in the S3 bucket by SES *before* the Lambda is invoked. Even if the Lambda fails, the email remains in S3 for `email_retention_days` (default 30 days) and can be manually reprocessed. Mail is not lost on a transient Lambda failure.
 - **No DLQ needed**: A dead-letter queue is not used because the raw email is already durably retained in S3. The alarm + S3 retention together cover the failure recovery path.
+- **Multi-record retry semantics**: The Lambda iterates all `event.Records` (SES normally delivers one record per invocation). When all records fail, the function throws and SES retries the whole event. When some records succeed and some fail, the function logs the error but does **not** throw — replaying a partially-succeeded batch would cause duplicate email delivery for the already-forwarded messages. The CloudWatch error-log alarm still fires for partial failures.
+- **CloudWatch Logs IAM scope**: The Lambda execution role's `logs:CreateLogStream`/`logs:PutLogEvents` permission is scoped to the specific log group (`/aws/lambda/<domain>-email-forwarder` in `var.region`), not the account-wide `arn:aws:logs:*:*:*` wildcard.
 
 ## Disabling Monitoring (`enable_monitoring`)
 

@@ -105,6 +105,12 @@ export default function DiffPanel({ result, loading, error }: DiffPanelProps) {
         </TableContainer>
       )}
 
+      {result && !result.identical && result.diffs.length === 0 && (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
+          Requests differ but no field-level diffs were produced by the server.
+        </Typography>
+      )}
+
       {result && result.identical && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
           The two requests are identical.

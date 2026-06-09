@@ -15,10 +15,9 @@ import static io.netty.buffer.Unpooled.wrappedBuffer;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 import static io.netty.handler.codec.http.HttpMethod.GET;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
-import static junit.framework.TestCase.assertNull;
-import static junit.framework.TestCase.assertTrue;
-import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockito.Mockito.mock;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.model.MediaType.*;
@@ -49,7 +48,7 @@ public class MatcherBuilderTest {
         HttpRequestMatcher httpRequestMapper = new MatcherBuilder(configuration, mockServerLogger).transformsToMatcher(new Expectation(httpRequest));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -78,7 +77,7 @@ public class MatcherBuilderTest {
 
         // then
         assertThat(httpRequest.getBody().getCharset(null), is(DEFAULT_TEXT_HTTP_CHARACTER_SET));
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -106,8 +105,8 @@ public class MatcherBuilderTest {
         ));
 
         // then - request used default charset, then body charset is NULL
-        assertNull(httpRequest.getBody().getCharset(null));
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequest.getBody().getCharset(null), nullValue());
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -134,7 +133,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -151,7 +150,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -168,7 +167,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -185,7 +184,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -202,7 +201,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -219,7 +218,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -236,7 +235,7 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 
     @Test
@@ -253,6 +252,6 @@ public class MatcherBuilderTest {
         ));
 
         // then
-        assertTrue(httpRequestMapper.matches(null, httpRequest));
+        assertThat(httpRequestMapper.matches(null, httpRequest), is(true));
     }
 }

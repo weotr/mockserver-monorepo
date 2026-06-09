@@ -41,7 +41,6 @@ import java.util.Collections;
 import java.util.List;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
@@ -261,8 +260,8 @@ public class NettyHttpProxySOCKSIntegrationTest {
         HttpResponse response = httpClient.execute(request);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
-        assertEquals("an_example_body", new String(EntityUtils.toByteArray(response.getEntity()), StandardCharsets.UTF_8));
+        assertThat(response.getStatusLine().getStatusCode(), is(HttpStatusCode.OK_200.code()));
+        assertThat(new String(EntityUtils.toByteArray(response.getEntity()), StandardCharsets.UTF_8), is("an_example_body"));
 
         // and
         mockServerClient.verify(
@@ -335,8 +334,8 @@ public class NettyHttpProxySOCKSIntegrationTest {
         HttpResponse response = httpClient.execute(request);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
-        assertEquals("an_example_body", new String(EntityUtils.toByteArray(response.getEntity()), StandardCharsets.UTF_8));
+        assertThat(response.getStatusLine().getStatusCode(), is(HttpStatusCode.OK_200.code()));
+        assertThat(new String(EntityUtils.toByteArray(response.getEntity()), StandardCharsets.UTF_8), is("an_example_body"));
 
         // and
         mockServerClient.verify(

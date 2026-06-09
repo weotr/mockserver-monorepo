@@ -112,6 +112,7 @@ public class McpToolRegistry {
         registerCreateExpectation();
         registerVerifyRequest();
         registerRetrieveRecordedRequests();
+        registerRetrieveLogs();
         registerClearExpectations();
         registerReset();
         registerManageServiceChaos();
@@ -588,6 +589,85 @@ public class McpToolRegistry {
         } catch (Exception e) {
             return errorResult("Failed to retrieve requests", e);
         }
+    }
+
+    private void registerRetrieveLogs() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("correlationId").put("type", "string").put("description", "Filter to a single request's log entries by its correlation ID — the key debugging filter. Each incoming request is assigned a unique correlation ID that links all log entries for that request's lifecycle.");
+        properties.putObject("limit").put("type", "integer").put("description", "Maximum number of log entries to return (default 100, max 500). Returns the most recent entries when more are available.");
+
+        tools.put("retrieve_logs", new ToolDefinition(
+            "retrieve_logs",
+            "Retrieve MockServer's recorded log messages — request matching, mismatches, actions and errors — to debug why a test/request behaved as it did. Returns structured LOG_ENTRIES format. Use the correlationId filter to narrow to a single request's lifecycle.",
+            schema,
+            this::handleRetrieveLogs
+        ));
+    }
+
+    private JsonNode handleRetrieveLogs(JsonNode params) {
+        try {
+            JsonNode correlationIdNode = params.path("correlationId");
+            String correlationId = (correlationIdNode.isTextual() && !correlationIdNode.asText().isEmpty())
+                ? correlationIdNode.asText() : null;
+
+            int limit = params.path("limit").asInt(100);
+            if (limit < 1 || limit > 500) {
+                return errorResult("'limit' must be between 1 and 500");
+            }
+
+            String body = retrieveLogsAsLogEntries(correlationId);
+
+            if (body != null && !body.isEmpty()) {
+                JsonNode allEntries = objectMapper.readTree(body);
+                if (allEntries.isArray() && allEntries.size() > limit) {
+                    ArrayNode limited = objectMapper.createArrayNode();
+                    for (int i = allEntries.size() - limit; i < allEntries.size(); i++) {
+                        limited.add(allEntries.get(i));
+                    }
+                    ObjectNode resultNode = objectMapper.createObjectNode();
+                    resultNode.set("logEntries", limited);
+                    resultNode.put("total", allEntries.size());
+                    resultNode.put("returned", limited.size());
+                    return resultNode;
+                } else {
+                    ObjectNode resultNode = objectMapper.createObjectNode();
+                    resultNode.set("logEntries", allEntries);
+                    resultNode.put("total", allEntries.isArray() ? allEntries.size() : 0);
+                    resultNode.put("returned", allEntries.isArray() ? allEntries.size() : 0);
+                    return resultNode;
+                }
+            }
+
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.set("logEntries", objectMapper.createArrayNode());
+            resultNode.put("total", 0);
+            resultNode.put("returned", 0);
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to retrieve logs", e);
+        }
+    }
+
+    /**
+     * Shared helper that builds the retrieve request for type=LOGS, format=LOG_ENTRIES
+     * with an optional correlationId filter and returns the raw response body.
+     * Used by both {@code retrieve_logs} and {@code raw_retrieve} (when type=LOGS, format=LOG_ENTRIES).
+     */
+    private String retrieveLogsAsLogEntries(String correlationId) {
+        HttpRequest retrieveRequest = request()
+            .withMethod("PUT")
+            .withPath("/mockserver/retrieve")
+            .withQueryStringParameter("type", "LOGS")
+            .withQueryStringParameter("format", "LOG_ENTRIES");
+
+        if (correlationId != null && !correlationId.isEmpty()) {
+            retrieveRequest.withQueryStringParameter("correlationId", correlationId);
+        }
+
+        HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+        return retrieveResponse.getBodyAsString();
     }
 
     private void registerClearExpectations() {
@@ -1413,24 +1493,35 @@ public class McpToolRegistry {
                 return errorResult("'format' must be one of: JSON, JAVA, LOG_ENTRIES");
             }
 
-            HttpRequest retrieveRequest = request()
-                .withMethod("PUT")
-                .withPath("/mockserver/retrieve")
-                .withQueryStringParameter("type", type)
-                .withQueryStringParameter("format", format);
-
-            JsonNode correlationIdNode = params.path("correlationId");
-            if (correlationIdNode.isTextual() && !correlationIdNode.asText().isEmpty()) {
-                retrieveRequest.withQueryStringParameter("correlationId", correlationIdNode.asText());
-            }
-
+            String body;
             JsonNode requestDefNode = params.path("requestDefinition");
-            if (requestDefNode.isObject()) {
-                retrieveRequest.withBody(objectMapper.writeValueAsString(requestDefNode));
-            }
+            boolean hasRequestDef = requestDefNode.isObject();
 
-            HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
-            String body = retrieveResponse.getBodyAsString();
+            // delegate to shared helper for LOGS + LOG_ENTRIES without a request body filter
+            if ("LOGS".equals(type) && "LOG_ENTRIES".equals(format) && !hasRequestDef) {
+                JsonNode correlationIdNode = params.path("correlationId");
+                String correlationId = (correlationIdNode.isTextual() && !correlationIdNode.asText().isEmpty())
+                    ? correlationIdNode.asText() : null;
+                body = retrieveLogsAsLogEntries(correlationId);
+            } else {
+                HttpRequest retrieveRequest = request()
+                    .withMethod("PUT")
+                    .withPath("/mockserver/retrieve")
+                    .withQueryStringParameter("type", type)
+                    .withQueryStringParameter("format", format);
+
+                JsonNode correlationIdNode = params.path("correlationId");
+                if (correlationIdNode.isTextual() && !correlationIdNode.asText().isEmpty()) {
+                    retrieveRequest.withQueryStringParameter("correlationId", correlationIdNode.asText());
+                }
+
+                if (hasRequestDef) {
+                    retrieveRequest.withBody(objectMapper.writeValueAsString(requestDefNode));
+                }
+
+                HttpResponse retrieveResponse = httpState.retrieve(retrieveRequest);
+                body = retrieveResponse.getBodyAsString();
+            }
 
             if (body != null && !body.isEmpty()) {
                 try {

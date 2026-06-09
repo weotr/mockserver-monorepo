@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gaugeSeries, gaugeSeriesByLabel, ratePerSecond, latestRate, type MetricsSnapshot } from '../lib/metricsDerive';
+import { gaugeSeries, gaugeSeriesByLabel, gaugeSeriesSum, ratePerSecond, latestRate, type MetricsSnapshot } from '../lib/metricsDerive';
 
 function snap(at: number, received: number): MetricsSnapshot {
   return { at, samples: [{ name: 'requests_received_count', labels: {}, value: received }] };
@@ -89,5 +89,31 @@ describe('metricsDerive', () => {
     ];
     expect(gaugeSeriesByLabel(history, 'mock_server_mcp_tool_calls_total', 'tool', 'list_mock_tools')).toEqual([5, 8]);
     expect(gaugeSeriesByLabel(history, 'mock_server_mcp_tool_calls_total', 'tool', 'create_expectation')).toEqual([2, 3]);
+  });
+
+  it('gaugeSeriesSum totals a labeled counter across all label values per snapshot', () => {
+    const history: MetricsSnapshot[] = [
+      {
+        at: 0,
+        samples: [
+          { name: 'mock_server_async_messages_published_total', labels: { channel: 'orders/placed' }, value: 6 },
+          { name: 'mock_server_async_messages_published_total', labels: { channel: 'payments/processed' }, value: 4 },
+        ],
+      },
+      {
+        at: 1000,
+        samples: [
+          { name: 'mock_server_async_messages_published_total', labels: { channel: 'orders/placed' }, value: 9 },
+          { name: 'mock_server_async_messages_published_total', labels: { channel: 'payments/processed' }, value: 6 },
+        ],
+      },
+    ];
+    // 6+4 = 10, then 9+6 = 15
+    expect(gaugeSeriesSum(history, 'mock_server_async_messages_published_total')).toEqual([10, 15]);
+  });
+
+  it('gaugeSeriesSum returns 0 for snapshots missing the metric', () => {
+    const history: MetricsSnapshot[] = [{ at: 0, samples: [] }];
+    expect(gaugeSeriesSum(history, 'mock_server_async_messages_published_total')).toEqual([0]);
   });
 });

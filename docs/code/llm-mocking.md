@@ -325,7 +325,7 @@ flowchart TD
 
 Adding a provider = implement `LlmClient` + one `register(...)` line — the same one-line story as codecs. **Ollama** is the reference backend (no auth, local, free) used to prove the path. **Bedrock** builds the Anthropic-on-Bedrock body and parses the Anthropic-shaped response, but automatic AWS SigV4 signing is not yet implemented — callers supply auth via the `headers` escape hatch or a signing proxy (tracked in `llm-security-audit.md`).
 
-This SPI is never on the deterministic assertion/matching path. The features that consume it (drift detection, semantic matching) are tracked in `docs/plans/mockserver-llm-mocking.md`.
+This SPI is never on the deterministic assertion/matching path. The features that consume it (drift detection, semantic matching) are opt-in and documented in this file above.
 
 ## OpenTelemetry export
 
@@ -442,7 +442,6 @@ These are operational settings (config + MCP, for CI/automation), not dashboard 
 
 ## Related Documents
 
-- [Roadmap](../plans/mockserver-llm-mocking.md) -- status of remaining work items after M0–M5 + U1–U4 delivery
 - [Security Audit](llm-security-audit.md) -- M5 security review including known codec limitations
 - [Codec Golden-File Testing](llm-codec-fixtures.md) -- how to refresh provider fixtures
 - [Request Processing](request-processing.md) -- action dispatch pipeline (LLM dispatch flow)

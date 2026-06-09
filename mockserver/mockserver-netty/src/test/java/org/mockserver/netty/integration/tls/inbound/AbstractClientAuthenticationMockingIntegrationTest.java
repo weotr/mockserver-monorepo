@@ -13,8 +13,6 @@ import org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBas
 
 import java.nio.charset.StandardCharsets;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.core.AnyOf.anyOf;
@@ -24,6 +22,7 @@ import static org.mockserver.echo.tls.UniqueCertificateChainSSLContextBuilder.un
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpStatusCode.OK_200;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -46,18 +45,15 @@ public abstract class AbstractClientAuthenticationMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(426)
-                .withReasonPhrase("Upgrade Required")
-                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(426)
+                .withReasonPhrase("Upgrade Required")
+                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1")));
     }
 
     @Test
@@ -76,19 +72,16 @@ public abstract class AbstractClientAuthenticationMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -155,7 +148,8 @@ public abstract class AbstractClientAuthenticationMockingIntegrationTest extends
                     containsString("Received fatal alert: internal_error"),
                     containsString("readHandshakeRecord"),
                     containsString("Broken pipe"),
-                    containsString("wrong type for socket")
+                    containsString("wrong type for socket"),
+                    containsString("Connection reset")
                 )
             );
         }

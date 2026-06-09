@@ -20,9 +20,18 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean detailedMatchFailures;
     private Boolean launchUIForLogLevelDebug;
     private Boolean metricsEnabled;
+    private Boolean chaosAutoHaltEnabled;
+    private Long chaosAutoHaltErrorThreshold;
+    private Long chaosAutoHaltWindowMillis;
     private Boolean mcpEnabled;
+    private Boolean breakpointEnabled;
+    private Boolean breakpointResponseEnabled;
+    private Long breakpointTimeoutMillis;
+    private Integer breakpointMaxHeld;
     private Map<String, String> logLevelOverrides;
     private Boolean compactLogFormat;
+
+    private Boolean devMode;
 
     private Integer maxExpectations;
     private Integer maxLogEntries;
@@ -70,6 +79,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private String validateProxyOpenAPISpec;
+    private Boolean validateProxyEnforce;
+    private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
     private Boolean persistExpectations;
@@ -79,6 +91,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String persistedRecordedExpectationsPath;
 
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
+    private Boolean attachMismatchDiagnosticToResponse;
 
     private Boolean attemptToProxyIfNoMatchingExpectation;
     private String forwardHttpProxy;
@@ -137,10 +150,19 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.detailedMatchFailures = configuration.detailedMatchFailures();
             this.launchUIForLogLevelDebug = configuration.launchUIForLogLevelDebug();
             this.metricsEnabled = configuration.metricsEnabled();
+            this.chaosAutoHaltEnabled = configuration.chaosAutoHaltEnabled();
+            this.chaosAutoHaltErrorThreshold = configuration.chaosAutoHaltErrorThreshold();
+            this.chaosAutoHaltWindowMillis = configuration.chaosAutoHaltWindowMillis();
             this.mcpEnabled = configuration.mcpEnabled();
+            this.breakpointEnabled = configuration.breakpointEnabled();
+            this.breakpointResponseEnabled = configuration.breakpointResponseEnabled();
+            this.breakpointTimeoutMillis = configuration.breakpointTimeoutMillis();
+            this.breakpointMaxHeld = configuration.breakpointMaxHeld();
             Map<String, String> overrides = configuration.logLevelOverrides();
             this.logLevelOverrides = overrides != null && !overrides.isEmpty() ? overrides : null;
             this.compactLogFormat = configuration.compactLogFormat();
+
+            this.devMode = configuration.devMode();
 
             this.maxExpectations = configuration.maxExpectations();
             this.maxLogEntries = configuration.maxLogEntries();
@@ -190,6 +212,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.initializationOpenAPIPath = configuration.initializationOpenAPIPath();
             this.openAPIContextPathPrefix = configuration.openAPIContextPathPrefix();
             this.openAPIResponseValidation = configuration.openAPIResponseValidation();
+            this.validateProxyOpenAPISpec = configuration.validateProxyOpenAPISpec();
+            this.validateProxyEnforce = configuration.validateProxyEnforce();
+            this.generateRealisticExampleValues = configuration.generateRealisticExampleValues();
             this.watchInitializationJson = configuration.watchInitializationJson();
 
             this.persistExpectations = configuration.persistExpectations();
@@ -199,6 +224,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.persistedRecordedExpectationsPath = configuration.persistedRecordedExpectationsPath();
 
             this.maximumNumberOfRequestToReturnInVerificationFailure = configuration.maximumNumberOfRequestToReturnInVerificationFailure();
+            this.attachMismatchDiagnosticToResponse = configuration.attachMismatchDiagnosticToResponse();
 
             this.attemptToProxyIfNoMatchingExpectation = configuration.attemptToProxyIfNoMatchingExpectation();
             InetSocketAddress httpProxy = configuration.forwardHttpProxy();
@@ -304,9 +330,18 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.detailedMatchFailures(detailedMatchFailures);
         configuration.launchUIForLogLevelDebug(launchUIForLogLevelDebug);
         configuration.metricsEnabled(metricsEnabled);
+        configuration.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
+        configuration.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
+        configuration.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
         configuration.mcpEnabled(mcpEnabled);
+        configuration.breakpointEnabled(breakpointEnabled);
+        configuration.breakpointResponseEnabled(breakpointResponseEnabled);
+        configuration.breakpointTimeoutMillis(breakpointTimeoutMillis);
+        configuration.breakpointMaxHeld(breakpointMaxHeld);
         configuration.logLevelOverrides(logLevelOverrides);
         configuration.compactLogFormat(compactLogFormat);
+
+        configuration.devMode(devMode);
 
         configuration.maxExpectations(maxExpectations);
         configuration.maxLogEntries(maxLogEntries);
@@ -356,6 +391,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.initializationOpenAPIPath(initializationOpenAPIPath);
         configuration.openAPIContextPathPrefix(openAPIContextPathPrefix);
         configuration.openAPIResponseValidation(openAPIResponseValidation);
+        configuration.validateProxyOpenAPISpec(validateProxyOpenAPISpec);
+        configuration.validateProxyEnforce(validateProxyEnforce);
+        configuration.generateRealisticExampleValues(generateRealisticExampleValues);
         configuration.watchInitializationJson(watchInitializationJson);
 
         configuration.persistExpectations(persistExpectations);
@@ -365,6 +403,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.persistedRecordedExpectationsPath(persistedRecordedExpectationsPath);
 
         configuration.maximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
+        configuration.attachMismatchDiagnosticToResponse(attachMismatchDiagnosticToResponse);
 
         configuration.attemptToProxyIfNoMatchingExpectation(attemptToProxyIfNoMatchingExpectation);
         if (forwardHttpProxy != null) {
@@ -444,14 +483,38 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (metricsEnabled != null) {
             target.metricsEnabled(metricsEnabled);
         }
+        if (chaosAutoHaltEnabled != null) {
+            target.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
+        }
+        if (chaosAutoHaltErrorThreshold != null) {
+            target.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
+        }
+        if (chaosAutoHaltWindowMillis != null) {
+            target.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
+        }
         if (mcpEnabled != null) {
             target.mcpEnabled(mcpEnabled);
+        }
+        if (breakpointEnabled != null) {
+            target.breakpointEnabled(breakpointEnabled);
+        }
+        if (breakpointResponseEnabled != null) {
+            target.breakpointResponseEnabled(breakpointResponseEnabled);
+        }
+        if (breakpointTimeoutMillis != null) {
+            target.breakpointTimeoutMillis(breakpointTimeoutMillis);
+        }
+        if (breakpointMaxHeld != null) {
+            target.breakpointMaxHeld(breakpointMaxHeld);
         }
         if (logLevelOverrides != null) {
             target.logLevelOverrides(logLevelOverrides);
         }
         if (compactLogFormat != null) {
             target.compactLogFormat(compactLogFormat);
+        }
+        if (devMode != null) {
+            target.devMode(devMode);
         }
         if (maxExpectations != null) {
             target.maxExpectations(maxExpectations);
@@ -570,6 +633,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (openAPIResponseValidation != null) {
             target.openAPIResponseValidation(openAPIResponseValidation);
         }
+        if (validateProxyOpenAPISpec != null) {
+            target.validateProxyOpenAPISpec(validateProxyOpenAPISpec);
+        }
+        if (validateProxyEnforce != null) {
+            target.validateProxyEnforce(validateProxyEnforce);
+        }
+        if (generateRealisticExampleValues != null) {
+            target.generateRealisticExampleValues(generateRealisticExampleValues);
+        }
         if (watchInitializationJson != null) {
             target.watchInitializationJson(watchInitializationJson);
         }
@@ -587,6 +659,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (maximumNumberOfRequestToReturnInVerificationFailure != null) {
             target.maximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
+        }
+        if (attachMismatchDiagnosticToResponse != null) {
+            target.attachMismatchDiagnosticToResponse(attachMismatchDiagnosticToResponse);
         }
         if (attemptToProxyIfNoMatchingExpectation != null) {
             target.attemptToProxyIfNoMatchingExpectation(attemptToProxyIfNoMatchingExpectation);
@@ -772,12 +847,75 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getChaosAutoHaltEnabled() {
+        return chaosAutoHaltEnabled;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltEnabled(Boolean chaosAutoHaltEnabled) {
+        this.chaosAutoHaltEnabled = chaosAutoHaltEnabled;
+        return this;
+    }
+
+    public Long getChaosAutoHaltErrorThreshold() {
+        return chaosAutoHaltErrorThreshold;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltErrorThreshold(Long chaosAutoHaltErrorThreshold) {
+        this.chaosAutoHaltErrorThreshold = chaosAutoHaltErrorThreshold;
+        return this;
+    }
+
+    public Long getChaosAutoHaltWindowMillis() {
+        return chaosAutoHaltWindowMillis;
+    }
+
+    public ConfigurationDTO setChaosAutoHaltWindowMillis(Long chaosAutoHaltWindowMillis) {
+        this.chaosAutoHaltWindowMillis = chaosAutoHaltWindowMillis;
+        return this;
+    }
+
     public Boolean getMcpEnabled() {
         return mcpEnabled;
     }
 
     public ConfigurationDTO setMcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
+        return this;
+    }
+
+    public Boolean getBreakpointEnabled() {
+        return breakpointEnabled;
+    }
+
+    public ConfigurationDTO setBreakpointEnabled(Boolean breakpointEnabled) {
+        this.breakpointEnabled = breakpointEnabled;
+        return this;
+    }
+
+    public Boolean getBreakpointResponseEnabled() {
+        return breakpointResponseEnabled;
+    }
+
+    public ConfigurationDTO setBreakpointResponseEnabled(Boolean breakpointResponseEnabled) {
+        this.breakpointResponseEnabled = breakpointResponseEnabled;
+        return this;
+    }
+
+    public Long getBreakpointTimeoutMillis() {
+        return breakpointTimeoutMillis;
+    }
+
+    public ConfigurationDTO setBreakpointTimeoutMillis(Long breakpointTimeoutMillis) {
+        this.breakpointTimeoutMillis = breakpointTimeoutMillis;
+        return this;
+    }
+
+    public Integer getBreakpointMaxHeld() {
+        return breakpointMaxHeld;
+    }
+
+    public ConfigurationDTO setBreakpointMaxHeld(Integer breakpointMaxHeld) {
+        this.breakpointMaxHeld = breakpointMaxHeld;
         return this;
     }
 
@@ -796,6 +934,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setCompactLogFormat(Boolean compactLogFormat) {
         this.compactLogFormat = compactLogFormat;
+        return this;
+    }
+
+    public Boolean getDevMode() {
+        return devMode;
+    }
+
+    public ConfigurationDTO setDevMode(Boolean devMode) {
+        this.devMode = devMode;
         return this;
     }
 
@@ -1150,6 +1297,33 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public String getValidateProxyOpenAPISpec() {
+        return validateProxyOpenAPISpec;
+    }
+
+    public ConfigurationDTO setValidateProxyOpenAPISpec(String validateProxyOpenAPISpec) {
+        this.validateProxyOpenAPISpec = validateProxyOpenAPISpec;
+        return this;
+    }
+
+    public Boolean getValidateProxyEnforce() {
+        return validateProxyEnforce;
+    }
+
+    public ConfigurationDTO setValidateProxyEnforce(Boolean validateProxyEnforce) {
+        this.validateProxyEnforce = validateProxyEnforce;
+        return this;
+    }
+
+    public Boolean getGenerateRealisticExampleValues() {
+        return generateRealisticExampleValues;
+    }
+
+    public ConfigurationDTO setGenerateRealisticExampleValues(Boolean generateRealisticExampleValues) {
+        this.generateRealisticExampleValues = generateRealisticExampleValues;
+        return this;
+    }
+
     public Boolean getWatchInitializationJson() {
         return watchInitializationJson;
     }
@@ -1201,6 +1375,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMaximumNumberOfRequestToReturnInVerificationFailure(Integer maximumNumberOfRequestToReturnInVerificationFailure) {
         this.maximumNumberOfRequestToReturnInVerificationFailure = maximumNumberOfRequestToReturnInVerificationFailure;
+        return this;
+    }
+
+    public Boolean getAttachMismatchDiagnosticToResponse() {
+        return attachMismatchDiagnosticToResponse;
+    }
+
+    public ConfigurationDTO setAttachMismatchDiagnosticToResponse(Boolean attachMismatchDiagnosticToResponse) {
+        this.attachMismatchDiagnosticToResponse = attachMismatchDiagnosticToResponse;
         return this;
     }
 

@@ -1,0 +1,28 @@
+services:
+  # Stand-in upstream the chaos proxy forwards to. Replace with your real
+  # dependency to break it on demand without touching the dependency itself.
+  upstream:
+    image: mockserver/mockserver:latest
+    ports:
+      - "1090:1090"
+    environment:
+      MOCKSERVER_LOG_LEVEL: INFO
+      MOCKSERVER_SERVER_PORT: 1090
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/upstream.json
+    volumes:
+      - ./config:/config
+
+  # Chaos proxy: forwards to the upstream but injects latency and intermittent
+  # errors via a chaos profile attached to the forwarding expectation.
+  mockserver:
+    image: mockserver/mockserver:latest
+    depends_on:
+      - upstream
+    ports:
+      - "1080:1080"
+    environment:
+      MOCKSERVER_LOG_LEVEL: INFO
+      MOCKSERVER_SERVER_PORT: 1080
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/chaos-proxy.json
+    volumes:
+      - ./config:/config

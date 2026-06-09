@@ -4,7 +4,7 @@ servers:
   - url: 'https://localhost:1080/'
 info:
   title: MockServer API
-  version: 5.16.0
+  version: 7.0.0
   description: >-
     MockServer enables easy mocking of any system you integrate with via HTTP or HTTPS with clients written in Java, JavaScript and Ruby and a simple REST API (as shown below).
 
@@ -26,6 +26,30 @@ tags:
     description: Verify requests (both MockServer & MockServer Proxy)
   - name: control
     description: Manage state or process (both MockServer & MockServer Proxy)
+  - name: import
+    description: Import expectations from external formats such as HAR or Postman collections (only supported by MockServer)
+  - name: crud
+    description: Register a generated CRUD data store backed REST resource (only supported by MockServer)
+  - name: files
+    description: Store, retrieve, list and delete files in the in-memory file store used by response templates and callbacks (only supported by MockServer)
+  - name: chaos
+    description: Register service-scoped, TCP and gRPC chaos / fault-injection profiles (only supported by MockServer)
+  - name: drift
+    description: Inspect and clear recorded mock drift (differences between expectations and observed responses)
+  - name: scenario
+    description: Inspect, set and trigger stateful scenario state (timed auto-transitions and external triggers) (only supported by MockServer)
+  - name: oidc
+    description: Generate a turnkey OpenID Connect / OAuth2 provider as a set of expectations (only supported by MockServer)
+  - name: asyncapi
+    description: Mock and verify AsyncAPI message brokers (only supported by MockServer when mockserver-async is on the classpath)
+  - name: wasm
+    description: Load and list WebAssembly custom rule modules (only supported by MockServer)
+  - name: grpc
+    description: Manage gRPC proto descriptors, services and health checking (only supported by MockServer)
+  - name: troubleshooting
+    description: Diagnose why requests did not match expectations (only supported by MockServer)
+  - name: pact
+    description: Export and verify Pact consumer-driven contracts (only supported by MockServer)
 
 paths:
   /mockserver/expectation:
@@ -136,7 +160,7 @@ paths:
             type: string
             enum: [ "logs", "requests", "request_responses", "recorded_expectations", "active_expectations", "metrics" ]
           required: false
-          description: specifies the type of object that is retrieve, default if not specified is "requests", supported values are "logs", "requests", "recorded_expectations", "active_expectations", "metrics"
+          description: specifies the type of object that is retrieve, default if not specified is "requests", supported values are "logs", "requests", "request_responses", "recorded_expectations", "active_expectations", "metrics"
       responses:
         '200':
           description: recorded requests or active expectations returned
@@ -359,6 +383,1714 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ClockStatus"
+  /mockserver/import:
+    put:
+      tags:
+        - import
+      summary: import expectations from a HAR or Postman collection
+      description: >-
+        Converts an HTTP Archive (HAR) export or a Postman collection into MockServer expectations and adds them.
+        The format is auto-detected from the document structure or can be forced with the format query parameter.
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [ "har", "postman" ]
+          required: false
+          description: >-
+            forces the import format, supported values are "har" and "postman"; when omitted the format is auto-detected from the request body
+      responses:
+        '201':
+          description: expectations created from the imported document
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: missing body, unsupported format, or unable to auto-detect the import format
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: a HAR export or Postman collection JSON document
+        description: HAR or Postman collection JSON document to import
+        required: true
+  /mockserver/crud:
+    put:
+      tags:
+        - crud
+      summary: register a generated CRUD data store
+      description: >-
+        Registers a REST resource backed by an in-memory data store that automatically handles
+        list, read, create, update and delete operations under the supplied base path.
+      responses:
+        '201':
+          description: CRUD resource registered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  basePath:
+                    type: string
+                  idStrategy:
+                    type: string
+        '400':
+          description: missing basePath or failed to register CRUD resource
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrudExpectationsDefinition"
+        description: CRUD resource definition including the base path and id strategy
+        required: true
+  /mockserver/files/store:
+    put:
+      tags:
+        - files
+      summary: store a file in the file store
+      description: stores a file (text or base64-encoded binary) under the supplied name in the in-memory file store
+      responses:
+        '201':
+          description: file stored
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  name:
+                    type: string
+                  size:
+                    type: integer
+        '400':
+          description: request body missing the required 'name' and 'content' fields, or empty body
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileStoreRequest"
+        description: file name and content to store
+        required: true
+  /mockserver/files/retrieve:
+    put:
+      tags:
+        - files
+      summary: retrieve a file from the file store
+      description: returns the raw bytes of a previously stored file
+      responses:
+        '200':
+          description: file content returned
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: request body missing the required 'name' field
+        '404':
+          description: file not found
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+              required:
+                - name
+        description: name of the file to retrieve
+        required: true
+  /mockserver/files/list:
+    put:
+      tags:
+        - files
+      summary: list files in the file store
+      description: returns the names of all files currently held in the in-memory file store
+      responses:
+        '200':
+          description: list of file names returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '400':
+          description: failed to list files
+  /mockserver/files/delete:
+    put:
+      tags:
+        - files
+      summary: delete a file from the file store
+      description: removes a previously stored file from the in-memory file store
+      responses:
+        '200':
+          description: file deleted
+        '400':
+          description: request body missing the required 'name' field
+        '404':
+          description: file not found
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+              required:
+                - name
+        description: name of the file to delete
+        required: true
+  /mockserver/serviceChaos:
+    put:
+      tags:
+        - chaos
+      summary: register, remove or clear service-scoped HTTP chaos
+      description: >-
+        Registers an HTTP chaos / fault-injection profile for a downstream host, removes a host's profile,
+        or clears all service-scoped chaos. Supply a 'host' with a 'chaos' object to register, 'host' with
+        'remove':true (or no 'chaos') to remove a single host, or 'clear':true to clear all.
+      responses:
+        '200':
+          description: chaos registered, removed, patched or cleared
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceChaosRequest"
+        description: service chaos registration, removal or clear instruction
+        required: true
+    get:
+      tags:
+        - chaos
+      summary: list registered service-scoped HTTP chaos
+      description: returns all registered service-scoped chaos profiles keyed by host, plus any remaining time-to-live
+      responses:
+        '200':
+          description: registered service-scoped chaos returned
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      tags:
+        - chaos
+      summary: update an existing service-scoped HTTP chaos profile (JSON Merge Patch)
+      description: >-
+        Applies a JSON Merge Patch to an already-registered service-scoped chaos profile for a host,
+        updating only the supplied fields and leaving the rest unchanged.
+      responses:
+        '200':
+          description: chaos profile patched
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body, unknown host, or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceChaosRequest"
+        description: JSON Merge Patch with 'host' and the chaos fields to update
+        required: true
+  /mockserver/tcpChaos:
+    put:
+      tags:
+        - chaos
+      summary: register, remove or clear TCP chaos
+      description: >-
+        Registers a TCP-layer chaos / fault-injection profile for a downstream host, removes a host's profile,
+        or clears all TCP chaos. Supply a 'host' with a 'chaos' object to register, 'host' with 'remove':true
+        (or no 'chaos') to remove a single host, or 'clear':true to clear all.
+      responses:
+        '200':
+          description: chaos registered, removed, patched or cleared
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >-
+                TCP chaos registration, removal or clear instruction with 'host', optional 'chaos', 'remove',
+                'clear' and 'ttlMillis' fields
+        description: TCP chaos registration, removal or clear instruction
+        required: true
+    get:
+      tags:
+        - chaos
+      summary: list registered TCP chaos
+      description: returns all registered TCP chaos profiles keyed by host, plus any remaining time-to-live
+      responses:
+        '200':
+          description: registered TCP chaos returned
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      tags:
+        - chaos
+      summary: update an existing TCP chaos profile (JSON Merge Patch)
+      description: >-
+        Applies a JSON Merge Patch to an already-registered TCP chaos profile for a host,
+        updating only the supplied fields and leaving the rest unchanged.
+      responses:
+        '200':
+          description: chaos profile patched
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body, unknown host, or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON Merge Patch with 'host' and the TCP chaos fields to update
+        description: JSON Merge Patch with 'host' and the TCP chaos fields to update
+        required: true
+  /mockserver/grpcChaos:
+    put:
+      tags:
+        - chaos
+      summary: register, remove or clear gRPC chaos
+      description: >-
+        Registers a gRPC chaos / fault-injection profile for a service, removes a service's profile,
+        or clears all gRPC chaos. Supply a 'service' with a 'chaos' object to register, 'service' with
+        'remove':true (or no 'chaos') to remove a single service, or 'clear':true to clear all.
+      responses:
+        '200':
+          description: chaos registered, removed, patched or cleared
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >-
+                gRPC chaos registration, removal or clear instruction with 'service', optional 'chaos', 'remove',
+                'clear' and 'ttlMillis' fields
+        description: gRPC chaos registration, removal or clear instruction
+        required: true
+    get:
+      tags:
+        - chaos
+      summary: list registered gRPC chaos
+      description: returns all registered gRPC chaos profiles keyed by service, plus any remaining time-to-live
+      responses:
+        '200':
+          description: registered gRPC chaos returned
+          content:
+            application/json:
+              schema:
+                type: object
+    patch:
+      tags:
+        - chaos
+      summary: update an existing gRPC chaos profile (JSON Merge Patch)
+      description: >-
+        Applies a JSON Merge Patch to an already-registered gRPC chaos profile for a service,
+        updating only the supplied fields and leaving the rest unchanged.
+      responses:
+        '200':
+          description: chaos profile patched
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: invalid request body, unknown service, or invalid chaos profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON Merge Patch with 'service' and the gRPC chaos fields to update
+        description: JSON Merge Patch with 'service' and the gRPC chaos fields to update
+        required: true
+  /mockserver/drift:
+    get:
+      tags:
+        - drift
+      summary: retrieve recorded mock drift
+      description: >-
+        Returns recorded drift records (differences between expectations and observed responses),
+        optionally filtered by expectation id and limited in count.
+      parameters:
+        - in: query
+          name: expectationId
+          schema:
+            type: string
+          required: false
+          description: only return drift records for the given expectation id
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+          required: false
+          description: maximum number of recent drift records to return (default 50, capped at 500), ignored when expectationId is supplied
+      responses:
+        '200':
+          description: drift records returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  count:
+                    type: integer
+                  drifts:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: failed to retrieve drift records
+  /mockserver/drift/clear:
+    put:
+      tags:
+        - drift
+      summary: clear all recorded mock drift
+      description: removes all recorded drift records
+      responses:
+        '200':
+          description: drift records cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+  /mockserver/scenario:
+    get:
+      tags:
+        - scenario
+      summary: list all scenarios and their current state
+      description: >-
+        Returns every known stateful scenario and its current state. Scenarios are created
+        implicitly by registering expectations with a scenarioName / scenarioState, or explicitly
+        via PUT /mockserver/scenario/{name}. All scenario state is reset when MockServer is reset.
+      responses:
+        '200':
+          description: scenarios listed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  scenarios:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        scenarioName:
+                          type: string
+                        currentState:
+                          type: string
+        '400':
+          description: failed to list scenarios
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioError'
+  '/mockserver/scenario/{name}':
+    get:
+      tags:
+        - scenario
+      summary: get the current state of one scenario
+      description: Returns the current state of the named scenario (null when the scenario has no state yet).
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+          description: the scenario name
+      responses:
+        '200':
+          description: scenario state returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  scenarioName:
+                    type: string
+                  currentState:
+                    type: string
+                    nullable: true
+        '400':
+          description: failed to get scenario state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioError'
+    put:
+      tags:
+        - scenario
+      summary: set a scenario's state, optionally scheduling a timed auto-transition
+      description: >-
+        Sets the named scenario to the given state immediately. Optionally schedules a timed
+        auto-transition to nextState after transitionAfterMs milliseconds; the transition only
+        fires if the scenario is still in the set state when the timer expires, and scheduling a
+        new transition cancels any pending one.
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+          description: the scenario name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - state
+              properties:
+                state:
+                  type: string
+                  description: the state to set immediately
+                transitionAfterMs:
+                  type: integer
+                  format: int64
+                  description: delay in milliseconds before auto-transitioning to nextState (requires nextState)
+                nextState:
+                  type: string
+                  description: the state to auto-transition to after transitionAfterMs (requires transitionAfterMs)
+            examples:
+              setState:
+                summary: set state immediately
+                value:
+                  state: Deploying
+              timedTransition:
+                summary: set state with timed auto-transition
+                value:
+                  state: Deploying
+                  transitionAfterMs: 5000
+                  nextState: Deployed
+      responses:
+        '200':
+          description: scenario state set
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  scenarioName:
+                    type: string
+                  currentState:
+                    type: string
+                  nextState:
+                    type: string
+                  transitionAfterMs:
+                    type: integer
+                    format: int64
+        '400':
+          description: invalid request (e.g. missing scenario name or state field)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioError'
+  '/mockserver/scenario/{name}/trigger':
+    put:
+      tags:
+        - scenario
+      summary: externally trigger a scenario state transition
+      description: >-
+        Advances the named scenario to newState immediately. Intended for driving a scenario
+        forward from a test harness or CI pipeline.
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+          description: the scenario name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newState
+              properties:
+                newState:
+                  type: string
+                  description: the state to transition the scenario to
+            example:
+              newState: Failed
+      responses:
+        '200':
+          description: scenario state transition triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  scenarioName:
+                    type: string
+                  currentState:
+                    type: string
+        '400':
+          description: invalid request (e.g. missing scenario name or newState field)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioError'
+  /mockserver/oidc:
+    put:
+      tags:
+        - oidc
+      summary: generate a turnkey OIDC / OAuth2 provider
+      description: >-
+        Generates a set of expectations that emulate an OpenID Connect / OAuth2 provider (discovery document,
+        JWKS, token, authorize, userinfo and related endpoints) and adds them. An empty body uses the default
+        provider configuration.
+      responses:
+        '201':
+          description: OIDC provider expectations created
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: invalid OIDC provider configuration
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: OIDC provider configuration (issuer, client, claims, etc.); an empty body uses defaults
+        description: OIDC provider configuration
+        required: false
+  /mockserver/asyncapi:
+    put:
+      tags:
+        - asyncapi
+      summary: load an AsyncAPI specification
+      description: >-
+        Loads an AsyncAPI specification (JSON or YAML), or a { spec, brokerConfig } document, to mock the
+        described message broker. Requires the mockserver-async module on the classpath.
+      responses:
+        '201':
+          description: AsyncAPI specification loaded
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: empty or invalid AsyncAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '501':
+          description: AsyncAPI messaging module is not available on the classpath
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: an AsyncAPI specification (JSON/YAML) or a { spec, brokerConfig } document
+        description: AsyncAPI specification or spec plus broker configuration
+        required: true
+    get:
+      tags:
+        - asyncapi
+      summary: retrieve AsyncAPI mock status
+      description: returns the status of the currently loaded AsyncAPI mock. Requires the mockserver-async module on the classpath.
+      responses:
+        '200':
+          description: AsyncAPI status returned
+          content:
+            application/json:
+              schema:
+                type: object
+        '501':
+          description: AsyncAPI messaging module is not available on the classpath
+  /mockserver/asyncapi/verify:
+    put:
+      tags:
+        - asyncapi
+      summary: verify AsyncAPI messages
+      description: >-
+        Verifies that messages were published/received against the loaded AsyncAPI mock.
+        Requires the mockserver-async module on the classpath.
+      responses:
+        '202':
+          description: verification passed
+        '400':
+          description: empty or invalid verification request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '406':
+          description: verification failed
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: human-readable description of the verification failure
+        '501':
+          description: AsyncAPI messaging module is not available on the classpath
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: AsyncAPI message verification request
+        description: AsyncAPI message verification request
+        required: true
+  /mockserver/wasm/modules:
+    put:
+      tags:
+        - wasm
+      summary: load a WebAssembly custom rule module
+      description: stores a compiled WebAssembly module (raw .wasm bytes) under the name supplied in the query parameter
+      parameters:
+        - in: query
+          name: name
+          schema:
+            type: string
+          required: true
+          description: name to register the WASM module under
+      responses:
+        '201':
+          description: WASM module loaded
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                  moduleName:
+                    type: string
+        '400':
+          description: missing 'name' query parameter or empty module body
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: raw compiled WebAssembly (.wasm) module bytes
+        description: raw compiled WebAssembly module bytes
+        required: true
+    get:
+      tags:
+        - wasm
+      summary: list loaded WebAssembly modules
+      description: returns the names of all currently loaded WebAssembly custom rule modules
+      responses:
+        '200':
+          description: list of WASM module names returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        '400':
+          description: failed to list WASM modules
+  /mockserver/grpc/descriptors:
+    put:
+      tags:
+        - grpc
+      summary: load a gRPC proto descriptor set
+      description: loads a compiled protobuf FileDescriptorSet (raw bytes) so gRPC services can be matched and mocked
+      responses:
+        '201':
+          description: descriptor set loaded
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+        '400':
+          description: empty descriptor set body or failed to load descriptor
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: compiled protobuf FileDescriptorSet bytes
+        description: compiled protobuf FileDescriptorSet bytes
+        required: true
+  /mockserver/grpc/health:
+    put:
+      tags:
+        - grpc
+      summary: set a gRPC health serving status
+      description: >-
+        Sets the gRPC health-checking serving status for a service (an empty service name sets the default),
+        or removes a service override with 'remove':true.
+      responses:
+        '200':
+          description: serving status set or removed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  servingStatus:
+                    type: string
+        '400':
+          description: missing or invalid 'service' / 'status' fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                service:
+                  type: string
+                  description: gRPC service name; an empty string sets the default status
+                status:
+                  type: string
+                  enum: [ "UNKNOWN", "SERVING", "NOT_SERVING", "SERVICE_UNKNOWN" ]
+                remove:
+                  type: boolean
+                  description: when true, removes the service override
+        description: gRPC service name and serving status
+        required: true
+    get:
+      tags:
+        - grpc
+      summary: retrieve gRPC health serving statuses
+      description: returns the configured gRPC health serving status for each service (the default is reported under "_default")
+      responses:
+        '200':
+          description: serving statuses returned
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: failed to get gRPC health status
+  /mockserver/mode:
+    put:
+      tags:
+        - control
+      summary: set the proxy / mock operating mode
+      description: >-
+        Sets the operating mode that controls how unmatched requests are handled.
+        SIMULATE matches expectations and returns a 404 for unmatched requests;
+        SPY matches expectations but forwards (and records) unmatched requests to the real downstream;
+        CAPTURE forwards and records all traffic (the same proxy-on-no-match behaviour as SPY).
+      parameters:
+        - in: query
+          name: mode
+          schema:
+            type: string
+            enum: [ "SIMULATE", "SPY", "CAPTURE" ]
+          required: true
+          description: the operating mode to set
+      responses:
+        '200':
+          description: mode set successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  mode:
+                    type: string
+                    enum: [ "SIMULATE", "SPY", "CAPTURE" ]
+                  proxyUnmatchedRequests:
+                    type: boolean
+        '400':
+          description: missing or unknown mode
+    get:
+      tags:
+        - control
+      summary: retrieve the current proxy / mock operating mode
+      description: returns the current operating mode and whether unmatched requests are proxied
+      responses:
+        '200':
+          description: current mode returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  mode:
+                    type: string
+                    enum: [ "SIMULATE", "SPY", "CAPTURE" ]
+                  proxyUnmatchedRequests:
+                    type: boolean
+  /mockserver/cassettes:
+    put:
+      tags:
+        - control
+      summary: register or update a record/replay cassette
+      description: >-
+        Registers (or updates) a cassette entry in the in-memory cassette registry from a JSON body.
+        The 'path' field is required; 'filename', 'expectationCount' and 'origin' are optional.
+      responses:
+        '201':
+          description: cassette registered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  path:
+                    type: string
+                  filename:
+                    type: string
+                  expectationCount:
+                    type: integer
+                  origin:
+                    type: string
+                  lastUsed:
+                    type: integer
+                    format: int64
+        '400':
+          description: missing request body or missing 'path' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - path
+              properties:
+                path:
+                  type: string
+                  description: cassette path (required, used as the registry key)
+                filename:
+                  type: string
+                expectationCount:
+                  type: integer
+                origin:
+                  type: string
+        description: cassette registration details
+        required: true
+    get:
+      tags:
+        - control
+      summary: list registered cassettes
+      description: returns all registered cassettes held in the in-memory cassette registry
+      responses:
+        '200':
+          description: registered cassettes returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  cassettes:
+                    type: array
+                    items:
+                      type: object
+    delete:
+      tags:
+        - control
+      summary: remove a registered cassette
+      description: >-
+        removes a cassette by path, supplied either as the 'path' query parameter or a JSON body with a 'path' field
+      parameters:
+        - in: query
+          name: path
+          schema:
+            type: string
+          required: false
+          description: path of the cassette to remove (alternatively supply 'path' in the request body)
+      responses:
+        '200':
+          description: removal processed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  removed:
+                    type: boolean
+        '400':
+          description: path missing from both query parameter and body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                path:
+                  type: string
+        description: path of the cassette to remove (alternative to the query parameter)
+        required: false
+  /mockserver/diff:
+    put:
+      tags:
+        - verify
+      summary: compare two HTTP requests field-by-field
+      description: >-
+        Diffs an 'expected' against an 'actual' HttpRequest and returns the per-field differences,
+        a total diff count and whether the two requests are identical.
+      responses:
+        '200':
+          description: diff computed
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  diffCount:
+                    type: integer
+                  identical:
+                    type: boolean
+                  diffs:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          description: missing body, missing 'expected'/'actual' fields, or non-HttpRequest definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - expected
+                - actual
+              properties:
+                expected:
+                  $ref: "#/components/schemas/HttpRequest"
+                actual:
+                  $ref: "#/components/schemas/HttpRequest"
+        description: the two HTTP requests to compare
+        required: true
+  /mockserver/replay:
+    put:
+      tags:
+        - control
+      summary: replay a previously recorded request to its original target
+      description: >-
+        Re-issues a previously recorded or proxied HTTP request to its upstream target and returns the
+        upstream response. The target host/port is resolved from the socketAddress field or the Host
+        header in the submitted HttpRequest JSON. Subject to the SSRF policy
+        (mockserver.forwardProxyBlockPrivateNetworks) and a 10 MB body-size cap on both the outbound
+        request and the upstream response.
+      responses:
+        '200':
+          description: upstream response returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HttpResponse"
+        '400':
+          description: missing or unparseable HttpRequest body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '403':
+          description: replay blocked by SSRF policy (target is a private/loopback/metadata address)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '413':
+          description: request body exceeds maximum replay size
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '501':
+          description: replay not available (no HTTP client wired)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '502':
+          description: upstream connection failed or upstream response body exceeds maximum size
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HttpRequest"
+        description: the HTTP request to replay to its original upstream target
+        required: true
+  /mockserver/breakpoint:
+    get:
+      tags:
+        - control
+      summary: list all currently paused (breakpointed) exchanges
+      description: >-
+        Returns a JSON object listing all exchanges currently held at a breakpoint, with each entry's
+        correlation id, phase (REQUEST or RESPONSE), age, matched expectation id (if any), a request
+        summary (method + path), and for response-phase exchanges a response summary (statusCode + reasonPhrase).
+        Requires breakpointEnabled=true or breakpointResponseEnabled=true to have any entries.
+      responses:
+        '200':
+          description: list of paused exchanges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pausedExchanges:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        phase:
+                          type: string
+                          enum: [REQUEST, RESPONSE]
+                        ageMillis:
+                          type: integer
+                        expectationId:
+                          type: string
+                        request:
+                          type: object
+                          properties:
+                            method:
+                              type: string
+                            path:
+                              type: string
+                        response:
+                          type: object
+                          description: present only for RESPONSE-phase exchanges
+                          properties:
+                            statusCode:
+                              type: integer
+                            reasonPhrase:
+                              type: string
+                  count:
+                    type: integer
+    put:
+      tags:
+        - control
+      summary: list all currently paused (breakpointed) exchanges (PUT variant)
+      description: >-
+        Same as GET /mockserver/breakpoint. The PUT variant exists for consistency with other
+        control-plane endpoints that use PUT for idempotent queries.
+      responses:
+        '200':
+          description: list of paused exchanges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pausedExchanges:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+  /mockserver/breakpoint/continue:
+    put:
+      tags:
+        - control
+      summary: continue a paused exchange unchanged
+      description: >-
+        Resolves a breakpointed exchange as CONTINUE. For request-phase exchanges, the original
+        captured request is forwarded to its upstream target unchanged. For response-phase exchanges,
+        the original upstream response is written to the client unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to continue
+      responses:
+        '200':
+          description: exchange continued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [continued]
+                  id:
+                    type: string
+        '400':
+          description: missing or unparseable body, or missing 'id' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/breakpoint/modify:
+    put:
+      tags:
+        - control
+      summary: modify and continue a paused exchange
+      description: >-
+        Resolves a breakpointed exchange as MODIFY. For request-phase exchanges, provide
+        {id, httpRequest} — the replacement request is forwarded to the upstream target. For
+        response-phase exchanges, provide {id, httpResponse} — the replacement response is
+        written to the client. Exactly one of httpRequest or httpResponse must be provided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to modify
+                httpRequest:
+                  description: replacement request (request-phase exchanges only)
+                  $ref: "#/components/schemas/HttpRequest"
+                httpResponse:
+                  description: replacement response (response-phase exchanges only)
+                  $ref: "#/components/schemas/HttpResponse"
+      responses:
+        '200':
+          description: exchange modified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [modified]
+                  id:
+                    type: string
+        '400':
+          description: missing body, missing 'id', or neither 'httpRequest' nor 'httpResponse' provided
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/breakpoint/abort:
+    put:
+      tags:
+        - control
+      summary: abort a paused exchange (return an error response to the client)
+      description: >-
+        Resolves a breakpointed exchange as ABORT. For request-phase exchanges, the request is NOT
+        forwarded to the upstream target. For response-phase exchanges, the original upstream response
+        is discarded. In both cases, the optional httpResponse is returned to the client (or a 503 if omitted).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to abort
+                httpResponse:
+                  $ref: "#/components/schemas/HttpResponse"
+      responses:
+        '200':
+          description: exchange aborted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [aborted]
+                  id:
+                    type: string
+        '400':
+          description: missing or unparseable body, or missing 'id' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/generateExpectation:
+    put:
+      tags:
+        - expectation
+      summary: generate expectation suggestion(s) from an unmatched request
+      description: >-
+        Generates one or more suggested expectations for an unmatched HttpRequest. When 'preview' is true
+        (the default) the suggestions are only returned; when false they are also added. If an LLM backend
+        is configured it is used, otherwise a simple template-based stub is generated.
+      responses:
+        '200':
+          description: expectation suggestion(s) returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Expectation"
+                  confidence:
+                    type: number
+                  preview:
+                    type: boolean
+                  explanation:
+                    type: string
+        '400':
+          description: missing body, missing 'request' field, or failed to parse the request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - request
+              properties:
+                request:
+                  $ref: "#/components/schemas/HttpRequest"
+                preview:
+                  type: boolean
+                  default: true
+                  description: when true (default) only return suggestions; when false also add them
+                limit:
+                  type: integer
+                  default: 1
+                  minimum: 1
+                  maximum: 5
+                  description: maximum number of suggestions to generate (1-5)
+        description: the unmatched request to generate expectation(s) for
+        required: true
+  /mockserver/explainUnmatched:
+    put:
+      tags:
+        - troubleshooting
+      summary: explain why recent requests did not match any expectation
+      description: >-
+        Returns a diagnostic report for recently recorded unmatched requests, including the closest-matching
+        expectations and the per-field differences that prevented a match. An optional 'limit' in the body
+        bounds how many unmatched requests are analysed (default 10).
+      responses:
+        '200':
+          description: unmatched-request explanation returned
+          content:
+            application/json:
+              schema:
+                type: object
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limit:
+                  type: integer
+                  default: 10
+                  description: maximum number of recent unmatched requests to analyse
+        description: optional limit on the number of unmatched requests to analyse
+        required: false
+  /mockserver/debugMismatch:
+    put:
+      tags:
+        - troubleshooting
+      summary: return per-expectation mismatch debug information for a request
+      description: >-
+        Evaluates the supplied HttpRequest against every active expectation and returns, for each, whether
+        it matched and the per-field differences, plus the closest match. Only HttpRequest definitions are
+        supported (not OpenAPI definitions).
+      responses:
+        '200':
+          description: mismatch debug information returned
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: an OpenAPI definition was supplied instead of an HttpRequest, or the request could not be processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestDefinition"
+        description: the request to evaluate against all active expectations
+        required: true
+  /mockserver/pact:
+    put:
+      tags:
+        - pact
+      summary: export active expectations as a Pact contract
+      description: >-
+        Exports the current active expectations as a Pact consumer-driven contract (JSON). The optional
+        'consumer' and 'provider' query parameters set the contract's consumer and provider names.
+      parameters:
+        - in: query
+          name: consumer
+          schema:
+            type: string
+          required: false
+          description: consumer name to record in the exported Pact contract
+        - in: query
+          name: provider
+          schema:
+            type: string
+          required: false
+          description: provider name to record in the exported Pact contract
+      responses:
+        '200':
+          description: Pact contract exported
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Pact consumer-driven contract document
+        '400':
+          description: failed to export the Pact contract
+          content:
+            text/plain:
+              schema:
+                type: string
+  /mockserver/pact/verify:
+    put:
+      tags:
+        - pact
+      summary: verify active expectations against a Pact contract
+      description: >-
+        Verifies the supplied Pact contract (JSON) against the current expectations and returns the
+        verification result. Returns 202 when verification passes and 406 when it fails.
+      responses:
+        '202':
+          description: Pact verification passed
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Pact verification result
+        '406':
+          description: Pact verification failed
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Pact verification result describing the failures
+        '400':
+          description: empty or invalid Pact contract
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Pact contract document to verify against
+        description: the Pact contract to verify
+        required: true
+  /mockserver/wsdl:
+    put:
+      tags:
+        - expectation
+      summary: create expectations from a WSDL
+      description: generates expectations from a WSDL document (the request body is the raw WSDL) and adds them
+      responses:
+        '201':
+          description: expectations created from the WSDL
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: invalid or unparseable WSDL document
+          content:
+            text/plain:
+              schema:
+                type: string
+      requestBody:
+        content:
+          application/xml:
+            schema:
+              type: string
+              description: raw WSDL document
+        description: WSDL document to generate expectations from
+        required: true
+  /mockserver/grpc/services:
+    put:
+      tags:
+        - grpc
+      summary: list loaded gRPC services
+      description: >-
+        Returns the gRPC services available from the loaded proto descriptor set, each with its methods
+        and their input/output types and streaming flags.
+      responses:
+        '200':
+          description: loaded gRPC services returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    name:
+                      type: string
+                    methods:
+                      type: array
+                      items:
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          name:
+                            type: string
+                          inputType:
+                            type: string
+                          outputType:
+                            type: string
+                          clientStreaming:
+                            type: boolean
+                          serverStreaming:
+                            type: boolean
+        '400':
+          description: failed to list gRPC services
+          content:
+            text/plain:
+              schema:
+                type: string
+  /mockserver/grpc/clear:
+    put:
+      tags:
+        - grpc
+      summary: reset the gRPC descriptor store
+      description: clears all loaded gRPC proto descriptors and the services derived from them
+      responses:
+        '200':
+          description: gRPC descriptor store reset
   /mockserver/stop:
     put:
       tags:
@@ -370,6 +2102,13 @@ paths:
           description: MockServer process is stopping
 components:
   schemas:
+    ScenarioError:
+      description: "scenario request error"
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
     Expectations:
       description: "list of expectations"
       oneOf:
@@ -1219,3 +2958,67 @@ components:
           $ref: "#/components/schemas/HttpResponse"
         timestamp:
           type: string
+    CrudExpectationsDefinition:
+      description: "definition of a generated CRUD data store backed REST resource"
+      type: object
+      additionalProperties: false
+      required:
+        - basePath
+      properties:
+        basePath:
+          type: string
+          description: "base path the CRUD resource is served under (e.g. /api/users)"
+        idField:
+          type: string
+          default: "id"
+          description: "name of the field used as the resource identifier"
+        idStrategy:
+          type: string
+          enum: [ "AUTO_INCREMENT", "UUID" ]
+          default: "AUTO_INCREMENT"
+          description: "strategy used to generate identifiers for newly created resources"
+        initialData:
+          type: array
+          description: "initial records to seed the data store with"
+          items:
+            type: object
+    FileStoreRequest:
+      description: "file to store in the in-memory file store"
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - content
+      properties:
+        name:
+          type: string
+          description: "name to store the file under"
+        content:
+          type: string
+          description: "file content, either plain text or base64-encoded when base64 is true"
+        base64:
+          type: boolean
+          default: false
+          description: "when true, content is treated as base64-encoded binary data"
+    ServiceChaosRequest:
+      description: "service-scoped HTTP chaos registration, removal or clear instruction"
+      type: object
+      additionalProperties: true
+      properties:
+        host:
+          type: string
+          description: "downstream host the chaos profile applies to (mutually exclusive with clear)"
+        chaos:
+          type: object
+          description: "HTTP chaos profile (fault types, probabilities, error status, etc.); omit (or set remove:true) to remove the host's profile"
+        remove:
+          type: boolean
+          description: "when true, removes the named host's chaos profile"
+        clear:
+          type: boolean
+          description: "when true, clears all service-scoped chaos (mutually exclusive with host)"
+        ttlMillis:
+          type: integer
+          format: int64
+          minimum: 1
+          description: "optional time-to-live in milliseconds after which the registration auto-reverts"

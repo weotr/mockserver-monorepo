@@ -1,11 +1,54 @@
-<a id="maven_plugin_expectation_initializer_class" class="anchor" href="#maven_plugin_expectation_initializer_class">&nbsp;</a>
+<a id="clustering_mockserver" class="anchor" href="#clustering_mockserver">&nbsp;</a>
 
 <h2>Clustering MockServer</h2>
 
-<p>MockServer supports a <a href="/mock_server/performance.html">very high request throughput</a>, however if a higher request per second rate is required it is possible to cluster MockServer so that all nodes share expectations.</p>
-<p>Although expectations are clustered, currently there is no support for clustering the MockServer log therefore request verifications will only work against the node that received the request.</p>
+<p>MockServer supports a <a href="/mock_server/performance.html">very high request throughput</a> from a single node. When you need high availability, horizontal scale beyond one node, or zero-downtime rolling updates, MockServer can run as a cluster so that all nodes share state.</p>
 
-<p>To create a MockServer cluster all instances need to:</p>
+<p>There are two ways to cluster MockServer. For the full deployment guide &mdash; architecture diagrams, the <code class="inline_code">-clustered</code> image, Docker Compose and Helm examples, and a decision table &mdash; see <a href="/mock_server/centralized_deployment.html">Centralized Deployment</a>.</p>
+
+<a id="clustering_infinispan" class="anchor" href="#clustering_infinispan">&nbsp;</a>
+
+<h3>Infinispan state backend (recommended)</h3>
+
+<p>The production-grade approach uses an embedded <a target="_blank" href="https://infinispan.org/" rel="noopener noreferrer">Infinispan</a> state backend that replicates state synchronously across all nodes over JGroups. Expectations, scenario state, CRUD entity stores, and chaos profiles are visible on every node immediately after any write, and per-expectation <span class="inline_code">Times</span> match limits are enforced cluster-wide. No shared filesystem is required.</p>
+
+<p>Clustering requires the <span class="inline_code">mockserver-state-infinispan</span> module on the classpath. The pre-built <span class="inline_code">-clustered</span> Docker image (<span class="inline_code">mockserver/mockserver:clustered-{{ site.mockserver_version }}</span>) bundles this module and its JGroups dependencies; the default image does not. It is enabled with three properties:</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Env var</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">mockserver.stateBackend</span></td>
+            <td><span class="inline_code">MOCKSERVER_STATE_BACKEND</span></td>
+            <td><span class="inline_code">memory</span></td>
+            <td>Set to <span class="inline_code">infinispan</span> to enable the clustered backend (requires the <span class="inline_code">mockserver-state-infinispan</span> module).</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">mockserver.clusterEnabled</span></td>
+            <td><span class="inline_code">MOCKSERVER_CLUSTER_ENABLED</span></td>
+            <td><span class="inline_code">false</span></td>
+            <td>Set to <span class="inline_code">true</span> to activate the JGroups transport and state replication across nodes.</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">mockserver.clusterName</span></td>
+            <td><span class="inline_code">MOCKSERVER_CLUSTER_NAME</span></td>
+            <td><span class="inline_code">mockserver-cluster</span></td>
+            <td>Cluster identifier. All nodes that should share state must use the same value.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Note:</strong> as with the file-based approach below, the request log and verification ring buffer are <strong>node-local</strong> &mdash; a <span class="inline_code">verify()</span> call only checks the node that received it. The <a href="/mock_server/centralized_deployment.html#option2">Centralized Deployment</a> page covers this constraint and the full Docker Compose and Kubernetes/Helm setup.</p>
+
+<a id="clustering_shared_filesystem" class="anchor" href="#clustering_shared_filesystem">&nbsp;</a>
+
+<h3>Shared filesystem (simpler alternative)</h3>
+
+<p>A simpler alternative that needs no extra module is to have several non-clustered nodes share their expectations through a common read-write filesystem and identical persistence configuration. State is reconciled by writing to and re-reading the shared file rather than by live replication, so propagation is eventual rather than synchronous. This suits modest fleets where a shared volume is already available.</p>
+
+<p>To create a file-based MockServer cluster all instances need to:</p>
 <ul>
     <li>share a read-write file system i.e. same physical / virtual machine, <a target="_blank" href="https://en.wikipedia.org/wiki/Network_File_System" rel="noopener noreferrer">NFS</a>, <a target="_blank" href="https://aws.amazon.com/efs/" rel="noopener noreferrer">AWS EFS</a>, <a target="_blank" href="https://docs.microsoft.com/en-us/azure/storage/files/" rel="noopener noreferrer">Azure Files</a>, etc</li>
     <li>configure identical <a href="/mock_server/initializing_expectations.html#expectation_initializer_json">expectation initialiser</a> and <a href="/mock_server/persisting_expectations.html">expectation persistence</a></li>

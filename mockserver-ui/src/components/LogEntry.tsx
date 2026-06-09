@@ -13,6 +13,7 @@ import BecauseSection from './BecauseSection';
 import CopyButton from './CopyButton';
 import { useDebugMismatchContext } from '../hooks/DebugMismatchContext';
 import { useGenerateStubContext } from '../hooks/GenerateStubContext';
+import { entryToText } from '../lib/logEntryText';
 
 // ---------------------------------------------------------------------------
 // W3C traceparent pill (F8)
@@ -220,27 +221,8 @@ function renderMessagePart(part: MessagePart) {
   );
 }
 
-export function entryToText(entry: LogEntryValue): string {
-  const parts: string[] = [];
-  if (entry.description) {
-    if (typeof entry.description === 'string') {
-      parts.push(entry.description);
-    } else if (entry.description.json === false) {
-      parts.push(`${entry.description.first} ${entry.description.second}`);
-    } else {
-      parts.push(entry.description.first);
-    }
-  }
-  if (entry.messageParts) {
-    for (const p of entry.messageParts) {
-      if (typeof p.value === 'string') parts.push(p.value);
-      else if (Array.isArray(p.value)) parts.push(p.value.join('\n'));
-      else if (typeof p.value === 'object') parts.push(JSON.stringify(p.value, null, 2));
-      else parts.push(String(p.value));
-    }
-  }
-  return parts.join(' ').trim();
-}
+// entryToText lives in ../lib/logEntryText.ts so this component file only
+// exports React components (satisfies react-refresh/only-export-components).
 
 function getSummary(entry: LogEntryValue): string {
   if (!entry.messageParts || entry.messageParts.length === 0) return '';

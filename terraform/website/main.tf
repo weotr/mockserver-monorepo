@@ -10,7 +10,8 @@ provider "aws" {
   dynamic "assume_role" {
     for_each = var.website_role_arn == "" ? [] : [1]
     content {
-      role_arn = var.website_role_arn
+      role_arn    = var.website_role_arn
+      external_id = var.role_external_id != "" ? var.role_external_id : null
     }
   }
 }
@@ -21,7 +22,8 @@ provider "aws" {
   dynamic "assume_role" {
     for_each = var.website_role_arn == "" ? [] : [1]
     content {
-      role_arn = var.website_role_arn
+      role_arn    = var.website_role_arn
+      external_id = var.role_external_id != "" ? var.role_external_id : null
     }
   }
 }

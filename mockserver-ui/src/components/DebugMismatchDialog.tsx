@@ -12,9 +12,13 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import { useState } from 'react';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
+import { useState, useMemo, useCallback } from 'react';
 import { useDashboardStore } from '../store';
 import type { DebugMismatchExpectationResult } from '../types';
+import type { ConnectionParams } from '../hooks/useConnectionParams';
+import type { GenericParsed } from '../lib/llmTraffic';
+import CaptureAsMockDialog from './CaptureAsMockDialog';
 
 function scoreColor(matched: number, total: number): 'success' | 'warning' | 'error' {
   // Guard divide-by-zero: a matcher with no fields hasn't "failed" anything, so don't paint it red.
@@ -115,70 +119,140 @@ function ExpectationResultRow({ result, isClosest }: { result: DebugMismatchExpe
   );
 }
 
-export default function DebugMismatchDialog() {
+// ---------------------------------------------------------------------------
+// Helpers to build a GenericParsed + itemValue from the unmatched request
+// ---------------------------------------------------------------------------
+
+function unmatchedRequestToParsed(request: Record<string, unknown>): { parsed: GenericParsed; path: string; itemValue: Record<string, unknown> } {
+  const method = typeof request['method'] === 'string' ? request['method'] : 'GET';
+  const path = typeof request['path'] === 'string' ? request['path'] : '/';
+
+  const parsed: GenericParsed = {
+    kind: 'generic',
+    method,
+    path,
+    statusCode: 200,
+  };
+
+  // Wrap the bare httpRequest in the { httpRequest, httpResponse } shape that
+  // extractGenericExpectationFromCapture expects, with a sensible 200 default.
+  const itemValue: Record<string, unknown> = {
+    httpRequest: request,
+    httpResponse: { statusCode: 200 },
+  };
+
+  return { parsed, path, itemValue };
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+interface DebugMismatchDialogProps {
+  connectionParams: ConnectionParams;
+}
+
+export default function DebugMismatchDialog({ connectionParams }: DebugMismatchDialogProps) {
   const open = useDashboardStore((s) => s.debugMismatchOpen);
   const result = useDashboardStore((s) => s.debugMismatchResult);
   const loading = useDashboardStore((s) => s.debugMismatchLoading);
   const error = useDashboardStore((s) => s.debugMismatchError);
-  const close = useDashboardStore((s) => s.closeDebugMismatch);
+  const closeStore = useDashboardStore((s) => s.closeDebugMismatch);
+
+  const [captureOpen, setCaptureOpen] = useState(false);
+
+  const close = useCallback(() => {
+    setCaptureOpen(false);
+    closeStore();
+  }, [closeStore]);
+
+  // Derive the capture-dialog inputs from the unmatched request stored in the result
+  const captureData = useMemo(() => {
+    if (!result?.unmatchedRequest) return null;
+    return unmatchedRequestToParsed(result.unmatchedRequest);
+  }, [result]);
+
+  const hasUnmatchedRequest = captureData !== null;
 
   return (
-    <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pr: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          Why Didn&apos;t This Match?
-          {result && (
-            <Chip
-              label={`${result.totalExpectations} expectation${result.totalExpectations !== 1 ? 's' : ''}`}
-              size="small"
-              variant="outlined"
-              sx={{ fontSize: '0.75rem' }}
-            />
+    <>
+      <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pr: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            Why Didn&apos;t This Match?
+            {result && (
+              <Chip
+                label={`${result.totalExpectations} expectation${result.totalExpectations !== 1 ? 's' : ''}`}
+                size="small"
+                variant="outlined"
+                sx={{ fontSize: '0.75rem' }}
+              />
+            )}
+          </Box>
+          <IconButton size="small" onClick={close}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          {loading && (
+            <Typography sx={{ p: 3, textAlign: 'center' }} color="text.secondary">
+              Analyzing match results...
+            </Typography>
           )}
-        </Box>
-        <IconButton size="small" onClick={close}>
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent dividers sx={{ p: 0 }}>
-        {loading && (
-          <Typography sx={{ p: 3, textAlign: 'center' }} color="text.secondary">
-            Analyzing match results...
-          </Typography>
-        )}
-        {error && (
-          <Typography sx={{ p: 3, textAlign: 'center' }} color="error">
-            {error}
-          </Typography>
-        )}
-        {result && !loading && (
-          <>
-            {result.truncated && (
-              <Typography variant="caption" sx={{ display: 'block', px: 2, py: 0.5, bgcolor: 'warning.dark', color: 'warning.contrastText' }}>
-                Showing first {result.maxExpectationsEvaluated} of {result.totalExpectations} expectations
-              </Typography>
-            )}
-            {result.results.length === 0 ? (
-              <Typography sx={{ p: 3, textAlign: 'center' }} color="text.secondary">
-                No active expectations
-              </Typography>
-            ) : (
-              result.results.map((r, i) => (
-                <ExpectationResultRow
-                  key={r.expectationId ?? i}
-                  result={r}
-                  isClosest={result.closestMatch?.expectationId === r.expectationId}
-                />
-              ))
-            )}
-          </>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={close} size="small">
-          Close
-        </Button>
-      </DialogActions>
-    </Dialog>
+          {error && (
+            <Typography sx={{ p: 3, textAlign: 'center' }} color="error">
+              {error}
+            </Typography>
+          )}
+          {result && !loading && (
+            <>
+              {result.truncated && (
+                <Typography variant="caption" sx={{ display: 'block', px: 2, py: 0.5, bgcolor: 'warning.dark', color: 'warning.contrastText' }}>
+                  Showing first {result.maxExpectationsEvaluated} of {result.totalExpectations} expectations
+                </Typography>
+              )}
+              {result.results.length === 0 ? (
+                <Typography sx={{ p: 3, textAlign: 'center' }} color="text.secondary">
+                  No active expectations
+                </Typography>
+              ) : (
+                result.results.map((r, i) => (
+                  <ExpectationResultRow
+                    key={r.expectationId ?? i}
+                    result={r}
+                    isClosest={result.closestMatch?.expectationId === r.expectationId}
+                  />
+                ))
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {hasUnmatchedRequest && (
+            <Button
+              size="small"
+              startIcon={<AddCircleOutlineIcon />}
+              onClick={() => setCaptureOpen(true)}
+            >
+              Create Expectation
+            </Button>
+          )}
+          <Button onClick={close} size="small">
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {captureData && (
+        <CaptureAsMockDialog
+          open={captureOpen}
+          onClose={() => setCaptureOpen(false)}
+          parsed={captureData.parsed}
+          path={captureData.path}
+          connectionParams={connectionParams}
+          itemValue={captureData.itemValue}
+        />
+      )}
+    </>
   );
 }

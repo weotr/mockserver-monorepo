@@ -184,7 +184,7 @@ This stack creates the following DNS records in the `mock-server.com` hosted zon
 | `mock-server.com` | MX | Routes inbound email to SES |
 | `_amazonses.mock-server.com` | TXT | SES domain verification |
 | `<token>._domainkey.mock-server.com` (x3) | CNAME | DKIM signing verification |
-| `_dmarc.mock-server.com` | TXT | DMARC policy (`p=none`) |
+| `_dmarc.mock-server.com` | TXT | DMARC policy (`p=quarantine; rua=mailto:dmarc-reports@mock-server.com; ruf=mailto:dmarc-reports@mock-server.com; fo=1`) |
 
 **Note:** An apex SPF TXT record is deliberately **not** created. The apex TXT already holds a `google-site-verification` value that this stack must not take ownership of. Email deliverability is covered by SES DKIM signing. An SPF record can be merged into the existing apex TXT manually later if desired.
 

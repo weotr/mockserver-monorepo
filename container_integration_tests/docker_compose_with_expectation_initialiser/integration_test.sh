@@ -11,7 +11,7 @@ printMessage "Start: \"${SCRIPT_DIR/\//}\""
 function integration_test() {
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
   RESPONSE_BODY=$(docker-exec-client "curl -v -s -X PUT 'http://mockserver:1080/some/path'")
 
   if [[ "${RESPONSE_BODY}" != "some_response_body" ]]; then

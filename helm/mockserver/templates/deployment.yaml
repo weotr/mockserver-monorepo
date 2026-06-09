@@ -92,6 +92,11 @@ spec:
             - name: serviceport
               containerPort: {{ .Values.app.serverPort }}
               protocol: TCP
+{{- if .Values.clustering.enabled }}
+            - name: jgroups
+              containerPort: {{ .Values.clustering.jgroupsPort | default 7800 }}
+              protocol: TCP
+{{- end }}
           readinessProbe:
             httpGet:
               path: /liveness/probe
@@ -143,10 +148,22 @@ spec:
             - name: MOCKSERVER_TRANSPARENT_PROXY_ENABLED
               value: "true"
 {{- end }}
+{{- if .Values.clustering.enabled }}
+            - name: MOCKSERVER_STATE_BACKEND
+              value: "infinispan"
+            - name: MOCKSERVER_CLUSTER_ENABLED
+              value: "true"
+            - name: MOCKSERVER_CLUSTER_NAME
+              value: {{ .Values.clustering.clusterName | default "mockserver-cluster" | quote }}
+            - name: MOCKSERVER_CLUSTER_TRANSPORT_CONFIG
+              value: {{ .Values.clustering.transportConfig | default "jgroups-kubernetes.xml" | quote }}
+            - name: JGROUPS_DNS_QUERY
+              value: "{{ template "release.name" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local"
+{{- end }}
           volumeMounts:
             - name: config-volume
               mountPath: /config
-{{- if .Values.app.mountedLibsConfigMapName}}
+{{- if and .Values.app.mountedLibsConfigMapName (not .Values.clustering.enabled) }}
             - name: libs-volume
               mountPath: /libs
 {{- end}}
@@ -163,7 +180,7 @@ spec:
           configMap:
             name: {{ .Values.app.mountedConfigMapName }}
             optional: true
-{{- if .Values.app.mountedLibsConfigMapName}}
+{{- if and .Values.app.mountedLibsConfigMapName (not .Values.clustering.enabled) }}
         - name: libs-volume
           configMap:
             name: {{ .Values.app.mountedLibsConfigMapName }}

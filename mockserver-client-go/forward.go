@@ -1,0 +1,88 @@
+package mockserver
+
+// HttpForward represents an HTTP forward action for MockServer.
+type HttpForward struct {
+	Host   string `json:"host"`
+	Port   int    `json:"port,omitempty"`
+	Scheme string `json:"scheme,omitempty"`
+	Delay  *Delay `json:"delay,omitempty"`
+}
+
+// HttpError represents an HTTP error action for MockServer.
+type HttpError struct {
+	DropConnection *bool  `json:"dropConnection,omitempty"`
+	ResponseBytes  string `json:"responseBytes,omitempty"`
+	Delay          *Delay `json:"delay,omitempty"`
+}
+
+// ForwardBuilder provides a fluent API for building HttpForward actions.
+type ForwardBuilder struct {
+	forward HttpForward
+}
+
+// Forward creates a new ForwardBuilder.
+func Forward() *ForwardBuilder {
+	return &ForwardBuilder{}
+}
+
+// Host sets the forward destination host.
+func (b *ForwardBuilder) Host(host string) *ForwardBuilder {
+	b.forward.Host = host
+	return b
+}
+
+// Port sets the forward destination port.
+func (b *ForwardBuilder) Port(port int) *ForwardBuilder {
+	b.forward.Port = port
+	return b
+}
+
+// Scheme sets the forward scheme (HTTP or HTTPS).
+func (b *ForwardBuilder) Scheme(scheme string) *ForwardBuilder {
+	b.forward.Scheme = scheme
+	return b
+}
+
+// WithDelay sets the forward delay.
+func (b *ForwardBuilder) WithDelay(timeUnit string, value int) *ForwardBuilder {
+	b.forward.Delay = &Delay{TimeUnit: timeUnit, Value: value}
+	return b
+}
+
+// Build returns the constructed HttpForward.
+func (b *ForwardBuilder) Build() HttpForward {
+	return b.forward
+}
+
+// ErrorBuilder provides a fluent API for building HttpError actions.
+type ErrorBuilder struct {
+	httpError HttpError
+}
+
+// Error creates a new ErrorBuilder.
+func Error() *ErrorBuilder {
+	return &ErrorBuilder{}
+}
+
+// DropConnection sets whether to drop the connection.
+func (b *ErrorBuilder) DropConnection(drop bool) *ErrorBuilder {
+	b.httpError.DropConnection = &drop
+	return b
+}
+
+// ResponseBytes sets the raw bytes to send before dropping.
+func (b *ErrorBuilder) ResponseBytes(bytes string) *ErrorBuilder {
+	b.httpError.ResponseBytes = bytes
+	return b
+}
+
+// WithDelay sets the error delay.
+func (b *ErrorBuilder) WithDelay(timeUnit string, value int) *ErrorBuilder {
+	b.httpError.Delay = &Delay{TimeUnit: timeUnit, Value: value}
+	return b
+}
+
+// Build returns the constructed HttpError.
+func (b *ErrorBuilder) Build() HttpError {
+	return b.httpError
+}

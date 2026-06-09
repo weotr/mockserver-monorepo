@@ -92,6 +92,8 @@ public class MockServerClient implements Stoppable {
     private VerificationSerializer verificationSerializer = new VerificationSerializer(MOCK_SERVER_LOGGER);
     private VerificationSequenceSerializer verificationSequenceSerializer = new VerificationSequenceSerializer(MOCK_SERVER_LOGGER);
     private LogEntrySerializer logEntrySerializer = new LogEntrySerializer(MOCK_SERVER_LOGGER);
+    private HttpRequestSerializer httpRequestSerializer = new HttpRequestSerializer(MOCK_SERVER_LOGGER);
+    private HttpResponseSerializer httpResponseSerializer = new HttpResponseSerializer(MOCK_SERVER_LOGGER);
     private final CompletableFuture<MockServerClient> stopFuture = new CompletableFuture<>();
 
     /**
@@ -2083,5 +2085,181 @@ public class MockServerClient implements Stoppable {
             throw new AssertionError(throwable.getMessage());
         }
         return clientClass.cast(this);
+    }
+
+    // -------------------------------------------------------------------
+    // Breakpoint Control
+    // -------------------------------------------------------------------
+
+    /**
+     * List all currently paused request exchanges (breakpoints).
+     * Returns a JSON string with the structure:
+     * <pre>
+     * {
+     *   "pausedExchanges": [
+     *     { "id": "...", "ageMillis": 1234, "expectationId": "...", "request": { "method": "GET", "path": "/..." } }
+     *   ],
+     *   "count": 1
+     * }
+     * </pre>
+     *
+     * @return JSON string describing all paused exchanges
+     */
+    public String listBreakpoints() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("breakpoint")),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Continue a paused breakpoint exchange, allowing the original request to proceed
+     * unmodified to the expectation's action (response/forward).
+     *
+     * @param id the correlation id of the paused exchange to continue
+     * @return this MockServerClient
+     * @throws IllegalArgumentException if the id is blank or the server rejects the request
+     */
+    public MockServerClient continueBreakpoint(String id) {
+        if (isBlank(id)) {
+            throw new IllegalArgumentException("continueBreakpoint requires a non-blank id");
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            body.put("id", id);
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("breakpoint/continue"))
+                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
+                true
+            );
+        } catch (IllegalArgumentException iae) {
+            throw iae;
+        } catch (Exception exception) {
+            throw new RuntimeException("Exception continuing breakpoint with id \"" + id + "\"", exception);
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Modify a paused breakpoint exchange by replacing the captured request with
+     * a modified version, then allow it to proceed to the expectation's action.
+     *
+     * @param id              the correlation id of the paused exchange to modify
+     * @param modifiedRequest the modified request that replaces the originally captured one
+     * @return this MockServerClient
+     * @throws IllegalArgumentException if the id is blank, modifiedRequest is null, or the server rejects the request
+     */
+    public MockServerClient modifyBreakpoint(String id, HttpRequest modifiedRequest) {
+        if (isBlank(id)) {
+            throw new IllegalArgumentException("modifyBreakpoint requires a non-blank id");
+        }
+        if (modifiedRequest == null) {
+            throw new IllegalArgumentException("modifyBreakpoint requires a non-null modifiedRequest");
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            body.put("id", id);
+            String serializedRequest = httpRequestSerializer.serialize(modifiedRequest);
+            body.set("httpRequest", objectMapper.readTree(serializedRequest));
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("breakpoint/modify"))
+                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
+                true
+            );
+        } catch (IllegalArgumentException iae) {
+            throw iae;
+        } catch (Exception exception) {
+            throw new RuntimeException("Exception modifying breakpoint with id \"" + id + "\"", exception);
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Abort a paused breakpoint exchange, returning a default error response to the caller.
+     *
+     * @param id the correlation id of the paused exchange to abort
+     * @return this MockServerClient
+     * @throws IllegalArgumentException if the id is blank or the server rejects the request
+     */
+    public MockServerClient abortBreakpoint(String id) {
+        return abortBreakpoint(id, null);
+    }
+
+    /**
+     * Abort a paused breakpoint exchange, optionally returning the specified response to the caller.
+     *
+     * @param id       the correlation id of the paused exchange to abort
+     * @param response the response to return to the caller, or null for a default error response
+     * @return this MockServerClient
+     * @throws IllegalArgumentException if the id is blank or the server rejects the request
+     */
+    public MockServerClient abortBreakpoint(String id, HttpResponse response) {
+        if (isBlank(id)) {
+            throw new IllegalArgumentException("abortBreakpoint requires a non-blank id");
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            body.put("id", id);
+            if (response != null) {
+                String serializedResponse = httpResponseSerializer.serialize(response);
+                body.set("httpResponse", objectMapper.readTree(serializedResponse));
+            }
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("breakpoint/abort"))
+                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
+                true
+            );
+        } catch (IllegalArgumentException iae) {
+            throw iae;
+        } catch (Exception exception) {
+            throw new RuntimeException("Exception aborting breakpoint with id \"" + id + "\"", exception);
+        }
+        return clientClass.cast(this);
+    }
+
+    // -------------------------------------------------------------------
+    // Replay
+    // -------------------------------------------------------------------
+
+    /**
+     * Replay a request to its upstream target and return the upstream response.
+     * The request is sent exactly as specified — the target host/port is resolved
+     * from the {@code Host} header or the explicit {@code socketAddress} field.
+     *
+     * @param requestToReplay the request to re-issue to the upstream server
+     * @return the upstream response
+     * @throws IllegalArgumentException if the request is null or the server rejects the request
+     */
+    public HttpResponse replay(HttpRequest requestToReplay) {
+        if (requestToReplay == null) {
+            throw new IllegalArgumentException("replay requires a non-null HttpRequest");
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("replay"))
+                .withBody(httpRequestSerializer.serialize(requestToReplay), StandardCharsets.UTF_8),
+            true
+        );
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return httpResponseSerializer.deserialize(httpResponse.getBodyAsString());
+        }
+        return httpResponse;
     }
 }

@@ -1,0 +1,274 @@
+---
+title: Self-Hosting MockServer
+shortTitle: Self-Hosting
+description: Run MockServer yourself in seconds — Docker, one-command docker-compose recipes, the mockserver CLI, a JVM-less binary bundle, Helm/Kubernetes, JAR, and Testcontainers, with copy-paste commands.
+layout: page
+pageOrder: 6
+section: 'Getting Started'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-08T00:00:00+00:00
+---
+
+<p>The fastest way to run your own MockServer is a single command. Pick whichever fits your environment — every option below starts a server that mocks and proxies HTTP and HTTPS on one port (default <span class="inline_code">1080</span>):</p>
+
+<pre class="prettyprint code"><code class="code"># Docker — no Java required
+docker run -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> mockserver/mockserver
+
+# Node — no Java and no Docker (downloads a self-contained bundle)
+npx -p mockserver-node mockserver run -p <span class="numeric_literal">1080</span>
+
+# Homebrew (macOS / Linux) — formula publishes with the next release
+brew install mockserver && mockserver run -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>Confirm it is up (the status endpoint returns <span class="inline_code">200</span> once MockServer is ready):</p>
+
+<pre class="prettyprint code"><code class="code">curl -i -X PUT http://localhost:<span class="numeric_literal">1080</span>/mockserver/status</code></pre>
+
+<p>This page is a task-oriented index of every self-hosting option. Each section links to the in-depth reference page where one exists.</p>
+
+<h3>Choose how to run MockServer:</h3>
+
+<ul>
+	<li><a href="#self_hosting_docker"><strong>Docker</strong></a> — one container, or a one-command <span class="inline_code">docker compose</span> recipe</li>
+	<li><a href="#self_hosting_cli"><strong>Command-line / binary bundle</strong></a> — the <span class="inline_code">mockserver</span> CLI, run via Homebrew, Java, or a JVM-less Node bundle</li>
+	<li><a href="#self_hosting_kubernetes"><strong>Helm / Kubernetes</strong></a> — the OCI Helm chart</li>
+	<li><a href="#self_hosting_jar"><strong>Executable JAR</strong></a> — run anywhere with Java 17+</li>
+	<li><a href="#self_hosting_testcontainers"><strong>Testcontainers</strong></a> — a throwaway container managed by your test run</li>
+	<li><a href="#self_hosting_initialization"><strong>Initialize &amp; persist mocks</strong></a> — preload expectations or an OpenAPI spec, and persist them across restarts</li>
+	<li><a href="#self_hosting_har"><strong>Bootstrap from a browser HAR</strong></a> — turn recorded traffic into a running mock</li>
+</ul>
+
+<a id="self_hosting_docker" class="anchor" href="#self_hosting_docker">&nbsp;</a>
+
+<h2>Docker</h2>
+
+<p>Run the published image directly — it bundles Java and all dependencies, so nothing else needs installing:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> mockserver/mockserver</code></pre>
+
+<p>Configure it with environment variables (any <a href="/mock_server/configuration_properties.html">configuration property</a> has an equivalent <span class="inline_code">MOCKSERVER_*</span> variable). For example, run it as a forwarding proxy:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> \
+    -e MOCKSERVER_PROXY_REMOTE_HOST=api.example.com \
+    -e MOCKSERVER_PROXY_REMOTE_PORT=<span class="numeric_literal">443</span> \
+    mockserver/mockserver</code></pre>
+
+<p>See the full <a href="/mock_server/running_mock_server.html#docker_container">Docker container guide</a> and the <a href="/where/docker.html">Docker download page</a> for image variants, the AWS ECR Public mirror, and signature verification.</p>
+
+<a id="self_hosting_docker_compose" class="anchor" href="#self_hosting_docker_compose">&nbsp;</a>
+
+<h3>One-command docker-compose recipes</h3>
+
+<p>The repository ships task-oriented <span class="inline_code">docker-compose.yml</span> recipes — each is a self-contained directory you can <span class="inline_code">docker compose up</span> with no extra configuration. Clone the repo (or copy a recipe), <span class="inline_code">cd</span> into it, and run:</p>
+
+<pre class="prettyprint code"><code class="code">cd examples/docker-compose/mock-from-openapi
+docker compose up</code></pre>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Recipe</th>
+			<th>What it does</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/mock-from-openapi" rel="noopener noreferrer"><span class="inline_code">mock-from-openapi</span></a></td>
+			<td>Serve mocks generated automatically from a mounted OpenAPI / Swagger spec.</td>
+		</tr>
+		<tr>
+			<td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/record-replay-proxy" rel="noopener noreferrer"><span class="inline_code">record-replay-proxy</span></a></td>
+			<td>Proxy to an upstream and record traffic to a replayable expectations file.</td>
+		</tr>
+		<tr>
+			<td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/validation-proxy" rel="noopener noreferrer"><span class="inline_code">validation-proxy</span></a></td>
+			<td>Proxy to an upstream and validate requests / responses against an OpenAPI spec.</td>
+		</tr>
+		<tr>
+			<td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/chaos-proxy" rel="noopener noreferrer"><span class="inline_code">chaos-proxy</span></a></td>
+			<td>Proxy to an upstream while injecting latency and intermittent errors.</td>
+		</tr>
+	</tbody>
+</table>
+
+<p>More configuration permutations (custom ports, mounted properties files, mTLS, persisted expectations) live in the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose" rel="noopener noreferrer">docker-compose examples folder</a>.</p>
+
+<a id="self_hosting_cli" class="anchor" href="#self_hosting_cli">&nbsp;</a>
+
+<h2>Command line &amp; binary bundle</h2>
+
+<p>The <span class="inline_code">mockserver</span> command is the same whether it is installed by Homebrew, run from the executable JAR, or fetched on demand by the Node bundle. It uses subcommands:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Subcommand</th>
+			<th>What it does</th>
+			<th>Example</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">run</span></td>
+			<td>Start MockServer in mock and/or proxy mode (the default — bare flags like <span class="inline_code">-p 1080</span> imply <span class="inline_code">run</span>).</td>
+			<td><code class="code inline">mockserver run -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">proxy</span></td>
+			<td>Start as a forwarding proxy — shorthand for <span class="inline_code">run --proxy-to</span>.</td>
+			<td><code class="code inline">mockserver proxy --to api.example.com:8080 -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">openapi</span></td>
+			<td>Start and auto-create expectations from an OpenAPI spec.</td>
+			<td><code class="code inline">mockserver openapi ./petstore.yaml -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">version</span></td>
+			<td>Print the MockServer version and exit.</td>
+			<td><code class="code inline">mockserver version</code></td>
+		</tr>
+	</tbody>
+</table>
+
+<p>The most useful <span class="inline_code">run</span> options:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Option</th>
+			<th>Description</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">-p, --port &lt;port&gt;</span></td>
+			<td>Port(s) to listen on; comma-separate to bind several, e.g. <span class="inline_code">1080,1081</span>.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--proxy-to &lt;target&gt;</span></td>
+			<td>Forward unmatched requests to <span class="inline_code">host:port</span> or a <span class="inline_code">http(s)://host</span> URL (a bare hostname with no port and no scheme is rejected).</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--openapi &lt;specUrlOrPath&gt;</span></td>
+			<td>Initialize expectations from an OpenAPI spec (file path or URL) on startup.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--init &lt;fileOrGlob&gt;</span></td>
+			<td>Initialize expectations from a JSON file or glob on startup.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--persist &lt;file&gt;</span></td>
+			<td>Persist expectations to the given file and reload them on restart.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-l, --log-level &lt;level&gt;</span></td>
+			<td>Set the <a href="/mock_server/debugging_issues.html#logging-levels">log level</a> (e.g. <span class="inline_code">INFO</span>, <span class="inline_code">DEBUG</span>, <span class="inline_code">WARN</span>).</td>
+		</tr>
+	</tbody>
+</table>
+
+<p>The full options reference (including the <span class="inline_code">proxy</span> and <span class="inline_code">openapi</span> subcommands, legacy flags, and configuration precedence) is on the <a href="/mock_server/running_mock_server.html#command_line_subcommands">Running From Command Line</a> page.</p>
+
+<a id="self_hosting_homebrew" class="anchor" href="#self_hosting_homebrew">&nbsp;</a>
+
+<h3>Homebrew</h3>
+
+<p>On macOS or Linux, the <span class="inline_code">mockserver</span> command can be installed with <a target="_blank" href="https://brew.sh/" rel="noopener noreferrer">Homebrew</a> <em>(the formula publishes with the next release)</em>:</p>
+
+<pre class="prettyprint code"><code class="code">brew install mockserver
+mockserver run -p <span class="numeric_literal">1080</span></code></pre>
+
+<a id="self_hosting_binary_bundle" class="anchor" href="#self_hosting_binary_bundle">&nbsp;</a>
+
+<h3>JVM-less binary bundle (no Java, no Docker)</h3>
+
+<p>If you have Node.js but neither Java nor Docker, the <span class="inline_code">mockserver-node</span> package can fetch a self-contained bundle — a trimmed Java runtime plus the server — for your platform on first use and run it:</p>
+
+<pre class="prettyprint code"><code class="code">npx -p mockserver-node mockserver run -p <span class="numeric_literal">1080</span>
+npx -p mockserver-node mockserver --openapi ./petstore.yaml -p <span class="numeric_literal">1080</span>
+npx -p mockserver-node mockserver --help</code></pre>
+
+<p>The bundle is downloaded from the MockServer GitHub Release, verified against its published SHA-256, and cached per-user. It exposes the full CLI (<span class="inline_code">run</span>, <span class="inline_code">proxy</span>, <span class="inline_code">openapi</span>, <span class="inline_code">version</span>, <span class="inline_code">help</span>). For corporate mirrors, cache locations, and proxy settings, see the <a target="_blank" href="https://www.npmjs.com/package/mockserver-node" rel="noopener noreferrer"><span class="inline_code">mockserver-node</span> documentation</a>.</p>
+
+<a id="self_hosting_kubernetes" class="anchor" href="#self_hosting_kubernetes">&nbsp;</a>
+
+<h2>Helm / Kubernetes</h2>
+
+<p>The Helm chart is published to the GitHub Container Registry as an OCI artifact, so no <span class="inline_code">helm repo add</span> is needed:</p>
+
+<pre class="prettyprint code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace --version {{ site.mockserver_version }} mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
+
+<p>See the <a href="/mock_server/running_mock_server.html#helm_chart">Helm chart guide</a> and the <a href="/where/kubernetes.html">Kubernetes download page</a> for values, proxy configuration, and signature verification.</p>
+
+<a id="self_hosting_jar" class="anchor" href="#self_hosting_jar">&nbsp;</a>
+
+<h2>Executable JAR</h2>
+
+<p>With Java 17 or higher installed, download the standalone jar from Maven Central and run it — the same CLI as above applies:</p>
+
+<pre class="prettyprint code"><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>Get the jar from the <a href="/where/downloads.html">downloads page</a> (or <a target="_blank" href="https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-netty-no-dependencies/{{ site.mockserver_version }}/mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar" rel="noopener noreferrer">directly from Maven Central</a>), and see <a href="/mock_server/running_mock_server.html#running_from_command_line_using_java">Running From Command Line - Using Java</a> for more.</p>
+
+<a id="self_hosting_testcontainers" class="anchor" href="#self_hosting_testcontainers">&nbsp;</a>
+
+<h2>Testcontainers</h2>
+
+<p>To have a MockServer container started and torn down automatically by your test run, use <a href="/mock_server/mockserver_testcontainers.html">MockServer with Testcontainers</a> rather than self-hosting a long-lived instance.</p>
+
+<a id="self_hosting_initialization" class="anchor" href="#self_hosting_initialization">&nbsp;</a>
+
+<h2>Initialize &amp; persist mocks</h2>
+
+<p>However you run MockServer, you can preload expectations at startup and persist them across restarts. These work as CLI flags, configuration properties, or environment variables:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>What you want</th>
+			<th>CLI flag</th>
+			<th>Environment variable</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td>Preload expectations from a JSON file or glob</td>
+			<td><span class="inline_code">--init &lt;file&gt;</span></td>
+			<td><span class="inline_code">MOCKSERVER_INITIALIZATION_JSON_PATH</span></td>
+		</tr>
+		<tr>
+			<td>Preload expectations from an OpenAPI spec</td>
+			<td><span class="inline_code">--openapi &lt;specUrlOrPath&gt;</span></td>
+			<td><span class="inline_code">MOCKSERVER_INITIALIZATION_OPENAPI_PATH</span></td>
+		</tr>
+		<tr>
+			<td>Persist expectations to a file across restarts</td>
+			<td><span class="inline_code">--persist &lt;file&gt;</span></td>
+			<td><span class="inline_code">MOCKSERVER_PERSIST_EXPECTATIONS=true</span> + <span class="inline_code">MOCKSERVER_PERSISTED_EXPECTATIONS_PATH</span></td>
+		</tr>
+	</tbody>
+</table>
+
+<p>For example, with Docker, mount a spec and serve it as a mock:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> \
+    -v $(pwd)/openapi.yaml:/config/openapi.yaml \
+    -e MOCKSERVER_INITIALIZATION_OPENAPI_PATH=/config/openapi.yaml \
+    mockserver/mockserver</code></pre>
+
+<p>See <a href="/mock_server/initializing_expectations.html">Initializing Expectations</a>, <a href="/mock_server/persisting_expectations.html">Persisting Expectations</a>, and the <a href="/mock_server/configuration_properties.html">configuration properties</a> page (each property lists its environment-variable form) for full details.</p>
+
+<a id="self_hosting_har" class="anchor" href="#self_hosting_har">&nbsp;</a>
+
+<h2>Bootstrap from a browser HAR</h2>
+
+<p>To get a working mock from real traffic in seconds: open your browser DevTools, record the requests on the Network tab, and <strong>Export HAR</strong>. Then import that file into a running MockServer — it creates one expectation per recorded entry:</p>
+
+<pre class="prettyprint code"><code class="code">curl -X PUT "http://localhost:<span class="numeric_literal">1080</span>/mockserver/import?format=har" \
+    --data-binary @recording.har</code></pre>
+
+<p>The same endpoint also imports Postman collections. See <a href="/mock_server/importing_expectations.html">Importing Expectations from HAR &amp; Postman</a> for format detection, options, and examples.</p>

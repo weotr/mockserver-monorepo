@@ -58,6 +58,19 @@ run_bootstrap() {
 run_terraform() {
   local cmd="${1:-plan}"
   cd "$SCRIPT_DIR"
+
+  # Source the Buildkite cluster agent token from SSM (never from tfvars/disk).
+  # The buildkite-pipelines stack mints the cluster token and publishes it to
+  # this SecureString parameter. TF_VAR_ overrides any tfvars value.
+  if [[ -z "${TF_VAR_buildkite_agent_token:-}" ]]; then
+    echo "Loading Buildkite agent token from SSM (/buildkite/buildkite/agent-token)..."
+    TF_VAR_buildkite_agent_token="$(aws ssm get-parameter \
+      --name /buildkite/buildkite/agent-token --with-decryption \
+      --query Parameter.Value --output text \
+      --profile "$AWS_PROFILE" --region "$AWS_REGION")"
+    export TF_VAR_buildkite_agent_token
+  fi
+
   terraform init -input=false
 
   case "$cmd" in

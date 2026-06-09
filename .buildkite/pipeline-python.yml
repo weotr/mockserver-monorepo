@@ -1,4 +1,11 @@
 steps:
+  - label: ":s3: restore pip cache"
+    command: ".buildkite/scripts/cache-restore.sh pip"
+    timeout_in_minutes: 10
+    soft_fail: true
+
+  - wait
+
   - label: ":python: Python client unit tests"
     command: ".buildkite/scripts/steps/python-unit-test.sh"
     artifact_paths:
@@ -9,6 +16,10 @@ steps:
     command: ".buildkite/scripts/steps/python-integration-test.sh"
     artifact_paths:
       - "mockserver-client-python/test-reports/*.xml"
+    timeout_in_minutes: 20
+
+  - label: ":python: testcontainers-python unit tests"
+    command: ".buildkite/scripts/steps/python-testcontainers-test.sh"
     timeout_in_minutes: 10
 
   - wait: ~
@@ -19,3 +30,8 @@ steps:
       - junit-annotate#8a549e5220869601737287b4d6a9293703dc5a6f:  # v2.7.0
           artifacts: "mockserver-client-python/test-reports/*.xml"
           always-annotate: true
+
+  - label: ":s3: save pip cache"
+    command: ".buildkite/scripts/cache-save.sh pip"
+    timeout_in_minutes: 10
+    soft_fail: true

@@ -176,7 +176,7 @@ if [[ -n "$LOCAL_CA" && -f "$LOCAL_CA" ]]; then
 else
   : > docker/graaljs/ca-bundle.pem
 fi
-exec docker buildx build \
+docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --push \
   --build-arg source=copy \
@@ -185,3 +185,40 @@ exec docker buildx build \
   --tag "${ECR_REPO}:snapshot-graaljs" \
   --tag "${ECR_REPO}:mockserver-snapshot-graaljs" \
   docker/graaljs
+
+echo "--- :docker: Building and pushing mockserver/mockserver-webhook:snapshot (multi-arch)"
+# Download the webhook fat jar artifact from the build step
+buildkite-agent artifact download "mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar" . 2>/dev/null || true
+
+WEBHOOK_JAR=""
+shopt -s nullglob
+for f in mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar; do
+  WEBHOOK_JAR="$f"
+  break
+done
+shopt -u nullglob
+
+if [[ -n "$WEBHOOK_JAR" ]]; then
+  cp "$WEBHOOK_JAR" docker/webhook/mockserver-webhook.jar
+  # Error-isolated: a webhook push failure must never abort the pipeline —
+  # the main + GraalJS images have already been published above.
+  # Push Docker Hub first (primary registry), then ECR separately.
+  if ! docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --push \
+    --tag mockserver/mockserver-webhook:snapshot \
+    --tag mockserver/mockserver-webhook:mockserver-snapshot \
+    docker/webhook; then
+    echo "WARNING: webhook Docker Hub push failed — continuing (main images already published)"
+  fi
+  if ! docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --push \
+    --tag "${ECR_REPO}-webhook:snapshot" \
+    --tag "${ECR_REPO}-webhook:mockserver-snapshot" \
+    docker/webhook; then
+    echo "WARNING: webhook ECR push failed — continuing (Docker Hub is the primary registry)"
+  fi
+else
+  echo "WARNING: Webhook fat jar not found — skipping webhook snapshot image push"
+fi

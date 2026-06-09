@@ -15,7 +15,6 @@ import javax.net.ssl.SSLException;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -96,19 +95,16 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                 header("x-test", "test_headers_and_body")
             )
             .withBody("an_example_body_http");
-        assertEquals(
-            response()
+        assertThat(makeRequest(
+                httpRequestMatchExpectation,
+                getHeadersToRemove()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-test", "test_headers_and_body")
                 )
-                .withBody("an_example_body_http"),
-            makeRequest(
-                httpRequestMatchExpectation,
-                getHeadersToRemove()
-            )
-        );
+                .withBody("an_example_body_http")));
     }
 
     @Test
@@ -129,15 +125,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
 
         // then
         // match expectation send to echo server via proxy
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(false)
                     .withPath(calculatePath("echo"))
@@ -147,14 +135,15 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
         // don't match expectation and forward to proxy
-        assertEquals(
-            response()
-                .withStatusCode(NOT_FOUND_404.code())
-                .withReasonPhrase(NOT_FOUND_404.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo_no_match"))
@@ -164,18 +153,11 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(NOT_FOUND_404.code())
+                .withReasonPhrase(NOT_FOUND_404.reasonPhrase())));
         // forward from mockserver to proxy then to echo server using header
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo_proxy_host"))
@@ -186,8 +168,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
         // and - verify sent via proxy to echo server
         getProxyClient()
             .verify(
@@ -226,15 +213,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -245,8 +224,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
 
         assertThat(insecureEchoServer
                 .mockServerEventLog()
@@ -285,15 +269,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -303,8 +279,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
 
 
         assertThat(secureEchoServer
@@ -356,11 +337,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then - invalid certificate returns 502 because TLS handshake fails during forwarding
-        assertEquals(
-            response()
-                .withStatusCode(BAD_GATEWAY_502.code())
-                .withReasonPhrase(BAD_GATEWAY_502.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("trustNone"))
@@ -371,19 +348,12 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(BAD_GATEWAY_502.code())
+                .withReasonPhrase(BAD_GATEWAY_502.reasonPhrase())));
 
         // then - valid certificate returns response
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -394,8 +364,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
     }
 
     @Test
@@ -416,15 +391,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -435,8 +402,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
 
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("some_overridden_body")));
     }
 
     @Test
@@ -457,15 +429,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withProtocol(Protocol.HTTP_2)
@@ -476,8 +440,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("some_overridden_body")));
     }
 
     @Test
@@ -494,15 +463,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -513,8 +474,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("some_overridden_body")));
     }
 
     @Test
@@ -543,15 +509,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("{'name': 'value'}"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -561,8 +519,13 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("{'name': 'value'}")));
     }
 
     @Test
@@ -593,15 +556,7 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
 
         // then
         // - forward
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("some_overridden_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -611,32 +566,31 @@ public abstract class AbstractForwardViaHttpsProxyMockingIntegrationTest extends
                     )
                     .withBody("an_example_body"),
                 getHeadersToRemove()
-            )
-        );
-        // - respond
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body"),
-            makeRequest(
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("some_overridden_body")));
+        // - respond
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("test_headers_and_body")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body")));
         // - no response or forward
-        assertEquals(
-            response()
-                .withStatusCode(HttpStatusCode.NOT_FOUND_404.code())
-                .withReasonPhrase(HttpStatusCode.NOT_FOUND_404.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("test_headers_and_body")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(HttpStatusCode.NOT_FOUND_404.code())
+                .withReasonPhrase(HttpStatusCode.NOT_FOUND_404.reasonPhrase())));
     }
 }

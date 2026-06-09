@@ -19,7 +19,7 @@ export REPO_ROOT
 # Override via env var if needed for a specific run.
 # -----------------------------------------------------------------------------
 
-MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9.9-eclipse-temurin-11}"
+MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9.9-eclipse-temurin-17}"
 NODE_IMAGE="${NODE_IMAGE:-node:20-bookworm}"
 RUBY_IMAGE="${RUBY_IMAGE:-ruby:3.2-bookworm}"
 HELM_IMAGE="${HELM_IMAGE:-alpine/helm:3.16.2}"
@@ -373,17 +373,26 @@ assume_website_role() {
   # Note: NOT skipped in dry-run — terraform plan against the website account
   # needs these creds. Callers who only want write-side actions (S3 sync,
   # CloudFront invalidation) wrap their own dry-run guards around them.
-  local role_arn
-  role_arn=$(load_secret "mockserver-release/website-role" "role_arn")
+  # Suppress xtrace BEFORE loading any secret so neither the role ARN nor the
+  # external id can leak to stderr if a caller had `set -x` active.
   local xtrace_state
   xtrace_state=$(shopt -po xtrace 2>/dev/null || true)
   set +x
+  local role_arn
+  role_arn=$(load_secret "mockserver-release/website-role" "role_arn")
+  local external_id
+  external_id=$(load_secret "mockserver-release/website-role" "external_id" 2>/dev/null || true)
+  local -a assume_args=(
+    --role-arn "$role_arn"
+    --role-session-name "mockserver-release-${RELEASE_VERSION}"
+    --duration-seconds 3600
+    --output json
+  )
+  if [[ -n "${external_id:-}" && "$external_id" != "null" ]]; then
+    assume_args+=(--external-id "$external_id")
+  fi
   local creds
-  creds=$(aws sts assume-role \
-    --role-arn "$role_arn" \
-    --role-session-name "mockserver-release-${RELEASE_VERSION}" \
-    --duration-seconds 3600 \
-    --output json)
+  creds=$(aws sts assume-role "${assume_args[@]}")
   AWS_ACCESS_KEY_ID=$(echo "$creds" | jq -r '.Credentials.AccessKeyId')
   AWS_SECRET_ACCESS_KEY=$(echo "$creds" | jq -r '.Credentials.SecretAccessKey')
   AWS_SESSION_TOKEN=$(echo "$creds" | jq -r '.Credentials.SessionToken')
@@ -451,8 +460,12 @@ git_commit_and_push() {
     return
   fi
   configure_git_for_push
-  # F-BK-03: clear extraheader on every exit path of this function so the
-  # token does not persist on the agent workspace.
+  # F-BK-03: clear extraheader on every exit path of this function — including
+  # early exit from `set -e`, signals, and rebase-retry failure — so the token
+  # does not persist on the agent workspace. The RETURN trap fires when the
+  # function returns (normally or via `return`) and does not clobber the
+  # caller's EXIT trap.
+  trap 'clear_git_push_credentials' RETURN
   local rc=0
   {
     git -C "$REPO_ROOT" add "${paths[@]}"
@@ -488,7 +501,6 @@ git_commit_and_push() {
       rm -f /tmp/push_err.$$
     fi
   } || rc=$?
-  clear_git_push_credentials
   return $rc
 }
 
@@ -500,7 +512,10 @@ git_tag_and_push() {
     return
   fi
   configure_git_for_push
-  # F-BK-03: clear extraheader on every exit path.
+  # F-BK-03: clear extraheader on every exit path — RETURN trap fires even on
+  # early exit from `set -e` within the function, without clobbering the
+  # caller's EXIT trap.
+  trap 'clear_git_push_credentials' RETURN
   local rc=0
   {
     # Idempotent: a re-run may find the tag already created by an earlier run.
@@ -512,6 +527,5 @@ git_tag_and_push() {
       git -C "$REPO_ROOT" push origin "$tag"
     fi
   } || rc=$?
-  clear_git_push_credentials
   return $rc
 }

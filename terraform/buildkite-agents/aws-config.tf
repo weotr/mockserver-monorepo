@@ -11,8 +11,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "config" {
   bucket = aws_s3_bucket.config.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      # Reuse the CloudTrail CMK (defined in cloudtrail-hardening.tf) — it
+      # already allows the account root and is in the same stack.
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.cloudtrail.arn
     }
+    bucket_key_enabled = true
   }
 }
 

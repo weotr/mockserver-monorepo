@@ -1,5 +1,6 @@
 ---
 title: Maven
+description: Add MockServer to Maven or Gradle with org.mock-server coordinates, including netty server, Java client, JUnit, Spring, and Maven plugin artifacts.
 layout: page
 pageOrder: 6
 section: 'Where'
@@ -10,7 +11,7 @@ sitemap:
   lastmod: 2026-05-19T08:00:00+01:00
 ---
 
-<h2>Maven Central &nbsp;&nbsp;<a target="_blank" href="https://central.sonatype.com/search?q=g:org.mock-server" rel="noopener noreferrer"><img src="https://camo.githubusercontent.com/e81e59784109e88f76e25361cd6b4da7a5a18947/68747470733a2f2f6d6176656e2d6261646765732e6865726f6b756170702e636f6d2f6d6176656e2d63656e7472616c2f6f72672e6d6f636b2d7365727665722f6d6f636b7365727665722d6e657474792f62616467652e7376673f7374796c653d666c6174" alt="mockserver" data-canonical-src="https://maven-badges.herokuapp.com/maven-central/org.mock-server/mockserver-netty/badge.svg?style=flat" style="max-width:100%;"></a>
+<h2>Maven Central &nbsp;&nbsp;<a target="_blank" href="https://central.sonatype.com/search?q=g:org.mock-server" rel="noopener noreferrer"><img src="https://img.shields.io/maven-central/v/org.mock-server/mockserver-netty.svg" alt="mockserver Maven Central version" style="max-width:100%;"></a>
 </h2>
 
 <p>MockServer publishes the following artifacts to Maven Central under the <code>org.mock-server</code> groupId. Each comes in two forms:</p>
@@ -37,8 +38,32 @@ sitemap:
         <tr><td>Deploy MockServer to a servlet container (mock mode)</td><td><code>mockserver-war</code></td></tr>
         <tr><td>Deploy MockServer to a servlet container (proxy mode)</td><td><code>mockserver-proxy-war</code></td></tr>
         <tr><td>Run MockServer from a single executable jar</td><td><code>mockserver-netty:jar-with-dependencies</code></td></tr>
+        <tr><td>Align all MockServer + transitive versions (plain artifacts)</td><td><code>mockserver-bom</code> (import)</td></tr>
     </tbody>
 </table>
+
+<a id="mockserver_bom" class="anchor" href="#mockserver_bom">&nbsp;</a>
+<h3>mockserver-bom &mdash; Bill of Materials (version alignment)</h3>
+
+<p>If you use the <strong>plain</strong> (unshaded) artifacts and your build enforces a single version of every dependency &mdash; for example the Maven Enforcer <a target="_blank" href="https://maven.apache.org/enforcer/enforcer-rules/dependencyConvergence.html" rel="noopener noreferrer"><code>dependencyConvergence</code></a> rule &mdash; import <code>mockserver-bom</code>. It pins every MockServer module <em>and</em> every third-party dependency MockServer relies on to a single, mutually consistent version, so your dependency tree converges. (If you use the <code>-no-dependencies</code> form there is nothing to align, so the BOM is not needed.)</p>
+
+<p>Maven &mdash; import the BOM in <code>dependencyManagement</code>, then declare MockServer artifacts without a version:</p>
+
+<pre><code class="code xml">&lt;<span class="element">dependencyManagement</span>&gt;
+    &lt;<span class="element">dependencies</span>&gt;
+        &lt;<span class="element">dependency</span>&gt;
+            &lt;<span class="element">groupId</span>&gt;<span class="element_value">org.mock-server</span>&lt;/<span class="element">groupId</span>&gt;
+            &lt;<span class="element">artifactId</span>&gt;<span class="element_value">mockserver-bom</span>&lt;/<span class="element">artifactId</span>&gt;
+            &lt;<span class="element">version</span>&gt;<span class="element_value">{{ site.mockserver_version }}</span>&lt;/<span class="element">version</span>&gt;
+            &lt;<span class="element">type</span>&gt;<span class="element_value">pom</span>&lt;/<span class="element">type</span>&gt;
+            &lt;<span class="element">scope</span>&gt;<span class="element_value">import</span>&lt;/<span class="element">scope</span>&gt;
+        &lt;/<span class="element">dependency</span>&gt;
+    &lt;/<span class="element">dependencies</span>&gt;
+&lt;/<span class="element">dependencyManagement</span>&gt;</code></pre>
+
+<p>Gradle &mdash; use the platform dependency:</p>
+
+<pre><code class="code"><span class="final">testImplementation</span>(<span class="final">platform</span>(<span class="string_literal">"org.mock-server:mockserver-bom:{{ site.mockserver_version }}"</span>))</code></pre>
 
 <a id="mockserver_netty" class="anchor" href="#mockserver_netty">&nbsp;</a>
 <h3>mockserver-netty &mdash; embedded server</h3>
@@ -107,7 +132,7 @@ sitemap:
 <a id="mockserver_junit_jupiter" class="anchor" href="#mockserver_junit_jupiter">&nbsp;</a>
 <h3>mockserver-junit-jupiter &mdash; JUnit 5 integration</h3>
 
-<p>A <a href="/mock_server/running_mock_server.html#junit_rule">JUnit 5 test extension</a> that starts MockServer for tests annotated with <code>@MockServerSettings</code> / <code>@MockServerTest</code>.</p>
+<p>A <a href="/mock_server/running_mock_server.html#junit_rule">JUnit 5 test extension</a> that starts MockServer for tests annotated with <code>@MockServerSettings</code> and <code>@ExtendWith(MockServerExtension.class)</code>.</p>
 
 <pre><code class="code xml">&lt;<span class="element">dependency</span>&gt;
     &lt;<span class="element">groupId</span>&gt;<span class="element_value">org.mock-server</span>&lt;/<span class="element">groupId</span>&gt;

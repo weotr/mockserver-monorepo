@@ -1,0 +1,14 @@
+[ {
+  "httpRequest" : {
+    "path" : "/.*"
+  },
+  "httpForwardValidateAction" : {
+    "specUrlOrPayload" : "/config/openapi.yaml",
+    "host" : "upstream",
+    "port" : 1090,
+    "scheme" : "HTTP",
+    "validateRequest" : true,
+    "validateResponse" : true,
+    "validationMode" : "LOG_ONLY"
+  }
+} ]

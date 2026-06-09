@@ -2,8 +2,8 @@
 title: MockServer Clients
 description: Control MockServer from Java, JavaScript, Python, Ruby, or the REST API to create expectations, verify requests, and retrieve recorded traffic.
 layout: page
-pageOrder: 2
-section: 'General'
+pageOrder: 3
+section: 'Getting Started'
 subsection: true
 sitemap:
   priority: 0.8
@@ -754,13 +754,13 @@ recorded_requests = client.retrieve_recorded_requests(
         <div class="panel">
             <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
 mockServerClient("localhost", 1080)
-  .retrieveRecordedRequests({
+  .retrieveRecordedExpectations({
     "path": "/some/path",
     "method": "POST"
   })
   .then(
-    function (recordedRequests) {
-      console.log(JSON.stringify(recordedRequests));
+    function (recordedExpectations) {
+      console.log(JSON.stringify(recordedExpectations));
     },
     function (error) {
       console.log(error);
@@ -772,13 +772,13 @@ mockServerClient("localhost", 1080)
         <pre class="prettyprint lang-javascript code"><code class="code">&lt;script src=&quot;https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver-client-node/mockServerClient.js&quot;&gt;&lt;/script&gt;
 &lt;script&gt;
   mockServerClient("localhost", 1080)
-    .retrieveRecordedRequests({
+    .retrieveRecordedExpectations({
       "path": "/some/path",
       "method": "POST"
     })
     .then(
-      function (recordedRequests) {
-        console.log(JSON.stringify(recordedRequests));
+      function (recordedExpectations) {
+        console.log(JSON.stringify(recordedExpectations));
       },
       function (error) {
         console.log(error);
@@ -807,7 +807,7 @@ recorded_expectations = client.retrieve_recorded_expectations(
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
-            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUESTS" -d '{
+            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS" -d '{
     "path": "/some/path",
     "method": "POST"
 }'</code></pre>
@@ -817,8 +817,10 @@ recorded_expectations = client.retrieve_recorded_expectations(
     <div class="panel">
         <button class="accordion inner">Java: MockServerClient</button>
         <div class="panel">
-            <pre class="prettyprint lang-java code"><code class="code">HttpRequest[] recordedRequests = new MockServerClient("localhost", 1080)
-    .retrieveRecordedRequests(
+            <pre class="prettyprint lang-java code"><code class="code">// retrieveLogMessagesArray returns a String[] of formatted log messages;
+// use retrieveLogMessages(...) for a single String containing all messages
+String[] logMessages = new MockServerClient("localhost", 1080)
+    .retrieveLogMessagesArray(
         request()
             .withPath("/some/path")
             .withMethod("POST")
@@ -826,8 +828,10 @@ recorded_expectations = client.retrieve_recorded_expectations(
         </div>
         <button class="accordion inner">Java: ClientAndServer</button>
         <div class="panel">
-            <pre class="prettyprint lang-java code"><code class="code">HttpRequest[] recordedRequests = new ClientAndServer(1080)
-    .retrieveRecordedRequests(
+            <pre class="prettyprint lang-java code"><code class="code">// retrieveLogMessagesArray returns a String[] of formatted log messages;
+// use retrieveLogMessages(...) for a single String containing all messages
+String[] logMessages = new ClientAndServer(1080)
+    .retrieveLogMessagesArray(
         request()
             .withPath("/some/path")
             .withMethod("POST")

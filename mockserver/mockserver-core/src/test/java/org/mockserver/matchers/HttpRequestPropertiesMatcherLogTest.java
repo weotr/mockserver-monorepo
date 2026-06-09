@@ -20,8 +20,6 @@ import org.slf4j.event.Level;
 import java.util.Date;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -80,7 +78,7 @@ public class HttpRequestPropertiesMatcherLogTest {
     @Test
     public void matchesMatchingMethod() {
         // given
-        assertTrue(match(request().withMethod("HEAD"), request().withMethod("HEAD")));
+        assertThat(match(request().withMethod("HEAD"), request().withMethod("HEAD")), is(true));
 
         // then - no match failure log entry
         HttpResponse response = httpStateHandler
@@ -107,7 +105,7 @@ public class HttpRequestPropertiesMatcherLogTest {
     @Test
     public void doesNotMatchMultipleIncorrectFields() {
         // given
-        assertFalse(match(
+        assertThat(match(
             request()
                 .withPath("some_path")
                 .withMethod("GET")
@@ -120,7 +118,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 .withBody("some_other_body")
                 .withKeepAlive(false)
                 .withSecure(false)
-        ));
+        ), is(false));
 
         // then
         HttpResponse response = httpStateHandler
@@ -168,7 +166,7 @@ public class HttpRequestPropertiesMatcherLogTest {
     @Test
     public void doesNotMatchMultipleIncorrectFieldsInExpectation() {
         // given
-        assertFalse(match(
+        assertThat(match(
             new Expectation(
                 request()
                     .withPath("some_path")
@@ -183,7 +181,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 .withBody("some_other_body")
                 .withKeepAlive(false)
                 .withSecure(false)
-        ));
+        ), is(false));
 
         // then
         HttpResponse response = httpStateHandler
@@ -244,7 +242,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         try {
             // given
             matchersFailFast(false);
-            assertFalse(match(
+            assertThat(match(
                 request()
                     .withPath("some_path")
                     .withMethod("GET")
@@ -257,7 +255,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                     .withBody("some_other_body")
                     .withKeepAlive(false)
                     .withSecure(false)
-            ));
+            ), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -356,7 +354,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         try {
             // given
             matchersFailFast(false);
-            assertFalse(match(
+            assertThat(match(
                 new Expectation(
                     request()
                         .withPath("some_path")
@@ -371,7 +369,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                     .withBody("some_other_body")
                     .withKeepAlive(false)
                     .withSecure(false)
-            ));
+            ), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -477,8 +475,8 @@ public class HttpRequestPropertiesMatcherLogTest {
     @Test
     public void doesNotMatchIncorrectKeepAlive() {
         // given
-        assertFalse(match(request().withKeepAlive(true), request().withKeepAlive(false)));
-        assertFalse(match(request().withKeepAlive(false), request().withKeepAlive(null)));
+        assertThat(match(request().withKeepAlive(true), request().withKeepAlive(false)), is(false));
+        assertThat(match(request().withKeepAlive(false), request().withKeepAlive(null)), is(false));
 
         // then
         HttpResponse response = httpStateHandler
@@ -559,8 +557,8 @@ public class HttpRequestPropertiesMatcherLogTest {
         try {
             // given
             matchersFailFast(false);
-            assertFalse(match(request().withKeepAlive(true), request().withKeepAlive(false)));
-            assertFalse(match(request().withKeepAlive(false), request().withKeepAlive(null)));
+            assertThat(match(request().withKeepAlive(true), request().withKeepAlive(false)), is(false));
+            assertThat(match(request().withKeepAlive(false), request().withKeepAlive(null)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -648,8 +646,8 @@ public class HttpRequestPropertiesMatcherLogTest {
         try {
             // given
             matchersFailFast(false);
-            assertFalse(match(new Expectation(request().withKeepAlive(true)), request().withKeepAlive(false)));
-            assertFalse(match(new Expectation(request().withKeepAlive(false)), request().withKeepAlive(null)));
+            assertThat(match(new Expectation(request().withKeepAlive(true)), request().withKeepAlive(false)), is(false));
+            assertThat(match(new Expectation(request().withKeepAlive(false)), request().withKeepAlive(null)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -756,8 +754,8 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withSecure(true), request().withSecure(false)));
-            assertFalse(match(request().withSecure(true), request().withSecure(null)));
+            assertThat(match(request().withSecure(true), request().withSecure(false)), is(false));
+            assertThat(match(request().withSecure(true), request().withSecure(null)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -842,8 +840,8 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withProtocol(Protocol.HTTP_1_1), request().withProtocol(Protocol.HTTP_2)));
-            assertFalse(match(request().withProtocol(Protocol.HTTP_2), request().withProtocol(null)));
+            assertThat(match(request().withProtocol(Protocol.HTTP_1_1), request().withProtocol(Protocol.HTTP_2)), is(false));
+            assertThat(match(request().withProtocol(Protocol.HTTP_2), request().withProtocol(null)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -930,7 +928,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withMethod("HEAD"), request().withMethod("OPTIONS")));
+            assertThat(match(request().withMethod("HEAD"), request().withMethod("OPTIONS")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -975,7 +973,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withMethod("P[A-Z]{2}"), request().withMethod("POST")));
+            assertThat(match(request().withMethod("P[A-Z]{2}"), request().withMethod("POST")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1020,7 +1018,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withPath("/dWM%2FdWM+ZA=="), request().withPath("/dWM/dWM+ZA==")));
+            assertThat(match(request().withPath("/dWM%2FdWM+ZA=="), request().withPath("/dWM/dWM+ZA==")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1066,7 +1064,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withPath("somepath"), request().withPath("pathsome")));
+            assertThat(match(request().withPath("somepath"), request().withPath("pathsome")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1112,7 +1110,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withPath("someP[a-z]{2}"), request().withPath("somePath")));
+            assertThat(match(request().withPath("someP[a-z]{2}"), request().withPath("somePath")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1158,7 +1156,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withPath("/{someKey}").withPathParameters(new Parameter("someKey", "someValue")), request().withPath("/someOtherValue").withPathParameter(new Parameter("someKey", "someOtherValue"))));
+            assertThat(match(request().withPath("/{someKey}").withPathParameters(new Parameter("someKey", "someValue")), request().withPath("/someOtherValue").withPathParameter(new Parameter("someKey", "someOtherValue"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1238,7 +1236,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withQueryStringParameters(new Parameter("someKey", "someValue")), request().withQueryStringParameter(new Parameter("someOtherKey", "someValue"))));
+            assertThat(match(request().withQueryStringParameters(new Parameter("someKey", "someValue")), request().withQueryStringParameter(new Parameter("someOtherKey", "someValue"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1317,7 +1315,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withQueryStringParameters(new Parameter("someKey", "someValue")), request().withQueryStringParameter(new Parameter("someKey", "someOtherValue"))));
+            assertThat(match(request().withQueryStringParameters(new Parameter("someKey", "someValue")), request().withQueryStringParameter(new Parameter("someKey", "someOtherValue"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1396,7 +1394,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withBody(new ParameterBody(new Parameter("name", "value"))), request().withBody(new ParameterBody(new Parameter("name1", "value")))));
+            assertThat(match(request().withBody(new ParameterBody(new Parameter("name", "value"))), request().withBody(new ParameterBody(new Parameter("name1", "value")))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1472,7 +1470,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withBody(new ParameterBody(new Parameter("name", "va[0-9]{1}ue"))), request().withBody(new ParameterBody(new Parameter("name", "value1")))));
+            assertThat(match(request().withBody(new ParameterBody(new Parameter("name", "va[0-9]{1}ue"))), request().withBody(new ParameterBody(new Parameter("name", "value1")))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1548,7 +1546,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withBody(exact("somebody")), request().withBody("bodysome")));
+            assertThat(match(request().withBody(exact("somebody")), request().withBody("bodysome")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1595,7 +1593,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withBody(exact("somebody")), request()));
+            assertThat(match(request().withBody(exact("somebody")), request()), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1644,7 +1642,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "<element>" + NEW_LINE +
                 "   <key>some_key</key>" + NEW_LINE +
                 "</element>";
-            assertFalse(match(request().withBody(xpath("/element[key = 'some_key' and value = 'some_value']")), request().withBody(matched)));
+            assertThat(match(request().withBody(xpath("/element[key = 'some_key' and value = 'some_value']")), request().withBody(matched)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1704,11 +1702,11 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "<element>" + NEW_LINE +
                 "   <key>some_key</key>" + NEW_LINE +
                 "</element>";
-            assertFalse(match(request().withBody(xml("" +
+            assertThat(match(request().withBody(xml("" +
                 "<element>" + NEW_LINE +
                 "   <key>some_key</key>" + NEW_LINE +
                 "   <value>some_value</value>" + NEW_LINE +
-                "</element>")), request().withBody(matched)));
+                "</element>")), request().withBody(matched)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1788,7 +1786,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "        </xs:complexType>" + NEW_LINE +
                 "    </xs:element>" + NEW_LINE +
                 "</xs:schema>";
-            assertFalse(match(request().withBody(xmlSchema(matcher)), request().withBody("<?xml version=\"1.0\" encoding=\"utf-8\"?>" + NEW_LINE +
+            assertThat(match(request().withBody(xmlSchema(matcher)), request().withBody("<?xml version=\"1.0\" encoding=\"utf-8\"?>" + NEW_LINE +
                 "<notes>" + NEW_LINE +
                 "    <note>" + NEW_LINE +
                 "        <to>Bob</to>" + NEW_LINE +
@@ -1801,7 +1799,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "        <heading>Reminder</heading>" + NEW_LINE +
                 "        <body>Wash Shirts</body>" + NEW_LINE +
                 "    </note>" + NEW_LINE +
-                "</notes>")));
+                "</notes>")), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1926,7 +1924,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "   \"some_incorrect_field\": \"some_value\"," + NEW_LINE +
                 "   \"some_other_field\": \"some_other_value\"" + NEW_LINE +
                 "}";
-            assertFalse(match(request().withBody(json("{ \"some_field\": \"some_value\" }")), request().withBody(matched)));
+            assertThat(match(request().withBody(json("{ \"some_field\": \"some_value\" }")), request().withBody(matched)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -1992,7 +1990,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "    \"price\": 12.50," + NEW_LINE +
                 "    \"tags\": []" + NEW_LINE +
                 "}";
-            assertFalse(match(request().withBody(jsonSchema("{" + NEW_LINE +
+            assertThat(match(request().withBody(jsonSchema("{" + NEW_LINE +
                 "    \"$schema\": \"http://json-schema.org/draft-04/schema#\"," + NEW_LINE +
                 "    \"title\": \"Product\"," + NEW_LINE +
                 "    \"description\": \"A product from Acme's catalog\"," + NEW_LINE +
@@ -2021,7 +2019,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "        }" + NEW_LINE +
                 "    }," + NEW_LINE +
                 "    \"required\": [\"id\", \"name\", \"price\"]" + NEW_LINE +
-                "}")), request().withBody(matched)));
+                "}")), request().withBody(matched)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -2169,7 +2167,7 @@ public class HttpRequestPropertiesMatcherLogTest {
                 "    }," + NEW_LINE +
                 "    \"expensive\": 10" + NEW_LINE +
                 "}";
-            assertFalse(match(request().withBody(jsonPath("$..book[?(@.price > $['expensive'])]")), request().withBody(matched)));
+            assertThat(match(request().withBody(jsonPath("$..book[?(@.price > $['expensive'])]")), request().withBody(matched)), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -2270,7 +2268,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         try {
             // given
             byte[] matched = "some other binary value that is much much longer so that the binary data is wrapped".getBytes(UTF_8);
-            assertFalse(match(request().withBody(binary("some binary value that is also long and wraps as little".getBytes(UTF_8))), request().withBody(binary(matched))));
+            assertThat(match(request().withBody(binary("some binary value that is also long and wraps as little".getBytes(UTF_8))), request().withBody(binary(matched))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -2331,7 +2329,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withHeaders(new Header("name", "value")), request().withHeaders(new Header("name1", "value"))));
+            assertThat(match(request().withHeaders(new Header("name", "value")), request().withHeaders(new Header("name1", "value"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -2407,7 +2405,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withHeaders(new Header("name", "[0-9]{0,100}")), request().withHeaders(new Header("name", "value1"))));
+            assertThat(match(request().withHeaders(new Header("name", "[0-9]{0,100}")), request().withHeaders(new Header("name", "value1"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler
@@ -2483,7 +2481,7 @@ public class HttpRequestPropertiesMatcherLogTest {
         boolean originalMatchersFailFast = matchersFailFast();
         try {
             // given
-            assertFalse(match(request().withCookies(new Cookie("name", "value")), request().withCookies(new Cookie("name", "value1"))));
+            assertThat(match(request().withCookies(new Cookie("name", "value")), request().withCookies(new Cookie("name", "value1"))), is(false));
 
             // then
             HttpResponse response = httpStateHandler

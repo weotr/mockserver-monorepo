@@ -1,0 +1,4 @@
+{{/* The webhook server (WebhookServer.java) is a pure HTTPS server that handles
+     AdmissionReview requests. It has no Kubernetes API client and therefore
+     requires no runtime RBAC. The TLS bootstrap Jobs have their own scoped RBAC
+     in webhook-tls-selfsigned.yaml. */}}

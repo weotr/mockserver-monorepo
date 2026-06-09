@@ -11,7 +11,6 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import java.io.IOException;
 import java.util.Arrays;
 
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
@@ -21,6 +20,7 @@ import static org.mockserver.model.KeyMatchStyle.SUB_SET;
 import static org.mockserver.model.NottableString.not;
 import static org.mockserver.model.NottableString.string;
 import static org.mockserver.model.Parameter.param;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom

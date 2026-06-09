@@ -6,11 +6,12 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.HttpRequest;
 
-import static org.junit.Assert.*;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.matchers.NotMatcher.notMatcher;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.Not.not;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * Tests for NOT operator logic in HttpRequestPropertiesMatcher.
@@ -56,8 +57,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should match (fields match, no NOTs)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Expected match when fields match and no NOT operators", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected match when fields match and no NOT operators", matcher.matches(null, actualRequest), is(true));
     }
 
     @Test
@@ -72,8 +72,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should not match (fields don't match)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Expected no match when fields don't match", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected no match when fields don't match", matcher.matches(null, actualRequest), is(false));
     }
 
     // ========================================
@@ -90,8 +89,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should NOT match (expectation says "anything except /test")
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Expected no match: NOT expectation with matching fields should not match", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected no match: NOT expectation with matching fields should not match", matcher.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -104,8 +102,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should match (expectation says "anything except /test", and we have /other)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Expected match: NOT expectation with non-matching fields should match", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected match: NOT expectation with non-matching fields should match", matcher.matches(null, actualRequest), is(true));
     }
 
     // ========================================
@@ -122,8 +119,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should NOT match (request wants anything except /test)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Expected no match: request NOT with matching fields should not match", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected no match: request NOT with matching fields should not match", matcher.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -136,8 +132,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should match (request wants "anything except /other", expectation wants "/test")
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Expected match: request NOT with non-matching fields should match", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected match: request NOT with non-matching fields should match", matcher.matches(null, actualRequest), is(true));
     }
 
     // ========================================
@@ -157,8 +152,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         // Apply expectation NOT: !true = false
         // Apply request NOT: !false = true
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Expected match: double NOT should cancel (NOT + NOT = identity)", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected match: double NOT should cancel (NOT + NOT = identity)", matcher.matches(null, actualRequest), is(true));
     }
 
     @Test
@@ -174,8 +168,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         // Apply expectation NOT: !false = true
         // Apply request NOT: !true = false
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Expected no match: double NOT on non-matching fields", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected no match: double NOT on non-matching fields", matcher.matches(null, actualRequest), is(false));
     }
 
     // ========================================
@@ -199,8 +192,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         // Apply body NOT: !true = false
         // Apply expectation NOT: !false = true  
         // Apply request NOT: !true = false
-        assertFalse("Expected no match: triple NOT should equal single NOT", 
-            matcherWithBodyNot.matches(null, actualRequest));
+        assertThat("Expected no match: triple NOT should equal single NOT", matcherWithBodyNot.matches(null, actualRequest), is(false));
     }
 
     // ========================================
@@ -223,8 +215,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should NOT match (all fields match, but expectation is NOT)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Expected no match: NOT expectation with all matching fields", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected no match: NOT expectation with all matching fields", matcher.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -241,8 +232,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
 
         // THEN: Should match (fields don't fully match, NOT inverts: !false = true)
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Expected match: NOT expectation with partial mismatch", 
-            matcher.matches(null, actualRequest));
+        assertThat("Expected match: NOT expectation with partial mismatch", matcher.matches(null, actualRequest), is(true));
     }
 
     // ========================================
@@ -256,8 +246,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest expectation = request().withPath("/test");
         HttpRequest actualRequest = request().withPath("/other");
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Truth table: false + no NOTs = false", 
-            matcher.matches(null, actualRequest));
+        assertThat("Truth table: false + no NOTs = false", matcher.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -267,8 +256,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest expectation = request().withPath("/test");
         HttpRequest actualRequest = not(request().withPath("/other"));
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Truth table: false + request NOT = true", 
-            matcher.matches(null, actualRequest));
+        assertThat("Truth table: false + request NOT = true", matcher.matches(null, actualRequest), is(true));
     }
 
     @Test
@@ -278,8 +266,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest expectation = not(request().withPath("/test"));
         HttpRequest actualRequest = request().withPath("/other");
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Truth table: false + expectation NOT = true", 
-            matcher.matches(null, actualRequest));
+        assertThat("Truth table: false + expectation NOT = true", matcher.matches(null, actualRequest), is(true));
     }
 
     @Test
@@ -289,8 +276,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest expectation = not(request().withPath("/test"));
         HttpRequest actualRequest = not(request().withPath("/other"));
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertFalse("Truth table: false + double NOT (req+exp) = false", 
-            matcher.matches(null, actualRequest));
+        assertThat("Truth table: false + double NOT (req+exp) = false", matcher.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -301,8 +287,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest actualRequest = not(request().withPath("/test"));
         HttpRequestPropertiesMatcher baseMatcher = createMatcher(expectation);
         HttpRequestPropertiesMatcher matcherWithBodyNot = notMatcher(baseMatcher);
-        assertFalse("Truth table: true + triple NOT = false", 
-            matcherWithBodyNot.matches(null, actualRequest));
+        assertThat("Truth table: true + triple NOT = false", matcherWithBodyNot.matches(null, actualRequest), is(false));
     }
 
     // ========================================
@@ -320,8 +305,7 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequestPropertiesMatcher matcherWithBodyNot = notMatcher(baseMatcher);
         
         // true (match) → !true (body NOT) → !false (exp NOT) → !true (req NOT) = false
-        assertFalse("Regression: triple NOT on matching fields should not match", 
-            matcherWithBodyNot.matches(null, actualRequest));
+        assertThat("Regression: triple NOT on matching fields should not match", matcherWithBodyNot.matches(null, actualRequest), is(false));
     }
 
     @Test
@@ -332,7 +316,6 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
         HttpRequest actualRequest = not(request().withPath("/test").withMethod("GET"));
         
         HttpRequestPropertiesMatcher matcher = createMatcher(expectation);
-        assertTrue("Regression: double NOT should cancel (expectation NOT + request NOT)", 
-            matcher.matches(null, actualRequest));
+        assertThat("Regression: double NOT should cancel (expectation NOT + request NOT)", matcher.matches(null, actualRequest), is(true));
     }
 }

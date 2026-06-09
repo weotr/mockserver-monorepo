@@ -25,13 +25,16 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
 
 <ol>
     <li>An init container sets up iptables rules to redirect outbound HTTP/HTTPS traffic to MockServer's port</li>
-    <li>MockServer resolves the original destination using a multi-strategy chain (first match wins):
+    <li>MockServer resolves the original destination using a multi-strategy chain (first match wins), in this priority order:
         <ol>
-            <li><strong>PROXY protocol v1 / v2</strong>: if the first bytes on the connection are a PROXY protocol header -- either v1 (text) or v2 (binary), e.g. sent by AWS NLB, HAProxy, or nginx -- MockServer parses the destination address from the header and consumes it. No configuration is needed -- detection is automatic.</li>
+            <li><strong>TPROXY (IP_TRANSPARENT)</strong>: with the native epoll transport, the TPROXY iptables target preserves the original destination as the socket's local address. Enabled with <code class="inline code">transparentProxyTproxy=true</code>.</li>
+            <li><strong>eBPF socket metadata</strong>: reads the pre-NAT destination from a pinned BPF map keyed by socket cookie (populated by an external BPF program). Enabled with <code class="inline code">transparentProxyEbpf=true</code>.</li>
+            <li><strong>SO_ORIGINAL_DST</strong>: with the native epoll transport, reads the pre-REDIRECT destination via a socket option — an O(1) alternative to the conntrack table scan.</li>
             <li><strong>Linux conntrack</strong>: reads the original destination from the kernel conntrack table (<code class="inline code">/proc/net/nf_conntrack</code>), which records the pre-REDIRECT destination. This works even when the Host header is missing or incorrect.</li>
             <li><strong>DNS-intent</strong>: if the client resolved a hostname via MockServer's own DNS server and then connected to the returned IP, MockServer recovers the intended hostname from the DNS answer it handed out — so matching and forwarding work by name. Active only when the DNS server is enabled.</li>
             <li><strong>Host header fallback</strong>: if no other strategy resolves the destination, MockServer reads the <code class="inline code">Host</code> header from the HTTP request.</li>
         </ol>
+        (A PROXY protocol v1 / v2 header, when sent by a fronting load balancer such as AWS NLB, HAProxy, or nginx, is detected and consumed earlier in the pipeline — before this chain runs.)
     </li>
     <li>If an expectation matches, MockServer returns the mock response</li>
     <li>Otherwise, MockServer forwards the request to the original target</li>
@@ -87,11 +90,92 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
 
 <p>When <code class="inline code">sidecar.iptables.enabled</code> is <code class="inline code">true</code>, the chart renders an init container that adds a UID-based RETURN rule (to exclude MockServer's own egress) before any REDIRECT rules, preventing an infinite redirect loop. The <code class="inline code">excludeUid</code> must match <code class="inline code">app.runAsUser</code> (both default to 65534).</p>
 
+<a id="admission_webhook" class="anchor" href="#admission_webhook">&nbsp;</a>
+
+<h2>Automatic Sidecar Injection (Admission Webhook)</h2>
+
+<p>Instead of manually adding the sidecar container and iptables init container to every Deployment, you can enable the MockServer <strong>admission webhook</strong>. The webhook is a <code class="inline code">MutatingAdmissionWebhook</code> that automatically injects the MockServer transparent-proxy sidecar and iptables init container into pods that opt in.</p>
+
+<h3>How it works</h3>
+
+<ol>
+    <li>Enable the webhook in the Helm chart: <code class="inline code">--set webhook.enabled=true</code></li>
+    <li>Label the target namespace: <code class="inline code">kubectl label namespace my-namespace mockserver.org/sidecar-injection=enabled</code></li>
+    <li>Annotate pods that should receive the sidecar: <code class="inline code">mockserver.org/inject: "true"</code></li>
+    <li>When a pod is created in a labelled namespace with the opt-in annotation, the webhook injects:
+        <ul>
+            <li>An iptables init container (with UID-exclusion loop avoidance)</li>
+            <li>A MockServer sidecar container (with <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true</code>)</li>
+            <li>An idempotency marker annotation (<code class="inline code">mockserver.org/injected: "true"</code>) to prevent double-injection</li>
+        </ul>
+    </li>
+</ol>
+
+<h3>Enabling the webhook</h3>
+
+<p>The webhook Docker image (<code class="inline code">mockserver/mockserver-webhook</code>) is published to Docker Hub and ECR Public by the release pipeline alongside the main MockServer image. Install with the webhook enabled:</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Install with the admission webhook enabled
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true
+
+# Or with cert-manager for TLS (if cert-manager is installed)
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true \
+  --set webhook.certManager.enabled=true</code></pre>
+
+<p>To build the webhook image locally (for development):</p>
+
+<pre class="prettyprint lang-sh code"><code class="code"># Build the webhook fat jar
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests && cd ..
+
+# Copy the jar into the Docker build context and build
+cp mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar \
+  docker/webhook/mockserver-webhook.jar
+docker build -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT docker/webhook</code></pre>
+
+<h3>Annotating pods</h3>
+
+<p>Add the <code class="inline code">mockserver.org/inject: "true"</code> annotation to your pod template:</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    metadata:
+      annotations:
+        mockserver.org/inject: "true"
+    spec:
+      containers:
+        - name: my-app
+          image: my-app:latest</code></pre>
+
+<h3>Webhook values</h3>
+
+<pre class="prettyprint lang-yaml code"><code class="code">webhook:
+  enabled: false              # enable the admission webhook
+  failurePolicy: Ignore       # Ignore = pods created even if webhook is down
+  sidecar:
+    iptablesImage: "alpine:3.19"
+    serverPort: 1080
+    redirectPorts: "80,443"
+    runAsUser: 65534           # must match the UID exclusion for loop avoidance
+    logLevel: "INFO"
+  certManager:
+    enabled: false             # use cert-manager instead of self-signed TLS
+  namespaceSelector: {}        # default: mockserver.org/sidecar-injection=enabled</code></pre>
+
+<p>The webhook uses <code class="inline code">failurePolicy: Ignore</code> by default so pods are created normally if the webhook is unavailable. TLS is bootstrapped automatically via a self-signed CA (Helm post-install hook that generates a CA, creates a TLS Secret, and patches the caBundle into the MutatingWebhookConfiguration) or via cert-manager if <code class="inline code">webhook.certManager.enabled=true</code>.</p>
+
+<a id="original_destination_resolution" class="anchor" href="#original_destination_resolution">&nbsp;</a>
+
 <h2>Original Destination Resolution</h2>
 
-<p>MockServer uses a pluggable, ordered chain of strategies to resolve the original destination of transparently intercepted connections. The first strategy that returns a result wins; if none do, MockServer falls back to the <code class="inline code">Host</code> header.</p>
+<p>MockServer uses a pluggable, ordered chain of strategies to resolve the original destination of transparently intercepted connections. The first strategy that returns a result wins; if none do, MockServer falls back to the <code class="inline code">Host</code> header. The strategies below are listed in the real priority order MockServer applies them: TPROXY, then eBPF, then SO_ORIGINAL_DST, then conntrack, then DNS-intent, then the Host header. A PROXY protocol header, when present, is detected and consumed earlier in the pipeline — before this resolver chain runs.</p>
 
-<h3>Strategy 1: PROXY Protocol (v1 and v2)</h3>
+<h3>PROXY Protocol (v1 and v2) — resolved before the chain</h3>
 
 <p>When MockServer is deployed behind a load balancer that prepends PROXY protocol headers (e.g., AWS Network Load Balancer with <code class="inline code">proxy_protocol_v2.enabled</code>, HAProxy with <code class="inline code">send-proxy</code> / <code class="inline code">send-proxy-v2</code>, nginx with <code class="inline code">proxy_protocol on</code>), MockServer automatically detects and parses the header to extract the original destination address. Both the v1 (text) and v2 (binary) formats are recognised on the same listener -- MockServer dispatches on the first byte.</p>
 
@@ -109,7 +193,19 @@ PROXY UNKNOWN\r\n</code></pre>
     <li><strong>Fail-safe</strong> -- if the first bytes are not a PROXY header, they pass through unchanged</li>
 </ul>
 
-<h3>Strategy 2: Linux Conntrack</h3>
+<h3>Strategy 1: TPROXY (IP_TRANSPARENT)</h3>
+
+<p>The highest-priority strategy. With the native (epoll) transport on Linux, the TPROXY iptables target (enabled with <code class="inline code">transparentProxyTproxy=true</code>) preserves the original destination as the socket's local address, so MockServer reads it directly with no table lookup. Requires the native transport and the <code class="inline code">CAP_NET_ADMIN</code> capability.</p>
+
+<h3>Strategy 2: eBPF socket metadata</h3>
+
+<p>An <strong>eBPF socket-metadata</strong> strategy (enable with <code class="inline code">transparentProxyEbpf=true</code>): an external BPF program records the original destination in a pinned BPF map keyed by socket cookie, which MockServer reads (Linux, native transport, <code class="inline code">CAP_BPF</code>; MockServer reads the map only — it does not load the BPF program). Automatic init-container injection is available via the Kubernetes <a href="#admission_webhook">admission webhook</a>.</p>
+
+<h3>Strategy 3: SO_ORIGINAL_DST getsockopt</h3>
+
+<p>With the native (epoll) transport on Linux, MockServer reads the pre-REDIRECT destination via the <code class="inline code">SO_ORIGINAL_DST</code> socket option — an O(1) alternative to the conntrack table scan. Requires the native transport and the <code class="inline code">CAP_NET_ADMIN</code> capability.</p>
+
+<h3>Strategy 4: Linux Conntrack</h3>
 
 <p>On Linux with the <code class="inline code">nf_conntrack</code> kernel module loaded, MockServer reads the original destination of intercepted connections from <code class="inline code">/proc/net/nf_conntrack</code>. This provides accurate target resolution even when the Host header is absent or incorrect.</p>
 
@@ -121,31 +217,15 @@ PROXY UNKNOWN\r\n</code></pre>
     <li><strong>NET_ADMIN capability</strong> -- required for the iptables init container</li>
 </ul>
 
-<h3>Strategy 3: DNS-Intent</h3>
+<h3>Strategy 5: DNS-Intent</h3>
 
 <p>When MockServer's own DNS server is enabled and answers a query (an A/AAAA record mapping a hostname to an IP), it records that <code class="inline code">answered IP &rarr; hostname</code> mapping. If a client then connects to that IP (DNS-steering: the name was pointed at MockServer), this strategy recovers the intended hostname so expectation matching and forwarding work by name even though the client connected by IP.</p>
 
 <p>It runs after conntrack, so a real iptables-REDIRECT original destination always wins; DNS-intent only fills the gap when conntrack returns nothing. The recovered hostname is resolved by the downstream forwarding logic, and MockServer's existing loop-prevention header guards against a DNS-to-self loop.</p>
 
-<h3>Strategy 4: Host Header Fallback</h3>
+<h3>Strategy 6: Host Header Fallback</h3>
 
 <p>If no other strategy resolves the destination, MockServer reads the <code class="inline code">Host</code> header from the HTTP request. This always works but requires a valid Host header.</p>
-
-<h3>Strategy 5: Native Strategies (SO_ORIGINAL_DST and TPROXY)</h3>
-
-<p>With the native (epoll) transport on Linux, MockServer resolves the original destination directly from the kernel:</p>
-<ul>
-    <li><strong>SO_ORIGINAL_DST getsockopt</strong> -- reads the pre-REDIRECT destination via a socket option (an O(1) alternative to the conntrack table scan)</li>
-    <li><strong>TPROXY (IP_TRANSPARENT)</strong> -- enabled with <code class="inline code">transparentProxyTproxy=true</code>, the TPROXY iptables target preserves the original destination as the socket's local address</li>
-</ul>
-<p>Both require the native transport and the <code class="inline code">CAP_NET_ADMIN</code> capability.</p>
-
-<h3>Future Strategies (Not Yet Implemented)</h3>
-
-<p>The resolver chain is designed to be extended with additional strategies that require native code:</p>
-<ul>
-    <li><strong>eBPF socket metadata</strong> -- an eBPF program stores original destination in a BPF map</li>
-</ul>
 
 <h2>Deployment Contexts</h2>
 
@@ -168,6 +248,16 @@ PROXY UNKNOWN\r\n</code></pre>
 <ul>
     <li><strong>Conntrack lookup is O(n) with a cap</strong> -- the <code class="inline code">/proc/net/nf_conntrack</code> file is parsed per connection, capped at 200,000 lines. If the conntrack table exceeds this limit, MockServer falls back to Host-header resolution. For high-throughput production use, consider a dedicated transparent proxy.</li>
     <li><strong>Linux only for conntrack</strong> -- original-destination resolution via conntrack requires Linux. On other OSes, the transparent proxy falls back to Host-header resolution.</li>
-    <li><strong>iptables not automatic</strong> -- an init container or external mechanism must configure traffic redirection.</li>
-    <li><strong>SO_ORIGINAL_DST and TPROXY need the native transport</strong> -- these kernel-level strategies require the native (epoll) transport on Linux and <code class="inline code">CAP_NET_ADMIN</code>. The eBPF socket-metadata strategy requires a native BPF program and is not yet implemented.</li>
+    <li><strong>iptables not automatic without the webhook</strong> -- without the <a href="#admission_webhook">admission webhook</a>, an init container or external mechanism must configure traffic redirection manually. With the webhook enabled, iptables rules are injected automatically.</li>
+    <li><strong>SO_ORIGINAL_DST and TPROXY need the native transport</strong> -- these kernel-level strategies require the native (epoll) transport on Linux and <code class="inline code">CAP_NET_ADMIN</code>. The eBPF socket-metadata strategy is also available (it reads a pinned BPF map populated by an external BPF program; requires <code class="inline code">CAP_BPF</code>).</li>
+</ul>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/transparent_interception_recipes.html">Transparent Interception Recipes</a> &mdash; ready-to-use iptables REDIRECT / TPROXY recipes for routing real traffic through MockServer</li>
+    <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> &mdash; inject latency and errors into the traffic this in-path proxy intercepts</li>
+    <li><a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> &mdash; use MockServer as a reverse proxy to isolate one service for testing or debugging</li>
 </ul>

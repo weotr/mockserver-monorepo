@@ -1,0 +1,101 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "release.name" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+spec:
+  replicas: {{ .Values.webhook.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ template "chart.name" . }}-webhook
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "chart.name" . }}-webhook
+        release: {{ .Release.Name }}
+{{- if .Values.webhook.podAnnotations }}
+      annotations:
+{{ toYaml .Values.webhook.podAnnotations | indent 8 }}
+{{- end }}
+    spec:
+      automountServiceAccountToken: false
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+{{- end }}
+      containers:
+        - name: webhook
+          image: {{ .Values.webhook.image.repository }}:{{ .Values.webhook.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          env:
+            - name: WEBHOOK_PORT
+              value: "8443"
+            - name: WEBHOOK_TLS_CERT_FILE
+              value: /etc/webhook/tls/tls.crt
+            - name: WEBHOOK_TLS_KEY_FILE
+              value: /etc/webhook/tls/tls.key
+            - name: MOCKSERVER_IMAGE
+              value: {{ .Values.webhook.sidecar.image | default (printf "%s/mockserver:mockserver-%s" .Values.image.repository .Chart.AppVersion) }}
+            - name: IPTABLES_IMAGE
+              value: {{ .Values.webhook.sidecar.iptablesImage | default "alpine:3.19" | quote }}
+            - name: MOCKSERVER_PORT
+              value: {{ .Values.webhook.sidecar.serverPort | default "1080" | quote }}
+            - name: REDIRECT_PORTS
+              value: {{ .Values.webhook.sidecar.redirectPorts | default "80,443" | quote }}
+            - name: EXCLUDE_UID
+              value: {{ .Values.webhook.sidecar.runAsUser | default 65534 | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.webhook.sidecar.logLevel | default "INFO" | quote }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /etc/webhook/tls
+              readOnly: true
+{{- if .Values.webhook.resources }}
+          resources:
+{{ toYaml .Values.webhook.resources | indent 12 }}
+{{- end }}
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: {{ template "release.name" . }}-webhook-tls
+{{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.webhook.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.webhook.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- end }}

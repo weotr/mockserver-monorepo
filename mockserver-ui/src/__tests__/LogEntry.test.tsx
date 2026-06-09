@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import LogEntry, { entryToText } from '../components/LogEntry';
+import LogEntry from '../components/LogEntry';
+import { entryToText } from '../lib/logEntryText';
 import type { LogEntryValue } from '../types';
 
 describe('LogEntry', () => {

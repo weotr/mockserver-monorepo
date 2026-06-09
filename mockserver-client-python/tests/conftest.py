@@ -46,13 +46,15 @@ def mockserver_url():
     port = _find_free_port()
     host = "localhost"
     container_name = f"mockserver-python-integration-{port}"
+    image = os.environ.get("MOCKSERVER_IMAGE", "mockserver/mockserver:snapshot")
 
     proc = subprocess.run(
         [
             "docker", "run", "-d",
             "--name", container_name,
             "-p", f"{port}:1080",
-            "mockserver/mockserver:snapshot",
+            "-e", "MOCKSERVER_ATTEMPT_TO_PROXY_IF_NO_MATCHING_EXPECTATION=false",
+            image,
         ],
         capture_output=True,
         text=True,

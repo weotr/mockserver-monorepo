@@ -67,10 +67,26 @@ if is_dry_run; then
   log_dry "skip: GPG-sign and upload artifacts"
 else
   log_info "Deploy to Sonatype with GPG signing"
-  GPG_KEY_B64=$(load_secret "mockserver-release/gpg-key" "key")
-  GPG_PASSPHRASE=$(load_secret "mockserver-release/gpg-key" "passphrase")
-  SONATYPE_USERNAME=$(load_secret "mockserver-build/sonatype" "username")
-  SONATYPE_PASSWORD=$(load_secret "mockserver-build/sonatype" "password")
+
+  # Write secrets to 0600 files under .tmp/ (mounted at /build in the
+  # container) instead of passing via `docker run -e`. Env vars are readable
+  # via /proc/1/environ and `docker inspect`; file-based secrets are not.
+  # Pattern mirrors the cosign key handling in helm.sh.
+  mkdir -p "$REPO_ROOT/.tmp"
+  GPG_KEY_FILE="$REPO_ROOT/.tmp/gpg-key.$$"
+  GPG_PASS_FILE="$REPO_ROOT/.tmp/gpg-passphrase.$$"
+  SONATYPE_CREDS_FILE="$REPO_ROOT/.tmp/sonatype-creds.$$"
+  _mc_cleanup_secrets() {
+    rm -f "$GPG_KEY_FILE" "$GPG_PASS_FILE" "$SONATYPE_CREDS_FILE"
+  }
+  ( umask 077
+    load_secret "mockserver-release/gpg-key" "key"        > "$GPG_KEY_FILE"
+    load_secret "mockserver-release/gpg-key" "passphrase" > "$GPG_PASS_FILE"
+    # Store sonatype user:pass as two lines (username\npassword) so the
+    # in-container script can read them without needing jq.
+    load_secret "mockserver-build/sonatype" "username"     > "$SONATYPE_CREDS_FILE"
+    load_secret "mockserver-build/sonatype" "password"    >> "$SONATYPE_CREDS_FILE"
+  )
 
   # tee the deploy output so we can extract the deploymentId the
   # central-publishing plugin prints after upload. We need it to poll the
@@ -80,25 +96,23 @@ else
   # holds the full container stdout/stderr, which could contain credentials
   # if any subprocess accidentally enables `set -x`, and the polling phase
   # below runs for up to 30 minutes.
-  mkdir -p "$REPO_ROOT/.tmp"
   DEPLOY_LOG=$(mktemp "$REPO_ROOT/.tmp/mockserver-deploy.XXXXXX")
-  trap 'rm -f "$DEPLOY_LOG"' EXIT
+  trap '_mc_cleanup_secrets; rm -f "$DEPLOY_LOG"' EXIT
 
   in_docker "$MAVEN_IMAGE" \
     -w /build/mockserver \
     -v mockserver-m2-cache:/root/.m2 \
-    -e "GPG_KEY_B64=$GPG_KEY_B64" \
-    -e "GPG_PASSPHRASE=$GPG_PASSPHRASE" \
-    -e "SONATYPE_USERNAME=$SONATYPE_USERNAME" \
-    -e "SONATYPE_PASSWORD=$SONATYPE_PASSWORD" \
     -- bash -ec '
       apt-get update -qq >/dev/null
       apt-get install -y -qq gnupg >/dev/null
       set +x
-      echo "$GPG_KEY_B64" | base64 -d | gpg --batch --import
+      base64 -d < /build/.tmp/gpg-key.'$$' | gpg --batch --import
       mkdir -p ~/.gnupg
       echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
       gpgconf --reload gpg-agent 2>/dev/null || true
+      GPG_PASSPHRASE=$(cat /build/.tmp/gpg-passphrase.'$$')
+      SONATYPE_USERNAME=$(head -1 /build/.tmp/sonatype-creds.'$$')
+      SONATYPE_PASSWORD=$(tail -1 /build/.tmp/sonatype-creds.'$$')
       cat > /tmp/settings.xml <<SETTINGS
 <?xml version="1.0" encoding="UTF-8"?>
 <settings>
@@ -139,12 +153,13 @@ SETTINGS
   # in API calls. A malformed or empty id is a hard failure.
   DEPLOYMENT_ID=$(grep -oE 'deploymentId: [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b' "$DEPLOY_LOG" \
     | head -1 | awk '{print $2}')
-  # Drop the log file as soon as the id is captured — it may contain
-  # secrets and lives outside the EXIT trap window otherwise. After this
-  # point and before the polling block creates $status_response_file, no
-  # tmpfiles exist, so the EXIT trap can be safely disarmed (a signal in
-  # this gap would leak nothing).
+  # Drop the log file and secret files as soon as the id is captured — they
+  # may contain secrets and live outside the EXIT trap window otherwise.
+  # After this point and before the polling block creates
+  # $status_response_file, no tmpfiles exist, so the EXIT trap can be safely
+  # disarmed (a signal in this gap would leak nothing).
   rm -f "$DEPLOY_LOG"
+  _mc_cleanup_secrets
   trap - EXIT
   if [[ ! "$DEPLOYMENT_ID" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
     log_error "Could not extract a well-formed deploymentId from mvn deploy output (got: '${DEPLOYMENT_ID:-<empty>}'; expected line: 'Uploaded bundle successfully, deployment name: ..., deploymentId: <uuid>')"
@@ -154,17 +169,27 @@ SETTINGS
 fi
 
 # ---- Helpers for the Central Portal API -----------------------------------
-# Use a single auth header that's stripped of any line wrapping. GNU base64
-# wraps at 76 chars by default; the wrapped form breaks curl's header parse.
-central_portal_auth() {
+# Write Sonatype credentials to a 0600 netrc-format file in .tmp/ rather than
+# holding decoded user:pass in a shell variable across the 30-min polling loop.
+# Curl's --netrc-file reads the credential on each request and the file is
+# trap-removed on exit.
+CP_NETRC=""
+setup_central_portal_netrc() {
+  mkdir -p "$REPO_ROOT/.tmp"
+  CP_NETRC="$REPO_ROOT/.tmp/sonatype-netrc.$$"
   local user pass
+  set +x
   user=$(load_secret "mockserver-build/sonatype" "username")
   pass=$(load_secret "mockserver-build/sonatype" "password")
-  printf "%s:%s" "$user" "$pass" | base64 | tr -d '\n'
+  ( umask 077; printf 'machine central.sonatype.com\nlogin %s\npassword %s\n' \
+      "$user" "$pass" > "$CP_NETRC" )
+}
+cleanup_central_portal_netrc() {
+  rm -f "$CP_NETRC"
 }
 
 if ! is_dry_run; then
-  CP_AUTH=$(central_portal_auth)
+  setup_central_portal_netrc
 fi
 
 # ---- Poll for validation ---------------------------------------------------
@@ -180,12 +205,12 @@ else
   TIMEOUT_ITERATIONS=60   # 60 × 30s = 30 minutes
   MAX_CONSECUTIVE_ERRORS=5
   status_response_file=$(mktemp "$REPO_ROOT/.tmp/mockserver-status.XXXXXX")
-  trap 'rm -f "$status_response_file"' EXIT
+  trap 'rm -f "$status_response_file"; cleanup_central_portal_netrc' EXIT
   consecutive_errors=0
   validation_status=""
   for i in $(seq 1 "$TIMEOUT_ITERATIONS"); do
     http_code=$(curl -sS --max-time 30 -o "$status_response_file" -w '%{http_code}' \
-      -X POST -H "Authorization: Basic $CP_AUTH" \
+      -X POST --netrc-file "$CP_NETRC" \
       "https://central.sonatype.com/api/v1/publisher/status?id=$DEPLOYMENT_ID" 2>/dev/null || echo "000")
     if [[ "$http_code" != "200" ]]; then
       consecutive_errors=$((consecutive_errors + 1))
@@ -230,7 +255,7 @@ else
     log_info "Publishing deployment $DEPLOYMENT_ID to Maven Central"
     publish_response_file=$(mktemp "$REPO_ROOT/.tmp/mockserver-publish.XXXXXX")
     publish_http=$(curl -sS --max-time 30 -o "$publish_response_file" -w '%{http_code}' \
-      -X POST -H "Authorization: Basic $CP_AUTH" \
+      -X POST --netrc-file "$CP_NETRC" \
       "https://central.sonatype.com/api/v1/publisher/deployment/$DEPLOYMENT_ID" 2>/dev/null || echo "000")
     if [[ "$publish_http" != "204" && "$publish_http" != "200" ]]; then
       log_error "Failed to publish deployment $DEPLOYMENT_ID (HTTP $publish_http)"

@@ -243,7 +243,7 @@ public class GrpcBidiReflectionMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -293,7 +293,7 @@ public class GrpcBidiReflectionMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -478,7 +478,7 @@ public class GrpcBidiReflectionMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -518,7 +518,7 @@ public class GrpcBidiReflectionMultiplexTest {
         // No descriptor store -> no reflection handler
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, null, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             null, null, reqHandler,
             httpState
         );

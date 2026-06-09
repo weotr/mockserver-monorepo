@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Pluggable factory for the {@link StateBackend}.
@@ -22,8 +24,15 @@ import java.lang.reflect.Method;
  * registers the Infinispan factory. This keeps mockserver-core free of any
  * compile-time dependency on the Infinispan module.
  * <p>
+ * Cloud blob store discovery: when {@code blobStoreType} is set to a cloud
+ * backend name (s3, gcs, azure) and no matching {@link BlobStoreFactory}
+ * has been registered, the factory attempts to load the corresponding
+ * registrar class via reflection. Each cloud module provides a registrar
+ * that calls {@link #registerBlobStoreFactory(String, BlobStoreFactory)}.
+ * <p>
  * Thread-safety: the factory reference is {@code volatile}; register/reset
- * are expected at startup.
+ * are expected at startup. The blob store factory registry is a
+ * {@code ConcurrentHashMap}.
  */
 public final class StateBackendFactory {
 
@@ -31,6 +40,18 @@ public final class StateBackendFactory {
 
     private static final String INFINISPAN_REGISTRAR_CLASS =
         "org.mockserver.state.infinispan.InfinispanStateBackendRegistrar";
+
+    /**
+     * Registrar class names for cloud blob store backends. When
+     * {@code blobStoreType} matches one of these keys, the corresponding
+     * registrar is loaded via reflection to register its
+     * {@link BlobStoreFactory} without core depending on the cloud SDK.
+     */
+    private static final Map<String, String> BLOB_STORE_REGISTRARS = Map.of(
+        "s3", "org.mockserver.blob.s3.S3BlobStoreRegistrar",
+        "gcs", "org.mockserver.blob.gcs.GcsBlobStoreRegistrar",
+        "azure", "org.mockserver.blob.azure.AzureBlobStoreRegistrar"
+    );
 
     /**
      * Creates a {@link StateBackend} for an {@code HttpState} instance.
@@ -48,6 +69,14 @@ public final class StateBackendFactory {
 
     private static volatile Factory factory = DEFAULT_FACTORY;
 
+    /**
+     * Registry of pluggable blob store factories, keyed by type name
+     * (e.g. "s3", "gcs", "azure"). Cloud modules register here via
+     * {@link #registerBlobStoreFactory(String, BlobStoreFactory)}.
+     */
+    private static final ConcurrentHashMap<String, BlobStoreFactory> blobStoreFactories =
+        new ConcurrentHashMap<>();
+
     private StateBackendFactory() {
     }
 
@@ -60,10 +89,24 @@ public final class StateBackendFactory {
     }
 
     /**
+     * Register a pluggable {@link BlobStoreFactory} for a given type name.
+     * Cloud blob store modules call this from their registrar classes to
+     * make themselves available when {@code blobStoreType} is configured.
+     *
+     * @param typeName the blob store type name (e.g. "s3", "gcs", "azure")
+     * @param blobStoreFactory the factory that creates the blob store
+     */
+    public static void registerBlobStoreFactory(String typeName, BlobStoreFactory blobStoreFactory) {
+        blobStoreFactories.put(typeName.toLowerCase(), blobStoreFactory);
+        LOG.info("registered BlobStoreFactory for type '{}'", typeName);
+    }
+
+    /**
      * Reset to the default in-memory factory (primarily for tests).
      */
     public static void resetToDefault() {
         factory = DEFAULT_FACTORY;
+        blobStoreFactories.clear();
     }
 
     /**
@@ -71,6 +114,14 @@ public final class StateBackendFactory {
      */
     public static boolean isCustomFactoryRegistered() {
         return factory != DEFAULT_FACTORY;
+    }
+
+    /**
+     * @return {@code true} if a blob store factory is registered for the
+     *         given type name.
+     */
+    public static boolean isBlobStoreFactoryRegistered(String typeName) {
+        return blobStoreFactories.containsKey(typeName.toLowerCase());
     }
 
     /**
@@ -91,12 +142,15 @@ public final class StateBackendFactory {
      * Creates the appropriate {@link BlobStore} based on the
      * {@code blobStoreType} configuration property.
      * <ul>
-     *   <li>{@code "filesystem"} (default) — creates a {@link FilesystemBlobStore}
+     *   <li>{@code "filesystem"} (default) -- creates a {@link FilesystemBlobStore}
      *       that writes to the filesystem using the same I/O patterns as the
      *       pre-existing persistence classes, so on-disk behaviour is
      *       byte-for-byte identical.</li>
-     *   <li>{@code "memory"} — creates an {@link InMemoryBlobStore} that holds
+     *   <li>{@code "memory"} -- creates an {@link InMemoryBlobStore} that holds
      *       blobs in-process only (lost on exit).</li>
+     *   <li>{@code "s3"}, {@code "gcs"}, {@code "azure"} -- discovers and
+     *       delegates to the matching cloud blob store module via the
+     *       {@link BlobStoreFactory} registry.</li>
      * </ul>
      */
     static BlobStore createBlobStore(Configuration configuration) {
@@ -104,13 +158,27 @@ public final class StateBackendFactory {
         if ("filesystem".equalsIgnoreCase(blobStoreType)) {
             return new FilesystemBlobStore(null);
         }
-        return new InMemoryBlobStore();
+        if ("memory".equalsIgnoreCase(blobStoreType)) {
+            return new InMemoryBlobStore();
+        }
+        // Cloud blob store types: discover and delegate
+        String typeKey = blobStoreType.toLowerCase();
+        if (!blobStoreFactories.containsKey(typeKey)) {
+            discoverBlobStoreBackend(typeKey);
+        }
+        BlobStoreFactory blobStoreFactory = blobStoreFactories.get(typeKey);
+        if (blobStoreFactory == null) {
+            throw new IllegalStateException(
+                "blobStoreType=" + blobStoreType + " configured but no BlobStoreFactory registered for it"
+            );
+        }
+        return blobStoreFactory.create(configuration);
     }
 
     /**
      * Attempt to load and register the Infinispan backend via reflection.
      * If the class is not on the classpath or registration fails, throws
-     * {@link IllegalStateException} — silently falling through to in-memory
+     * {@link IllegalStateException} -- silently falling through to in-memory
      * would cause split-brain: a node the operator believes is clustered
      * would run isolated in-memory.
      */
@@ -130,6 +198,38 @@ public final class StateBackendFactory {
         } catch (Exception e) {
             throw new IllegalStateException(
                 "stateBackend=infinispan configured but failed to register the Infinispan state backend", e);
+        }
+    }
+
+    /**
+     * Attempt to load and register a cloud blob store backend via reflection.
+     * The registrar class is looked up from {@link #BLOB_STORE_REGISTRARS}.
+     * If the class is not on the classpath, throws {@link IllegalStateException}
+     * with a helpful message about the missing module dependency.
+     */
+    private static synchronized void discoverBlobStoreBackend(String typeKey) {
+        if (blobStoreFactories.containsKey(typeKey)) {
+            return; // another thread already registered
+        }
+        String registrarClassName = BLOB_STORE_REGISTRARS.get(typeKey);
+        if (registrarClassName == null) {
+            throw new IllegalStateException(
+                "blobStoreType=" + typeKey + " is not a recognised blob store type; "
+                    + "supported types: memory, filesystem, s3, gcs, azure"
+            );
+        }
+        try {
+            Class<?> registrarClass = Class.forName(registrarClassName);
+            Method registerMethod = registrarClass.getMethod("register");
+            registerMethod.invoke(null);
+            LOG.info("auto-discovered blob store backend '{}' from classpath", typeKey);
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(
+                "blobStoreType=" + typeKey + " configured but " + registrarClassName
+                    + " is not on the classpath; add the mockserver-blob-" + typeKey + " dependency", e);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "blobStoreType=" + typeKey + " configured but failed to register the blob store backend", e);
         }
     }
 }

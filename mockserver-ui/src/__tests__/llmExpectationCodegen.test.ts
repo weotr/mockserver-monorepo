@@ -4,11 +4,13 @@ import {
   expectationToJava,
   expectationToMcpArgs,
   expectationToJsonObject,
+  genericExpectationToJsonObject,
 } from '../lib/llmExpectationCodegen';
-import type { ExpectationDraft } from '../lib/expectationFromCapture';
+import type { LlmExpectationDraft, GenericExpectationDraft } from '../lib/expectationFromCapture';
 
-function baseDraft(): ExpectationDraft {
+function baseDraft(): LlmExpectationDraft {
   return {
+    kind: 'llm',
     path: '/v1/messages',
     provider: 'ANTHROPIC',
     model: 'claude-sonnet-4-20250514',
@@ -74,7 +76,8 @@ describe('expectationToJsonObject', () => {
   });
 
   it('omits completion when no fields populated', () => {
-    const draft: ExpectationDraft = {
+    const draft: LlmExpectationDraft = {
+      kind: 'llm',
       path: '/v1/messages',
       provider: 'OPENAI',
       model: '',
@@ -200,5 +203,192 @@ describe('expectationToMcpArgs', () => {
 
     expect(args).not.toHaveProperty('text');
     expect(args).not.toHaveProperty('stopReason');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic HTTP codegen
+// ---------------------------------------------------------------------------
+
+function baseGenericDraft(): GenericExpectationDraft {
+  return {
+    kind: 'generic',
+    method: 'GET',
+    path: '/api/health',
+    queryStringParameters: [],
+    headers: [],
+    body: '',
+    responseStatusCode: 200,
+    responseHeaders: [{ name: 'Content-Type', values: ['application/json'] }],
+    responseBody: '{"status":"ok"}',
+    matcherPrecision: 'moderate',
+  };
+}
+
+describe('genericExpectationToJsonObject', () => {
+  it('produces httpRequest + httpResponse structure', () => {
+    const draft = baseGenericDraft();
+    const obj = genericExpectationToJsonObject(draft);
+
+    expect(obj).toHaveProperty('httpRequest');
+    expect(obj).toHaveProperty('httpResponse');
+    expect(obj).not.toHaveProperty('httpLlmResponse');
+
+    const req = obj['httpRequest'] as Record<string, unknown>;
+    expect(req['method']).toBe('GET');
+    expect(req['path']).toBe('/api/health');
+
+    const res = obj['httpResponse'] as Record<string, unknown>;
+    expect(res['statusCode']).toBe(200);
+    expect(res['body']).toBe('{"status":"ok"}');
+  });
+
+  it('loose precision includes only method and path', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'loose';
+    draft.body = '{"data":true}';
+    draft.queryStringParameters = [{ name: 'q', values: ['test'] }];
+    draft.headers = [{ name: 'Accept', values: ['*/*'] }];
+
+    const obj = genericExpectationToJsonObject(draft);
+    const req = obj['httpRequest'] as Record<string, unknown>;
+
+    expect(req['method']).toBe('GET');
+    expect(req['path']).toBe('/api/health');
+    expect(req).not.toHaveProperty('body');
+    expect(req).not.toHaveProperty('queryStringParameters');
+    expect(req).not.toHaveProperty('headers');
+  });
+
+  it('moderate precision includes query and body but not headers', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'moderate';
+    draft.body = '{"data":true}';
+    draft.queryStringParameters = [{ name: 'q', values: ['test'] }];
+    draft.headers = [{ name: 'Accept', values: ['*/*'] }];
+
+    const obj = genericExpectationToJsonObject(draft);
+    const req = obj['httpRequest'] as Record<string, unknown>;
+
+    expect(req['body']).toBe('{"data":true}');
+    expect(req['queryStringParameters']).toEqual([{ name: 'q', values: ['test'] }]);
+    expect(req).not.toHaveProperty('headers');
+  });
+
+  it('exact precision includes headers, query, and body', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'exact';
+    draft.body = '{"data":true}';
+    draft.queryStringParameters = [{ name: 'q', values: ['test'] }];
+    draft.headers = [{ name: 'Accept', values: ['*/*'] }];
+
+    const obj = genericExpectationToJsonObject(draft);
+    const req = obj['httpRequest'] as Record<string, unknown>;
+
+    expect(req['body']).toBe('{"data":true}');
+    expect(req['queryStringParameters']).toEqual([{ name: 'q', values: ['test'] }]);
+    expect(req['headers']).toEqual([{ name: 'Accept', values: ['*/*'] }]);
+  });
+});
+
+describe('generic expectationToJava', () => {
+  it('uses HttpResponse imports (not LLM)', () => {
+    const java = expectationToJava(baseGenericDraft());
+
+    expect(java).toContain('import static org.mockserver.model.HttpResponse.response;');
+    expect(java).toContain('import static org.mockserver.model.HttpRequest.request;');
+    expect(java).not.toContain('Llm');
+    expect(java).not.toContain('llmResponse');
+  });
+
+  it('generates correct builder chain', () => {
+    const java = expectationToJava(baseGenericDraft());
+
+    expect(java).toContain('request().withMethod("GET").withPath("/api/health")');
+    expect(java).toContain('.thenRespond(');
+    expect(java).toContain('response().withStatusCode(200)');
+    expect(java).toContain('.withBody("{\\"status\\":\\"ok\\"}")');
+  });
+
+  it('includes headers in exact mode', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'exact';
+    draft.headers = [{ name: 'Accept', values: ['application/json'] }];
+    const java = expectationToJava(draft);
+
+    expect(java).toContain('.withHeader("Accept", "application/json")');
+  });
+
+  it('omits body and headers in loose mode', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'loose';
+    draft.body = 'something';
+    draft.headers = [{ name: 'Accept', values: ['*/*'] }];
+    const java = expectationToJava(draft);
+
+    // Request should only have method and path
+    const requestLine = java.split('.thenRespond(')[0]!;
+    expect(requestLine).not.toContain('.withBody(');
+    expect(requestLine).not.toContain('.withHeader(');
+  });
+});
+
+describe('generic multi-value query params and headers in Java codegen', () => {
+  it('emits separate quoted args for multi-value query params', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'moderate';
+    draft.queryStringParameters = [
+      { name: 'page[]', values: ['1', '2', '3'] },
+    ];
+    const java = expectationToJava(draft);
+
+    expect(java).toContain('.withQueryStringParameter("page[]", "1", "2", "3")');
+    // Must NOT join into a single string
+    expect(java).not.toContain('"1, 2, 3"');
+  });
+
+  it('emits separate quoted args for multi-value request headers in exact mode', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'exact';
+    draft.headers = [
+      { name: 'Accept', values: ['text/html', 'application/json'] },
+    ];
+    const java = expectationToJava(draft);
+
+    expect(java).toContain('.withHeader("Accept", "text/html", "application/json")');
+    expect(java).not.toContain('"text/html, application/json"');
+  });
+
+  it('emits separate quoted args for multi-value response headers', () => {
+    const draft = baseGenericDraft();
+    draft.responseHeaders = [
+      { name: 'Set-Cookie', values: ['a=1', 'b=2'] },
+    ];
+    const java = expectationToJava(draft);
+
+    expect(java).toContain('.withHeader("Set-Cookie", "a=1", "b=2")');
+    expect(java).not.toContain('"a=1, b=2"');
+  });
+
+  it('escapes special chars in each value separately', () => {
+    const draft = baseGenericDraft();
+    draft.matcherPrecision = 'moderate';
+    draft.queryStringParameters = [
+      { name: 'q', values: ['hello "world"', 'foo\nbar'] },
+    ];
+    const java = expectationToJava(draft);
+
+    expect(java).toContain('.withQueryStringParameter("q", "hello \\"world\\"", "foo\\nbar")');
+  });
+});
+
+describe('generic expectationToJson', () => {
+  it('produces valid JSON for generic draft', () => {
+    const json = expectationToJson(baseGenericDraft());
+    const parsed = JSON.parse(json);
+
+    expect(parsed).toHaveProperty('httpRequest');
+    expect(parsed).toHaveProperty('httpResponse');
+    expect(parsed).not.toHaveProperty('httpLlmResponse');
   });
 });

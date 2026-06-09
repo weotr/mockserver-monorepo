@@ -1,0 +1,26 @@
+{{- if .Values.clustering.enabled }}
+# Headless Service for JGroups DNS_PING pod discovery.
+# dns.DNS_PING queries this Service's DNS A records to discover all pod
+# IPs in the cluster, enabling JGroups cluster formation without multicast.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "release.name" . }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "chart.name" . }}
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: jgroups
+      port: {{ .Values.clustering.jgroupsPort | default 7800 }}
+      targetPort: jgroups
+      protocol: TCP
+  selector:
+    app: {{ template "chart.name" . }}
+    release: {{ .Release.Name }}
+{{- end }}

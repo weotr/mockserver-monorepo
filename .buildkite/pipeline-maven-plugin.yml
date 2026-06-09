@@ -1,8 +1,13 @@
 steps:
-  - label: ":docker: update docker image"
-    command: "docker pull mockserver/mockserver:maven"
+  - label: ":s3: restore maven cache"
+    command: ".buildkite/scripts/cache-restore.sh maven"
+    timeout_in_minutes: 10
+    soft_fail: true
 
   - wait
+
+  - label: ":docker: update docker image"
+    command: "docker pull mockserver/mockserver:maven"
 
   - label: ":maven: maven-plugin build"
     command: ".buildkite/scripts/steps/maven-plugin-build.sh"
@@ -19,3 +24,8 @@ steps:
           artifacts: "mockserver/mockserver-maven-plugin/**/TEST-*.xml"
           always-annotate: true
           fail-build-on-error: false
+
+  - label: ":s3: save maven cache"
+    command: ".buildkite/scripts/cache-save.sh maven"
+    timeout_in_minutes: 15
+    soft_fail: true

@@ -15,12 +15,12 @@ public class NottableSchemaStringMatchesTest {
         String schema = "{ \"type\": \"number\" }";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("1"), is(true));
-        assertThat(string.matches("2.5"), is(true));
-        assertThat(string.matches("a"), is(false));
-        assertThat(notString.matches("1"), is(false));
-        assertThat(notString.matches("2.5"), is(false));
-        assertThat(notString.matches("a"), is(true));
+        assertThat("number schema should match '1'", string.matches("1"), is(true));
+        assertThat("number schema should match '2.5'", string.matches("2.5"), is(true));
+        assertThat("number schema should not match 'a'", string.matches("a"), is(false));
+        assertThat("NOT number schema should not match '1'", notString.matches("1"), is(false));
+        assertThat("NOT number schema should not match '2.5'", notString.matches("2.5"), is(false));
+        assertThat("NOT number schema should match 'a'", notString.matches("a"), is(true));
     }
 
     @Test
@@ -28,10 +28,10 @@ public class NottableSchemaStringMatchesTest {
         String schema = "{ \"type\": \"integer\" }";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("1"), is(true));
-        assertThat(string.matches("a"), is(false));
-        assertThat(notString.matches("1"), is(false));
-        assertThat(notString.matches("a"), is(true));
+        assertThat("integer schema should match '1'", string.matches("1"), is(true));
+        assertThat("integer schema should not match 'a'", string.matches("a"), is(false));
+        assertThat("NOT integer schema should not match '1'", notString.matches("1"), is(false));
+        assertThat("NOT integer schema should match 'a'", notString.matches("a"), is(true));
     }
 
     @Test
@@ -39,12 +39,12 @@ public class NottableSchemaStringMatchesTest {
         String schema = "{ \"type\": \"integer\", \"nullable\": true }";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("1"), is(true));
-        assertThat(string.matches(""), is(true));
-        assertThat(string.matches("a"), is(false));
-        assertThat(notString.matches("1"), is(false));
-        assertThat(notString.matches(""), is(false));
-        assertThat(notString.matches("a"), is(true));
+        assertThat("nullable integer schema should match '1'", string.matches("1"), is(true));
+        assertThat("nullable integer schema should match empty string", string.matches(""), is(true));
+        assertThat("nullable integer schema should not match 'a'", string.matches("a"), is(false));
+        assertThat("NOT nullable integer schema should not match '1'", notString.matches("1"), is(false));
+        assertThat("NOT nullable integer schema should not match empty string", notString.matches(""), is(false));
+        assertThat("NOT nullable integer schema should match 'a'", notString.matches("a"), is(true));
     }
 
     @Test
@@ -55,12 +55,12 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("10"), is(true));
-        assertThat(string.matches("20"), is(true));
-        assertThat(string.matches("23"), is(false));
-        assertThat(notString.matches("10"), is(false));
-        assertThat(notString.matches("20"), is(false));
-        assertThat(notString.matches("23"), is(true));
+        assertThat("multipleOf:10 schema should match '10'", string.matches("10"), is(true));
+        assertThat("multipleOf:10 schema should match '20'", string.matches("20"), is(true));
+        assertThat("multipleOf:10 schema should not match '23'", string.matches("23"), is(false));
+        assertThat("NOT multipleOf:10 schema should not match '10'", notString.matches("10"), is(false));
+        assertThat("NOT multipleOf:10 schema should not match '20'", notString.matches("20"), is(false));
+        assertThat("NOT multipleOf:10 schema should match '23'", notString.matches("23"), is(true));
     }
 
     @Test
@@ -72,10 +72,10 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("abc"), is(true));
-        assertThat(string.matches("a"), is(false));
-        assertThat(notString.matches("abc"), is(false));
-        assertThat(notString.matches("a"), is(true));
+        assertThat("string[2..3] schema should match 'abc' (len=3)", string.matches("abc"), is(true));
+        assertThat("string[2..3] schema should not match 'a' (len=1)", string.matches("a"), is(false));
+        assertThat("NOT string[2..3] schema should not match 'abc'", notString.matches("abc"), is(false));
+        assertThat("NOT string[2..3] schema should match 'a'", notString.matches("a"), is(true));
     }
 
     @Test
@@ -88,12 +88,12 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("abc"), is(true));
-        assertThat(string.matches(""), is(true));
-        assertThat(string.matches("a"), is(false));
-        assertThat(notString.matches("abc"), is(false));
-        assertThat(notString.matches(""), is(false));
-        assertThat(notString.matches("a"), is(true));
+        assertThat("nullable string[2..3] schema should match 'abc'", string.matches("abc"), is(true));
+        assertThat("nullable string[2..3] schema should match empty string", string.matches(""), is(true));
+        assertThat("nullable string[2..3] schema should not match 'a' (len=1)", string.matches("a"), is(false));
+        assertThat("NOT nullable string[2..3] schema should not match 'abc'", notString.matches("abc"), is(false));
+        assertThat("NOT nullable string[2..3] schema should not match empty string", notString.matches(""), is(false));
+        assertThat("NOT nullable string[2..3] schema should match 'a'", notString.matches("a"), is(true));
     }
 
     @Test
@@ -104,14 +104,14 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("555-1212"), is(true));
-        assertThat(string.matches("(888)555-1212"), is(true));
-        assertThat(string.matches("(888)555-1212 ext. 532"), is(false));
-        assertThat(string.matches("(800)FLOWERS"), is(false));
-        assertThat(notString.matches("555-1212"), is(false));
-        assertThat(notString.matches("(888)555-1212"), is(false));
-        assertThat(notString.matches("(888)555-1212 ext. 532"), is(true));
-        assertThat(notString.matches("(800)FLOWERS"), is(true));
+        assertThat("phone regex should match '555-1212'", string.matches("555-1212"), is(true));
+        assertThat("phone regex should match '(888)555-1212'", string.matches("(888)555-1212"), is(true));
+        assertThat("phone regex should not match '(888)555-1212 ext. 532'", string.matches("(888)555-1212 ext. 532"), is(false));
+        assertThat("phone regex should not match '(800)FLOWERS'", string.matches("(800)FLOWERS"), is(false));
+        assertThat("NOT phone regex should not match '555-1212'", notString.matches("555-1212"), is(false));
+        assertThat("NOT phone regex should not match '(888)555-1212'", notString.matches("(888)555-1212"), is(false));
+        assertThat("NOT phone regex should match '(888)555-1212 ext. 532'", notString.matches("(888)555-1212 ext. 532"), is(true));
+        assertThat("NOT phone regex should match '(800)FLOWERS'", notString.matches("(800)FLOWERS"), is(true));
     }
 
     @Test
@@ -122,10 +122,10 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches(UUIDService.getUUID()), is(true));
-        assertThat(string.matches("abc"), is(false));
-        assertThat(notString.matches(UUIDService.getUUID()), is(false));
-        assertThat(notString.matches("abc"), is(true));
+        assertThat("uuid format should match valid UUID", string.matches(UUIDService.getUUID()), is(true));
+        assertThat("uuid format should not match 'abc'", string.matches("abc"), is(false));
+        assertThat("NOT uuid format should not match valid UUID", notString.matches(UUIDService.getUUID()), is(false));
+        assertThat("NOT uuid format should match 'abc'", notString.matches("abc"), is(true));
     }
 
     @Test
@@ -136,10 +136,10 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("someone@mockserver.com"), is(true));
-        assertThat(string.matches("abc"), is(false));
-        assertThat(notString.matches("someone@mockserver.com"), is(false));
-        assertThat(notString.matches("abc"), is(true));
+        assertThat("email format should match 'someone@mockserver.com'", string.matches("someone@mockserver.com"), is(true));
+        assertThat("email format should not match 'abc'", string.matches("abc"), is(false));
+        assertThat("NOT email format should not match 'someone@mockserver.com'", notString.matches("someone@mockserver.com"), is(false));
+        assertThat("NOT email format should match 'abc'", notString.matches("abc"), is(true));
     }
 
     @Test
@@ -150,10 +150,10 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("192.168.1.30"), is(true));
-        assertThat(string.matches("abc"), is(false));
-        assertThat(notString.matches("192.168.1.30"), is(false));
-        assertThat(notString.matches("abc"), is(true));
+        assertThat("ipv4 format should match '192.168.1.30'", string.matches("192.168.1.30"), is(true));
+        assertThat("ipv4 format should not match 'abc'", string.matches("abc"), is(false));
+        assertThat("NOT ipv4 format should not match '192.168.1.30'", notString.matches("192.168.1.30"), is(false));
+        assertThat("NOT ipv4 format should match 'abc'", notString.matches("abc"), is(true));
     }
 
     @Test
@@ -164,10 +164,10 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("mock-server.com"), is(true));
-        assertThat(string.matches("%@12345"), is(false));
-        assertThat(notString.matches("mock-server.com"), is(false));
-        assertThat(notString.matches("12$^345"), is(true));
+        assertThat("hostname format should match 'mock-server.com'", string.matches("mock-server.com"), is(true));
+        assertThat("hostname format should not match '%@12345'", string.matches("%@12345"), is(false));
+        assertThat("NOT hostname format should not match 'mock-server.com'", notString.matches("mock-server.com"), is(false));
+        assertThat("NOT hostname format should match '12$^345'", notString.matches("12$^345"), is(true));
     }
 
     @Test
@@ -178,9 +178,9 @@ public class NottableSchemaStringMatchesTest {
             "}";
         NottableSchemaString string = schemaString(schema);
         NottableSchemaString notString = schemaString("!" + schema);
-        assertThat(string.matches("2018-11-13T20:20:39+00:00"), is(true));
-        assertThat(string.matches("2018-11-13 20:20:39"), is(false));
-        assertThat(notString.matches("2018-11-13T20:20:39+00:00"), is(false));
-        assertThat(notString.matches("2018-11-13 20:20:39"), is(true));
+        assertThat("date-time format should match ISO-8601", string.matches("2018-11-13T20:20:39+00:00"), is(true));
+        assertThat("date-time format should not match '2018-11-13 20:20:39'", string.matches("2018-11-13 20:20:39"), is(false));
+        assertThat("NOT date-time format should not match ISO-8601", notString.matches("2018-11-13T20:20:39+00:00"), is(false));
+        assertThat("NOT date-time format should match '2018-11-13 20:20:39'", notString.matches("2018-11-13 20:20:39"), is(true));
     }
 }

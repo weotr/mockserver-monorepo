@@ -6,7 +6,6 @@ import org.junit.Test;
 import org.mockserver.integration.ClientAndServer;
 import org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBase;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.configuration.ConfigurationProperties.*;
@@ -58,19 +57,16 @@ public class ClientAuthenticationDataPlaneOnlyMockingIntegrationTest extends Abs
                     .withBody("some_body_response")
             );
 
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -87,17 +83,14 @@ public class ClientAuthenticationDataPlaneOnlyMockingIntegrationTest extends Abs
                     .withBody("some_body_response")
             );
 
-        assertEquals(
-            response()
-                .withStatusCode(426)
-                .withReasonPhrase("Upgrade Required")
-                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(426)
+                .withReasonPhrase("Upgrade Required")
+                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1")));
     }
 }

@@ -272,6 +272,140 @@ public class ScenarioManagerCompositeKeyTest {
         assertThat("No errors during concurrent clear + transitions", errors.get(), is(0));
     }
 
+    // --- Key encoding round-trip and edge cases ---
+
+    @Test
+    public void shouldRoundTripKeyWithBrackets() {
+        // Name containing brackets should not collide with isolation encoding
+        ScenarioManager.ScenarioKey key = new ScenarioManager.ScenarioKey("test[1]", null);
+        String encoded = key.toString();
+        ScenarioManager.ScenarioKey parsed = ScenarioManager.parseKey(encoded);
+        assertThat(parsed.getScenarioName(), is("test[1]"));
+        assertThat(parsed.getIsolation(), is((String) null));
+    }
+
+    @Test
+    public void shouldRoundTripKeyWithBracketsAndIsolation() {
+        ScenarioManager.ScenarioKey key = new ScenarioManager.ScenarioKey("test[1]", "iso[2]");
+        String encoded = key.toString();
+        ScenarioManager.ScenarioKey parsed = ScenarioManager.parseKey(encoded);
+        assertThat(parsed.getScenarioName(), is("test[1]"));
+        assertThat(parsed.getIsolation(), is("iso[2]"));
+    }
+
+    @Test
+    public void shouldRoundTripKeyWithColons() {
+        ScenarioManager.ScenarioKey key = new ScenarioManager.ScenarioKey("name:with:colons", "iso:value");
+        String encoded = key.toString();
+        ScenarioManager.ScenarioKey parsed = ScenarioManager.parseKey(encoded);
+        assertThat(parsed.getScenarioName(), is("name:with:colons"));
+        assertThat(parsed.getIsolation(), is("iso:value"));
+    }
+
+    @Test
+    public void shouldRoundTripKeyWithDelimiterChars() {
+        // Name and isolation containing the delimiter characters used internally
+        ScenarioManager.ScenarioKey key = new ScenarioManager.ScenarioKey("3:name:N", "V2:val");
+        String encoded = key.toString();
+        ScenarioManager.ScenarioKey parsed = ScenarioManager.parseKey(encoded);
+        assertThat(parsed.getScenarioName(), is("3:name:N"));
+        assertThat(parsed.getIsolation(), is("V2:val"));
+    }
+
+    @Test
+    public void shouldRoundTripEmptyName() {
+        ScenarioManager.ScenarioKey key = new ScenarioManager.ScenarioKey("", null);
+        String encoded = key.toString();
+        ScenarioManager.ScenarioKey parsed = ScenarioManager.parseKey(encoded);
+        assertThat(parsed.getScenarioName(), is(""));
+        assertThat(parsed.getIsolation(), is((String) null));
+    }
+
+    @Test
+    public void shouldRoundTripEmptyIsolation() {
+        // Empty isolation (non-null but empty string) vs null isolation
+        ScenarioManager.ScenarioKey keyEmpty = new ScenarioManager.ScenarioKey("test", "");
+        ScenarioManager.ScenarioKey keyNull = new ScenarioManager.ScenarioKey("test", null);
+
+        String encodedEmpty = keyEmpty.toString();
+        String encodedNull = keyNull.toString();
+
+        // They should encode differently
+        assertThat("null vs empty isolation must encode differently", encodedEmpty, is(org.hamcrest.Matchers.not(encodedNull)));
+
+        ScenarioManager.ScenarioKey parsedEmpty = ScenarioManager.parseKey(encodedEmpty);
+        ScenarioManager.ScenarioKey parsedNull = ScenarioManager.parseKey(encodedNull);
+
+        assertThat(parsedEmpty.getIsolation(), is(""));
+        assertThat(parsedNull.getIsolation(), is((String) null));
+    }
+
+    @Test
+    public void shouldNotCollideNamesWithBrackets() {
+        // "test[1]" with null isolation vs "test" with isolation "1]"
+        // In the old encoding both would produce "test[1]" — in the new
+        // encoding they must be distinct.
+        ScenarioManager.ScenarioKey key1 = new ScenarioManager.ScenarioKey("test[1]", null);
+        ScenarioManager.ScenarioKey key2 = new ScenarioManager.ScenarioKey("test", "1]");
+
+        String encoded1 = key1.toString();
+        String encoded2 = key2.toString();
+
+        assertThat("keys must not collide", encoded1, is(org.hamcrest.Matchers.not(encoded2)));
+
+        // And both must round-trip correctly
+        ScenarioManager.ScenarioKey parsed1 = ScenarioManager.parseKey(encoded1);
+        ScenarioManager.ScenarioKey parsed2 = ScenarioManager.parseKey(encoded2);
+
+        assertThat(parsed1.getScenarioName(), is("test[1]"));
+        assertThat(parsed1.getIsolation(), is((String) null));
+        assertThat(parsed2.getScenarioName(), is("test"));
+        assertThat(parsed2.getIsolation(), is("1]"));
+    }
+
+    @Test
+    public void shouldClearNotMatchPrefixScenario() {
+        // "conv1" is a prefix of "conv1-extended" — clear("conv1") must NOT clear "conv1-extended"
+        scenarioManager.setState("conv1", null, "state1");
+        scenarioManager.setState("conv1-extended", null, "state2");
+
+        scenarioManager.clear("conv1");
+
+        assertThat(scenarioManager.getState("conv1", null), is(ScenarioManager.STARTED));
+        assertThat(scenarioManager.getState("conv1-extended", null), is("state2"));
+    }
+
+    @Test
+    public void shouldKeyBelongsToScenarioExactMatch() {
+        // Encode two keys with different names, one a prefix of the other
+        String key1 = new ScenarioManager.ScenarioKey("test", "iso").toString();
+        String key2 = new ScenarioManager.ScenarioKey("test-extended", "iso").toString();
+
+        assertThat(ScenarioManager.keyBelongsToScenario(key1, "test"), is(true));
+        assertThat(ScenarioManager.keyBelongsToScenario(key1, "test-extended"), is(false));
+        assertThat(ScenarioManager.keyBelongsToScenario(key2, "test"), is(false));
+        assertThat(ScenarioManager.keyBelongsToScenario(key2, "test-extended"), is(true));
+    }
+
+    @Test
+    public void shouldWorkEndToEndWithBracketNames() {
+        // End-to-end: scenario name containing brackets
+        scenarioManager.setState("test[1]", null, "Step1");
+        scenarioManager.setState("test[1]", "isoA", "Step2");
+        scenarioManager.setState("test", "1]", "Step3");
+
+        assertThat(scenarioManager.getState("test[1]", null), is("Step1"));
+        assertThat(scenarioManager.getState("test[1]", "isoA"), is("Step2"));
+        assertThat(scenarioManager.getState("test", "1]"), is("Step3"));
+
+        // Clear only "test[1]" — should NOT clear "test" with isolation "1]"
+        scenarioManager.clear("test[1]");
+
+        assertThat(scenarioManager.getState("test[1]", null), is(ScenarioManager.STARTED));
+        assertThat(scenarioManager.getState("test[1]", "isoA"), is(ScenarioManager.STARTED));
+        assertThat(scenarioManager.getState("test", "1]"), is("Step3"));
+    }
+
     // --- Edge cases ---
 
     @Test

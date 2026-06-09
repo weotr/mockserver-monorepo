@@ -76,51 +76,96 @@ sidecar:
 
 When `sidecar.transparentProxy` is true, the `MOCKSERVER_TRANSPARENT_PROXY_ENABLED` environment variable is set in the deployment.
 
+### Automatic Sidecar Injection (Admission Webhook)
+
+When `webhook.enabled=true`, the chart deploys a MutatingAdmissionWebhook that automatically injects the MockServer sidecar and iptables init container into pods. This removes the need to manually edit every Deployment. See [helm.md](helm.md) for full details.
+
+The webhook Docker image (`mockserver/mockserver-webhook`) is published to Docker Hub and ECR Public by the release pipeline alongside the main MockServer image. Install with the webhook enabled:
+
+```bash
+helm install mockserver mockserver/mockserver \
+  --set webhook.enabled=true
+kubectl label namespace my-namespace mockserver.org/sidecar-injection=enabled
+# Annotate pods: mockserver.org/inject: "true"
+```
+
+**Building locally (optional, for development):**
+
+```bash
+# Build the fat jar and Docker image
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests && cd ..
+cp mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar \
+  docker/webhook/mockserver-webhook.jar
+docker build -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT docker/webhook
+```
+
 ## Implementation
 
 | Component | Location |
 |-----------|----------|
 | Configuration properties | `Configuration.java`, `ConfigurationProperties.java` |
-| Transparent proxy logic | `mockserver-netty/.../proxy/TransparentProxyInitializer.java` |
-| SO_ORIGINAL_DST / conntrack | `mockserver-netty/.../proxy/SoOriginalDstHelper.java` |
-| Pipeline handler (sets REMOTE_SOCKET) | `mockserver-netty/.../proxy/TransparentProxyHandler.java` |
+| Transparent proxy logic | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/TransparentProxyInitializer.java` |
+| Composite resolver chain | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/CompositeOriginalDestinationResolver.java` |
+| TPROXY resolver (local address) | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/TproxyOriginalDestinationResolver.java` |
+| eBPF resolver | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/EbpfOriginalDestinationResolver.java` |
+| SO_ORIGINAL_DST resolver (JNA) | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/SoOriginalDstResolver.java` |
+| Conntrack resolver (fallback) | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/ConntrackOriginalDestinationResolver.java` |
+| Conntrack table helper | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/SoOriginalDstHelper.java` |
+| DNS intent resolver | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/DnsIntentOriginalDestinationResolver.java` |
+| Pipeline handler (sets REMOTE_SOCKET) | `mockserver-netty/src/main/java/org/mockserver/netty/proxy/TransparentProxyHandler.java` |
+| Webhook HTTPS server | `mockserver-k8s-webhook/.../webhook/WebhookServer.java` |
+| Admission webhook handler | `mockserver-k8s-webhook/.../webhook/AdmissionReviewHandler.java` |
+| JSONPatch builder | `mockserver-k8s-webhook/.../webhook/SidecarPatchBuilder.java` |
+| Injection config | `mockserver-k8s-webhook/.../webhook/SidecarInjectionConfig.java` |
+| Webhook Dockerfile | `docker/webhook/Dockerfile` |
 | Helm values | `helm/mockserver/values.yaml` |
 | Helm deployment | `helm/mockserver/templates/deployment.yaml` |
+| Helm webhook templates | `helm/mockserver/templates/webhook-*.yaml` |
 
-## SO_ORIGINAL_DST / Conntrack Resolution
+## Original-Destination Resolution
 
-On Linux with the `nf_conntrack` kernel module loaded, MockServer reads the original destination of intercepted connections from `/proc/net/nf_conntrack`. This provides accurate target resolution even when the Host header is absent or incorrect.
+MockServer resolves the original destination of intercepted connections through a composite chain (`CompositeOriginalDestinationResolver`). Each resolver is tried in order; the first non-null result wins.
 
-### Requirements
+### Resolver Chain
 
-- **Linux only**: conntrack-based resolution requires Linux. On other OSes (macOS, Windows), MockServer gracefully falls back to Host-header resolution.
-- **`nf_conntrack` module**: the kernel module must be loaded (`modprobe nf_conntrack`) and `/proc/net/nf_conntrack` must be readable by the MockServer process.
-- **iptables REDIRECT**: the iptables rule must use `-j REDIRECT` (not `-j DNAT`). The conntrack entry format differs for DNAT.
-- **`NET_ADMIN` capability**: the container/pod needs `NET_ADMIN` for iptables setup (the same capability already required for the init container).
+| Priority | Resolver | Strategy | Requirements |
+|----------|----------|----------|--------------|
+| 1 | `TproxyOriginalDestinationResolver` | Reads `channel.localAddress()` — with TPROXY iptables rules, this IS the original destination | `transparentProxyTproxy=true`, `CAP_NET_ADMIN`, Netty epoll |
+| 2 | `EbpfOriginalDestinationResolver` | eBPF map lookup | `transparentProxyEbpf=true` |
+| 3 | `SoOriginalDstResolver` | O(1) `getsockopt(SO_ORIGINAL_DST)` via JNA (no JNI) | Linux, Netty epoll (`EpollSocketChannel`), JNA native loadable |
+| 4 | `ConntrackOriginalDestinationResolver` | O(n) parse of `/proc/net/nf_conntrack` | Linux, `nf_conntrack` module loaded, file readable |
+| 5 | `DnsIntentOriginalDestinationResolver` | Infers destination from DNS query history | Fallback when all above return null |
 
-### Implementation approach
+The default chain for REDIRECT-based transparent proxy is: **SO_ORIGINAL_DST → conntrack → dns-intent**. When `transparentProxyTproxy=true`, TPROXY is prepended as the first resolver.
 
-Netty 4.x does not expose the `SO_ORIGINAL_DST` socket option (not even via `EpollChannelOption`). Calling `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)` would require JNI. Instead, MockServer uses a JNI-free approach: parsing `/proc/net/nf_conntrack` to look up the original destination by matching the connection's client address and MockServer's local address against conntrack entries.
+### SO_ORIGINAL_DST (Primary Path)
 
-This approach:
-- Works without native code or JNI libraries
-- Is used by several production transparent proxies
-- Has O(n) cost per lookup where n = number of tracked connections (acceptable for development/testing; for high-throughput production use, a JNI-based `SO_ORIGINAL_DST` implementation would be more efficient)
-- Falls back to the legacy `/proc/net/ip_conntrack` if `nf_conntrack` is unavailable
+`SoOriginalDstResolver` calls `getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, ...)` via JNA — not JNI. JNA loads the C library dynamically at runtime, so no compile-time native code is needed. The resolver is an O(1) socket-option read and returns null (never throws) on unsupported platforms (non-Linux, NIO transport, JNA unavailable), allowing the chain to fall through.
+
+Requirements:
+- Linux OS
+- Netty epoll transport (`EpollSocketChannel`) — the NIO transport does not expose a raw file descriptor
+- JNA loadable at runtime (`com.sun.jna.Native`)
+
+### Conntrack (Fallback)
+
+`ConntrackOriginalDestinationResolver` parses `/proc/net/nf_conntrack` to find the pre-`iptables -j REDIRECT` destination. This is O(n) per connection (n = tracked connections), capped at 200,000 lines to bound CPU cost. If the table exceeds the cap or `nf_conntrack` is unavailable, the resolver returns null and the chain continues to dns-intent.
+
+### TPROXY Mode
+
+With `transparentProxyTproxy=true`, iptables uses `-j TPROXY` instead of `-j REDIRECT`. The kernel preserves the original destination as the socket's local address, so resolution is trivial (`channel.localAddress()` returns it directly). No conntrack lookup or `getsockopt` is needed.
 
 ### Testing
 
-- Unit tests for conntrack parsing and address normalization run cross-platform (macOS/Linux/Windows)
-- The `isSupported()` platform gate is tested to reflect the actual OS
-- The `getOriginalDestination()` method correctly throws `UnsupportedOperationException` on non-Linux with a descriptive message
-- The `TransparentProxyHandler` is tested with an `EmbeddedChannel` to verify:
-  - `REMOTE_SOCKET` attribute is set when original destination is resolved
-  - Graceful fallback when the resolver returns null or throws
-  - No-op behavior when transparent proxy is disabled
-- Integration testing with real iptables REDIRECT requires a Linux environment (CI or Docker)
+- Unit tests for all resolvers run cross-platform (macOS/Linux/Windows)
+- `SoOriginalDstResolverTest` verifies sockaddr decoding and platform-support gating
+- `TproxyOriginalDestinationResolverTest` verifies TPROXY mode flag and local-address extraction
+- `CompositeOriginalDestinationResolverTest` verifies chain ordering and null fall-through
+- `SoOriginalDstEndToEndIT` and `TproxyEndToEndIT` require Linux with `NET_ADMIN` (Docker-gated)
+- The `TransparentProxyHandler` is tested with an `EmbeddedChannel` to verify `REMOTE_SOCKET` attribute setting and graceful fallback
 
 ## Limitations
 
-- **Conntrack lookup is O(n) with a cap**: The `/proc/net/nf_conntrack` parsing scans the conntrack table per connection, capped at 200,000 lines to bound CPU cost. If the table exceeds this limit, MockServer falls back to Host-header resolution. For high-connection-rate production deployments, a JNI-based `getsockopt(SO_ORIGINAL_DST)` would be more efficient (not yet implemented).
-- **Linux only**: conntrack-based original-destination resolution requires Linux with `nf_conntrack`. On other OSes, the transparent proxy falls back to Host-header resolution, which works for HTTP traffic but requires the Host header to be correct.
-- **iptables required for interception**: The transparent proxy itself does not set up iptables rules. An init container or external mechanism must configure traffic redirection.
+- **SO_ORIGINAL_DST requires Linux + epoll**: On macOS or Windows, or with NIO transport, the resolver returns null and conntrack (also Linux-only) is tried next. Both fall through to dns-intent on non-Linux hosts.
+- **Conntrack lookup is O(n) with a cap**: The `/proc/net/nf_conntrack` scan is capped at 200,000 lines. If the table exceeds this, MockServer falls back to Host-header resolution via dns-intent.
+- **iptables required without the webhook**: Without the admission webhook, an init container or external mechanism must configure traffic redirection. With the webhook enabled, iptables rules are injected automatically into opted-in pods.

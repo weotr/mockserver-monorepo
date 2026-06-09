@@ -308,4 +308,229 @@ describe('ServiceChaosPanel', () => {
     const unavailableElements = screen.getAllByText('UNAVAILABLE');
     expect(unavailableElements.length).toBeGreaterThanOrEqual(1);
   });
+
+  // --- Full chaos fault-type controls tests ---
+
+  it('registers HTTP chaos with body corruption controls (truncate + malformed)', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'body.svc');
+    await user.type(screen.getByLabelText('Truncate body (0–1)'), '0.5');
+    await user.click(screen.getByLabelText('Malformed body'));
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'body.svc',
+      chaos: { truncateBodyAtFraction: 0.5, malformedBody: true },
+    });
+  });
+
+  it('registers HTTP chaos with slow response (chunk size + delay)', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'slow.svc');
+    await user.type(screen.getByLabelText('Slow chunk bytes'), '64');
+    await user.type(screen.getByLabelText('Slow chunk delay ms'), '500');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'slow.svc',
+      chaos: {
+        slowResponseChunkSize: 64,
+        slowResponseChunkDelay: { timeUnit: 'MILLISECONDS', value: 500 },
+      },
+    });
+  });
+
+  it('registers HTTP chaos with quota (rate limit) controls', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'quota.svc');
+    await user.type(screen.getByLabelText('Quota name'), 'api-quota');
+    await user.type(screen.getByLabelText('Quota limit'), '100');
+    await user.type(screen.getByLabelText('Quota window ms'), '60000');
+    await user.type(screen.getByLabelText('Quota error status'), '429');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'quota.svc',
+      chaos: {
+        quotaName: 'api-quota',
+        quotaLimit: 100,
+        quotaWindowMillis: 60000,
+        quotaErrorStatus: 429,
+      },
+    });
+  });
+
+  it('registers HTTP chaos with outage window and degradation ramp', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'outage.svc');
+    await user.type(screen.getByLabelText('Error status'), '503');
+    await user.type(screen.getByLabelText('Outage after ms'), '5000');
+    await user.type(screen.getByLabelText('Outage duration ms'), '30000');
+    await user.type(screen.getByLabelText('Degradation ramp ms'), '60000');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'outage.svc',
+      chaos: {
+        errorStatus: 503,
+        outageAfterMillis: 5000,
+        outageDurationMillis: 30000,
+        degradationRampMillis: 60000,
+      },
+    });
+  });
+
+  it('registers HTTP chaos with retry-after header', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'retry.svc');
+    await user.type(screen.getByLabelText('Error status'), '429');
+    await user.type(screen.getByLabelText('Retry-After'), '120');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'retry.svc',
+      chaos: { errorStatus: 429, retryAfter: '120' },
+    });
+  });
+
+  it('registers a full chaos profile with all fault types', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'full.svc');
+    await user.type(screen.getByLabelText('Error status'), '503');
+    await user.type(screen.getByLabelText('Error prob (0–1)'), '0.8');
+    await user.type(screen.getByLabelText('Retry-After'), '60');
+    await user.type(screen.getByLabelText('Drop prob (0–1)'), '0.1');
+    await user.type(screen.getByLabelText('Latency ms'), '200');
+    await user.type(screen.getByLabelText('Truncate body (0–1)'), '0.75');
+    await user.click(screen.getByLabelText('Malformed body'));
+    await user.type(screen.getByLabelText('Slow chunk bytes'), '32');
+    await user.type(screen.getByLabelText('Slow chunk delay ms'), '250');
+    await user.type(screen.getByLabelText('Quota name'), 'test-quota');
+    await user.type(screen.getByLabelText('Quota limit'), '50');
+    await user.type(screen.getByLabelText('Quota window ms'), '30000');
+    await user.type(screen.getByLabelText('Quota error status'), '429');
+    await user.type(screen.getByLabelText('Seed'), '42');
+    await user.type(screen.getByLabelText('Succeed first'), '3');
+    await user.type(screen.getByLabelText('Fail count'), '10');
+    await user.type(screen.getByLabelText('Outage after ms'), '1000');
+    await user.type(screen.getByLabelText('Outage duration ms'), '5000');
+    await user.type(screen.getByLabelText('Degradation ramp ms'), '10000');
+    await user.type(screen.getByLabelText('TTL ms'), '120000');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    await waitFor(() => expect(puts.length).toBeGreaterThan(0));
+    expect(puts[0]?.body).toEqual({
+      host: 'full.svc',
+      chaos: {
+        errorStatus: 503,
+        errorProbability: 0.8,
+        retryAfter: '60',
+        dropConnectionProbability: 0.1,
+        latency: { timeUnit: 'MILLISECONDS', value: 200 },
+        truncateBodyAtFraction: 0.75,
+        malformedBody: true,
+        slowResponseChunkSize: 32,
+        slowResponseChunkDelay: { timeUnit: 'MILLISECONDS', value: 250 },
+        quotaName: 'test-quota',
+        quotaLimit: 50,
+        quotaWindowMillis: 30000,
+        quotaErrorStatus: 429,
+        seed: 42,
+        succeedFirst: 3,
+        failRequestCount: 10,
+        outageAfterMillis: 1000,
+        outageDurationMillis: 5000,
+        degradationRampMillis: 10000,
+      },
+      ttlMillis: 120000,
+    });
+  });
+
+  it('shows summary chips for all new fault types from server', async () => {
+    stubServiceChaos({
+      services: {
+        'all-faults.svc': {
+          errorStatus: 503,
+          errorProbability: 0.5,
+          retryAfter: '120',
+          dropConnectionProbability: 0.2,
+          latency: { timeUnit: 'MILLISECONDS', value: 200 },
+          truncateBodyAtFraction: 0.5,
+          malformedBody: true,
+          slowResponseChunkSize: 64,
+          quotaName: 'test',
+          quotaLimit: 100,
+          quotaWindowMillis: 60000,
+          degradationRampMillis: 30000,
+          outageAfterMillis: 5000,
+          outageDurationMillis: 10000,
+          seed: 42,
+        },
+      },
+    });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('all-faults.svc')).toBeInTheDocument());
+    expect(screen.getByText('error 503 @ 50% retry-after=120')).toBeInTheDocument();
+    expect(screen.getByText('drop @ 20%')).toBeInTheDocument();
+    expect(screen.getByText('+200ms latency')).toBeInTheDocument();
+    expect(screen.getByText('truncate to 50%')).toBeInTheDocument();
+    expect(screen.getByText('malformed body')).toBeInTheDocument();
+    expect(screen.getByText('slow response')).toBeInTheDocument();
+    expect(screen.getByText('quota 100/60000ms')).toBeInTheDocument();
+    expect(screen.getByText('ramp over 30000ms')).toBeInTheDocument();
+    expect(screen.getByText('outage window')).toBeInTheDocument();
+    expect(screen.getByText('seed 42')).toBeInTheDocument();
+  });
+
+  it('validates retry-after requires an error status', async () => {
+    const user = userEvent.setup();
+    const { puts } = stubServiceChaos({ services: {} });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('No service-scoped chaos registered.')).toBeInTheDocument());
+
+    await expandHttp(user);
+    await user.type(screen.getByLabelText('Host'), 'bad.svc');
+    await user.type(screen.getByLabelText('Retry-After'), '120');
+    // Add a valid fault so the "at least one fault" check passes
+    await user.type(screen.getByLabelText('Drop prob (0–1)'), '0.5');
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    expect(await screen.findByText(/Retry-After needs an error status/)).toBeInTheDocument();
+    expect(puts).toHaveLength(0);
+  });
 });

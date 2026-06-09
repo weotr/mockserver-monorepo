@@ -12,7 +12,6 @@ import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.TimeToLive.unlimited;
 import static org.mockserver.matchers.Times.exactly;
@@ -30,6 +29,8 @@ import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpResponseModifier.responseModifier;
 import static org.mockserver.model.HttpTemplate.template;
 import static org.mockserver.model.Parameter.param;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -40,7 +41,36 @@ public class ExpectationToJavaSerializerTest {
 
     @Test
     public void shouldSerializeArrayOfObjectsAsJava() {
-        assertEquals(NEW_LINE +
+        assertThat(
+            new ExpectationToJavaSerializer().serialize(
+                Arrays.asList(
+                    new Expectation(
+                        request("somePathOne"),
+                        null,
+                        null,
+                        0)
+                        .thenRespond(
+                            response("responseBodyOne")
+                        ),
+                    new Expectation(
+                        request("somePathOne"),
+                        once(),
+                        null,
+                        0)
+                        .thenRespond(
+                            response("responseBodyOne")
+                        ),
+                    new Expectation(
+                        request("somePathOne"),
+                        exactly(2),
+                        TimeToLive.exactly(TimeUnit.MINUTES, 1L),
+                        100)
+                        .thenRespond(
+                            response("responseBodyOne")
+                        )
+                )
+            )
+        , is(NEW_LINE +
                 "new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 ".when(" + NEW_LINE +
                 "        request()" + NEW_LINE +
@@ -87,85 +117,12 @@ public class ExpectationToJavaSerializerTest {
                 "                .withReasonPhrase(\"OK\")" + NEW_LINE +
                 "                .withBody(\"responseBodyOne\")" + NEW_LINE +
                 ");" + NEW_LINE +
-                NEW_LINE,
-            new ExpectationToJavaSerializer().serialize(
-                Arrays.asList(
-                    new Expectation(
-                        request("somePathOne"),
-                        null,
-                        null,
-                        0)
-                        .thenRespond(
-                            response("responseBodyOne")
-                        ),
-                    new Expectation(
-                        request("somePathOne"),
-                        once(),
-                        null,
-                        0)
-                        .thenRespond(
-                            response("responseBodyOne")
-                        ),
-                    new Expectation(
-                        request("somePathOne"),
-                        exactly(2),
-                        TimeToLive.exactly(TimeUnit.MINUTES, 1L),
-                        100)
-                        .thenRespond(
-                            response("responseBodyOne")
-                        )
-                )
-            )
-        );
+                NEW_LINE));
     }
 
     @Test
     public void shouldSerializeFullObjectWithResponseAsJava() {
-        assertEquals(NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withMethod(\"GET\")" + NEW_LINE +
-                "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withHeaders(" + NEW_LINE +
-                "                                new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
-                "                                new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withCookies(" + NEW_LINE +
-                "                                new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
-                "                                new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withQueryStringParameters(" + NEW_LINE +
-                "                                new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
-                "                                new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withBody(new StringBody(\"somebody\"))," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withStatusCode(304)" + NEW_LINE +
-                "                        .withHeaders(" + NEW_LINE +
-                "                                new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
-                "                                new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withCookies(" + NEW_LINE +
-                "                                new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
-                "                                new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withBody(\"responseBody\")" + NEW_LINE +
-                "                        .withDelay(new Delay(TimeUnit.MINUTES, 1))" + NEW_LINE +
-                "                        .withConnectionOptions(" + NEW_LINE +
-                "                                connectionOptions()" + NEW_LINE +
-                "                                        .withSuppressContentLengthHeader(true)" + NEW_LINE +
-                "                                        .withContentLengthHeaderOverride(10)" + NEW_LINE +
-                "                                        .withSuppressConnectionHeader(true)" + NEW_LINE +
-                "                                        .withKeepAliveOverride(true)" + NEW_LINE +
-                "                                        .withCloseSocket(true)" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "        );",
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -210,12 +167,7 @@ public class ExpectationToJavaSerializerTest {
                             )
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithResponseTemplateAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -239,10 +191,32 @@ public class ExpectationToJavaSerializerTest {
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
                 "        .respond(" + NEW_LINE +
-                "                template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
-                "                        .withTemplate(\"if (request.method === 'POST' && request.path === '/somePath') {\\n    return {\\n        'statusCode': 200,\\n        'body': JSON.stringify({name: 'value'})\\n    };\\n} else {\\n    return {\\n        'statusCode': 406,\\n        'body': request.body\\n    };\\n}\")" + NEW_LINE +
-                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
+                "                response()" + NEW_LINE +
+                "                        .withStatusCode(304)" + NEW_LINE +
+                "                        .withHeaders(" + NEW_LINE +
+                "                                new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
+                "                                new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withCookies(" + NEW_LINE +
+                "                                new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
+                "                                new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withBody(\"responseBody\")" + NEW_LINE +
+                "                        .withDelay(new Delay(TimeUnit.MINUTES, 1))" + NEW_LINE +
+                "                        .withConnectionOptions(" + NEW_LINE +
+                "                                connectionOptions()" + NEW_LINE +
+                "                                        .withSuppressContentLengthHeader(true)" + NEW_LINE +
+                "                                        .withContentLengthHeaderOverride(10)" + NEW_LINE +
+                "                                        .withSuppressConnectionHeader(true)" + NEW_LINE +
+                "                                        .withKeepAliveOverride(true)" + NEW_LINE +
+                "                                        .withCloseSocket(true)" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithResponseTemplateAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -279,85 +253,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithParameterBodyResponseAsJava() {
-        assertEquals(NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withBody(" + NEW_LINE +
-                "                                new ParameterBody(" + NEW_LINE +
-                "                                        new Parameter(\"requestBodyParameterNameOne\", \"requestBodyParameterValueOneOne\", \"requestBodyParameterValueOneTwo\")," + NEW_LINE +
-                "                                        new Parameter(\"requestBodyParameterNameTwo\", \"requestBodyParameterValueTwo\")" + NEW_LINE +
-                "                                )" + NEW_LINE +
-                "                        )," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withBody(\"responseBody\")" + NEW_LINE +
-                "        );",
-            new ExpectationToJavaSerializer().serialize(1,
-                new Expectation(
-                    request()
-                        .withBody(
-                            new ParameterBody(
-                                new Parameter("requestBodyParameterNameOne", "requestBodyParameterValueOneOne", "requestBodyParameterValueOneTwo"),
-                                new Parameter("requestBodyParameterNameTwo", "requestBodyParameterValueTwo")
-                            )
-                        ),
-                    once(),
-                    unlimited(),
-                    0)
-                    .thenRespond(
-                        response()
-                            .withBody("responseBody")
-                    )
-            )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithBinaryBodyResponseAsJava() {
-        // when
-        assertEquals(NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("request body".getBytes(UTF_8)) + "\"))," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withBody(\"responseBody\")" + NEW_LINE +
-                "        );",
-            new ExpectationToJavaSerializer().serialize(1,
-                new Expectation(
-                    request()
-                        .withBody(
-                            new BinaryBody("request body".getBytes(UTF_8))
-                        ),
-                    once(),
-                    unlimited(),
-                    0)
-                    .thenRespond(
-                        response()
-                            .withBody("responseBody")
-                    )
-            )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithResponseClassCallbackAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -381,10 +277,88 @@ public class ExpectationToJavaSerializerTest {
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
                 "        .respond(" + NEW_LINE +
-                "                callback()" + NEW_LINE +
-                "                        .withCallbackClass(\"some_class\")" + NEW_LINE +
+                "                template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
+                "                        .withTemplate(\"if (request.method === 'POST' && request.path === '/somePath') {\\n    return {\\n        'statusCode': 200,\\n        'body': JSON.stringify({name: 'value'})\\n    };\\n} else {\\n    return {\\n        'statusCode': 406,\\n        'body': request.body\\n    };\\n}\")" + NEW_LINE +
                 "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithParameterBodyResponseAsJava() {
+        assertThat(
+            new ExpectationToJavaSerializer().serialize(1,
+                new Expectation(
+                    request()
+                        .withBody(
+                            new ParameterBody(
+                                new Parameter("requestBodyParameterNameOne", "requestBodyParameterValueOneOne", "requestBodyParameterValueOneTwo"),
+                                new Parameter("requestBodyParameterNameTwo", "requestBodyParameterValueTwo")
+                            )
+                        ),
+                    once(),
+                    unlimited(),
+                    0)
+                    .thenRespond(
+                        response()
+                            .withBody("responseBody")
+                    )
+            )
+        , is(NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withBody(" + NEW_LINE +
+                "                                new ParameterBody(" + NEW_LINE +
+                "                                        new Parameter(\"requestBodyParameterNameOne\", \"requestBodyParameterValueOneOne\", \"requestBodyParameterValueOneTwo\")," + NEW_LINE +
+                "                                        new Parameter(\"requestBodyParameterNameTwo\", \"requestBodyParameterValueTwo\")" + NEW_LINE +
+                "                                )" + NEW_LINE +
+                "                        )," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .respond(" + NEW_LINE +
+                "                response()" + NEW_LINE +
+                "                        .withBody(\"responseBody\")" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithBinaryBodyResponseAsJava() {
+        // when
+        assertThat(
+            new ExpectationToJavaSerializer().serialize(1,
+                new Expectation(
+                    request()
+                        .withBody(
+                            new BinaryBody("request body".getBytes(UTF_8))
+                        ),
+                    once(),
+                    unlimited(),
+                    0)
+                    .thenRespond(
+                        response()
+                            .withBody("responseBody")
+                    )
+            )
+        , is(NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("request body".getBytes(UTF_8)) + "\"))," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .respond(" + NEW_LINE +
+                "                response()" + NEW_LINE +
+                "                        .withBody(\"responseBody\")" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithResponseClassCallbackAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -412,12 +386,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithResponseObjectCallbackAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -440,7 +409,16 @@ public class ExpectationToJavaSerializerTest {
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
-                "        /*NOT POSSIBLE TO GENERATE CODE FOR OBJECT CALLBACK*/;",
+                "        .respond(" + NEW_LINE +
+                "                callback()" + NEW_LINE +
+                "                        .withCallbackClass(\"some_class\")" + NEW_LINE +
+                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithResponseObjectCallbackAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -468,12 +446,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithForwardAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -496,13 +469,12 @@ public class ExpectationToJavaSerializerTest {
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
-                "        .forward(" + NEW_LINE +
-                "                forward()" + NEW_LINE +
-                "                        .withHost(\"some_host\")" + NEW_LINE +
-                "                        .withPort(9090)" + NEW_LINE +
-                "                        .withScheme(HttpForward.Scheme.HTTPS)" + NEW_LINE +
-                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
+                "        /*NOT POSSIBLE TO GENERATE CODE FOR OBJECT CALLBACK*/;"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithForwardAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -532,12 +504,142 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
+        , is(NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withMethod(\"GET\")" + NEW_LINE +
+                "                        .withPath(\"somePath\")" + NEW_LINE +
+                "                        .withHeaders(" + NEW_LINE +
+                "                                new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
+                "                                new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withCookies(" + NEW_LINE +
+                "                                new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
+                "                                new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withQueryStringParameters(" + NEW_LINE +
+                "                                new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
+                "                                new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withBody(new StringBody(\"somebody\"))," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .forward(" + NEW_LINE +
+                "                forward()" + NEW_LINE +
+                "                        .withHost(\"some_host\")" + NEW_LINE +
+                "                        .withPort(9090)" + NEW_LINE +
+                "                        .withScheme(HttpForward.Scheme.HTTPS)" + NEW_LINE +
+                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
+                "        );"));
     }
 
     @Test
     public void shouldSerializeFullObjectWithForwardOverriddenRequestAsJava() {
-        assertEquals(NEW_LINE +
+        assertThat(
+            new ExpectationToJavaSerializer().serialize(1,
+                new Expectation(
+                    request()
+                        .withMethod("GET")
+                        .withPath("somePath")
+                        .withQueryStringParameters(
+                            new Parameter("requestQueryStringParameterNameOne", "requestQueryStringParameterValueOneOne", "requestQueryStringParameterValueOneTwo"),
+                            new Parameter("requestQueryStringParameterNameTwo", "requestQueryStringParameterValueTwo")
+                        )
+                        .withHeaders(
+                            new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
+                            new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
+                        )
+                        .withCookies(
+                            new Cookie("requestCookieNameOne", "requestCookieValueOne"),
+                            new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
+                        )
+                        .withBody(new StringBody("somebody")),
+                    once(),
+                    unlimited(),
+                    0)
+                    .thenForward(
+                        forwardOverriddenRequest()
+                            .withRequestOverride(
+                                request()
+                                    .withMethod("GET")
+                                    .withPath("somePath")
+                                    .withQueryStringParameters(
+                                        new Parameter("requestQueryStringParameterNameOne", "requestQueryStringParameterValueOneOne", "requestQueryStringParameterValueOneTwo"),
+                                        new Parameter("requestQueryStringParameterNameTwo", "requestQueryStringParameterValueTwo")
+                                    )
+                                    .withHeaders(
+                                        new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
+                                        new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
+                                    )
+                                    .withCookies(
+                                        new Cookie("requestCookieNameOne", "requestCookieValueOne"),
+                                        new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
+                                    )
+                                    .withBody(new StringBody("somebody"))
+                            )
+                            .withRequestModifier(
+                                requestModifier()
+                                    .withPath("someRegex", "someSubstitution")
+                                    .withHeaders(
+                                        ImmutableList.of(
+                                            header("addNameOne", "addValueOne"),
+                                            header("addNameTwo", "addValueTwo")
+                                        ),
+                                        ImmutableList.of(header("replaceName", "replaceValue")),
+                                        ImmutableList.of("removeNameOne", "removeNameOne")
+                                    )
+                                    .withCookies(
+                                        ImmutableList.of(cookie("addName", "addValue")),
+                                        ImmutableList.of(
+                                            cookie("replaceNameOne", "replaceValueOne"),
+                                            cookie("replaceNameTwo", "replaceValueTwo")
+                                        ),
+                                        ImmutableList.of("removeName")
+                                    )
+                                    .withQueryStringParameters(
+                                        ImmutableList.of(
+                                            param("addNameOne", "addValueOne"),
+                                            param("addNameTwo", "addValueTwo")
+                                        ),
+                                        ImmutableList.of(
+                                            param("replaceNameOne", "replaceValueOne"),
+                                            param("replaceNameTwo", "replaceValueTwo")
+                                        ),
+                                        ImmutableList.of("removeNameOne", "removeNameTwo", "removeNameThree")
+                                    )
+                            )
+                            .withResponseOverride(
+                                response()
+                                    .withHeaders(
+                                        new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
+                                        new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
+                                    )
+                                    .withCookies(
+                                        new Cookie("requestCookieNameOne", "requestCookieValueOne"),
+                                        new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
+                                    )
+                                    .withBody(new StringBody("somebody"))
+                            )
+                            .withResponseModifier(
+                                responseModifier()
+                                    .withHeaders(
+                                        ImmutableList.of(header("addName", "addValue")),
+                                        ImmutableList.of(header("replaceName", "replaceValue")),
+                                        ImmutableList.of("removeName")
+                                    )
+                                    .withCookies(
+                                        ImmutableList.of(cookie("addName", "addValue")),
+                                        ImmutableList.of(cookie("replaceName", "replaceValue")),
+                                        ImmutableList.of("removeName")
+                                    )
+                            )
+                            .withDelay(TimeUnit.MILLISECONDS, 100)
+                    )
+            )
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -649,140 +751,12 @@ public class ExpectationToJavaSerializerTest {
                 "                                        )" + NEW_LINE +
                 "                        )" + NEW_LINE +
                 "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
-            new ExpectationToJavaSerializer().serialize(1,
-                new Expectation(
-                    request()
-                        .withMethod("GET")
-                        .withPath("somePath")
-                        .withQueryStringParameters(
-                            new Parameter("requestQueryStringParameterNameOne", "requestQueryStringParameterValueOneOne", "requestQueryStringParameterValueOneTwo"),
-                            new Parameter("requestQueryStringParameterNameTwo", "requestQueryStringParameterValueTwo")
-                        )
-                        .withHeaders(
-                            new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
-                            new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
-                        )
-                        .withCookies(
-                            new Cookie("requestCookieNameOne", "requestCookieValueOne"),
-                            new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
-                        )
-                        .withBody(new StringBody("somebody")),
-                    once(),
-                    unlimited(),
-                    0)
-                    .thenForward(
-                        forwardOverriddenRequest()
-                            .withRequestOverride(
-                                request()
-                                    .withMethod("GET")
-                                    .withPath("somePath")
-                                    .withQueryStringParameters(
-                                        new Parameter("requestQueryStringParameterNameOne", "requestQueryStringParameterValueOneOne", "requestQueryStringParameterValueOneTwo"),
-                                        new Parameter("requestQueryStringParameterNameTwo", "requestQueryStringParameterValueTwo")
-                                    )
-                                    .withHeaders(
-                                        new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
-                                        new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
-                                    )
-                                    .withCookies(
-                                        new Cookie("requestCookieNameOne", "requestCookieValueOne"),
-                                        new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
-                                    )
-                                    .withBody(new StringBody("somebody"))
-                            )
-                            .withRequestModifier(
-                                requestModifier()
-                                    .withPath("someRegex", "someSubstitution")
-                                    .withHeaders(
-                                        ImmutableList.of(
-                                            header("addNameOne", "addValueOne"),
-                                            header("addNameTwo", "addValueTwo")
-                                        ),
-                                        ImmutableList.of(header("replaceName", "replaceValue")),
-                                        ImmutableList.of("removeNameOne", "removeNameOne")
-                                    )
-                                    .withCookies(
-                                        ImmutableList.of(cookie("addName", "addValue")),
-                                        ImmutableList.of(
-                                            cookie("replaceNameOne", "replaceValueOne"),
-                                            cookie("replaceNameTwo", "replaceValueTwo")
-                                        ),
-                                        ImmutableList.of("removeName")
-                                    )
-                                    .withQueryStringParameters(
-                                        ImmutableList.of(
-                                            param("addNameOne", "addValueOne"),
-                                            param("addNameTwo", "addValueTwo")
-                                        ),
-                                        ImmutableList.of(
-                                            param("replaceNameOne", "replaceValueOne"),
-                                            param("replaceNameTwo", "replaceValueTwo")
-                                        ),
-                                        ImmutableList.of("removeNameOne", "removeNameTwo", "removeNameThree")
-                                    )
-                            )
-                            .withResponseOverride(
-                                response()
-                                    .withHeaders(
-                                        new Header("requestHeaderNameOne", "requestHeaderValueOneOne", "requestHeaderValueOneTwo"),
-                                        new Header("requestHeaderNameTwo", "requestHeaderValueTwo")
-                                    )
-                                    .withCookies(
-                                        new Cookie("requestCookieNameOne", "requestCookieValueOne"),
-                                        new Cookie("requestCookieNameTwo", "requestCookieValueTwo")
-                                    )
-                                    .withBody(new StringBody("somebody"))
-                            )
-                            .withResponseModifier(
-                                responseModifier()
-                                    .withHeaders(
-                                        ImmutableList.of(header("addName", "addValue")),
-                                        ImmutableList.of(header("replaceName", "replaceValue")),
-                                        ImmutableList.of("removeName")
-                                    )
-                                    .withCookies(
-                                        ImmutableList.of(cookie("addName", "addValue")),
-                                        ImmutableList.of(cookie("replaceName", "replaceValue")),
-                                        ImmutableList.of("removeName")
-                                    )
-                            )
-                            .withDelay(TimeUnit.MILLISECONDS, 100)
-                    )
-            )
-        );
+                "        );"));
     }
 
     @Test
     public void shouldSerializeFullObjectWithForwardTemplateAsJava() {
-        assertEquals(NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withMethod(\"GET\")" + NEW_LINE +
-                "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withHeaders(" + NEW_LINE +
-                "                                new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
-                "                                new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withCookies(" + NEW_LINE +
-                "                                new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
-                "                                new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withQueryStringParameters(" + NEW_LINE +
-                "                                new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
-                "                                new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                        .withBody(new StringBody(\"somebody\"))," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .forward(" + NEW_LINE +
-                "                template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
-                "                        .withTemplate(\"return { 'path': \\\"somePath\\\", 'body': JSON.stringify({name: 'value'}) };\")" + NEW_LINE +
-                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -810,12 +784,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithForwardClassCallbackAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -839,10 +808,15 @@ public class ExpectationToJavaSerializerTest {
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
                 "        .forward(" + NEW_LINE +
-                "                callback()" + NEW_LINE +
-                "                        .withCallbackClass(\"some_class\")" + NEW_LINE +
+                "                template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
+                "                        .withTemplate(\"return { 'path': \\\"somePath\\\", 'body': JSON.stringify({name: 'value'}) };\")" + NEW_LINE +
                 "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
-                "        );",
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithForwardClassCallbackAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -870,12 +844,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithForwardObjectCallbackAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -898,7 +867,16 @@ public class ExpectationToJavaSerializerTest {
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
-                "        /*NOT POSSIBLE TO GENERATE CODE FOR OBJECT CALLBACK*/;",
+                "        .forward(" + NEW_LINE +
+                "                callback()" + NEW_LINE +
+                "                        .withCallbackClass(\"some_class\")" + NEW_LINE +
+                "                        .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithForwardObjectCallbackAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -926,12 +904,7 @@ public class ExpectationToJavaSerializerTest {
                             .withDelay(TimeUnit.MILLISECONDS, 100)
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeFullObjectWithErrorAsJava() {
-        assertEquals(NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
@@ -954,12 +927,12 @@ public class ExpectationToJavaSerializerTest {
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
-                "        .error(" + NEW_LINE +
-                "                error()" + NEW_LINE +
-                "                        .withDelay(new Delay(TimeUnit.MINUTES, 1))" + NEW_LINE +
-                "                        .withDropConnection(true)" + NEW_LINE +
-                "                        .withResponseBytes(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("some_bytes".getBytes(UTF_8)) + "\"))" + NEW_LINE +
-                "        );",
+                "        /*NOT POSSIBLE TO GENERATE CODE FOR OBJECT CALLBACK*/;"));
+    }
+
+    @Test
+    public void shouldSerializeFullObjectWithErrorAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -988,26 +961,40 @@ public class ExpectationToJavaSerializerTest {
                             .withResponseBytes("some_bytes".getBytes(UTF_8))
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldEscapeJsonBodies() {
-        assertEquals("" + NEW_LINE +
+        , is(NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
+                "                        .withMethod(\"GET\")" + NEW_LINE +
                 "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withBody(new JsonBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\", JsonBodyMatchType.ONLY_MATCHING_FIELDS))," + NEW_LINE +
+                "                        .withHeaders(" + NEW_LINE +
+                "                                new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
+                "                                new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withCookies(" + NEW_LINE +
+                "                                new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
+                "                                new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withQueryStringParameters(" + NEW_LINE +
+                "                                new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
+                "                                new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                        .withBody(new StringBody(\"somebody\"))," + NEW_LINE +
                 "                Times.once()," + NEW_LINE +
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
                 "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withStatusCode(304)" + NEW_LINE +
-                "                        .withBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\")" + NEW_LINE +
-                "        );",
+                "        .error(" + NEW_LINE +
+                "                error()" + NEW_LINE +
+                "                        .withDelay(new Delay(TimeUnit.MINUTES, 1))" + NEW_LINE +
+                "                        .withDropConnection(true)" + NEW_LINE +
+                "                        .withResponseBytes(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("some_bytes".getBytes(UTF_8)) + "\"))" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldEscapeJsonBodies() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -1066,7 +1053,21 @@ public class ExpectationToJavaSerializerTest {
                                 "]")
                     )
             )
-        );
+        , is("" + NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withPath(\"somePath\")" + NEW_LINE +
+                "                        .withBody(new JsonBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\", JsonBodyMatchType.ONLY_MATCHING_FIELDS))," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .respond(" + NEW_LINE +
+                "                response()" + NEW_LINE +
+                "                        .withStatusCode(304)" + NEW_LINE +
+                "                        .withBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }," + StringEscapeUtils.escapeJava(NEW_LINE) + "    {" + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "    }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\")" + NEW_LINE +
+                "        );"));
     }
 
     @Test
@@ -1101,21 +1102,7 @@ public class ExpectationToJavaSerializerTest {
             "    }," + NEW_LINE +
             "    \"required\": [\"id\", \"name\", \"price\"]" + NEW_LINE +
             "}";
-        assertEquals("" + NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withBody(new JsonSchemaBody(\"" + StringEscapeUtils.escapeJava(jsonSchema) + "\"))," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withStatusCode(304)" + NEW_LINE +
-                "                        .withBody(\"responseBody\")" + NEW_LINE +
-                "        );",
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -1130,7 +1117,21 @@ public class ExpectationToJavaSerializerTest {
                             .withBody("responseBody")
                     )
             )
-        );
+        , is("" + NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withPath(\"somePath\")" + NEW_LINE +
+                "                        .withBody(new JsonSchemaBody(\"" + StringEscapeUtils.escapeJava(jsonSchema) + "\"))," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .respond(" + NEW_LINE +
+                "                response()" + NEW_LINE +
+                "                        .withStatusCode(304)" + NEW_LINE +
+                "                        .withBody(\"responseBody\")" + NEW_LINE +
+                "        );"));
     }
 
     @Test
@@ -1156,21 +1157,7 @@ public class ExpectationToJavaSerializerTest {
             "        </xs:complexType>" + NEW_LINE +
             "    </xs:element>" + NEW_LINE +
             "</xs:schema>";
-        assertEquals("" + NEW_LINE +
-                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
-                "        .when(" + NEW_LINE +
-                "                request()" + NEW_LINE +
-                "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withBody(new XmlSchemaBody(\"" + StringEscapeUtils.escapeJava(xmlSchema) + "\"))," + NEW_LINE +
-                "                Times.once()," + NEW_LINE +
-                "                TimeToLive.unlimited()," + NEW_LINE +
-                "                0" + NEW_LINE +
-                "        )" + NEW_LINE +
-                "        .respond(" + NEW_LINE +
-                "                response()" + NEW_LINE +
-                "                        .withStatusCode(304)" + NEW_LINE +
-                "                        .withBody(\"responseBody\")" + NEW_LINE +
-                "        );",
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -1185,17 +1172,12 @@ public class ExpectationToJavaSerializerTest {
                             .withBody("responseBody")
                     )
             )
-        );
-    }
-
-    @Test
-    public void shouldSerializeMinimalObjectAsJava() {
-        assertEquals(NEW_LINE +
+        , is("" + NEW_LINE +
                 "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
                 "        .when(" + NEW_LINE +
                 "                request()" + NEW_LINE +
                 "                        .withPath(\"somePath\")" + NEW_LINE +
-                "                        .withBody(new StringBody(\"responseBody\"))," + NEW_LINE +
+                "                        .withBody(new XmlSchemaBody(\"" + StringEscapeUtils.escapeJava(xmlSchema) + "\"))," + NEW_LINE +
                 "                Times.once()," + NEW_LINE +
                 "                TimeToLive.unlimited()," + NEW_LINE +
                 "                0" + NEW_LINE +
@@ -1203,8 +1185,13 @@ public class ExpectationToJavaSerializerTest {
                 "        .respond(" + NEW_LINE +
                 "                response()" + NEW_LINE +
                 "                        .withStatusCode(304)" + NEW_LINE +
-                "                        .withReasonPhrase(\"randomPhrase\")" + NEW_LINE +
-                "        );",
+                "                        .withBody(\"responseBody\")" + NEW_LINE +
+                "        );"));
+    }
+
+    @Test
+    public void shouldSerializeMinimalObjectAsJava() {
+        assertThat(
             new ExpectationToJavaSerializer().serialize(1,
                 new Expectation(
                     request()
@@ -1219,6 +1206,20 @@ public class ExpectationToJavaSerializerTest {
                             .withReasonPhrase("randomPhrase")
                     )
             )
-        );
+        , is(NEW_LINE +
+                "        new MockServerClient(\"localhost\", 1080)" + NEW_LINE +
+                "        .when(" + NEW_LINE +
+                "                request()" + NEW_LINE +
+                "                        .withPath(\"somePath\")" + NEW_LINE +
+                "                        .withBody(new StringBody(\"responseBody\"))," + NEW_LINE +
+                "                Times.once()," + NEW_LINE +
+                "                TimeToLive.unlimited()," + NEW_LINE +
+                "                0" + NEW_LINE +
+                "        )" + NEW_LINE +
+                "        .respond(" + NEW_LINE +
+                "                response()" + NEW_LINE +
+                "                        .withStatusCode(304)" + NEW_LINE +
+                "                        .withReasonPhrase(\"randomPhrase\")" + NEW_LINE +
+                "        );"));
     }
 }

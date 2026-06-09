@@ -8,11 +8,13 @@ import org.mockserver.serialization.model.ExpectationDTO;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.*;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpSseResponse.sseResponse;
 import static org.mockserver.model.JsonRpcBody.jsonRpc;
 import static org.mockserver.model.SseEvent.sseEvent;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
 
 public class ExpectationWithSseAndJsonRpcSerializationTest {
 
@@ -31,22 +33,22 @@ public class ExpectationWithSseAndJsonRpcSerializationTest {
         );
 
         String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(new ExpectationDTO(expectation));
-        assertNotNull(json);
-        assertTrue(json.contains("httpSseResponse"));
-        assertTrue(json.contains("message"));
+        assertThat(json, notNullValue());
+        assertThat(json.contains("httpSseResponse"), is(true));
+        assertThat(json.contains("message"), is(true));
 
         ExpectationDTO rebuiltDTO = objectMapper.readValue(json, ExpectationDTO.class);
         Expectation rebuilt = rebuiltDTO.buildObject();
 
-        assertNotNull(rebuilt.getHttpSseResponse());
-        assertEquals(Integer.valueOf(200), rebuilt.getHttpSseResponse().getStatusCode());
-        assertEquals(2, rebuilt.getHttpSseResponse().getEvents().size());
-        assertEquals("message", rebuilt.getHttpSseResponse().getEvents().get(0).getEvent());
-        assertEquals("{\"hello\": \"world\"}", rebuilt.getHttpSseResponse().getEvents().get(0).getData());
-        assertEquals("1", rebuilt.getHttpSseResponse().getEvents().get(0).getId());
-        assertEquals("update", rebuilt.getHttpSseResponse().getEvents().get(1).getEvent());
-        assertNotNull(rebuilt.getHttpSseResponse().getEvents().get(1).getDelay());
-        assertTrue(rebuilt.getHttpSseResponse().getCloseConnection());
+        assertThat(rebuilt.getHttpSseResponse(), notNullValue());
+        assertThat( rebuilt.getHttpSseResponse().getStatusCode(), is(Integer.valueOf(200)));
+        assertThat( rebuilt.getHttpSseResponse().getEvents().size(), is(2));
+        assertThat( rebuilt.getHttpSseResponse().getEvents().get(0).getEvent(), is("message"));
+        assertThat( rebuilt.getHttpSseResponse().getEvents().get(0).getData(), is("{\"hello\": \"world\"}"));
+        assertThat( rebuilt.getHttpSseResponse().getEvents().get(0).getId(), is("1"));
+        assertThat( rebuilt.getHttpSseResponse().getEvents().get(1).getEvent(), is("update"));
+        assertThat(rebuilt.getHttpSseResponse().getEvents().get(1).getDelay(), notNullValue());
+        assertThat(rebuilt.getHttpSseResponse().getCloseConnection(), is(true));
     }
 
     @Test
@@ -63,18 +65,18 @@ public class ExpectationWithSseAndJsonRpcSerializationTest {
         );
 
         String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(new ExpectationDTO(expectation));
-        assertNotNull(json);
-        assertTrue(json.contains("JSON_RPC"));
+        assertThat(json, notNullValue());
+        assertThat(json.contains("JSON_RPC"), is(true));
 
         ExpectationDTO rebuiltDTO = objectMapper.readValue(json, ExpectationDTO.class);
         Expectation rebuilt = rebuiltDTO.buildObject();
 
-        assertNotNull(rebuilt.getHttpRequest());
+        assertThat(rebuilt.getHttpRequest(), notNullValue());
         HttpRequest rebuiltRequest = (HttpRequest) rebuilt.getHttpRequest();
-        assertNotNull(rebuiltRequest.getBody());
-        assertEquals(Body.Type.JSON_RPC, rebuiltRequest.getBody().getType());
-        assertTrue(rebuiltRequest.getBody() instanceof JsonRpcBody);
-        assertEquals("tools/call", ((JsonRpcBody) rebuiltRequest.getBody()).getMethod());
+        assertThat(rebuiltRequest.getBody(), notNullValue());
+        assertThat( rebuiltRequest.getBody().getType(), is(Body.Type.JSON_RPC));
+        assertThat(rebuiltRequest.getBody() instanceof JsonRpcBody, is(true));
+        assertThat( ((JsonRpcBody) rebuiltRequest.getBody()).getMethod(), is("tools/call"));
     }
 
     @Test
@@ -90,15 +92,15 @@ public class ExpectationWithSseAndJsonRpcSerializationTest {
         );
 
         String json = objectMapper.writeValueAsString(new ExpectationDTO(expectation));
-        assertNotNull(json);
+        assertThat(json, notNullValue());
 
         ExpectationDTO rebuiltDTO = objectMapper.readValue(json, ExpectationDTO.class);
         Expectation rebuilt = rebuiltDTO.buildObject();
 
         HttpRequest rebuiltRequest = (HttpRequest) rebuilt.getHttpRequest();
         JsonRpcBody rebuiltBody = (JsonRpcBody) rebuiltRequest.getBody();
-        assertEquals("tools/call", rebuiltBody.getMethod());
-        assertNotNull(rebuiltBody.getParamsSchema());
+        assertThat( rebuiltBody.getMethod(), is("tools/call"));
+        assertThat(rebuiltBody.getParamsSchema(), notNullValue());
     }
 
     @Test
@@ -106,7 +108,7 @@ public class ExpectationWithSseAndJsonRpcSerializationTest {
         Expectation expectation = Expectation.when(request())
             .thenRespond(HttpResponse.response().withStatusCode(200))
             .thenRespondWithSse(sseResponse().withEvent(sseEvent().withData("test")));
-        assertNotNull(expectation.getHttpResponse());
-        assertNotNull(expectation.getHttpSseResponse());
+        assertThat(expectation.getHttpResponse(), notNullValue());
+        assertThat(expectation.getHttpSseResponse(), notNullValue());
     }
 }

@@ -20,3 +20,54 @@
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEnabled="true"</code></pre>
 </div>
+
+<button id="button_configuration_transparent_proxy_tproxy" class="accordion title"><strong>Transparent Proxy TPROXY Mode</strong></button>
+<div class="panel title">
+    <p>Resolve the original destination of intercepted connections using the Linux TPROXY mechanism instead of REDIRECT. When enabled, the original destination is read from the socket's local address (preserved by the TPROXY iptables target), allowing MockServer to forward to the real destination address rather than relying on the Host header.</p>
+    <p>Requires Linux, the epoll transport, the <span class="inline_code">CAP_NET_ADMIN</span> capability, and TPROXY iptables rules instead of REDIRECT.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.transparentProxyTproxy(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyTproxy=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TRANSPARENT_PROXY_TPROXY=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.transparentProxyTproxy=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyTproxy="true"</code></pre>
+</div>
+
+<button id="button_configuration_transparent_proxy_ebpf" class="accordion title"><strong>Transparent Proxy eBPF Original Destination Resolution</strong></button>
+<div class="panel title">
+    <p>Resolve the original destination of intercepted connections by reading from a pinned eBPF (BPF) hash map, populated by an external cgroup/connect4 BPF program and keyed by socket cookie. This is an alternative to TPROXY for recovering the real destination address.</p>
+    <p>Requires Linux, the <span class="inline_code">CAP_BPF</span> capability, a BTF-enabled kernel, and the external BPF program that populates the map (see <a href="#button_configuration_transparent_proxy_ebpf_map_path">transparentProxyEbpfMapPath</a>).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.transparentProxyEbpf(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEbpf=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TRANSPARENT_PROXY_EBPF=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.transparentProxyEbpf=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEbpf="true"</code></pre>
+</div>
+
+<button id="button_configuration_transparent_proxy_ebpf_map_path" class="accordion title"><strong>Transparent Proxy eBPF Map Path</strong></button>
+<div class="panel title">
+    <p>Path to the pinned BPF map used by the eBPF original destination resolver. The map must be a BPF hash map with a <span class="inline_code">u64</span> key (socket cookie) and a 6-byte value (4-byte IPv4 address + 2-byte port in network byte order).</p>
+    <p>Only used when <a href="#button_configuration_transparent_proxy_ebpf">transparentProxyEbpf</a> is enabled.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">/sys/fs/bpf/mockserver_orig_dst</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.transparentProxyEbpfMapPath(String path)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEbpfMapPath=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.transparentProxyEbpfMapPath=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.transparentProxyEbpfMapPath="/sys/fs/bpf/mockserver_orig_dst"</code></pre>
+</div>

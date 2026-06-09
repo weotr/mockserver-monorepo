@@ -10,9 +10,10 @@ import org.mockserver.serialization.Base64Converter;
 import java.util.concurrent.TimeUnit;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.BinaryBody.binary;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -23,20 +24,7 @@ public class HttpResponseToJavaSerializerTest {
 
     @Test
     public void shouldSerializeFullObjectWithResponseAsJava() {
-        assertEquals(NEW_LINE +
-                "        response()" + NEW_LINE +
-                "                .withStatusCode(304)" + NEW_LINE +
-                "                .withReasonPhrase(\"someReason\")" + NEW_LINE +
-                "                .withHeaders(" + NEW_LINE +
-                "                        new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
-                "                        new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withCookies(" + NEW_LINE +
-                "                        new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
-                "                        new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withBody(\"responseBody\")" + NEW_LINE +
-                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))",
+        assertThat(
             new HttpResponseToJavaSerializer().serialize(1,
                 new HttpResponse()
                     .withStatusCode(304)
@@ -52,28 +40,38 @@ public class HttpResponseToJavaSerializerTest {
                     .withBody("responseBody")
                     .withDelay(TimeUnit.MILLISECONDS, 100)
             )
-        );
+        , is(NEW_LINE +
+                "        response()" + NEW_LINE +
+                "                .withStatusCode(304)" + NEW_LINE +
+                "                .withReasonPhrase(\"someReason\")" + NEW_LINE +
+                "                .withHeaders(" + NEW_LINE +
+                "                        new Header(\"responseHeaderNameOne\", \"responseHeaderValueOneOne\", \"responseHeaderValueOneTwo\")," + NEW_LINE +
+                "                        new Header(\"responseHeaderNameTwo\", \"responseHeaderValueTwo\")" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withCookies(" + NEW_LINE +
+                "                        new Cookie(\"responseCookieNameOne\", \"responseCookieValueOne\")," + NEW_LINE +
+                "                        new Cookie(\"responseCookieNameTwo\", \"responseCookieValueTwo\")" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withBody(\"responseBody\")" + NEW_LINE +
+                "                .withDelay(new Delay(TimeUnit.MILLISECONDS, 100))"));
     }
 
     @Test
     public void shouldSerializeObjectWithBinaryBodyResponseAsJava() {
         // when
-        assertEquals(NEW_LINE +
-                "        response()" + NEW_LINE +
-                "                .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("responseBody".getBytes(UTF_8)) + "\"))",
+        assertThat(
             new HttpResponseToJavaSerializer().serialize(1,
                 new HttpResponse()
                     .withBody(binary("responseBody".getBytes(UTF_8)))
             )
-        );
+        , is(NEW_LINE +
+                "        response()" + NEW_LINE +
+                "                .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("responseBody".getBytes(UTF_8)) + "\"))"));
     }
 
     @Test
     public void shouldEscapeJSONBodies() {
-        assertEquals("" + NEW_LINE +
-                "        response()" + NEW_LINE +
-                "                .withStatusCode(304)" + NEW_LINE +
-                "                .withBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }," + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }," + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\")",
+        assertThat(
             new HttpResponseToJavaSerializer().serialize(1,
 
                 new HttpResponse()
@@ -102,20 +100,23 @@ public class HttpResponseToJavaSerializerTest {
                         "          }" + NEW_LINE +
                         "]")
             )
-        );
+        , is("" + NEW_LINE +
+                "        response()" + NEW_LINE +
+                "                .withStatusCode(304)" + NEW_LINE +
+                "                .withBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }," + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }," + StringEscapeUtils.escapeJava(NEW_LINE) + "          {" + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) + "              \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) + "          }" + StringEscapeUtils.escapeJava(NEW_LINE) + "]\")"));
     }
 
     @Test
     public void shouldSerializeMinimalObjectAsJava() {
-        assertEquals(NEW_LINE +
-                "        response()" + NEW_LINE +
-                "                .withStatusCode(304)" + NEW_LINE +
-                "                .withReasonPhrase(\"randomPhrase\")",
+        assertThat(
             new HttpResponseToJavaSerializer().serialize(1,
                 new HttpResponse()
                     .withStatusCode(304)
                     .withReasonPhrase("randomPhrase")
             )
-        );
+        , is(NEW_LINE +
+                "        response()" + NEW_LINE +
+                "                .withStatusCode(304)" + NEW_LINE +
+                "                .withReasonPhrase(\"randomPhrase\")"));
     }
 }

@@ -14,6 +14,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.llm.codec.CodecTestUtil.escapeForJson;
 import static org.mockserver.model.ToolUse.toolUse;
 
 /**
@@ -330,12 +331,5 @@ public class OpenAiResponsesCodecRoundTripTest {
         ParsedConversation parsed = codec.decode(request().withBody(body));
         assertThat(parsed.getMessages(), hasSize(1));
         assertThat(parsed.getMessages().get(0).getRole(), is(ParsedMessage.Role.USER));
-    }
-
-    private static String escapeForJson(String value) {
-        return value.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\t", "\\t");
     }
 }

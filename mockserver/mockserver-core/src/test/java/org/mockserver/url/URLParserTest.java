@@ -2,8 +2,6 @@ package org.mockserver.url;
 
 import org.junit.Test;
 
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 
@@ -15,14 +13,14 @@ public class URLParserTest {
     @Test
     public void shouldDetectPath() {
         // isn't path
-        assertTrue(URLParser.isFullUrl("http://www.mock-server.com/some/path"));
-        assertTrue(URLParser.isFullUrl("https://www.mock-server.com/some/path"));
-        assertTrue(URLParser.isFullUrl("https:////localhost/some/path"));
+        assertThat(URLParser.isFullUrl("http://www.mock-server.com/some/path"), is(true));
+        assertThat(URLParser.isFullUrl("https://www.mock-server.com/some/path"), is(true));
+        assertThat(URLParser.isFullUrl("https:////localhost/some/path"), is(true));
 
         // is path
-        assertFalse(URLParser.isFullUrl(null));
-        assertFalse(URLParser.isFullUrl("/some/path"));
-        assertFalse(URLParser.isFullUrl("some/path"));
+        assertThat(URLParser.isFullUrl(null), is(false));
+        assertThat(URLParser.isFullUrl("/some/path"), is(false));
+        assertThat(URLParser.isFullUrl("some/path"), is(false));
     }
 
     @Test

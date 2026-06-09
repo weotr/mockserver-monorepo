@@ -3,8 +3,8 @@ title: CRUD Data Store
 description: Auto-generate a fully functional REST CRUD API over an in-memory JSON data store using a single PUT /mockserver/crud request, with no expectations required.
 shortTitle: CRUD Data Store
 layout: page
-pageOrder: 9.6
-section: 'Mock Server'
+pageOrder: 2
+section: 'Data & State'
 subsection: true
 sitemap:
   priority: 0.7
@@ -192,3 +192,12 @@ curl -s -X PATCH http://localhost:1080/users/1 \
 
 # Delete
 curl -s -X DELETE http://localhost:1080/users/1</code></pre>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/file_storage.html">File Storage</a> &mdash; store and serve static files alongside the stateful data managed here</li>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; combine the data store with request matchers and response, forward, callback, and error actions</li>
+</ul>

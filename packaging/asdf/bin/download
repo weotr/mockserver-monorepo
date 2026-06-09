@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Downloads a specific version of MockServer CLI.
+# Called by asdf/mise with ASDF_INSTALL_VERSION and ASDF_DOWNLOAD_PATH set.
+#
+# TODO(cli-release): Replace placeholder binary names once the CLI's GitHub
+# Releases artifact naming is finalised.
+
+set -euo pipefail
+
+if [[ -z "${ASDF_INSTALL_VERSION:-}" ]]; then
+  echo "ASDF_INSTALL_VERSION is required" >&2
+  exit 1
+fi
+
+if [[ -z "${ASDF_DOWNLOAD_PATH:-}" ]]; then
+  echo "ASDF_DOWNLOAD_PATH is required" >&2
+  exit 1
+fi
+
+# Detect platform and architecture
+get_platform() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+
+  case "$os" in
+    linux)  os="linux" ;;
+    darwin) os="darwin" ;;
+    mingw*|msys*|cygwin*) os="windows" ;;
+    *) echo "Unsupported OS: $os" >&2; exit 1 ;;
+  esac
+
+  case "$arch" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
+  esac
+
+  echo "${os}-${arch}"
+}
+
+platform="$(get_platform)"
+version="$ASDF_INSTALL_VERSION"
+
+# TODO(cli-release): Confirm download URL pattern
+base_url="https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-${version}"
+
+# Windows binaries have .exe extension
+binary_name="mockserver-${platform}"
+if [[ "$platform" == windows-* ]]; then
+  binary_name="${binary_name}.exe"
+fi
+
+url="${base_url}/${binary_name}"
+
+echo "Downloading MockServer CLI ${version} for ${platform}..."
+mkdir -p "$ASDF_DOWNLOAD_PATH"
+
+# Download the binary
+if ! curl -fsSL -o "$ASDF_DOWNLOAD_PATH/mockserver" "$url"; then
+  echo "Failed to download MockServer CLI from: $url" >&2
+  echo "Check that version ${version} exists and has a binary for ${platform}" >&2
+  exit 1
+fi

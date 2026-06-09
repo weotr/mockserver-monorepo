@@ -1,0 +1,534 @@
+package org.mockserver.netty.mcp;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.mockserver.lifecycle.LifeCycle;
+import org.mockserver.logging.MockServerLogger;
+import org.mockserver.metrics.Metrics;
+import org.mockserver.mock.HttpState;
+import org.mockserver.serialization.ObjectMapperFactory;
+import org.mockserver.version.Version;
+
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Transport-neutral MCP (Model Context Protocol) JSON-RPC request processor.
+ * <p>
+ * This class contains all the MCP protocol logic (JSON-RPC parsing, session
+ * management, tool/resource dispatch, response construction) without any
+ * dependency on a specific transport (Netty HTTP/1.1, HTTP/2, or HTTP/3).
+ * <p>
+ * Both {@link McpStreamableHttpHandler} (TCP path) and the HTTP/3 MCP
+ * dispatch in {@code Http3MockServerHandler} delegate to this processor.
+ */
+public class McpRequestProcessor {
+
+    static final String MCP_PATH = "/mockserver/mcp";
+    private static final String PROTOCOL_VERSION = "2025-03-26";
+    private static final String SERVER_NAME = "MockServer";
+    private static final String SERVER_VERSION = Version.getVersion();
+
+    /**
+     * Sent in the 'initialize' result so an AI agent knows, up front, which MockServer tools to reach for.
+     */
+    private static final String SERVER_INSTRUCTIONS =
+        "MockServer is an HTTP(S) mock server and proxy for testing. Use these tools to mock APIs, " +
+            "debug failing requests, and verify implementations:\n" +
+            "- Mock APIs: 'create_expectation', 'create_expectation_from_openapi', and " +
+            "'create_expectations_from_recorded_traffic' (turn traffic already recorded via the proxy into mocks).\n" +
+            "- Debug a request that did not match: call 'explain_unmatched_requests' after a failed test run to see, " +
+            "for each request that hit the server, the closest expectations ranked by similarity with field-level " +
+            "diffs and a remediation hint — no need to reconstruct the request. 'debug_request_mismatch' does the " +
+            "same for a request you supply.\n" +
+            "- Verify an implementation: 'verify_request' / 'verify_request_sequence' check requests were made; " +
+            "'verify_traffic_against_openapi' checks recorded traffic conforms to an OpenAPI contract; " +
+            "'run_contract_test' sends spec-derived example requests to a running service and checks the responses; " +
+            "'run_resiliency_test' sends malformed and boundary-case requests and reports which inputs the service " +
+            "failed to handle gracefully.\n" +
+            "- Deterministic LLM testing: 'record_llm_fixtures' snapshots LLM/MCP traffic recorded through the proxy " +
+            "into a committable, secret-free fixture file; 'load_expectations_from_file' replays it.\n" +
+            "Readable resources expose live state: mockserver://expectations, mockserver://requests, " +
+            "mockserver://logs, mockserver://unmatched, mockserver://configuration.";
+
+    private final HttpState httpState;
+    private final LifeCycle server;
+    private final McpSessionManager sessionManager;
+    private final McpToolRegistry toolRegistry;
+    private final McpResourceRegistry resourceRegistry;
+    private final ObjectMapper objectMapper;
+
+    public McpRequestProcessor(HttpState httpState, LifeCycle server, McpSessionManager sessionManager) {
+        this.httpState = httpState;
+        this.server = server;
+        this.sessionManager = sessionManager;
+        this.toolRegistry = new McpToolRegistry(httpState, server);
+        this.resourceRegistry = new McpResourceRegistry(httpState);
+        this.objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
+    }
+
+    /**
+     * Returns the session manager used by this processor.
+     */
+    public McpSessionManager getSessionManager() {
+        return sessionManager;
+    }
+
+    /**
+     * Check if a path matches the MCP endpoint.
+     */
+    public static boolean isMcpPath(String path) {
+        return path != null && (
+            path.equals(MCP_PATH)
+                || path.startsWith(MCP_PATH + "?")
+                || path.startsWith(MCP_PATH + "/")
+        );
+    }
+
+    // ---- response types ----
+
+    /**
+     * Result of processing an MCP request. Transport handlers translate this
+     * into the appropriate wire format (HTTP/1.1, HTTP/3 frames, etc.).
+     */
+    public static class McpResult {
+        private final int statusCode;
+        private final byte[] body;
+        private final String sessionId;
+
+        public McpResult(int statusCode, byte[] body, String sessionId) {
+            this.statusCode = statusCode;
+            this.body = body;
+            this.sessionId = sessionId;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        /** JSON body bytes, or empty for no-body responses. */
+        public byte[] getBody() {
+            return body;
+        }
+
+        /** Non-null only for initialize responses. */
+        public String getSessionId() {
+            return sessionId;
+        }
+
+        public boolean hasBody() {
+            return body != null && body.length > 0;
+        }
+    }
+
+    // ---- HTTP method dispatch (transport-neutral) ----
+
+    /**
+     * Process an MCP POST request.
+     *
+     * @param requestBody the raw JSON body
+     * @param mcpSessionId the Mcp-Session-Id header value (may be null)
+     * @return the result to write back
+     */
+    public McpResult handlePost(String requestBody, String mcpSessionId) {
+        if (requestBody == null || requestBody.isEmpty()) {
+            return jsonResponse(400,
+                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Empty request body"), null);
+        }
+
+        try {
+            JsonNode jsonNode = objectMapper.readTree(requestBody);
+
+            if (jsonNode.isArray()) {
+                return handleBatchRequest(jsonNode, mcpSessionId);
+            } else if (jsonNode.isObject()) {
+                return handleSingleRequest(jsonNode, mcpSessionId);
+            } else {
+                return jsonResponse(400,
+                    JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Invalid JSON-RPC message"), null);
+            }
+        } catch (JsonProcessingException e) {
+            return jsonResponse(400,
+                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Parse error"), null);
+        }
+    }
+
+    /**
+     * Process an MCP DELETE request.
+     *
+     * @param mcpSessionId the Mcp-Session-Id header value
+     * @return the result to write back
+     */
+    public McpResult handleDelete(String mcpSessionId) {
+        if (mcpSessionId == null || sessionManager.removeSession(mcpSessionId) == null) {
+            return emptyResponse(404);
+        }
+        return emptyResponse(200);
+    }
+
+    /**
+     * Process an MCP GET request (currently not supported -- returns 405).
+     *
+     * @return the result to write back
+     */
+    public McpResult handleGet() {
+        return emptyResponse(405);
+    }
+
+    /**
+     * Process an MCP OPTIONS request (CORS preflight or method-not-allowed).
+     *
+     * @param hasOrigin whether the request has an Origin header
+     * @return the result to write back
+     */
+    public McpResult handleOptions(boolean hasOrigin) {
+        if (hasOrigin) {
+            return emptyResponse(200);
+        }
+        return jsonResponse(405,
+            JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Method not allowed"), null);
+    }
+
+    // ---- private request handling ----
+
+    private boolean isSessionValid(String mcpSessionId, String method) {
+        if ("initialize".equals(method)) {
+            return true;
+        }
+        if (!sessionManager.isValidSession(mcpSessionId)) {
+            return false;
+        }
+        if ("notifications/initialized".equals(method)) {
+            return true;
+        }
+        McpSession session = sessionManager.getSession(mcpSessionId);
+        return session != null && session.isInitialized();
+    }
+
+    private McpResult handleBatchRequest(JsonNode batchNode, String mcpSessionId) {
+        if (batchNode.size() == 0) {
+            return jsonResponse(400,
+                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid Request: batch must not be empty"), null);
+        }
+
+        ArrayNode responses = objectMapper.createArrayNode();
+        boolean allNotifications = true;
+
+        for (JsonNode element : batchNode) {
+            JsonRpcMessage.JsonRpcRequest rpcRequest = parseJsonRpcRequest(element);
+            if (rpcRequest == null) {
+                responses.add(objectMapper.valueToTree(
+                    JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid JSON-RPC request")));
+                allNotifications = false;
+                continue;
+            }
+
+            if ("initialize".equals(rpcRequest.getMethod())) {
+                responses.add(objectMapper.valueToTree(
+                    JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
+                        "The 'initialize' method must be sent as a single request, not inside a batch.")));
+                allNotifications = false;
+                continue;
+            }
+
+            if (rpcRequest.isNotification()) {
+                boolean sessionValid = mcpSessionId != null && sessionManager.isValidSession(mcpSessionId);
+                if ("notifications/initialized".equals(rpcRequest.getMethod())) {
+                    if (sessionValid) {
+                        processNotification(rpcRequest, mcpSessionId);
+                    }
+                } else {
+                    if (sessionValid) {
+                        McpSession session = sessionManager.getSession(mcpSessionId);
+                        if (session != null && session.isInitialized()) {
+                            processNotification(rpcRequest, mcpSessionId);
+                        }
+                    }
+                }
+            } else {
+                allNotifications = false;
+                if (!isSessionValid(mcpSessionId, rpcRequest.getMethod())) {
+                    responses.add(objectMapper.valueToTree(
+                        JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
+                            "Missing or invalid Mcp-Session-Id header. Call 'initialize' first.")));
+                    continue;
+                }
+                JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest);
+                responses.add(objectMapper.valueToTree(response));
+            }
+        }
+
+        if (allNotifications) {
+            return emptyResponse(202);
+        }
+        return rawJsonResponse(200, responses, null);
+    }
+
+    private McpResult handleSingleRequest(JsonNode jsonNode, String mcpSessionId) {
+        JsonRpcMessage.JsonRpcRequest rpcRequest = parseJsonRpcRequest(jsonNode);
+        if (rpcRequest == null) {
+            return jsonResponse(400,
+                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid JSON-RPC request"), null);
+        }
+
+        if (rpcRequest.isNotification()) {
+            if ("notifications/initialized".equals(rpcRequest.getMethod())) {
+                if (mcpSessionId == null || !sessionManager.isValidSession(mcpSessionId)) {
+                    return emptyResponse(400);
+                }
+            } else {
+                if (mcpSessionId == null || !sessionManager.isValidSession(mcpSessionId)) {
+                    return emptyResponse(400);
+                }
+                McpSession session = sessionManager.getSession(mcpSessionId);
+                if (session == null || !session.isInitialized()) {
+                    return emptyResponse(400);
+                }
+            }
+            processNotification(rpcRequest, mcpSessionId);
+            return emptyResponse(202);
+        }
+
+        if ("initialize".equals(rpcRequest.getMethod())) {
+            InitializeResult initResult = handleInitialize(rpcRequest);
+            return jsonResponse(200, initResult.response, initResult.sessionId);
+        }
+
+        if (!isSessionValid(mcpSessionId, rpcRequest.getMethod())) {
+            return jsonResponse(200,
+                JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
+                    "Missing or invalid Mcp-Session-Id header. Call 'initialize' first."), null);
+        }
+
+        JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest);
+        return jsonResponse(200, response, null);
+    }
+
+    private JsonRpcMessage.JsonRpcRequest parseJsonRpcRequest(JsonNode node) {
+        try {
+            JsonRpcMessage.JsonRpcRequest request = objectMapper.treeToValue(node, JsonRpcMessage.JsonRpcRequest.class);
+            if (request == null) {
+                return null;
+            }
+            request.setIdPresent(node.has("id"));
+            if (!"2.0".equals(request.getJsonrpc())) {
+                return null;
+            }
+            if (request.getMethod() == null || request.getMethod().isEmpty()) {
+                return null;
+            }
+            Object id = request.getId();
+            if (id != null && !(id instanceof String) && !(id instanceof Integer) && !(id instanceof Long)) {
+                return null;
+            }
+            return request;
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private void processNotification(JsonRpcMessage.JsonRpcRequest rpcRequest, String mcpSessionId) {
+        if ("notifications/initialized".equals(rpcRequest.getMethod())) {
+            if (mcpSessionId != null) {
+                McpSession session = sessionManager.getSession(mcpSessionId);
+                if (session != null) {
+                    session.markInitialized();
+                }
+            }
+        }
+    }
+
+    private JsonRpcMessage.JsonRpcResponse processRequest(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        String method = rpcRequest.getMethod();
+        if (method == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST, "Missing method");
+        }
+
+        switch (method) {
+            case "initialize":
+                return handleInitialize(rpcRequest).response;
+            case "tools/list":
+                return handleToolsList(rpcRequest);
+            case "tools/call":
+                return handleToolsCall(rpcRequest);
+            case "resources/list":
+                return handleResourcesList(rpcRequest);
+            case "resources/read":
+                return handleResourcesRead(rpcRequest);
+            case "ping":
+                return handlePing(rpcRequest);
+            default:
+                return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.METHOD_NOT_FOUND,
+                    "Method not found: " + method);
+        }
+    }
+
+    static class InitializeResult {
+        final JsonRpcMessage.JsonRpcResponse response;
+        final String sessionId;
+
+        InitializeResult(JsonRpcMessage.JsonRpcResponse response, String sessionId) {
+            this.response = response;
+            this.sessionId = sessionId;
+        }
+    }
+
+    private InitializeResult handleInitialize(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        McpSession session = sessionManager.createSession();
+        String sessionId = session.getSessionId();
+
+        ObjectNode result = objectMapper.createObjectNode();
+        result.put("protocolVersion", PROTOCOL_VERSION);
+
+        ObjectNode capabilities = result.putObject("capabilities");
+        ObjectNode toolsCap = capabilities.putObject("tools");
+        toolsCap.put("listChanged", false);
+        ObjectNode resourcesCap = capabilities.putObject("resources");
+        resourcesCap.put("subscribe", false);
+        resourcesCap.put("listChanged", false);
+
+        ObjectNode serverInfo = result.putObject("serverInfo");
+        serverInfo.put("name", SERVER_NAME);
+        serverInfo.put("version", SERVER_VERSION);
+
+        result.put("instructions", SERVER_INSTRUCTIONS);
+
+        return new InitializeResult(JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result), sessionId);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handleToolsList(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode toolsArray = result.putArray("tools");
+
+        for (McpToolRegistry.ToolDefinition tool : toolRegistry.getTools().values()) {
+            ObjectNode toolNode = objectMapper.createObjectNode();
+            toolNode.put("name", tool.getName());
+            toolNode.put("description", tool.getDescription());
+            toolNode.set("inputSchema", tool.getInputSchema());
+            toolsArray.add(toolNode);
+        }
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handleToolsCall(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        JsonNode params = rpcRequest.getParams();
+        if (params == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
+        }
+
+        String toolName = params.path("name").asText(null);
+        if (toolName == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing tool name");
+        }
+
+        if (!toolRegistry.getTools().containsKey(toolName)) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.METHOD_NOT_FOUND,
+                "Unknown tool: " + toolName);
+        }
+
+        JsonNode arguments = params.path("arguments");
+        JsonNode toolResult = toolRegistry.callTool(toolName, arguments.isMissingNode() ? null : arguments);
+        Metrics.incrementMcpToolCall(toolName);
+
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode content = result.putArray("content");
+        ObjectNode textContent = objectMapper.createObjectNode();
+        textContent.put("type", "text");
+        try {
+            textContent.put("text", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(toolResult));
+        } catch (JsonProcessingException e) {
+            textContent.put("text", toolResult.toString());
+        }
+        content.add(textContent);
+
+        boolean isError = toolResult != null && toolResult.has("error") && toolResult.path("error").asBoolean(false);
+        result.put("isError", isError);
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handleResourcesList(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode resourcesArray = result.putArray("resources");
+
+        for (McpResourceRegistry.ResourceDefinition resource : resourceRegistry.getResources().values()) {
+            ObjectNode resourceNode = objectMapper.createObjectNode();
+            resourceNode.put("uri", resource.getUri());
+            resourceNode.put("name", resource.getName());
+            resourceNode.put("description", resource.getDescription());
+            resourceNode.put("mimeType", resource.getMimeType());
+            resourcesArray.add(resourceNode);
+        }
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handleResourcesRead(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        JsonNode params = rpcRequest.getParams();
+        if (params == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
+        }
+
+        String uri = params.path("uri").asText(null);
+        if (uri == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing resource URI");
+        }
+
+        if (!resourceRegistry.getResources().containsKey(uri)) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS,
+                "Unknown resource: " + uri);
+        }
+
+        McpResourceRegistry.ResourceDefinition resourceDef = resourceRegistry.getResources().get(uri);
+        JsonNode resourceContent = resourceRegistry.readResource(uri);
+
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode contents = result.putArray("contents");
+        ObjectNode contentEntry = objectMapper.createObjectNode();
+        contentEntry.put("uri", uri);
+        contentEntry.put("mimeType", resourceDef.getMimeType());
+
+        try {
+            contentEntry.put("text", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resourceContent));
+        } catch (JsonProcessingException e) {
+            contentEntry.put("text", resourceContent.toString());
+        }
+
+        contents.add(contentEntry);
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handlePing(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), objectMapper.createObjectNode());
+    }
+
+    // ---- response construction helpers ----
+
+    private McpResult jsonResponse(int statusCode, JsonRpcMessage.JsonRpcResponse rpcResponse, String sessionId) {
+        try {
+            byte[] jsonBytes = objectMapper.writeValueAsBytes(rpcResponse);
+            return new McpResult(statusCode, jsonBytes, sessionId);
+        } catch (JsonProcessingException e) {
+            byte[] fallback = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal error\"},\"id\":null}".getBytes(StandardCharsets.UTF_8);
+            return new McpResult(statusCode, fallback, sessionId);
+        }
+    }
+
+    private McpResult rawJsonResponse(int statusCode, JsonNode jsonNode, String sessionId) {
+        try {
+            byte[] jsonBytes = objectMapper.writeValueAsBytes(jsonNode);
+            return new McpResult(statusCode, jsonBytes, sessionId);
+        } catch (JsonProcessingException e) {
+            byte[] fallback = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal error\"},\"id\":null}".getBytes(StandardCharsets.UTF_8);
+            return new McpResult(statusCode, fallback, sessionId);
+        }
+    }
+
+    private McpResult emptyResponse(int statusCode) {
+        return new McpResult(statusCode, new byte[0], null);
+    }
+}

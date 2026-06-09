@@ -602,7 +602,7 @@ new MockServerClient("localhost", 1080)
             <li><strong>use for:</strong> method, path, path parameter keys, path parameters values, query parameter keys, query parameters values, header keys, header values, cookie keys, cookie values or bodies</li>
             <li><strong>examples:</strong> <a href="#button_match_request_by_method_regex">method</a>, <a href="#button_match_request_by_regex_path">path</a>, <a href="#button_match_request_by_path_parameter_regex_value">path parameters</a>, <a
                     href="#button_match_request_by_query_parameter_name_regex">query parameters</a>, <a href="#button_match_request_by_header_name_regex">headers</a></li>
-            <li>for syntax see <a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html" rel="noopener noreferrer">Java regex syntax</a></li>
+            <li>for syntax see <a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/regex/Pattern.html" rel="noopener noreferrer">Java regex syntax</a></li>
         </ul>
     </li>
     <li><strong>json schema</strong>
@@ -693,7 +693,7 @@ new MockServerClient("localhost", 1080)
 
 <ul>
     <li><strong><a href="#button_match_request_by_body_in_utf16">plain text</a></strong> (i.e. exact match)</li>
-    <li><strong><a href="#button_match_request_by_regex_body">regular expression</a></strong> - see <a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html" rel="noopener noreferrer">Java regex syntax</a></li>
+    <li><strong><a href="#button_match_request_by_regex_body">regular expression</a></strong> - see <a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/regex/Pattern.html" rel="noopener noreferrer">Java regex syntax</a></li>
     <li><strong><a href="#button_match_request_by_body_with_json_exactly">JSON</a></strong> - supports:
         <ul>
             <li><strong>matchType</strong> to control which fields get matched:
@@ -941,7 +941,7 @@ new MockServerClient("localhost", 1080)
 
 <p>MockServer creates a set of <strong><a href="#request_properties_matchers">request properties matchers</a></strong> for each <strong>open api request matcher</strong>, to ensures control-plane logic such as <a
         href="/mock_server/clearing_and_resetting.html">clearing expectations</a> or <a href="/mock_server/debugging_issues.html">retrieving expectations</a> work consistently between the two types of request matchers, this can be viewed in
-    the <a href="/mock_server/mockserver_ui.html">MockServer UI</a> <a href="/mock_server/mockserver_ui.html#active_expectations">active expectations</a> section.</p>
+    the <a href="/mock_server/mockserver_ui.html">MockServer UI</a> <a href="/mock_server/mockserver_ui.html#ui_active_expectations_section">active expectations</a> section.</p>
 
 <button id="button_match_by_openapi" class="accordion title"><strong>OpenAPI Request Matcher Code Examples</strong></button>
 <div class="panel title">
@@ -1341,7 +1341,7 @@ llmMock("/v1/messages")
 
 <p>In this example, MockServer sends <span class="inline_code">{"type": "connected"}</span> immediately after the WebSocket upgrade. If the client then sends a frame containing <span class="inline_code">ping</span>, MockServer replies with <span class="inline_code">{"type": "pong"}</span>. A frame containing <span class="inline_code">subscribe</span> triggers a two-message reply sequence. Frames that match no entry are silently ignored.</p>
 
-<p>Bidirectional WebSocket expectations are also autherable in the dashboard Composer — select <strong>WebSocket response</strong> as the action type and use the <strong>Bidirectional frame matchers</strong> panel to add entries.</p>
+<p>Bidirectional WebSocket expectations are also authorable in the dashboard Composer — select <strong>WebSocket response</strong> as the action type and use the <strong>Bidirectional frame matchers</strong> panel to add entries.</p>
 
 <a id="crud_simulation" class="anchor" href="#crud_simulation">&nbsp;</a>
 

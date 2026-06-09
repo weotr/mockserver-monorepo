@@ -14,7 +14,6 @@ import org.mockserver.uuid.UUIDService;
 import java.util.ArrayList;
 import java.util.UUID;
 
-import static junit.framework.TestCase.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
@@ -30,6 +29,7 @@ import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.model.XmlBody.xml;
 import static org.slf4j.event.Level.ERROR;
 import static org.slf4j.event.Level.WARN;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -106,14 +106,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("GET")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -134,14 +134,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("GET")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
-        ));
+        ), is(false));
     }
 
     // PATH
@@ -163,14 +163,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/someOtherPath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -191,14 +191,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/someOtherPath")
-        ));
+        ), is(false));
     }
 
     // PARAMETERS
@@ -207,7 +207,6 @@ public class HttpRequestsPropertiesMatcherTest {
     public void shouldThrowExceptionForAllowReserved() {
         // given
         HttpRequestsPropertiesMatcher httpRequestsPropertiesMatcher = new HttpRequestsPropertiesMatcher(configuration, mockServerLogger);
-
 
         // when
         ArrayList<LogEntry> logEntries = new ArrayList<>();
@@ -266,22 +265,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -315,26 +314,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1/ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0/ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -368,22 +367,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0/ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -411,22 +410,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -453,26 +452,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - required: false not supported for pathParameters
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -500,26 +499,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - allowEmptyValue not supported for pathParameters
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -548,30 +547,30 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3,4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -600,30 +599,30 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3,4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -652,30 +651,30 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3,4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.0,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.a,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -704,30 +703,30 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1.2.3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1.2.3.4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.0.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.a.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -756,34 +755,34 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1,2,3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1,2,3,4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someOtherParam=1,2,3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=0,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=a,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -812,34 +811,34 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1;someParam=2;someParam=3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=1;someParam=2;someParam=3;someParam=4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someOtherParam=1;someOtherParam=2;someOtherParam=3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=0;someParam=1;someParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/;someParam=a;someParam=1;someParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -876,62 +875,62 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3/.1.2.3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1/.1.2.3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3/.1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1/.1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3/.1.2.3.4")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3,4/.1.2.3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3,4/.1.2.3.4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3/.0.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0,1,2/.1.2.3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/0,1,2/.0.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/1,2,3/.a.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a,1,2/.1.2.3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/a,1,2/.a.1.2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -968,46 +967,46 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3/;someMatrixParam=1;someMatrixParam=2;someMatrixParam=3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1/;someMatrixParam=1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3,4/;someMatrixParam=1;someMatrixParam=2;someMatrixParam=3;someMatrixParam=4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3/;someMatrixParam=0;someMatrixParam=1;someMatrixParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.0,1,2/;someMatrixParam=1;someMatrixParam=2;someMatrixParam=3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.0,1,2/;someMatrixParam=0;someMatrixParam=1;someMatrixParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.1,2,3/;someMatrixParam=a;someMatrixParam=1;someMatrixParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.a,1,2/;someMatrixParam=1;someMatrixParam=2;someMatrixParam=3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath/.a,1,2/;someMatrixParam=a;someMatrixParam=1;someMatrixParam=2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     // QUERY STRING PARAMETERS
@@ -1036,18 +1035,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1075,18 +1074,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1113,22 +1112,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1154,22 +1153,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1197,22 +1196,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1240,26 +1239,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1300,25 +1299,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
                 .withQueryStringParameter("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1345,18 +1344,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1402,25 +1401,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "10")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "5")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "10")
                 .withQueryStringParameter("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1472,25 +1471,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "100")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "50")
                 .withQueryStringParameter("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someParam", "100")
                 .withQueryStringParameter("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1519,35 +1518,35 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1,2,3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1,2,3,4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a,1,2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1576,35 +1575,35 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3", "4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1633,75 +1632,75 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1%202%203")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1 2 3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1+2+3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1%202%203%204")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1 2 3 4")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1+2+3+4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0%201%202")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0 1 2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0+1+2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a%202%203")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a 2 3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a+2+3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1730,35 +1729,35 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3", "4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1787,35 +1786,35 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1|2|3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1|2|3|4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1844,35 +1843,35 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "1", "2", "3", "4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "0", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someParam", "a", "1", "2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -1909,64 +1908,64 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "1", "2", "3")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1|2|3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "1")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "1", "2", "3", "4")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1|2|3|4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "0", "1", "2")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1|2|3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "1", "2", "3")
                 .withQueryStringParameter("someSpaceDelimitedParam", "0|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "0", "1", "2")
                 .withQueryStringParameter("someSpaceDelimitedParam", "0|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "a", "1", "2")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1|2|3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "1", "2", "3")
                 .withQueryStringParameter("someSpaceDelimitedParam", "a|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someFormParam", "a", "1", "2")
                 .withQueryStringParameter("someSpaceDelimitedParam", "a|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2003,70 +2002,70 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1%202%203")
                 .withQueryStringParameter("somePipeDelimitedParam", "1|2|3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1 2 3")
                 .withQueryStringParameter("somePipeDelimitedParam", "1|2|3")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1")
                 .withQueryStringParameter("somePipeDelimitedParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1+2+3+4")
                 .withQueryStringParameter("somePipeDelimitedParam", "1|2|3|4")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "0+1+2")
                 .withQueryStringParameter("somePipeDelimitedParam", "1|2|3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1+2+3")
                 .withQueryStringParameter("somePipeDelimitedParam", "0|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "0+1+2")
                 .withQueryStringParameter("somePipeDelimitedParam", "0|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "a%201%202")
                 .withQueryStringParameter("somePipeDelimitedParam", "1|2|3")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "1%202%203")
                 .withQueryStringParameter("somePipeDelimitedParam", "a|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withQueryStringParameter("someSpaceDelimitedParam", "a%201%202")
                 .withQueryStringParameter("somePipeDelimitedParam", "a|1|2")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     // HEADERS
@@ -2095,18 +2094,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2134,18 +2133,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2172,22 +2171,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2213,22 +2212,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2256,22 +2255,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - allowEmptyValue not supported for header
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2312,25 +2311,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
                 .withHeader("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
                 .withHeader("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
                 .withHeader("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2357,18 +2356,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2420,25 +2419,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "100")
                 .withHeader("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "50")
                 .withHeader("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someParam", "100")
                 .withHeader("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     // COOKIES
@@ -2467,18 +2466,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2506,18 +2505,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2544,22 +2543,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2585,22 +2584,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2628,22 +2627,22 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - allowEmptyValue not supported for cookie
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2670,18 +2669,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2722,25 +2721,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
                 .withCookie("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "0")
                 .withCookie("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "1")
                 .withCookie("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -2792,25 +2791,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "100")
                 .withCookie("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "50")
                 .withCookie("someOtherParam", "ab")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someParam", "100")
                 .withCookie("someOtherParam", "a")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("someOtherParam", "1")
-        ));
+        ), is(false));
     }
 
     // BODY
@@ -2897,36 +2896,36 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - should match correct path and method
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             null,
             request()
                 .withMethod("POST")
                 .withPath("/somePath")
-        ));
+        ), is(true));
 
         // then - should NOT match wrong path and wrong method
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             null,
             request()
                 .withMethod("GET")
                 .withPath("/idontexist")
-        ));
+        ), is(false));
 
         // then - should NOT match wrong path with correct method
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             null,
             request()
                 .withMethod("POST")
                 .withPath("/idontexist")
-        ));
+        ), is(false));
 
         // then - should NOT match wrong method with correct path
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             null,
             request()
                 .withMethod("GET")
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     // - JSON BODY (via JsonSchema)
@@ -2975,26 +2974,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json; charset=utf-8")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3041,21 +3040,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3102,21 +3101,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3158,21 +3157,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3217,21 +3216,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/json")
                 .withBody(json("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     // - PLAIN TEXT BODY (via JsonSchema)
@@ -3280,26 +3279,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text; charset=utf-8")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3346,39 +3345,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text; charset=utf-8")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3424,39 +3423,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text; charset=utf-8")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3503,21 +3502,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3564,18 +3563,18 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3617,21 +3616,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3676,21 +3675,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": \"abc\" }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": 1, \"name\": 1 }"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "plain/text")
                 .withBody(exact("{ \"id\": \"abc\", \"name\": \"abc\" }"))
-        ));
+        ), is(false));
     }
 
     // - XML BODY (via JsonSchema)
@@ -3742,26 +3741,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml; charset=utf-8")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>1</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>abc</id><name>1</name></root>"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3811,39 +3810,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml; charset=utf-8")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>1</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>abc</id><name>1</name></root>"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3892,39 +3891,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml; charset=utf-8")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>1</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>abc</id><name>1</name></root>"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -3966,21 +3965,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>1</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>abc</id><name>1</name></root>"))
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4025,21 +4024,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>abc</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>1</id><name>1</name></root>"))
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/xml")
                 .withBody(xml("<root><id>abc</id><name>1</name></root>"))
-        ));
+        ), is(false));
     }
 
     // - FORM BODY (via JsonSchema)
@@ -4079,26 +4078,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=abc")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
                 .withBody("id=1&name=abc")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=abc&name=1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4143,26 +4142,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1,2,3&name=abc&name=def")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
                 .withBody("id=1,2,3&name=abc&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1,2,3&name=1&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=a,2,3&name=abc&name=def")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4207,51 +4206,51 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1%202%203&name=abc&name=def")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1+2+3&name=abc&name=def")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1 2 3&name=abc&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1%202%203&name=1&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1+2+3&name=1&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1 2 3&name=1&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=a%202%203&name=abc&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=a+2+3&name=abc&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=a 2 3&name=abc&name=def")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4296,26 +4295,26 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1|2|3&name=abc&name=def")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
                 .withBody("id=1|2|3&name=abc&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1|2|3&name=1&name=def")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=a|2|3&name=abc&name=def")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4353,39 +4352,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=abc")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
                 .withBody("id=1&name=abc")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=abc&name=1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4422,39 +4421,39 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=abc")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
                 .withBody("id=1&name=abc")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=abc&name=1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4497,21 +4496,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=abc")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=abc&name=1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4556,21 +4555,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=abc")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=1&name=1")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("content-type", "application/x-www-form-urlencoded")
                 .withBody("id=abc&name=1")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4621,21 +4620,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4663,21 +4662,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4706,17 +4705,17 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4746,13 +4745,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4789,13 +4788,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4827,25 +4826,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4882,33 +4881,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -4945,33 +4944,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5009,25 +5008,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - only operation-level ApiKeyAuth should be accepted, not global BasicAuth/BearerAuth
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     // QUERY STRING PARAMETER (SECURITY SCHEMES)
@@ -5058,21 +5057,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5101,21 +5100,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5144,17 +5143,17 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5185,13 +5184,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5229,13 +5228,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5269,25 +5268,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5326,33 +5325,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "wrong_scheme " + UUIDService.getUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5391,33 +5390,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic " + UUIDService.getUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5457,25 +5456,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - only operation-level ApiKeyAuth should be accepted, not global BasicAuth/BearerAuth
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     // COOKIE (SECURITY SCHEMES)
@@ -5506,21 +5505,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5549,21 +5548,21 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5592,17 +5591,17 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5633,13 +5632,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5677,13 +5676,13 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5717,25 +5716,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5774,33 +5773,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5839,33 +5838,33 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     @Test
@@ -5905,25 +5904,25 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - only operation-level ApiKeyAuth should be accepted, not global BasicAuth/BearerAuth
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", UUID.randomUUID().toString())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("X-API-Key", "")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
+        ), is(false));
     }
 
     // EMPTY SECURITY LIST (OPERATION DISABLES GLOBAL SECURITY — issue #1315)
@@ -5959,17 +5958,17 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - /login with security: [] should NOT require Authorization header
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
                 .withPath("/login")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
                 .withPath("/login")
                 .withHeader("Authorization", "Bearer token123")
-        ));
+        ), is(true));
     }
 
     @Test
@@ -6003,17 +6002,17 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - /logout should require Authorization header from global security
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
                 .withPath("/logout")
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withMethod("POST")
                 .withPath("/logout")
                 .withHeader("Authorization", "Bearer token123")
-        ));
+        ), is(true));
     }
 
     // HEADER & QUERY STRING PARAMETER & COOKIE (SECURITY SCHEMES)
@@ -6053,47 +6052,47 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", UUID.randomUUID().toString())
-        ));
+        ), is(true));
         // TODO(limitation): if multiple security requirements in different parameters types and missing
         //                   from all request will still match as each parameter is an optional match
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "bearer " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withHeader("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "bearer")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "basic " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withCookie("Authorization", "wrong_scheme " + UUID.randomUUID())
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(false));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withQueryStringParameter("X-API-Key", "")
-        ));
+        ), is(false));
     }
 
     // OTHER TESTS
@@ -6993,14 +6992,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/api/v1/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -7021,14 +7020,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/api/v2/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/somePath")
-        ));
+        ), is(false));
     }
 
     @Test
@@ -7050,14 +7049,14 @@ public class HttpRequestsPropertiesMatcherTest {
         ));
 
         // then - per-definition prefix overrides global
-        assertTrue(httpRequestsPropertiesMatcher.matches(
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/api/v2/somePath")
-        ));
-        assertFalse(httpRequestsPropertiesMatcher.matches(
+        ), is(true));
+        assertThat(httpRequestsPropertiesMatcher.matches(
             request()
                 .withPath("/api/v1/somePath")
-        ));
+        ), is(false));
     }
 
     private void thenMatchesEmptyFieldDifferences(MatchDifference context, boolean matches, boolean expected) {

@@ -1410,7 +1410,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         console.log(error);
     }
 );</code></pre>
-        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1435,7 +1435,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         "templateType": "VELOCITY"
     }
 }'</code></pre>
-        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
 </div>
 <button id="button_response_template_forward" class="accordion">override forwarded request with response template</button>
@@ -1606,7 +1606,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 </div>
 <button id="button_forward_method_or_closure_callback" class="accordion">method / closure callback to override request</button>
 <div class="panel">
-    <button class="accordion inner">Java 7</button>
+    <button class="accordion inner">Java (anonymous class)</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(
@@ -1630,7 +1630,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         }
     );</code></pre>
     </div>
-    <button class="accordion inner">Java 8+</button>
+    <button class="accordion inner">Java (lambda)</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(
@@ -1654,7 +1654,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 </div>
 <button id="button_forward_method_or_closure_callback_with_resp" class="accordion">method / closure callback to override request & response</button>
 <div class="panel">
-    <button class="accordion inner">Java 7</button>
+    <button class="accordion inner">Java (anonymous class)</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(
@@ -1687,7 +1687,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         }
     );</code></pre>
     </div>
-    <button class="accordion inner">Java 8+</button>
+    <button class="accordion inner">Java (lambda)</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(

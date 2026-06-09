@@ -68,7 +68,7 @@ If any check fails, **stop and report** — do not start monitoring.
 | `interval` | 10 minutes | Time between checks |
 | `duration` | 90 minutes | Total monitoring duration |
 | `branch` | `master` | Branch to monitor (ignore other branches) |
-| `auto_fix` | **user approval required** | **CRITICAL:** Automatically fix, review, commit, and push — **NEVER default to true** — require explicit user approval before any commit/push |
+| `auto_fix` | `false` (report only) | When `false`, investigate and report fixes only — do not change files. When `true`, the loop fixes, runs the full commit-workflow gate chain, then commits and pushes autonomously per the DVRR operating model (gate failure ⇒ no commit). Default off so an unattended monitor does not change master unless explicitly enabled. |
 
 Calculate total checks: `duration / interval` (e.g., 90/10 = 9 checks).
 
@@ -192,27 +192,34 @@ Note: Full integration tests require the Docker CI image and may not run locally
 
 #### 5. Adversarial Review
 
-Before committing, run a review using a different model with fresh context:
+Before committing, run the adversarial review defined in
+`.opencode/rules/commit-workflow.md` Step 4 (a `review-cheap` subagent on a
+different model with fresh context, applying the 8-lens review constitution):
 
 ```
-Task(subagent_type="review-cheap", prompt="Review the following changes for correctness, security, and conventions: {diff}")
+Task(subagent_type="review-cheap", prompt="Adversarially review the following changes using .opencode/rules/review-constitution.md. Verdict PASS or BLOCK: {diff}")
 ```
 
-The reviewer will return PASS or NEEDS_WORK. If NEEDS_WORK, address the feedback before committing.
+If the verdict is BLOCK, address the feedback, re-verify, and re-run the review before committing.
 
 #### 6. Commit and Push
 
-**CRITICAL SAFETY RULE:** NEVER commit or push without explicit user approval. This skill can investigate and suggest fixes, but commits and pushes MUST be explicitly requested by the user.
+Run only when `auto_fix` is enabled (it is off by default — see Parameters). When
+enabled, the **gate chain is the authority to ship**, per the DVRR operating
+model (`.opencode/rules/operating-model.md`): follow the full pre-commit workflow
+in `.opencode/rules/commit-workflow.md` (classify → validate → changelog →
+adversarial review with a PASS verdict → re-verify after any fix), then commit
+and push to master autonomously — no separate human approval step.
 
-**Before proceeding, ASK THE USER:**
-"I've prepared a fix for build #{number}. The changes are:
+**Fail-closed:** if any gate fails (tests red, review BLOCK, review subagent
+unavailable), do NOT commit — report the failure and continue monitoring. A user
+can interject at any time to halt or amend. Report the fix you applied:
 ```
+Applied fix for build #{number}:
 {git diff --stat output}
 ```
 
-May I commit and push this fix to master? (yes/no)"
-
-**If yes, follow the commit workflow:**
+**Commit workflow:**
 
 **a. Classify changed files:**
 

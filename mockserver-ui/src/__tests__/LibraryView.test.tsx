@@ -1,27 +1,89 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import LibraryView from '../components/LibraryView';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 
+vi.mock('../lib/mcpClient', () => ({
+  buildBaseUrl: (p: { host: string; port: string; secure: boolean }) =>
+    `${p.secure ? 'https' : 'http'}://${p.host}:${p.port}`,
+}));
+
 const connectionParams: ConnectionParams = { host: 'localhost', port: '1080', secure: false };
+
+interface FetchCall {
+  url: string;
+  init?: RequestInit;
+}
+
+let fetchCalls: FetchCall[];
+
+function stubFetch(status: number, body: unknown) {
+  fetchCalls = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      fetchCalls.push({ url, init });
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: 'stub',
+        json: async () => body,
+        text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+        blob: async () => new Blob([typeof body === 'string' ? body : JSON.stringify(body)]),
+      };
+    }),
+  );
+}
 
 function downloadButton() {
   return screen.getByRole('button', { name: /Download/ });
 }
 
-describe('LibraryView export controls', () => {
-  it('opens on the Export tab (first in the strip)', () => {
+/** Switch to the Export tab (index 1 — Import is 0). */
+async function switchToExport(user: ReturnType<typeof userEvent.setup>) {
+  const tabs = screen.getAllByRole('tab');
+  await user.click(tabs[1]!); // Export tab
+}
+
+beforeEach(() => {
+  stubFetch(201, [{ id: 'imported-1' }, { id: 'imported-2' }]);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('LibraryView tab layout', () => {
+  it('Import is the first tab, Export is the second', () => {
     render(<LibraryView connectionParams={connectionParams} />);
     const tabs = screen.getAllByRole('tab');
-    expect(tabs[0]).toHaveTextContent('Export');
-    expect(tabs[1]).toHaveTextContent('Cassettes');
-    // Export controls are visible without switching tabs.
+    expect(tabs[0]).toHaveTextContent('Import');
+    expect(tabs[1]).toHaveTextContent('Export');
+    expect(tabs[2]).toHaveTextContent('Cassettes');
+  });
+
+  it('opens on the Import tab by default', () => {
+    render(<LibraryView connectionParams={connectionParams} />);
+    // Import form elements are visible.
+    expect(screen.getByText('Format')).toBeInTheDocument();
+    expect(screen.getByText('Source')).toBeInTheDocument();
+  });
+});
+
+describe('LibraryView export controls', () => {
+  it('shows Export controls after clicking the Export tab', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     expect(screen.getByText('What to export')).toBeInTheDocument();
   });
 
-  it('lists Recorded requests first and selects it by default', () => {
+  it('lists Recorded requests first and selects it by default', async () => {
+    const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     const radios = screen.getAllByRole('radio');
     expect(radios[0]).toHaveAccessibleName('Recorded requests');
     expect(screen.getByRole('radio', { name: 'Recorded requests' })).toBeChecked();
@@ -30,6 +92,7 @@ describe('LibraryView export controls', () => {
   it('shows the best-effort caveat only for lossy expectation exports', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     // Default (recorded requests + JSON): no caveat.
     expect(screen.queryByText(/Best-effort export/)).not.toBeInTheDocument();
     // Active expectations + OpenAPI: the expectation-graph caveat appears.
@@ -42,14 +105,17 @@ describe('LibraryView export controls', () => {
   it('shows a traffic-derived note for recorded-request spec exports', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     await user.click(screen.getByRole('option', { name: 'OpenAPI 3 spec' }));
     expect(screen.getByText(/Derived from the traffic/)).toBeInTheDocument();
     expect(screen.queryByText(/Best-effort export/)).not.toBeInTheDocument();
   });
 
-  it('chooses scope with a radio and format with a dropdown (no combined list)', () => {
+  it('chooses scope with a radio and format with a dropdown (no combined list)', async () => {
+    const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     expect(screen.getByRole('radio', { name: 'Active expectations' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Recorded requests' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Format' })).toBeInTheDocument();
@@ -60,6 +126,7 @@ describe('LibraryView export controls', () => {
   it('updates the target file when the scope radio changes', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
     expect(downloadButton()).toHaveTextContent('mockserver-expectations.har');
   });
@@ -67,6 +134,7 @@ describe('LibraryView export controls', () => {
   it('updates the target file when the format dropdown changes', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     await user.click(screen.getByRole('option', { name: 'OpenAPI 3 spec' }));
@@ -76,6 +144,7 @@ describe('LibraryView export controls', () => {
   it('offers JAVA only for active expectations', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     // Default scope = recorded requests: no Java DSL option.
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     expect(screen.queryByRole('option', { name: 'MockServer Java DSL' })).not.toBeInTheDocument();
@@ -89,6 +158,7 @@ describe('LibraryView export controls', () => {
   it('offers LOG_ENTRIES only for recorded requests', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     // Default scope = recorded requests: log entries present.
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     expect(screen.getByRole('option', { name: 'Log entries (JSON)' })).toBeInTheDocument();
@@ -101,6 +171,7 @@ describe('LibraryView export controls', () => {
   it('offers cURL only for recorded requests', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     expect(screen.getByRole('option', { name: 'cURL commands' })).toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: 'cURL commands' }));
@@ -110,6 +181,7 @@ describe('LibraryView export controls', () => {
   it('resets an expectations-only format back to JSON when switching to requests', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
     await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
     await user.click(screen.getByRole('combobox', { name: 'Format' }));
     await user.click(screen.getByRole('option', { name: 'MockServer Java DSL' }));
@@ -117,5 +189,161 @@ describe('LibraryView export controls', () => {
     // Switching to requests (where Java is invalid) falls back to JSON.
     await user.click(screen.getByRole('radio', { name: 'Recorded requests' }));
     expect(downloadButton()).toHaveTextContent('mockserver-traffic.json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Import tab — endpoint + format integration
+// ---------------------------------------------------------------------------
+
+describe('LibraryView import tab', () => {
+  it('Import tab renders the ImportForm with all format radios', () => {
+    render(<LibraryView connectionParams={connectionParams} />);
+    // Import tab is open by default
+    expect(screen.getByRole('radio', { name: /Expectation JSON/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /OpenAPI/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /WSDL/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /HAR/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Postman/ })).toBeInTheDocument();
+  });
+
+  it('Expectation JSON import PUTs to /mockserver/expectation', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    // Expectation JSON is default format, Paste is default source
+    const textarea = screen.getByLabelText('Expectation JSON content');
+    await user.click(textarea);
+    await user.paste('[{"httpRequest":{"path":"/test"}}]');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/expectation'));
+      expect(call).toBeTruthy();
+      expect(call!.url).toBe('http://localhost:1080/mockserver/expectation');
+      expect(call!.init?.method).toBe('PUT');
+    });
+  });
+
+  it('OpenAPI import PUTs to /mockserver/openapi', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await user.click(screen.getByRole('radio', { name: /OpenAPI/ }));
+    const textarea = screen.getByLabelText('OpenAPI content');
+    await user.click(textarea);
+    await user.paste('{"openapi":"3.0.0"}');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/openapi'));
+      expect(call).toBeTruthy();
+      expect(call!.url).toBe('http://localhost:1080/mockserver/openapi');
+      expect(call!.init?.method).toBe('PUT');
+    });
+  });
+
+  it('HAR import PUTs to /mockserver/import?format=har', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await user.click(screen.getByRole('radio', { name: /HAR/ }));
+    const textarea = screen.getByLabelText('HAR (HTTP Archive) content');
+    await user.click(textarea);
+    await user.paste('{"log":{"entries":[]}}');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/import?format=har'));
+      expect(call).toBeTruthy();
+      expect(call!.init?.method).toBe('PUT');
+    });
+  });
+
+  it('Postman import PUTs to /mockserver/import?format=postman', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await user.click(screen.getByRole('radio', { name: /Postman/ }));
+    const textarea = screen.getByLabelText('Postman collection content');
+    await user.click(textarea);
+    await user.paste('{"info":{"name":"x"},"item":[]}');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/import?format=postman'));
+      expect(call).toBeTruthy();
+      expect(call!.init?.method).toBe('PUT');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Export tab — download via PUT /mockserver/retrieve with type + format
+// ---------------------------------------------------------------------------
+
+describe('LibraryView export download', () => {
+  it('Download calls PUT /mockserver/retrieve with correct type and format', async () => {
+    // Stub URL.createObjectURL and revokeObjectURL for download test
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:fake');
+    URL.revokeObjectURL = vi.fn();
+
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    // Default: Recorded requests (REQUEST_RESPONSES) + HAR
+    await user.click(downloadButton());
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+      expect(call).toBeTruthy();
+      expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES&format=HAR');
+      expect(call!.init?.method).toBe('PUT');
+    });
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('Export uses ACTIVE_EXPECTATIONS type when that scope is selected', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:fake');
+    URL.revokeObjectURL = vi.fn();
+
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    await user.click(screen.getByRole('option', { name: 'OpenAPI 3 spec' }));
+    await user.click(downloadButton());
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+      expect(call).toBeTruthy();
+      expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=ACTIVE_EXPECTATIONS&format=OPENAPI');
+    });
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('Export triggers a browser download with the correct filename', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:fake-url');
+    URL.revokeObjectURL = vi.fn();
+    const clickSpy = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = originalCreateElement(tag);
+      if (tag === 'a') {
+        el.click = clickSpy;
+      }
+      return el;
+    });
+
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    await user.click(downloadButton());
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalled();
+      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-url');
+    });
+
+    vi.restoreAllMocks();
   });
 });

@@ -1,0 +1,46 @@
+{
+  "name": "@mockserver/testcontainers",
+  "version": "7.0.0",
+  "description": "Testcontainers module for MockServer — starts a mockserver/mockserver Docker container for integration testing",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=unit",
+    "test:integration": "jest --testPathPattern=integration",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mockserver",
+    "testcontainers",
+    "docker",
+    "testing",
+    "mock",
+    "http"
+  ],
+  "author": "Mock-Server <jamesdbloom@gmail.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mock-server/mockserver.git",
+    "directory": "mockserver-testcontainers/node"
+  },
+  "homepage": "https://www.mock-server.com",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "testcontainers": "^12.0.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "typescript": "^5.5.0"
+  }
+}

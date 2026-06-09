@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <MockServerVersion>7.0.1</MockServerVersion>
+  </PropertyGroup>
+</Project>

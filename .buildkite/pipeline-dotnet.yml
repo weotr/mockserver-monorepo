@@ -1,0 +1,9 @@
+steps:
+  - label: ":dotnet: .NET client unit tests"
+    command: ".buildkite/scripts/steps/dotnet-unit-test.sh"
+    timeout_in_minutes: 15
+
+  - label: ":dotnet: :docker: .NET testcontainers tests"
+    command: ".buildkite/scripts/steps/dotnet-testcontainers-test.sh"
+    timeout_in_minutes: 15
+    soft_fail: true

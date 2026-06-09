@@ -20,10 +20,12 @@ import org.mockserver.mock.HttpState;
 import org.mockserver.mock.crud.CrudDispatcher;
 import org.mockserver.model.*;
 import org.mockserver.model.StreamingBody;
+import org.mockserver.openapi.OpenAPIRequestValidator;
 import org.mockserver.openapi.OpenAPIResponseValidator;
 import org.mockserver.openapi.OpenApiRuntimeExpressionResolver;
 import org.mockserver.proxyconfiguration.NoProxyHostsUtils;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
+import org.mockserver.responsewriter.GrpcStreamResponseWriter;
 import org.mockserver.responsewriter.ResponseWriter;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.curl.HttpRequestToCurlSerializer;
@@ -39,6 +41,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
@@ -547,11 +550,44 @@ public class HttpActionHandler {
                 }
             }
             case GRPC_STREAM_RESPONSE -> {
-                if (ctx == null) {
+                if (ctx == null && !(responseWriter instanceof GrpcStreamResponseWriter)) {
                     writeResponseActionResponse(
                         response().withStatusCode(501).withBody("gRPC streaming is not supported in WAR deployments"),
                         responseWriter, request, action, synchronous, null, expectationPostProcessor
                     );
+                } else if (responseWriter instanceof GrpcStreamResponseWriter) {
+                    // HTTP/3 path: a QUIC stream has no HTTP/2 frame codec, so delegate the
+                    // server-streaming write to the transport-specific response writer (which
+                    // emits initial HEADERS + DATA frames + trailing HEADERS over the QUIC stream).
+                    scheduler.schedule(() -> {
+                        try {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(EXPECTATION_RESPONSE)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setExpectationId(action.getExpectationId())
+                                    .setMessageFormat("returning gRPC stream response over HTTP/3 for request:{}for action:{}from expectation:{}")
+                                    .setArguments(request, action, action.getExpectationId())
+                            );
+                            ((GrpcStreamResponseWriter) responseWriter).writeGrpcStreamResponse((GrpcStreamResponse) action, request);
+                        } catch (Throwable throwable) {
+                            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(WARN)
+                                        .setLogLevel(Level.INFO)
+                                        .setCorrelationId(request.getLogCorrelationId())
+                                        .setHttpRequest(request)
+                                        .setMessageFormat(throwable.getMessage())
+                                        .setThrowable(throwable)
+                                );
+                            }
+                        } finally {
+                            expectationPostProcessor.run();
+                        }
+                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
                 } else {
                     scheduler.schedule(() -> {
                         try {
@@ -674,111 +710,393 @@ public class HttpActionHandler {
                 final InetSocketAddress remoteAddress = getRemoteAddressWithFallback(ctx);
                 final HttpRequest clonedRequest = hopByHopHeaderFilter.onRequest(request).withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
                 adjustHostHeaderForUnmatchedRequest(clonedRequest, remoteAddress);
-                final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
-                scheduler.submit(responseFuture, () -> {
-                        try {
-                            HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
-                            if (response == null) {
-                                response = badGatewayResponse();
+
+                // validation proxy: request validation runs inside the scheduler (off the Netty event loop)
+                // to avoid blocking I/O threads on cold-cache OpenAPI spec parsing / JSON-schema validation
+                final boolean validationEnabled = isValidationProxyEnabled();
+                scheduler.submit(() -> {
+                    try {
+                        // pre-flight request validation (enforce mode blocks with 400 before upstream call)
+                        if (validationEnabled) {
+                            HttpResponse rejectResponse = validateProxyRequest(request);
+                            if (rejectResponse != null) {
+                                responseWriter.writeResponse(request, rejectResponse, false);
+                                return;
                             }
-                            if (response.containsHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue())) {
-                                response.removeHeader(httpStateHandler.getUniqueLoopPreventionHeaderName());
+                        }
+
+                        // breakpoint intercept: pause the request if breakpoints are enabled (async mode only).
+                        // IMPORTANT: does NOT block any thread — the decision future's continuation runs
+                        // asynchronously on the scheduler executor when the control-plane resolves it (or
+                        // when the timeout auto-completes it). This avoids exhausting the scheduler pool
+                        // and, via CallerRunsPolicy, the Netty event loop.
+                        if (!synchronous && Boolean.TRUE.equals(configuration.breakpointEnabled())) {
+                            org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
+                            org.mockserver.mock.breakpoint.PausedExchange pausedExchange = breakpointRegistry.pause(
+                                request.getLogCorrelationId(), request, null, configuration
+                            );
+                            if (pausedExchange != null) {
                                 if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
                                     mockServerLogger.logEvent(
                                         new LogEntry()
-                                            .setType(NO_MATCH_RESPONSE)
                                             .setLogLevel(Level.INFO)
                                             .setCorrelationId(request.getLogCorrelationId())
                                             .setHttpRequest(request)
-                                            .setHttpResponse(notFoundResponse())
-                                            .setMessageFormat(NO_MATCH_RESPONSE_NO_EXPECTATION_MESSAGE_FORMAT)
-                                            .setArguments(request, response)
+                                            .setMessageFormat("request paused at breakpoint, awaiting resolution for:{}")
+                                            .setArguments(request)
                                     );
                                 }
-                                responseWriter.writeResponse(request, response, false);
-                            } else if (response.getStreamingBody() != null) {
-                                // Streaming response: write the head immediately and log
-                                // the FORWARDED_REQUEST entry after the stream completes
-                                final HttpResponse streamingResponse = response;
-                                responseWriter.writeResponse(request, streamingResponse, false);
-                                streamingResponse.getStreamingBody().addCompletionListener(() -> {
-                                    HttpResponse logResponse = streamingResponse.clone();
-                                    byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
-                                    setCapturedStreamingBody(logResponse, captured);
-                                    attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setType(FORWARDED_REQUEST)
-                                            .setLogLevel(Level.INFO)
-                                            .setCorrelationId(request.getLogCorrelationId())
-                                            .setHttpRequest(request)
-                                            .setHttpResponse(logResponse)
-                                            .setExpectation(request, logResponse)
-                                            .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                            .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
-                                    );
-                                });
-                            } else {
+                                // Chain the forward-and-respond continuation onto the decision future
+                                // asynchronously. The current scheduler worker thread returns immediately.
+                                java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                                    ? scheduler.getExecutorService()
+                                    : Runnable::run;
+                                pausedExchange.getDecisionFuture().thenAcceptAsync(decision -> {
+                                    try {
+                                        switch (decision.getAction()) {
+                                            case ABORT:
+                                                HttpResponse abortResponse = decision.getAbortResponse();
+                                                if (abortResponse == null) {
+                                                    abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                                                }
+                                                responseWriter.writeResponse(request, abortResponse, false);
+                                                return;
+                                            case MODIFY:
+                                                HttpRequest modified = decision.getModifiedRequest();
+                                                HttpRequest modifiedToForward = hopByHopHeaderFilter.onRequest(modified)
+                                                    .withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
+                                                adjustHostHeaderForUnmatchedRequest(modifiedToForward, remoteAddress);
+                                                executeUnmatchedForward(modifiedToForward, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                return;
+                                            case CONTINUE:
+                                            default:
+                                                executeUnmatchedForward(clonedRequest, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                return;
+                                        }
+                                    } catch (SocketCommunicationException sce) {
+                                        returnBadGateway(responseWriter, request, sce.getMessage());
+                                    } catch (Throwable throwable) {
+                                        returnBadGateway(responseWriter, request, "breakpoint continuation failed: " + throwable.getMessage());
+                                    }
+                                }, continuationExecutor);
+                                // Return immediately — do NOT block the scheduler worker thread
+                                return;
+                            }
+                        }
+
+                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
+                        HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+                        if (response == null) {
+                            response = badGatewayResponse();
+                        }
+                        if (response.containsHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue())) {
+                            response.removeHeader(httpStateHandler.getUniqueLoopPreventionHeaderName());
+                            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(NO_MATCH_RESPONSE)
+                                        .setLogLevel(Level.INFO)
+                                        .setCorrelationId(request.getLogCorrelationId())
+                                        .setHttpRequest(request)
+                                        .setHttpResponse(notFoundResponse())
+                                        .setMessageFormat(NO_MATCH_RESPONSE_NO_EXPECTATION_MESSAGE_FORMAT)
+                                        .setArguments(request, response)
+                                );
+                            }
+                            responseWriter.writeResponse(request, response, false);
+                        } else if (response.getStreamingBody() != null) {
+                            // Streaming response: write the head immediately and log
+                            // the FORWARDED_REQUEST entry after the stream completes.
+                            // Note: enforce mode cannot replace a streaming response since the body
+                            // has already been written to the client — violations are logged (report-only).
+                            final HttpResponse streamingResponse = response;
+                            responseWriter.writeResponse(request, streamingResponse, false);
+                            streamingResponse.getStreamingBody().addCompletionListener(() -> {
+                                HttpResponse logResponse = streamingResponse.clone();
+                                byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
+                                setCapturedStreamingBody(logResponse, captured);
+                                attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                // validation proxy: validate completed streaming response (report-only)
+                                if (validationEnabled) {
+                                    validateProxyResponse(request, logResponse, true);
+                                }
                                 mockServerLogger.logEvent(
                                     new LogEntry()
                                         .setType(FORWARDED_REQUEST)
                                         .setLogLevel(Level.INFO)
                                         .setCorrelationId(request.getLogCorrelationId())
                                         .setHttpRequest(request)
-                                        .setHttpResponse(response)
-                                        .setExpectation(request, response)
+                                        .setHttpResponse(logResponse)
+                                        .setExpectation(request, logResponse)
                                         .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                        .setArguments(response, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                                        .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
                                 );
-                                responseWriter.writeResponse(request, response, false);
+                            });
+                        } else {
+                            // validation proxy: validate non-streaming response (enforce mode returns 502)
+                            if (validationEnabled) {
+                                response = validateProxyResponse(request, response, false);
                             }
-                        } catch (SocketCommunicationException sce) {
-                            returnBadGateway(responseWriter, request, sce.getMessage());
-                        } catch (Throwable throwable) {
-                            if (potentiallyHttpProxy && connectionException(throwable)) {
-                                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setLogLevel(TRACE)
-                                            .setCorrelationId(request.getLogCorrelationId())
-                                            .setMessageFormat("failed to connect to proxied socket due to exploratory HTTP proxy for:{}due to:{}falling back to no proxy")
-                                            .setArguments(request, throwable.getCause())
-                                    );
+                            // Response breakpoint: hold non-streaming unmatched proxy responses before writing
+                            if (!synchronous && Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
+                                org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
+                                org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
+                                    request.getLogCorrelationId(), request, response, null, configuration
+                                );
+                                if (responsePaused != null) {
+                                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                        mockServerLogger.logEvent(
+                                            new LogEntry()
+                                                .setLogLevel(Level.INFO)
+                                                .setCorrelationId(request.getLogCorrelationId())
+                                                .setHttpRequest(request)
+                                                .setHttpResponse(response)
+                                                .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
+                                                .setArguments(request, response)
+                                        );
+                                    }
+                                    final HttpResponse capturedResponse = response;
+                                    java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                                        ? scheduler.getExecutorService()
+                                        : Runnable::run;
+                                    chainResponseBreakpointContinuation(responsePaused, request, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                                        mockServerLogger.logEvent(
+                                            new LogEntry()
+                                                .setType(FORWARDED_REQUEST)
+                                                .setLogLevel(Level.INFO)
+                                                .setCorrelationId(request.getLogCorrelationId())
+                                                .setHttpRequest(request)
+                                                .setHttpResponse(responseToWrite)
+                                                .setExpectation(request, responseToWrite)
+                                                .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                                                .setArguments(responseToWrite, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                                        );
+                                        responseWriter.writeResponse(request, responseToWrite, false);
+                                    }, null);
+                                    return; // do NOT block — continuation is async
                                 }
-                                returnBadGateway(responseWriter, request, "failed to connect to proxied socket due to exploratory HTTP proxy");
-                            } else if (sslHandshakeException(throwable)) {
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setLogLevel(Level.ERROR)
-                                        .setCorrelationId(request.getLogCorrelationId())
-                                        .setHttpRequest(request)
-                                        .setMessageFormat("TLS handshake exception while proxying request{}to remote address{}with channel" + (ctx != null ? String.valueOf(ctx.channel()) : ""))
-                                        .setArguments(request, remoteAddress)
-                                        .setThrowable(throwable)
-                                );
-                                returnBadGateway(responseWriter, request, "TLS handshake exception while proxying request to remote address" + remoteAddress);
-                            } else if (!connectionClosedException(throwable)) {
-                                mockServerLogger.logEvent(
-                                    new LogEntry()
-                                        .setType(EXCEPTION)
-                                        .setLogLevel(Level.ERROR)
-                                        .setCorrelationId(request.getLogCorrelationId())
-                                        .setHttpRequest(request)
-                                        .setMessageFormat(throwable.getMessage())
-                                        .setThrowable(throwable)
-                                );
-                                returnBadGateway(responseWriter, request, "connection closed while proxying request to remote address" + remoteAddress);
-                            } else {
-                                returnBadGateway(responseWriter, request, throwable.getMessage());
+                                // cap reached — fall through to normal write
                             }
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(FORWARDED_REQUEST)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setHttpResponse(response)
+                                    .setExpectation(request, response)
+                                    .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                                    .setArguments(response, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                            );
+                            responseWriter.writeResponse(request, response, false);
                         }
-                    },
-                    synchronous,
-                    throwable -> !(potentiallyHttpProxy && isNotBlank(throwable.getMessage()) || !throwable.getMessage().contains("Connection refused"))
-                );
+                    } catch (SocketCommunicationException sce) {
+                        returnBadGateway(responseWriter, request, sce.getMessage());
+                    } catch (Throwable throwable) {
+                        if (potentiallyHttpProxy && connectionException(throwable)) {
+                            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setLogLevel(TRACE)
+                                        .setCorrelationId(request.getLogCorrelationId())
+                                        .setMessageFormat("failed to connect to proxied socket due to exploratory HTTP proxy for:{}due to:{}falling back to no proxy")
+                                        .setArguments(request, throwable.getCause())
+                                );
+                            }
+                            returnBadGateway(responseWriter, request, "failed to connect to proxied socket due to exploratory HTTP proxy");
+                        } else if (sslHandshakeException(throwable)) {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.ERROR)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setMessageFormat("TLS handshake exception while proxying request{}to remote address{}with channel" + (ctx != null ? String.valueOf(ctx.channel()) : ""))
+                                    .setArguments(request, remoteAddress)
+                                    .setThrowable(throwable)
+                                );
+                            returnBadGateway(responseWriter, request, "TLS handshake exception while proxying request to remote address" + remoteAddress);
+                        } else if (!connectionClosedException(throwable)) {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(EXCEPTION)
+                                    .setLogLevel(Level.ERROR)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setMessageFormat(throwable.getMessage())
+                                    .setThrowable(throwable)
+                            );
+                            returnBadGateway(responseWriter, request, "connection closed while proxying request to remote address" + remoteAddress);
+                        } else {
+                            returnBadGateway(responseWriter, request, throwable.getMessage());
+                        }
+                    }
+                }, synchronous);
 
             }
 
+        }
+    }
+
+    /**
+     * Executes the actual HTTP forward for an unmatched proxy request and writes the response.
+     * Extracted so the breakpoint async continuation can reuse the same forward+response logic
+     * without duplicating the streaming/non-streaming/loop-prevention handling.
+     *
+     * @param requestToForward the (possibly modified) request to send upstream
+     * @param originalRequest  the original inbound request (for logging and correlation)
+     * @param remoteAddress    the resolved upstream address
+     * @param potentiallyHttpProxy whether this is an exploratory HTTP proxy request
+     * @param validationEnabled whether validation-proxy mode is active
+     * @param responseWriter   the writer to send the response back to the client
+     */
+    private void executeUnmatchedForward(HttpRequest requestToForward, HttpRequest originalRequest,
+                                         InetSocketAddress remoteAddress, boolean potentiallyHttpProxy,
+                                         boolean validationEnabled, ResponseWriter responseWriter) {
+        try {
+            final HttpForwardActionResult responseFuture = new HttpForwardActionResult(
+                requestToForward,
+                httpClient.sendRequest(requestToForward, remoteAddress,
+                    potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()),
+                null, remoteAddress
+            );
+            HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+            if (response == null) {
+                response = badGatewayResponse();
+            }
+            if (response.containsHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue())) {
+                response.removeHeader(httpStateHandler.getUniqueLoopPreventionHeaderName());
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(NO_MATCH_RESPONSE)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setHttpRequest(originalRequest)
+                            .setHttpResponse(notFoundResponse())
+                            .setMessageFormat(NO_MATCH_RESPONSE_NO_EXPECTATION_MESSAGE_FORMAT)
+                            .setArguments(originalRequest, response)
+                    );
+                }
+                responseWriter.writeResponse(originalRequest, response, false);
+            } else if (response.getStreamingBody() != null) {
+                final HttpResponse streamingResponse = response;
+                responseWriter.writeResponse(originalRequest, streamingResponse, false);
+                streamingResponse.getStreamingBody().addCompletionListener(() -> {
+                    HttpResponse logResponse = streamingResponse.clone();
+                    byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
+                    setCapturedStreamingBody(logResponse, captured);
+                    attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                    if (validationEnabled) {
+                        validateProxyResponse(originalRequest, logResponse, true);
+                    }
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(FORWARDED_REQUEST)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setHttpRequest(originalRequest)
+                            .setHttpResponse(logResponse)
+                            .setExpectation(originalRequest, logResponse)
+                            .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                            .setArguments(logResponse, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                    );
+                });
+            } else {
+                if (validationEnabled) {
+                    response = validateProxyResponse(originalRequest, response, false);
+                }
+                // Response breakpoint: hold non-streaming unmatched proxy responses before writing
+                if (Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
+                    org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
+                    org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
+                        originalRequest.getLogCorrelationId(), originalRequest, response, null, configuration
+                    );
+                    if (responsePaused != null) {
+                        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(originalRequest.getLogCorrelationId())
+                                    .setHttpRequest(originalRequest)
+                                    .setHttpResponse(response)
+                                    .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
+                                    .setArguments(originalRequest, response)
+                            );
+                        }
+                        final HttpResponse capturedResponse = response;
+                        java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                            ? scheduler.getExecutorService()
+                            : Runnable::run;
+                        chainResponseBreakpointContinuation(responsePaused, originalRequest, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(FORWARDED_REQUEST)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(originalRequest.getLogCorrelationId())
+                                    .setHttpRequest(originalRequest)
+                                    .setHttpResponse(responseToWrite)
+                                    .setExpectation(originalRequest, responseToWrite)
+                                    .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                                    .setArguments(responseToWrite, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                            );
+                            responseWriter.writeResponse(originalRequest, responseToWrite, false);
+                        }, null);
+                        return; // do NOT block — continuation is async
+                    }
+                    // cap reached — fall through to normal write
+                }
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(FORWARDED_REQUEST)
+                        .setLogLevel(Level.INFO)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setHttpResponse(response)
+                        .setExpectation(originalRequest, response)
+                        .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                        .setArguments(response, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                );
+                responseWriter.writeResponse(originalRequest, response, false);
+            }
+        } catch (SocketCommunicationException sce) {
+            returnBadGateway(responseWriter, originalRequest, sce.getMessage());
+        } catch (Throwable throwable) {
+            if (potentiallyHttpProxy && connectionException(throwable)) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(TRACE)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setMessageFormat("failed to connect to proxied socket due to exploratory HTTP proxy for:{}due to:{}falling back to no proxy")
+                            .setArguments(originalRequest, throwable.getCause())
+                    );
+                }
+                returnBadGateway(responseWriter, originalRequest, "failed to connect to proxied socket due to exploratory HTTP proxy");
+            } else if (sslHandshakeException(throwable)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setMessageFormat("TLS handshake exception while proxying request{}to remote address{}")
+                        .setArguments(originalRequest, remoteAddress)
+                        .setThrowable(throwable)
+                );
+                returnBadGateway(responseWriter, originalRequest, "TLS handshake exception while proxying request to remote address" + remoteAddress);
+            } else if (!connectionClosedException(throwable)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(EXCEPTION)
+                        .setLogLevel(Level.ERROR)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setMessageFormat(throwable.getMessage())
+                        .setThrowable(throwable)
+                );
+                returnBadGateway(responseWriter, originalRequest, "connection closed while proxying request to remote address" + remoteAddress);
+            } else {
+                returnBadGateway(responseWriter, originalRequest, throwable.getMessage());
+            }
         }
     }
 
@@ -814,15 +1132,29 @@ public class HttpActionHandler {
                     clonedRequest.replaceHeader(new Header("Host", hostHeader));
                 }
 
+                // validation proxy: request + response validation runs inside the scheduler
+                // (off the Netty event loop) to avoid blocking I/O threads on cold-cache OpenAPI parsing
+                final boolean validationEnabled = isValidationProxyEnabled();
                 InetSocketAddress targetAddress = new InetSocketAddress(mapping.getTargetHost(), mapping.getTargetPort());
-                final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, targetAddress), null, targetAddress);
-                scheduler.submit(responseFuture, () -> {
+                scheduler.submit(() -> {
                     try {
+                        // pre-flight request validation (enforce mode blocks with 400 before upstream call)
+                        if (validationEnabled) {
+                            HttpResponse rejectResponse = validateProxyRequest(request);
+                            if (rejectResponse != null) {
+                                responseWriter.writeResponse(request, rejectResponse, false);
+                                return;
+                            }
+                        }
+
+                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, targetAddress), null, targetAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
                         if (response == null) {
                             response = badGatewayResponse();
                         }
                         if (response.getStreamingBody() != null) {
+                            // Note: enforce mode cannot replace a streaming response since the body
+                            // has already been written to the client — violations are logged (report-only).
                             final HttpResponse streamingResponse = response;
                             responseWriter.writeResponse(request, streamingResponse, false);
                             streamingResponse.getStreamingBody().addCompletionListener(() -> {
@@ -830,6 +1162,10 @@ public class HttpActionHandler {
                                 byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                 setCapturedStreamingBody(logResponse, captured);
                                 attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                // validation proxy: validate completed streaming response (report-only)
+                                if (validationEnabled) {
+                                    validateProxyResponse(request, logResponse, true);
+                                }
                                 mockServerLogger.logEvent(
                                     new LogEntry()
                                         .setType(FORWARDED_REQUEST)
@@ -843,6 +1179,10 @@ public class HttpActionHandler {
                                 );
                             });
                         } else {
+                            // validation proxy: validate non-streaming response (enforce mode returns 502)
+                            if (validationEnabled) {
+                                response = validateProxyResponse(request, response, false);
+                            }
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(FORWARDED_REQUEST)
@@ -859,7 +1199,7 @@ public class HttpActionHandler {
                     } catch (Throwable throwable) {
                         returnBadGateway(responseWriter, request, "proxy pass forwarding failed for " + mapping.getTargetUri() + ": " + throwable.getMessage());
                     }
-                }, synchronous, throwable -> true);
+                }, synchronous);
                 return true;
             }
         }
@@ -1723,10 +2063,62 @@ public class HttpActionHandler {
                 // OpenTelemetry: emit a request-level span for the forwarded request
                 emitRequestSpan(request, effectiveResponse, action, ctx, responseTimeMs);
 
+                // Response breakpoint: hold non-streaming responses before writing to client.
+                // IMPORTANT: does NOT block any thread — chains the client write onto the
+                // decision future via thenAcceptAsync (same pattern as request breakpoints).
+                boolean isStreaming = !chaosErrorInjected && effectiveResponse != null && effectiveResponse.getStreamingBody() != null;
+                if (!synchronous && !isStreaming && Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
+                    org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
+                    org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
+                        request.getLogCorrelationId(), request, effectiveResponse,
+                        action != null ? action.getExpectationId() : null, configuration
+                    );
+                    if (responsePaused != null) {
+                        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setHttpResponse(effectiveResponse)
+                                    .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
+                                    .setArguments(request, effectiveResponse)
+                            );
+                        }
+                        // Chain the write onto the decision future asynchronously
+                        java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                            ? scheduler.getExecutorService()
+                            : Runnable::run;
+                        final HttpResponse capturedEffective = effectiveResponse;
+                        final boolean capturedChaosErrorInjected = chaosErrorInjected;
+                        chainResponseBreakpointContinuation(responsePaused, request, capturedEffective, responseWriter, continuationExecutor, responseToWrite -> {
+                            responseWriter.writeResponse(request, responseToWrite, false);
+                            String logMessageFormat = capturedChaosErrorInjected
+                                ? "returning chaos-injected error response:{}replacing forwarded response" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}"
+                                : "returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}";
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setType(FORWARDED_REQUEST)
+                                    .setLogLevel(Level.INFO)
+                                    .setCorrelationId(request.getLogCorrelationId())
+                                    .setHttpRequest(request)
+                                    .setHttpResponse(responseToWrite)
+                                    .setExpectation(request, responseToWrite)
+                                    .setExpectationId(action != null ? action.getExpectationId() : null)
+                                    .setMessageFormat(logMessageFormat)
+                                    .setArguments(responseToWrite, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action != null ? action.getExpectationId() : null)
+                            );
+                        }, postProcessor);
+                        // Return immediately — do NOT block the scheduler worker thread
+                        return;
+                    }
+                    // If pauseResponse returned null (cap reached), fall through to normal write
+                }
+
                 // Factor the write (streaming vs non-streaming) into a single command so
                 // it can be dispatched either directly or via the non-blocking scheduler.
                 final Runnable writeCommand;
-                if (!chaosErrorInjected && effectiveResponse != null && effectiveResponse.getStreamingBody() != null) {
+                if (isStreaming) {
                     writeCommand = () -> writeStreamingForwardActionResponse(effectiveResponse, responseWriter, request, action, responseFuture, postProcessor);
                 } else {
                     writeCommand = () -> {
@@ -1888,6 +2280,65 @@ public class HttpActionHandler {
         }
     }
 
+    /**
+     * Shared continuation for response breakpoints. Chains the CONTINUE/MODIFY/ABORT
+     * decision handling onto the paused exchange's future, executing asynchronously on
+     * the given executor. On the success path the caller-supplied {@code onResolved}
+     * callback receives the resolved response (to log + write in the caller's preferred
+     * order). On failure a 502 Bad Gateway is ALWAYS written to the client — this
+     * prevents the client connection from hanging on a continuation error.
+     *
+     * @param responsePaused       the paused response-phase exchange
+     * @param request              the original inbound request (for error responses)
+     * @param capturedResponse     the upstream response held at the breakpoint
+     * @param responseWriter       writer for the client channel
+     * @param continuationExecutor executor for the async continuation
+     * @param onResolved           callback receiving the resolved response (log + write)
+     * @param postProcessor        optional post-processing (e.g. chaos-latency scheduling); always invoked
+     */
+    private void chainResponseBreakpointContinuation(
+        org.mockserver.mock.breakpoint.PausedExchange responsePaused,
+        HttpRequest request,
+        HttpResponse capturedResponse,
+        ResponseWriter responseWriter,
+        java.util.concurrent.Executor continuationExecutor,
+        Consumer<HttpResponse> onResolved,
+        Runnable postProcessor
+    ) {
+        responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
+            try {
+                HttpResponse responseToWrite;
+                switch (decision.getAction()) {
+                    case ABORT:
+                        responseToWrite = decision.getAbortResponse();
+                        if (responseToWrite == null) {
+                            responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                        }
+                        break;
+                    case MODIFY:
+                        responseToWrite = decision.getModifiedResponse();
+                        if (responseToWrite == null) {
+                            responseToWrite = capturedResponse;
+                        }
+                        break;
+                    case CONTINUE:
+                    default:
+                        responseToWrite = capturedResponse;
+                        break;
+                }
+                onResolved.accept(responseToWrite);
+                if (postProcessor != null) {
+                    postProcessor.run();
+                }
+            } catch (Throwable t) {
+                returnBadGateway(responseWriter, request, "response breakpoint continuation failed: " + t.getMessage());
+                if (postProcessor != null) {
+                    postProcessor.run();
+                }
+            }
+        }, continuationExecutor);
+    }
+
     private void returnBadGateway(ResponseWriter responseWriter, HttpRequest request, String error) {
         HttpResponse response = badGatewayResponse();
         if (isNotBlank(error)) {
@@ -1988,7 +2439,52 @@ public class HttpActionHandler {
                 }
             }
         }
+        if (configuration.attachMismatchDiagnosticToResponse()) {
+            attachMismatchDiagnostic(request, response);
+        }
         responseWriter.writeResponse(request, response, false);
+    }
+
+    private void attachMismatchDiagnostic(HttpRequest request, HttpResponse response) {
+        try {
+            java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff = httpStateHandler.findClosestMatchDiff(request);
+            if (closestDiff != null && !closestDiff.isEmpty()) {
+                String summary = org.mockserver.matchers.MatchDifferenceFormatter.formatDifferences(closestDiff);
+                if (isNotBlank(summary)) {
+                    // header: concise one-line summary of the mismatched fields
+                    String headerValue = closestDiff.keySet().stream()
+                        .map(org.mockserver.matchers.MatchDifference.Field::getName)
+                        .collect(java.util.stream.Collectors.joining(", "));
+                    response.withHeader("x-mockserver-closest-match", "fields differ: " + headerValue);
+                    // body: structured JSON diagnostic
+                    com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
+                    com.fasterxml.jackson.databind.node.ObjectNode diagnosticNode = objectMapper.createObjectNode();
+                    diagnosticNode.put("matchedFieldCount", org.mockserver.matchers.MatchDifference.Field.values().length - closestDiff.size());
+                    diagnosticNode.put("totalFieldCount", org.mockserver.matchers.MatchDifference.Field.values().length);
+                    com.fasterxml.jackson.databind.node.ObjectNode differencesNode = objectMapper.createObjectNode();
+                    for (java.util.Map.Entry<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> entry : closestDiff.entrySet()) {
+                        com.fasterxml.jackson.databind.node.ArrayNode fieldDiffs = differencesNode.putArray(entry.getKey().getName());
+                        for (String diff : entry.getValue()) {
+                            fieldDiffs.add(org.mockserver.matchers.MatchDifferenceFormatter.truncateDiffLine(diff));
+                        }
+                    }
+                    diagnosticNode.set("differences", differencesNode);
+                    response.withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(diagnosticNode), MediaType.JSON_UTF_8);
+                }
+            } else {
+                response.withHeader("x-mockserver-closest-match", "no expectations configured");
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.TRACE)
+                        .setMessageFormat("exception attaching mismatch diagnostic to 404 response:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+            }
+        }
     }
 
     /**
@@ -2235,6 +2731,167 @@ public class HttpActionHandler {
                 }
             }
         });
+    }
+
+    // -------- validation proxy (OpenAPI contract validation on forwarded traffic) --------
+
+    /**
+     * Returns {@code true} when the validation-proxy mode is enabled: a spec has been configured
+     * via {@code validateProxyOpenAPISpec}.
+     */
+    private boolean isValidationProxyEnabled() {
+        String spec = configuration.validateProxyOpenAPISpec();
+        return spec != null && !spec.isEmpty();
+    }
+
+    /**
+     * Validates the forwarded request against the configured OpenAPI spec before the request is sent upstream.
+     * If violations are found they are logged as {@code OPENAPI_REQUEST_VALIDATION_FAILED}. In enforce mode
+     * a 400 response is returned; otherwise {@code null} (meaning "proceed normally").
+     *
+     * <p>This method may perform an expensive cold-cache OpenAPI parse / JSON-schema validation,
+     * so callers MUST invoke it off the Netty event loop (inside a {@code scheduler.submit} block).</p>
+     *
+     * @return an {@link HttpResponse} to short-circuit with, or {@code null} to proceed
+     */
+    private HttpResponse validateProxyRequest(HttpRequest request) {
+        String spec = configuration.validateProxyOpenAPISpec();
+        if (spec == null || spec.isEmpty()) {
+            return null;
+        }
+        try {
+            List<String> requestErrors = OpenAPIRequestValidator.validate(spec, request, mockServerLogger);
+            if (!requestErrors.isEmpty()) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(OPENAPI_REQUEST_VALIDATION_FAILED)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setMessageFormat("validation proxy: request does not conform to OpenAPI spec{}errors:{}")
+                        .setArguments(request, String.join("; ", requestErrors))
+                );
+                if (Boolean.TRUE.equals(configuration.validateProxyEnforce())) {
+                    return response()
+                        .withStatusCode(400)
+                        .withBody("OpenAPI request validation failed: " + String.join("; ", requestErrors));
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setMessageFormat("validation proxy: failed to validate request against OpenAPI spec{}due to:{}")
+                        .setArguments(request, e.getMessage())
+                );
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validates the upstream response (only) against the configured OpenAPI spec. Violations are logged
+     * as {@code OPENAPI_RESPONSE_VALIDATION_FAILED}. In enforce mode a 502 response is returned instead
+     * of the upstream response; otherwise the original response is returned unmodified.
+     *
+     * <p>Unlike the previous implementation this method validates the <em>response only</em> using
+     * {@link OpenAPIResponseValidator} directly, avoiding the double request validation that
+     * {@link OpenApiTrafficValidator} would perform.</p>
+     *
+     * <p>For streaming responses the body has already been written to the client before validation
+     * runs, so enforce mode cannot replace the response. Streaming responses are therefore validated
+     * in report-only fashion (violations logged) even when enforce is enabled.</p>
+     *
+     * @param request  the forwarded request (used to resolve the matching operation)
+     * @param response the upstream response to validate
+     * @param streaming {@code true} when the response was a streaming response whose body has already
+     *                  been written to the client (enforce mode is ineffective for streaming)
+     * @return the original response (if valid or report-only/streaming), or a 502 in enforce mode
+     */
+    private HttpResponse validateProxyResponse(HttpRequest request, HttpResponse response, boolean streaming) {
+        String spec = configuration.validateProxyOpenAPISpec();
+        if (spec == null || spec.isEmpty() || response == null) {
+            return response;
+        }
+        try {
+            String operationId = resolveOperationId(spec, request);
+            if (operationId == null) {
+                // could not match the request to a spec operation — skip response validation
+                return response;
+            }
+            List<String> responseErrors = OpenAPIResponseValidator.validate(spec, operationId, response, mockServerLogger);
+            if (!responseErrors.isEmpty()) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(OPENAPI_RESPONSE_VALIDATION_FAILED)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setHttpResponse(response)
+                        .setMessageFormat("validation proxy: upstream response does not conform to OpenAPI spec{}errors:{}")
+                        .setArguments(request, String.join("; ", responseErrors))
+                );
+                if (!streaming && Boolean.TRUE.equals(configuration.validateProxyEnforce())) {
+                    return response()
+                        .withStatusCode(502)
+                        .withBody("OpenAPI response validation failed: " + String.join("; ", responseErrors));
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setMessageFormat("validation proxy: failed to validate upstream response against OpenAPI spec{}due to:{}")
+                        .setArguments(request, e.getMessage())
+                );
+            }
+        }
+        return response;
+    }
+
+    /**
+     * Resolves the OpenAPI operationId for the given request by matching its path and method
+     * against the spec. Returns {@code null} if no matching operation is found.
+     */
+    private String resolveOperationId(String specUrlOrPayload, HttpRequest request) {
+        try {
+            io.swagger.v3.oas.models.OpenAPI openAPI = org.mockserver.openapi.OpenAPIParser.buildOpenAPI(specUrlOrPayload, mockServerLogger);
+            String requestPath = request.getPath() != null ? request.getPath().getValue() : "/";
+            String requestMethod = request.getMethod() != null ? request.getMethod().getValue().toLowerCase() : "get";
+            for (java.util.Map.Entry<String, io.swagger.v3.oas.models.PathItem> entry : openAPI.getPaths().entrySet()) {
+                String templatePath = entry.getKey();
+                if (pathMatchesTemplate(templatePath, requestPath)) {
+                    for (org.apache.commons.lang3.tuple.Pair<String, io.swagger.v3.oas.models.Operation> methodOp : org.mockserver.openapi.OpenAPIParser.mapOperations(entry.getValue())) {
+                        if (methodOp.getLeft().equalsIgnoreCase(requestMethod)) {
+                            return methodOp.getRight().getOperationId();
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // fall through — unable to resolve operation
+        }
+        return null;
+    }
+
+    /**
+     * Checks whether a concrete request path matches an OpenAPI path template (e.g. {@code /pets/{petId}}).
+     */
+    private static boolean pathMatchesTemplate(String templatePath, String actualPath) {
+        StringBuilder regex = new StringBuilder();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\{[^}]+}").matcher(templatePath);
+        int lastEnd = 0;
+        while (matcher.find()) {
+            regex.append(java.util.regex.Pattern.quote(templatePath.substring(lastEnd, matcher.start())));
+            regex.append("[^/]+");
+            lastEnd = matcher.end();
+        }
+        regex.append(java.util.regex.Pattern.quote(templatePath.substring(lastEnd)));
+        return actualPath.matches(regex.toString());
     }
 
     /**

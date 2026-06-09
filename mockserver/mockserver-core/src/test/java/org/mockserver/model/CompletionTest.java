@@ -5,8 +5,6 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.core.Is.is;
@@ -17,12 +15,13 @@ import static org.mockserver.model.StreamingPhysics.streamingPhysics;
 import static org.mockserver.model.ToolUse.toolUse;
 import static org.mockserver.model.Usage.usage;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class CompletionTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(completion(), completion());
-        assertNotSame(completion(), completion());
+        assertThat(completion(), is(completion()));
+        assertThat(completion(), not(sameInstance(completion())));
     }
 
     @Test

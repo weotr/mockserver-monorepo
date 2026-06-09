@@ -10,7 +10,7 @@ The end-to-end checklist a release manager follows. **Use this every release.** 
 
 Run the `/prepare-release` slash command from this repo. It inspects `changelog.md`, `mockserver/pom.xml`, and the latest `mockserver-X.Y.Z` git tag, then recommends:
 
-- `release-version` (e.g. `6.1.0`)
+- `release-version` (e.g. `7.0.0`)
 - `next-version` (e.g. `6.1.1-SNAPSHOT`)
 - `old-version` (e.g. `6.0.0` — auto-derived, you don't need to type it on the form)
 - `release-type` (almost always `full`)
@@ -84,7 +84,7 @@ Everything downstream now runs in parallel: Versioned Site, Maven Plugin, Docker
 
 | Channel | Verification |
 |---|---|
-| Docker Hub | https://hub.docker.com/r/mockserver/mockserver/tags — `<release-version>`, `<release-version>-graaljs`, and `latest` should appear |
+| Docker Hub | https://hub.docker.com/r/mockserver/mockserver/tags — `<release-version>`, `<release-version>-graaljs`, and `latest` should appear; cosign signatures attached to each image digest |
 | npm — mockserver-node | https://www.npmjs.com/package/mockserver-node |
 | npm — mockserver-client-node | https://www.npmjs.com/package/mockserver-client-node |
 | PyPI | https://pypi.org/project/mockserver-client/ |
@@ -171,17 +171,17 @@ scripts/release/
 # 2. Run the entire pipeline in dry-run mode. Builds everything, but skips
 #    every external write (npm publish, twine upload, S3 sync, gh release
 #    create, git push, etc.).
-./scripts/release/release.sh --version 6.1.0 --dry-run
+./scripts/release/release.sh --version 7.0.0 --dry-run
 
 # 3. Run a single component.
 ./scripts/release/components/npm.sh --dry-run        # exits with `RELEASE_VERSION` unset
-RELEASE_VERSION=6.1.0 ./scripts/release/components/npm.sh --dry-run
+RELEASE_VERSION=7.0.0 ./scripts/release/components/npm.sh --dry-run
 
 # 4. Run only a few components.
-./scripts/release/release.sh --version 6.1.0 --only=npm,pypi --dry-run
+./scripts/release/release.sh --version 7.0.0 --only=npm,pypi --dry-run
 
 # 5. Skip components.
-./scripts/release/release.sh --version 6.1.0 --skip=docker --dry-run
+./scripts/release/release.sh --version 7.0.0 --skip=docker --dry-run
 ```
 
 DRY_RUN defaults to `true` unless you pass `--execute`. **Locally you almost never want `--execute`** — that publishes for real.
@@ -209,7 +209,7 @@ Buildkite outage on release day? No problem. From a developer machine with `dock
 aws sso login --profile mockserver-build
 
 # Run the same scripts the CI would have run
-RELEASE_VERSION=6.1.0 \
+RELEASE_VERSION=7.0.0 \
 NEXT_VERSION=6.1.1-SNAPSHOT \
 RELEASE_TYPE=full \
 CREATE_VERSIONED_SITE=yes \
@@ -273,7 +273,7 @@ The release pipeline writes every version-bearing file in the repo, so contribut
 | `prepare` | Validate inputs, show pom diff | pom write, git commit, tag, push |
 | `maven-central` | `mvn clean install` (build + test) | Sonatype upload, publish, sync wait |
 | `maven-plugin` | Build core + verify plugin | tag, deploy, push |
-| `docker` | `docker buildx build` (local `--load`, amd64 only) | `--push` to Docker Hub + ECR |
+| `docker` | `docker buildx build` (local `--load`, amd64 only) | `--push` to Docker Hub + ECR, cosign signing by digest |
 | `npm` | `npm install`, grunt build | `git push tag`, `npm publish` (uses `--dry-run`) |
 | `pypi` | `python -m build`, `twine check` | `twine upload` |
 | `rubygems` | `gem build` | `gem push` |
@@ -292,13 +292,13 @@ The release pipeline writes every version-bearing file in the repo, so contribut
 All toolchain calls run inside these images. Defined in `scripts/release/_lib.sh`:
 
 ```bash
-MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-11
+MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-17
 NODE_IMAGE=node:20-bookworm
 RUBY_IMAGE=ruby:3.2-bookworm
 HELM_IMAGE=alpine/helm:3.16.2
 GH_IMAGE=maniator/gh:v2.62.0
 PYTHON_IMAGE=python:3.12-slim-bookworm
-TERRAFORM_IMAGE=hashicorp/terraform:1.9
+TERRAFORM_IMAGE=hashicorp/terraform:1.15
 ```
 
 Override any of them by exporting the corresponding env var. Change them in `_lib.sh` to update for everyone.
@@ -314,7 +314,7 @@ If, say, the Maven Central step succeeded but `npm` failed:
 # release-runner.sh adapter re-reads meta-data and re-invokes.
 
 # Locally:
-RELEASE_VERSION=6.1.0 ./scripts/release/components/npm.sh --execute
+RELEASE_VERSION=7.0.0 ./scripts/release/components/npm.sh --execute
 ```
 
 ### Reproduce a CI failure locally
@@ -322,7 +322,7 @@ RELEASE_VERSION=6.1.0 ./scripts/release/components/npm.sh --execute
 ```bash
 # Pull the same env vars Buildkite was using (or set them by hand) and run
 # the same script.
-RELEASE_VERSION=6.1.0 \
+RELEASE_VERSION=7.0.0 \
 NEXT_VERSION=6.1.1-SNAPSHOT \
 ./scripts/release/components/maven-central.sh --dry-run
 ```

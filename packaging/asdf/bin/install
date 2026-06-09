@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Installs a downloaded MockServer CLI binary.
+# Called by asdf/mise with ASDF_INSTALL_TYPE, ASDF_INSTALL_VERSION,
+# ASDF_INSTALL_PATH, and ASDF_DOWNLOAD_PATH set.
+
+set -euo pipefail
+
+if [[ "${ASDF_INSTALL_TYPE:-}" != "version" ]]; then
+  echo "mockserver plugin only supports release versions, not ref installs" >&2
+  exit 1
+fi
+
+if [[ -z "${ASDF_INSTALL_PATH:-}" ]]; then
+  echo "ASDF_INSTALL_PATH is required" >&2
+  exit 1
+fi
+
+if [[ -z "${ASDF_DOWNLOAD_PATH:-}" ]]; then
+  echo "ASDF_DOWNLOAD_PATH is required" >&2
+  exit 1
+fi
+
+mkdir -p "$ASDF_INSTALL_PATH/bin"
+cp "$ASDF_DOWNLOAD_PATH/mockserver" "$ASDF_INSTALL_PATH/bin/mockserver"
+chmod +x "$ASDF_INSTALL_PATH/bin/mockserver"
+
+echo "MockServer CLI ${ASDF_INSTALL_VERSION} installed to ${ASDF_INSTALL_PATH}/bin/mockserver"

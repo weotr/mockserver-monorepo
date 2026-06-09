@@ -1,13 +1,14 @@
 package org.mockserver.model;
 
-import junit.framework.TestCase;
 import org.junit.Test;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpClassCallback.callback;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsSame.sameInstance;
+import static org.hamcrest.CoreMatchers.not;
 /**
  * @author jamesdbloom
  */
@@ -16,25 +17,23 @@ public class HttpClassCallbackTest {
     @Test
     @SuppressWarnings("AccessStaticViaInstance")
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(callback(), callback());
-        assertNotSame(callback(), callback());
+        assertThat(callback(), is(callback()));
+        assertThat(callback(), not(sameInstance(callback())));
     }
 
     @Test
     public void returnsCallbackClass() {
-        assertEquals("some_class", new HttpClassCallback().withCallbackClass("some_class").getCallbackClass());
-        assertEquals("some_class", callback().withCallbackClass("some_class").getCallbackClass());
-        assertEquals("some_class", callback("some_class").getCallbackClass());
+        assertThat(new HttpClassCallback().withCallbackClass("some_class").getCallbackClass(), is("some_class"));
+        assertThat(callback().withCallbackClass("some_class").getCallbackClass(), is("some_class"));
+        assertThat(callback("some_class").getCallbackClass(), is("some_class"));
     }
 
     @Test
     public void shouldReturnFormattedRequestInToString() {
-        TestCase.assertEquals("{" + NEW_LINE +
-                "  \"callbackClass\" : \"some_class\"" + NEW_LINE +
-                "}",
-            callback()
+        assertThat(callback()
                 .withCallbackClass("some_class")
-                .toString()
-        );
+                .toString(), is("{" + NEW_LINE +
+                "  \"callbackClass\" : \"some_class\"" + NEW_LINE +
+                "}"));
     }
 }

@@ -16,7 +16,6 @@ import org.mockserver.validator.jsonschema.JsonSchemaHttpRequestAndHttpResponseV
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.model.Cookie.cookie;
@@ -24,6 +23,8 @@ import static org.mockserver.model.Header.header;
 import static org.mockserver.model.NottableString.string;
 import static org.mockserver.model.Parameter.param;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -133,7 +134,7 @@ public class HttpRequestAndHttpResponseSerializerTest {
         HttpRequestAndHttpResponse httpRequestAndHttpResponse = httpRequestAndHttpResponseSerializer.deserialize("requestBytes");
 
         // then
-        assertEquals(fullHttpRequestAndHttpResponse, httpRequestAndHttpResponse);
+        assertThat( httpRequestAndHttpResponse, is(fullHttpRequestAndHttpResponse));
     }
 
     @Test

@@ -3,7 +3,7 @@ title: Clearing & Resetting
 description: Clear or reset MockServer state selectively by type (expectations, logs, or all) or by request matcher, with curl, Java, and JavaScript examples.
 layout: page
 pageOrder: 4
-section: 'General'
+section: 'Data & State'
 subsection: true
 sitemap:
   priority: 0.7
@@ -26,6 +26,42 @@ sitemap:
     <li>use a <a href="/mock_server/getting_started.html#request_matchers"><strong>request matcher</strong></a> to clear matching items</li>
     <li>use an <strong>expectation id</strong> to clear matching items</li>
 </ul>
+
+<p><strong>What each <span class="inline_code">type</span> affects:</strong> the <span class="inline_code">type</span> parameter is important for memory management. <span class="string_literal">expectations</span> clears <em>only</em> the configured expectations &mdash; it does <strong>not</strong> clear the recorded request / event log. On a long-running instance the request log grows with every request, so clearing expectations alone will not free that memory. To free memory held by accumulated log entries, use <span class="string_literal">log</span> or <span class="string_literal">all</span>, or perform a full <a href="#button_client_reset">reset</a> with <span class="inline_code">PUT /mockserver/reset</span>.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Operation</th>
+            <th>Expectations</th>
+            <th>Request / event log</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">clear?type=expectations</span></td>
+            <td>cleared</td>
+            <td>kept</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">clear?type=log</span></td>
+            <td>kept</td>
+            <td>cleared</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">clear?type=all</span> (the default when <span class="inline_code">type</span> is omitted)</td>
+            <td>cleared</td>
+            <td>cleared</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">PUT /mockserver/reset</span></td>
+            <td>cleared</td>
+            <td>cleared</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Note:</strong> a request matcher or expectation id narrows clearing to matching items; <span class="inline_code">reset</span> always clears everything and ignores any matcher.</p>
 
 <p><strong>How clearing works:</strong> when <a href="/mock_server/debugging_issues.html#logging-levels">logLevel</a> is <span class="string_literal">INFO</span> or lower (the default), cleared log entries are <em>soft-deleted</em> rather than physically removed. This means:</p>
 <ul>

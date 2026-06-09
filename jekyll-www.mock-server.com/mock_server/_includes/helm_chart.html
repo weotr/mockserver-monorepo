@@ -9,6 +9,8 @@
     <li><a href="#deploy_via_local_source">via local source</a></li>
 </ol>
 
+<p>You can also discover MockServer Helm charts on <a target="_blank" href="https://artifacthub.io/packages/search?ts_query_web=mockserver&amp;kind=0" rel="noopener noreferrer">Artifact Hub</a>, the CNCF registry for Kubernetes packages. The official chart is published to the GitHub Container Registry (OCI) as described below; the OCI install command is the recommended way to install it.</p>
+
 <a id="deploy_via_oci_registry" class="anchor" href="#deploy_via_oci_registry">&nbsp</a>
 
 <h3>Deploy Via OCI Registry</h3>
@@ -36,7 +38,7 @@ helm push mockserver-{{ site.mockserver_version }}.tgz oci://&lt;your-private-re
 
 <p>Recent chart releases are signed with <a target="_blank" href="https://docs.sigstore.dev/cosign/overview/" rel="noopener noreferrer">Sigstore cosign</a>. You can verify a chart against the published MockServer public key before installing it:</p>
 
-<pre class="prettyprint code"><code class="code">cosign verify --key https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/helm/mockserver/cosign.pub oci://ghcr.io/mock-server/charts/mockserver:{{ site.mockserver_version }}</code></pre>
+<pre class="prettyprint code"><code class="code">cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mock-server/charts/mockserver:{{ site.mockserver_version }}</code></pre>
 
 <p>A successful verification prints the signed payload and exits with status <span class="keyword">0</span>. Older chart versions predate signing, so verification will report no matching signatures for them.</p>
 
@@ -343,7 +345,7 @@ echo http://$MOCKSERVER_HOST</code></pre>
 
 <p>To test the installation the following <span class="keyword">curl</span> command should return the ports MockServer is bound to:</p>
 
-<pre class="prettyprint code"><code class="code">curl -v -X PUT http://$MOCKSERVER_HOST/status</code></pre>
+<pre class="prettyprint code"><code class="code">curl -v -X PUT http://$MOCKSERVER_HOST/mockserver/status</code></pre>
 
 <h3>Docker for Desktop</h3>
 
@@ -360,7 +362,7 @@ echo http://$MOCKSERVER_HOST</code></pre>
 <p>For <strong>LoadBalancer</strong> services it is possible to query kubernetes to programmatically determine the MockServer base URL as follows:</p>
 
 <pre class="prettyprint code"><code class="code">export SERVICE_IP=$(kubectl get svc --namespace mockserver mockserver -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-export MOCKSERVER_HOST=$SERVICE_IP:1081
+export MOCKSERVER_HOST=$SERVICE_IP:1080
 echo http://$MOCKSERVER_HOST</code></pre>
 
 <h3>Outside Remote Kubernetes Cluster (i.e. Azure AKS, AWS EKS, etc) via Port Forward</h3>
@@ -379,4 +381,4 @@ echo http://$MOCKSERVER_HOST</code></pre>
 
 <p>To completely remove the chart:</p>
 
-<pre class="prettyprint code"><code class="code">helm delete mockserver --purge</code></pre>
+<pre class="prettyprint code"><code class="code">helm uninstall -n mockserver mockserver</code></pre>

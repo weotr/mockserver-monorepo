@@ -7,7 +7,6 @@ import org.mockserver.mock.SortableExpectationId;
 import java.util.List;
 import java.util.Optional;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -35,7 +34,7 @@ public class CircularPriorityQueueTest {
         concurrentLinkedQueue.add(new SortableExpectationId("4", 0, 0));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         List<SortableExpectationId> actual = concurrentLinkedQueue.toSortedList();
         assertThat(actual, not(contains(new SortableExpectationId("1", 0, 0))));
         assertThat(actual, containsInAnyOrder(
@@ -85,7 +84,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         List<SortableExpectationId> actual = concurrentLinkedQueue.toSortedList();
         assertThat(actual, not(contains(new SortableExpectationId("1", 0, 0))));
         assertThat(actual, not(contains(new SortableExpectationId("2", 0, 0))));
@@ -149,7 +148,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(2, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(2));
         List<SortableExpectationId> actual = concurrentLinkedQueue.toSortedList();
         assertThat(actual, not(contains(new SortableExpectationId("1", 0, 0))));
         assertThat(actual, not(contains(new SortableExpectationId("2", 0, 0))));
@@ -203,7 +202,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(one)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(three, four, five));
@@ -251,7 +250,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(one)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(one, four, five));
@@ -304,7 +303,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(one)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(four, three, five));
@@ -356,7 +355,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(one)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(three, four, five));
@@ -409,7 +408,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(three)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(one, four, five));
@@ -462,7 +461,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(one)));
         assertThat(concurrentLinkedQueue.toSortedList(), not(contains(two)));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(five, three, four));
@@ -518,7 +517,7 @@ public class CircularPriorityQueueTest {
         }));
 
         // then
-        assertEquals(5, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(5));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(four, five, three, one, two));
         assertThat(concurrentLinkedQueue.getByKey(five.getId()), is(Optional.of(five)));
         assertThat(concurrentLinkedQueue.getByKey(four.getId()), is(Optional.of(four)));
@@ -623,7 +622,7 @@ public class CircularPriorityQueueTest {
         assertThat(concurrentLinkedQueue.keyMap().get(four.getId()), is(nullValue()));
 
         // then
-        assertEquals(3, concurrentLinkedQueue.size());
+        assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(five, one, two));
     }
 

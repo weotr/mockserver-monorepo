@@ -6,11 +6,11 @@ import org.mockserver.model.Delay;
 import org.mockserver.model.HttpTemplate;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpResponse.response;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -19,23 +19,7 @@ public class HttpTemplateToJavaSerializerTest {
 
     @Test
     public void shouldSerializeFullObjectWithCallbackAsJava() {
-        assertEquals(NEW_LINE +
-                "        template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
-                "                .withTemplate(\"" +
-                StringEscapeUtils.escapeJava("if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
-                    "    return {" + NEW_LINE +
-                    "        'statusCode': 200," + NEW_LINE +
-                    "        'body': JSON.stringify({name: 'value'})" + NEW_LINE +
-                    "    };" + NEW_LINE +
-                    "} else {" + NEW_LINE +
-                    "    return {" + NEW_LINE +
-                    "        'statusCode': 406," + NEW_LINE +
-                    "        'body': request.body" + NEW_LINE +
-                    "    };" + NEW_LINE +
-                    "}"
-                ) +
-                "\")" + NEW_LINE +
-                "                .withDelay(new Delay(TimeUnit.SECONDS, 5))",
+        assertThat(
             new HttpTemplateToJavaSerializer().serialize(1,
                 new HttpTemplate(HttpTemplate.TemplateType.JAVASCRIPT)
                     .withTemplate("if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
@@ -52,7 +36,23 @@ public class HttpTemplateToJavaSerializerTest {
                     )
                     .withDelay(new Delay(SECONDS, 5))
             )
-        );
+        , is(NEW_LINE +
+                "        template(HttpTemplate.TemplateType.JAVASCRIPT)" + NEW_LINE +
+                "                .withTemplate(\"" +
+                StringEscapeUtils.escapeJava("if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
+                    "    return {" + NEW_LINE +
+                    "        'statusCode': 200," + NEW_LINE +
+                    "        'body': JSON.stringify({name: 'value'})" + NEW_LINE +
+                    "    };" + NEW_LINE +
+                    "} else {" + NEW_LINE +
+                    "    return {" + NEW_LINE +
+                    "        'statusCode': 406," + NEW_LINE +
+                    "        'body': request.body" + NEW_LINE +
+                    "    };" + NEW_LINE +
+                    "}"
+                ) +
+                "\")" + NEW_LINE +
+                "                .withDelay(new Delay(TimeUnit.SECONDS, 5))"));
     }
 
     @Test

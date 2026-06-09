@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsIterableContaining.hasItems;
@@ -50,6 +49,7 @@ import static org.mockserver.model.MediaType.APPLICATION_JSON_UTF_8;
 import static org.mockserver.stop.Stop.stopQuietly;
 import static org.mockserver.verify.Verification.verification;
 import static org.mockserver.verify.VerificationSequence.verificationSequence;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom

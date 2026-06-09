@@ -1,0 +1,48 @@
+<!--
+  JGroups stack for Kubernetes deployment.
+
+  Uses TCP transport with dns.DNS_PING discovery, which queries the DNS
+  SRV/A records of a headless Kubernetes Service to discover peer pods.
+  This is the recommended stack for MockServer clustered deployments on
+  Kubernetes — no multicast needed, no additional discovery plugins.
+
+  Required environment variables (set by the Helm chart):
+    JGROUPS_DNS_QUERY  — the DNS name of the headless Service, e.g.
+                         "mockserver-headless.mockserver.svc.cluster.local"
+
+  Select this stack via:
+    MOCKSERVER_CLUSTER_TRANSPORT_CONFIG=jgroups-kubernetes.xml
+
+  For non-Kubernetes (bare metal / VM) clusters, use a TCP+TCPPING
+  or UDP+MPING stack with explicit initial hosts instead.
+-->
+<config xmlns="urn:org:jgroups"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups.xsd">
+
+    <!-- TCP transport — no multicast required, works on every cloud provider -->
+    <TCP bind_addr="match-interface:eth0,site_local,loopback"
+         bind_port="7800"
+         thread_pool.min_threads="0"
+         thread_pool.max_threads="20"
+         thread_pool.keep_alive_time="30000" />
+
+    <!-- DNS_PING discovers peers by querying A/AAAA records of a headless
+         Kubernetes Service. The dns_query property is read from the
+         JGROUPS_DNS_QUERY environment variable. -->
+    <dns.DNS_PING dns_query="${JGROUPS_DNS_QUERY}"
+                  dns_record_type="A"
+                  num_discovery_runs="3" />
+
+    <MERGE3 max_interval="30000" min_interval="10000" />
+    <FD_ALL3 timeout="40000" interval="5000" />
+    <VERIFY_SUSPECT2 timeout="1500" />
+
+    <pbcast.NAKACK2 use_mcast_xmit="false" />
+    <UNICAST3 />
+    <pbcast.STABLE desired_avg_gossip="50000" max_bytes="4M" />
+    <pbcast.GMS print_local_addr="true" join_timeout="5000" />
+    <UFC max_credits="2M" min_threshold="0.4" />
+    <MFC max_credits="2M" min_threshold="0.4" />
+    <FRAG2 frag_size="60K" />
+</config>

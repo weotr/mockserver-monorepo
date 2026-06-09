@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ChangeEvent } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
@@ -26,6 +26,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { CassetteManagerBody } from './CassetteManager';
+import ImportForm from './ImportForm';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import {
   listWasmModules,
@@ -179,7 +180,10 @@ function ExportTab({ connectionParams }: { connectionParams: ConnectionParams })
   const scopeMeta = SCOPES.find((s) => s.value === scope)!;
   const availableFormats = FORMATS.filter((f) => f.scopes.includes(scope));
   const formatMeta = FORMATS.find((f) => f.value === format)!;
-  const detail = DETAILS[scope][format] ?? { description: '', filename: `mockserver-${scope}` };
+  const detail = useMemo(
+    () => DETAILS[scope][format] ?? { description: '', filename: `mockserver-${scope}` },
+    [scope, format],
+  );
 
   // The export caveat depends on the scope: exporting the expectation graph to a
   // request-collection format is lossy (dynamic behaviour becomes placeholders),
@@ -615,7 +619,7 @@ export interface LibraryViewProps {
   connectionParams: ConnectionParams;
 }
 
-const TABS = ['Export', 'Cassettes', 'WASM Modules', 'gRPC Descriptors'];
+const TABS = ['Import', 'Export', 'Cassettes', 'WASM Modules', 'gRPC Descriptors'];
 
 export default function LibraryView({ connectionParams }: LibraryViewProps) {
   const [tab, setTab] = useState(0);
@@ -633,10 +637,15 @@ export default function LibraryView({ connectionParams }: LibraryViewProps) {
           ))}
         </Tabs>
         <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
-          {tab === 0 && <ExportTab connectionParams={connectionParams} />}
-          {tab === 1 && <CassetteManagerBody connectionParams={connectionParams} />}
-          {tab === 2 && <WasmModulesTab connectionParams={connectionParams} />}
-          {tab === 3 && <GrpcDescriptorsTab connectionParams={connectionParams} />}
+          {tab === 0 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 720 }}>
+              <ImportForm connectionParams={connectionParams} />
+            </Box>
+          )}
+          {tab === 1 && <ExportTab connectionParams={connectionParams} />}
+          {tab === 2 && <CassetteManagerBody connectionParams={connectionParams} />}
+          {tab === 3 && <WasmModulesTab connectionParams={connectionParams} />}
+          {tab === 4 && <GrpcDescriptorsTab connectionParams={connectionParams} />}
         </Box>
       </Paper>
     </Box>

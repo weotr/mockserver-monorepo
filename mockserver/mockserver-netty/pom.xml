@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>6.1.1-SNAPSHOT</version>
+        <version>7.0.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -115,13 +115,20 @@
             <artifactId>jna</artifactId>
         </dependency>
 
-        <!-- HTTP/3 (QUIC) — experimental; the native QUIC library is bundled
-             transitively by netty-incubator-codec-http3 for supported platforms.
-             CI/CD must run on a platform where the native is available (linux-x86_64,
-             osx-x86_64, osx-aarch_64) or the HTTP/3 feature will be unavailable. -->
+        <!-- HTTP/3 (QUIC) — graduated from incubator into Netty 4.2; the native
+             QUIC library is bundled transitively by netty-codec-http3 for
+             supported platforms. CI/CD must run on a platform where the native
+             is available (linux-x86_64, osx-x86_64, osx-aarch_64) or the
+             HTTP/3 feature will be unavailable. -->
         <dependency>
-            <groupId>io.netty.incubator</groupId>
-            <artifactId>netty-incubator-codec-http3</artifactId>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http3</artifactId>
+        </dependency>
+
+        <!-- CLI -->
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
         </dependency>
 
         <!-- commons & guava -->

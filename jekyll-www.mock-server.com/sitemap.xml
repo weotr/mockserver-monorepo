@@ -29,6 +29,12 @@ sitemap:
     <priority>{{ page.sitemap.priority }}</priority>
     {%- elsif page.url == '/' %}
     <priority>1.0</priority>
+    {%- elsif page.section == 'Getting Started' or page.section == 'Creating Mocks' %}
+    <priority>0.8</priority>
+    {%- elsif page.section == 'Data & State' or page.section == 'Verify & Test' or page.section == 'Protocols & Advanced' or page.section == 'AI Integration' or page.section == 'Chaos Testing' or page.section == 'Proxy' %}
+    <priority>0.7</priority>
+    {%- elsif page.section == 'Security' or page.section == 'Operations' or page.section == 'Where' %}
+    <priority>0.6</priority>
     {%- else %}
     <priority>0.5</priority>
     {%- endif %}

@@ -3,7 +3,7 @@ title: Expectation Initializers
 description: Load expectations automatically when MockServer starts using a Java initializer class, JSON file, OpenAPI spec, or Maven plugin initializer.
 layout: page
 pageOrder: 6
-section: 'Mock Server'
+section: 'Creating Mocks'
 subsection: true
 sitemap:
   priority: 0.7
@@ -32,7 +32,7 @@ int mockServerPort = new ClientAndServer().getLocalPort();</code></pre>
 
 <p>When using Spring's <code>@MockServerTest</code>, the initializer class can be configured directly in the annotation:</p>
 <pre class="prettyprint lang-java code"><code class="code">@MockServerTest("mockserver.initializationClass=org.mockserver.server.initialize.ExpectationInitializerExample")
-@RunWith(SpringRunner.class)
+@ExtendWith(SpringExtension.class) // JUnit 5; use @RunWith(SpringRunner.class) on JUnit 4
 public class MyTest {
     private MockServerClient mockServerClient;  // auto-injected with expectations already loaded
 }</code></pre>
@@ -78,7 +78,9 @@ public class MyTest {
     <li>multiple files by using glob patterns that can expand a wildcard pattern into a list of paths that match the given pattern using characters such as *, **, ?, [] and {}, for more details see <a href="#expectation_initializer_json_glob_patterns">glob patterns</a></li>
 </ul>
 
-<p><strong>Supported action types in JSON initializer files:</strong> <span class="inline_code">httpResponse</span>, <span class="inline_code">httpResponseTemplate</span>, <span class="inline_code">httpForward</span>, <span class="inline_code">httpForwardTemplate</span>, <span class="inline_code">httpForwardClassCallback</span>, <span class="inline_code">httpResponseClassCallback</span>, <span class="inline_code">httpOverrideForwardedRequest</span>, and <span class="inline_code">httpError</span>. WebSocket-based object callbacks (<span class="inline_code">httpResponseObjectCallback</span> and <span class="inline_code">httpForwardObjectCallback</span>) are <strong>not</strong> supported in JSON initialization files because they require an active WebSocket connection from a running client.</p>
+<p><strong>Supported action types in JSON initializer files:</strong> any expectation action that can be expressed in JSON is supported &mdash; the JSON initializer accepts the same expectation shape as the REST API and Java client. This includes, but is not limited to, <span class="inline_code">httpResponse</span>, <span class="inline_code">httpResponseTemplate</span>, <span class="inline_code">httpResponseClassCallback</span>, <span class="inline_code">httpForward</span>, <span class="inline_code">httpForwardTemplate</span>, <span class="inline_code">httpForwardClassCallback</span>, <span class="inline_code">httpForwardWithFallback</span>, <span class="inline_code">httpForwardValidateAction</span>, <span class="inline_code">httpOverrideForwardedRequest</span>, <span class="inline_code">httpError</span>, <span class="inline_code">httpSseResponse</span>, <span class="inline_code">grpcStreamResponse</span>, and <span class="inline_code">grpcBidiResponse</span>, as well as <span class="inline_code">beforeActions</span>, <span class="inline_code">afterActions</span>, and <span class="inline_code">steps</span>.</p>
+
+<p>The exception is the WebSocket-based object callbacks (<span class="inline_code">httpResponseObjectCallback</span> and <span class="inline_code">httpForwardObjectCallback</span>): although they serialise to JSON, they cannot do anything useful when loaded from an initializer file because they require an active WebSocket connection from a running client to dispatch to.</p>
 
 <p>The JSON file should contain an array of serialised expectations, for example:</p>
 
@@ -261,3 +263,13 @@ java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependen
 }</code></pre>
 
 {% include_subpage _includes/initializer_persistence_configuration.html %}
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the full reference for the expectations you load at startup: request matchers and response, forward, callback, and error actions</li>
+    <li><a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> &mdash; write expectations back out so they survive a restart and can be reloaded</li>
+    <li><a href="/mock_server/file_storage.html">File Storage</a> &mdash; manage the files on disk that initializers and persisted expectations read from and write to</li>
+</ul>

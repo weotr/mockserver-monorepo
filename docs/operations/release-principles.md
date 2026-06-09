@@ -63,7 +63,15 @@ The full contract:
 
 No other variables. No fallback to `BUILDKITE_*`. The Buildkite adapter is responsible for translating its inputs into this contract before invoking the release scripts.
 
-## 7. Transparency over magic
+## 7. Secrets are file-based, never container env vars
+
+Release scripts that run toolchains inside Docker containers **must not** pass secrets via `docker run -e VAR=value`. Environment variables are readable from `/proc/1/environ` and via `docker inspect` by anyone with Docker daemon access on the agent.
+
+Instead, write secrets to `0600` files under `.tmp/` (the repo root, which is volume-mounted into the container), read them from inside the container as files, and delete them via `trap` on EXIT. This pattern is used by `maven-central.sh`, `maven-plugin.sh`, `helm.sh`, and `docker.sh` for GPG keys, Sonatype credentials, GHCR tokens, and cosign keys.
+
+Curl calls to authenticated APIs use `--netrc-file <path>` rather than `Authorization: Basic <base64>` in a shell variable.
+
+## 8. Transparency over magic
 
 A `cat scripts/release/release.sh` should be enough to understand what a release does. No hidden imports, no dynamically generated YAML, no clever metaprogramming. Bash, with clear function names and explicit step ordering.
 

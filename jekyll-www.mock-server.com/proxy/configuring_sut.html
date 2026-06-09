@@ -1,5 +1,5 @@
 ---
-title: Configuring Clients<br/>(i.e. System Under Test)
+title: Configuring the System Under Test
 description: Configure your application to proxy through MockServer using port forwarding, HTTP proxy, HTTPS tunnel, or SOCKS proxy with code examples.
 shortTitle: Configuring Clients
 layout: page
@@ -33,13 +33,13 @@ sitemap:
     </li>
     <li><a href="#socks_proxy"><strong>SOCKS Proxy</strong></a> (i.e. dynamic port forwarding)
         <ul>
-            <li>requests are forwarded using a SOCK CONNECT CMD request that established a socket tunnel</li>
+            <li>requests are forwarded using a SOCK CONNECT CMD request that establishes a socket tunnel</li>
             <li>if the traffic is encrypted an SSL certificate is auto-generated allowing SSL traffic to be recorded transparently</li>
         </ul>
     </li>
 </ul>
 
-<p>The port forwarding and the SOCKS proxy are the most transparent and typically don't require any code changes.  However the Web Proxy and Secure Web Proxy ensure only configured clients are proxied and that multiple services can be simultaneously proxies.</p>
+<p>The port forwarding and the SOCKS proxy are the most transparent and typically don't require any code changes.  However the Web Proxy and Secure Web Proxy ensure only configured clients are proxied and that multiple services can be simultaneously proxied.</p>
 
 <a id="port_forwarding" class="anchor" href="#port_forwarding">&nbsp;</a>
 
@@ -49,7 +49,7 @@ sitemap:
 
 <p>Port forwarding is very simple as it does not require any code changes. The port forwarding proxy is configured to send all received requests to remote port and host.</p>
 
-<p>Although the port forwarding proxy is the simplest proxy is can only proxy a single remote port and host. To forward multiple ports, multiple port forwarding proxies, should be run as separate processes.</p>
+<p>Although the port forwarding proxy is the simplest proxy, it can only proxy a single remote port and host. To forward multiple ports, multiple port forwarding proxies, should be run as separate processes.</p>
 
 <p>There are two main approaches for routing requests via the port forwarding proxy.</p>
 
@@ -102,13 +102,13 @@ sitemap:
 	<li><strong>serverPort</strong> - specifies the HTTP and HTTPS port for the MockServer.</li>
 </ul>
 
-<p>For details of how to run MockServer with the above values configured see <a href="/proxy/running_mock_server_proxy.html">Running MockServer</a></p>
+<p>For details of how to run MockServer with the above values configured see <a href="/mock_server/running_mock_server.html">Running MockServer</a></p>
 
 <a id="java_jdk_http_url_connection" class="anchor" href="#java_jdk_http_url_connection">&nbsp;</a>
 
 <h4>Java JDK HttpURLConnection (HTTP)</h4>
 
-<p>Configure the Web or Secure Web Proxy with an <a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/net/HttpURLConnection.html" rel="noopener noreferrer">HttpURLConnection</a> from the Java JDK, as follows:</p>
+<p>Configure the Web or Secure Web Proxy with an <a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/HttpURLConnection.html" rel="noopener noreferrer">HttpURLConnection</a> from the Java JDK, as follows:</p>
 
 <pre><code class="code"><span class="keyword">private</span> HttpURLConnection sendRequestViaProxy(URL url) throws IOException {
     Proxy proxy = <span class="keyword">new</span> Proxy(Proxy.Type.<span class="constant">HTTP</span>, <span class="keyword">new</span> InetSocketAddress(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>))));
@@ -150,9 +150,9 @@ restTemplate.setRequestFactory(<span class="keyword">new</span> HttpComponentsCl
 
 <h4>Spring WebClient</h4>
 
-<p>Configure the Web or Secure Web Proxy with a <a target="_blank" href="https://docs.spring.io/spring-framework/docs/current/reference/html/web-reactive.html#webflux-client" rel="noopener noreferrer">Spring RestTemplate</a>, as follows:</p>
+<p>Configure the Web or Secure Web Proxy with a <a target="_blank" href="https://docs.spring.io/spring-framework/docs/current/reference/html/web-reactive.html#webflux-client" rel="noopener noreferrer">Spring WebClient</a>, as follows:</p>
 
-<pre><code class="code">SslContext sslContext = <span class="keyword">new</span> NettySslContextFactory(<span class="keyword">new</span> MockServerLogger(getClass())).createClientSslContext(<span class="keyword">false</span>);
+<pre><code class="code">SslContext sslContext = <span class="keyword">new</span> NettySslContextFactory(Configuration.configuration(), <span class="keyword">new</span> MockServerLogger(getClass()), <span class="keyword">false</span>).createClientSslContext(<span class="keyword">false</span>, <span class="keyword">false</span>);
 return WebClient.builder()
     .clientConnector(
         <span class="keyword">new</span> ReactorClientHttpConnector(
@@ -210,7 +210,7 @@ return WebClient.builder()
 
 <pre><code class="code">HttpClient httpClient = <span class="keyword">new</span> HttpClient();
 <span class="keyword">try</span> {
-    httpClient.getProxyConfiguration().getProxies().add(<span class="keyword">new</span> HttpProxy(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>));
+    httpClient.getProxyConfiguration().getProxies().add(<span class="keyword">new</span> HttpProxy(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>))));
     httpClient.start();
 } <span class="keyword">catch</span> (Exception e) {
     <span class="keyword">throw new</span> RuntimeException(<span class="string_literal">"Exception creating HttpClient"</span>, e);
@@ -220,7 +220,7 @@ return WebClient.builder()
 
 <pre><code class="code">HttpClient httpClient = <span class="keyword">new</span> HttpClient();
 <span class="keyword">try</span> {
-    httpClient.setProxy(<span class="keyword">new</span> Address(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>));
+    httpClient.setProxy(<span class="keyword">new</span> Address(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>))));
     httpClient.start();
 } <span class="keyword">catch</span> (Exception e) {
     <span class="keyword">throw new</span> RuntimeException(<span class="string_literal">"Exception creating HttpClient"</span>, e);
@@ -306,7 +306,7 @@ AsyncHttpClient asyncHttpClient = <span class="keyword">new</span> AsyncHttpClie
 	<li><strong>serverPort</strong> - specifies the SOCKS port for the MockServer.</li>
 </ul>
 
-<p>For details of how to run MockServer with the above values configured see <a href="/proxy/running_mock_server_proxy.html">Running MockServer</a></p>
+<p>For details of how to run MockServer with the above values configured see <a href="/mock_server/running_mock_server.html">Running MockServer</a></p>
 
 <a id="socks_apache_http_client" class="anchor" href="#socks_apache_http_client">&nbsp;</a>
 
@@ -362,7 +362,7 @@ HttpClient httpClient = HttpClients.custom()
 
 <h4>Java JDK HttpURLConnection (SOCKS)</h4>
 
-<p>Configure the SOCKS Proxy with an <a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/net/HttpURLConnection.html" rel="noopener noreferrer">HttpURLConnection</a> from the Java JDK, as follows:</p>
+<p>Configure the SOCKS Proxy with an <a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/net/HttpURLConnection.html" rel="noopener noreferrer">HttpURLConnection</a> from the Java JDK, as follows:</p>
 
 <pre><code class="code"><span class="keyword">private</span> HttpURLConnection sendRequestViaProxy(URL url) throws IOException {
     Proxy proxy = <span class="keyword">new</span> Proxy(Proxy.Type.<span class="constant">SOCKS</span>, <span class="keyword">new</span> InetSocketAddress(System.getProperty(<span class="string_literal">"http.proxyHost"</span>), Integer.parseInt(System.getProperty(<span class="string_literal">"http.proxyPort"</span>))));

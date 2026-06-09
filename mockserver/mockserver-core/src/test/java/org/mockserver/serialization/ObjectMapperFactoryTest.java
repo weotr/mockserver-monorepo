@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -21,6 +20,7 @@ import static org.mockserver.model.Cookie.cookie;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.NottableString.string;
 import static org.mockserver.model.Parameter.param;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -80,7 +80,7 @@ public class ObjectMapperFactoryTest {
         ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectationDTO, is(new ExpectationDTO()
             .setHttpRequest(
                 new HttpRequestDTO()
                     .setMethod(string("someMethod"))
@@ -113,7 +113,7 @@ public class ObjectMapperFactoryTest {
                             .setValue(1)
                     )
             )
-            .setTimes(new org.mockserver.serialization.model.TimesDTO(Times.exactly(5))), expectationDTO);
+            .setTimes(new org.mockserver.serialization.model.TimesDTO(Times.exactly(5)))));
     }
 
     @Test

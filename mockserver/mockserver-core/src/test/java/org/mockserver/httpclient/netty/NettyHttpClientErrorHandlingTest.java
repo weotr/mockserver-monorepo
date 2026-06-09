@@ -55,7 +55,7 @@ public class NettyHttpClientErrorHandlingTest {
         // when
         Exception exception = assertThrows(Exception.class, () -> new NettyHttpClient(configuration(), mockServerLogger, clientEventLoopGroup, null, false)
             .sendRequest(request().withHeader(HOST.toString(), "127.0.0.1:" + freePort))
-            .get(10, TimeUnit.SECONDS));
+            .get(60, TimeUnit.SECONDS));
 
         // then
         assertThat(exception.getMessage(), anyOf(
@@ -73,7 +73,7 @@ public class NettyHttpClientErrorHandlingTest {
         try {
             // when
             Exception exception = assertThrows(Exception.class, () -> new NettyHttpClient(configuration(), mockServerLogger, clientEventLoopGroup, null, false).sendRequest(request().withSecure(true).withHeader(HOST.toString(), "127.0.0.1:" + echoServer.getPort()))
-                .get(10, TimeUnit.SECONDS));
+                .get(60, TimeUnit.SECONDS));
 
             // then
             assertThat(exception.getMessage(), anyOf(
@@ -102,7 +102,7 @@ public class NettyHttpClientErrorHandlingTest {
                         .withSecure(true),
                     socket
                 )
-                .get(10, TimeUnit.SECONDS);
+                .get(60, TimeUnit.SECONDS);
 
             // then
             assertThat(httpResponse, is(

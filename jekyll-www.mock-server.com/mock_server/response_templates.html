@@ -2,8 +2,8 @@
 title: Response Templates
 description: Generate dynamic mock responses using Mustache, Velocity, or JavaScript templates with access to request data, UUIDs, timestamps, and helper objects.
 layout: page
-pageOrder: 4
-section: 'Mock Server'
+pageOrder: 2
+section: 'Creating Mocks'
 subsection: true
 sitemap:
 priority: 0.8
@@ -39,6 +39,7 @@ lastmod: 2019-11-10T08:00:00+01:00
             <li><a href="#math_helper">Calc Helper</a> &mdash; random numbers, rounding, min/max, abs, ceil/floor, number formatting</li>
         </ul>
     </li>
+    <li><a href="#response_template_security"><strong>Security Considerations</strong></a> &mdash; restrict the Java classes templates can reach via <code class="inline code">velocityDisallowClassLoading</code> and <code class="inline code">javascriptDisallowedClasses</code></li>
 </ul>
 
 <a id="templates_in_json_files" class="anchor" href="#templates_in_json_files">&nbsp;</a>
@@ -697,7 +698,7 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 
 <h3>JWT Helper (<code>jwt</code>)</h3>
 
-<p>Generates signed JSON Web Tokens (JWTs) and JSON Web Key Sets (JWKS) for testing OAuth2/OIDC flows. Tokens are signed with RSA-256 using an auto-generated key pair.</p>
+<p>Generates signed JSON Web Tokens (JWTs) and JSON Web Key Sets (JWKS) for testing OAuth2/OIDC flows. Tokens are signed with RS256 (RSA with SHA-256) using an auto-generated key pair.</p>
 
 <table class="table">
     <thead><tr><th>Method</th><th>Description</th><th>Example Output</th></tr></thead>
@@ -1142,9 +1143,9 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 <pre class="prettyprint lang-java code"><code class="code">{
   'statusCode': 200,
   'body': {
-    'method': '#!request.method',
-    'path': '#!request.path',
-    'headers': '#!request.headers.host.0'
+    'method': '$!request.method',
+    'path': '$!request.path',
+    'headers': '$!request.headers.host.0'
   }
 }</code></pre>
 
@@ -1320,10 +1321,6 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 
 <p>All javascript response templates should return the response as an object as shown in the example above.</p>
 
-<p>JavaScript response templates support ES6 syntax for Java 9 to 14, for a summary of ES6 syntax see <a target="_blank" href="https://www.w3schools.com/js/js_es6.asp" rel="noopener noreferrer">w3schools</a>.</p>
-
-<p>JavaScript response templates support ES5 syntax for Java 8, for a summary of ES5 syntax see <a target="_blank" href="https://www.w3schools.com/js/js_es5.asp" rel="noopener noreferrer">w3schools</a>.</p>
-
 <h4>JavaScript Engine Support</h4>
 
 <p>MockServer uses the <strong>GraalVM Polyglot JavaScript engine</strong> for JavaScript templates. The engine is bundled with all official Docker images and the standalone JAR. It supports ES2023+ syntax, including template literals, async/await, destructuring, optional chaining, and the full modern JavaScript language.</p>
@@ -1376,3 +1373,16 @@ return {
   "statusCode" : 200,
   "body" : "{'headers': ['mock-server.com', 'plain/text']}"
 }</code></pre>
+
+<a id="response_template_security" class="anchor" href="#response_template_security">&nbsp;</a>
+
+<h2>Security Considerations</h2>
+
+<p>Response templates execute code &mdash; a Velocity or JavaScript template can reach into the Java runtime and, unless restricted, call classes such as <code class="inline code">java.lang.Runtime</code>, <code class="inline code">java.lang.ProcessBuilder</code>, or <code class="inline code">java.lang.System</code>. Treat template content as trusted code. If untrusted users can submit expectations (for example because the control plane is exposed), lock down what templates are allowed to do.</p>
+
+<ul>
+    <li><strong>Velocity</strong> &mdash; set <code class="inline code">velocityDisallowClassLoading</code> to <code class="inline code">true</code> to block class loading from within Velocity templates, preventing access to arbitrary Java classes.</li>
+    <li><strong>JavaScript</strong> &mdash; set <code class="inline code">javascriptDisallowedClasses</code> to a comma-separated list of fully-qualified class names that JavaScript templates may not use. At a minimum, deny <code class="inline code">java.lang.Runtime</code>, <code class="inline code">java.lang.ProcessBuilder</code>, <code class="inline code">java.lang.System</code>, <code class="inline code">java.lang.Class</code>, and <code class="inline code">java.lang.ClassLoader</code> so templates cannot spawn processes, read or alter system state, or load further classes by reflection.</li>
+</ul>
+
+<p>See the <a href="/mock_server/configuration_properties.html">configuration properties</a> page for the full list of equivalent system-property, environment-variable, and Java API forms of these settings. To stop untrusted callers from registering templated expectations in the first place, also enable <a href="/mock_server/control_plane_authorisation.html">control plane authorisation</a>.</p>

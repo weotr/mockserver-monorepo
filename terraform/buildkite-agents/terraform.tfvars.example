@@ -1,9 +1,16 @@
 # Copy this to terraform.tfvars and fill in values.
 # NEVER commit terraform.tfvars — it is gitignored.
 
-# Get your agent token from: https://buildkite.com/organizations/mockserver/agents
-# Or retrieve from AWS SSM Parameter Store (see .opencode/skills/terraform-tfvars/)
-buildkite_agent_token = "your-token-here"
+# IMPORTANT: Do NOT put the Buildkite agent token in this file.
+# Source it at apply time via an environment variable:
+#
+#   export TF_VAR_buildkite_agent_token=$(aws ssm get-parameter \
+#     --name /buildkite/buildkite/agent-token \
+#     --with-decryption --query Parameter.Value --output text \
+#     --profile mockserver-build)
+#
+# The run.sh wrapper does this automatically.
+# buildkite_agent_token = "NEVER_PUT_TOKEN_HERE"
 
 region               = "eu-west-2"
 instance_types       = "c5.2xlarge,c5.xlarge,c5a.2xlarge,c5a.xlarge,m5.2xlarge,m5.xlarge"

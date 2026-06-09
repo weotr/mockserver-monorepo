@@ -12,7 +12,10 @@ import org.mockserver.mock.HttpState;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.ObjectMapperFactory;
 
+import org.mockserver.socket.PortFactory;
+
 import java.util.Arrays;
+import java.util.function.BooleanSupplier;
 
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -39,12 +42,37 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
     public void setUp() {
         LifeCycle server = mock(LifeCycle.class);
         when(server.getScheduler()).thenReturn(mock(Scheduler.class));
-        when(server.getLocalPorts()).thenReturn(Arrays.asList(1080));
+        when(server.getLocalPorts()).thenReturn(Arrays.asList(PortFactory.findFreePort()));
         when(server.isRunning()).thenReturn(true);
 
         httpState = new HttpState(configuration(), new MockServerLogger(), mock(Scheduler.class));
         toolRegistry = new McpToolRegistry(httpState, server);
         objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
+    }
+
+    /**
+     * Polls until the condition is true or the deadline (5 seconds) is exceeded.
+     */
+    private void pollUntilTrue(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("Timed out waiting for condition to become true");
+            }
+            Thread.sleep(50);
+        }
+    }
+
+    private int retrieveRecordedExpectationCount() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("type", "RECORDED_EXPECTATIONS");
+        params.put("format", "JSON");
+        JsonNode result = toolRegistry.callTool("raw_retrieve", params);
+        JsonNode data = result.path("data");
+        if (data.isArray()) {
+            return data.size();
+        }
+        return 0;
     }
 
     @Test
@@ -72,8 +100,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(201).withBody("{\"orderId\":42}"))
         );
 
-        // allow async disruptor to process
-        Thread.sleep(500);
+        // poll until both recorded expectations are visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 2);
 
         // when - create expectations from recorded traffic
         ObjectNode params = objectMapper.createObjectNode();
@@ -126,7 +154,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(200).withBody("{\"status\":\"ok\"}"))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when - preview the expectations
         ObjectNode params = objectMapper.createObjectNode();
@@ -190,7 +219,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(204))
         );
 
-        Thread.sleep(500);
+        // poll until all 3 recorded expectations are visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 3);
 
         // when - create expectations only for GET requests
         ObjectNode params = objectMapper.createObjectNode();
@@ -236,7 +266,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(200).withBody("[]"))
         );
 
-        Thread.sleep(500);
+        // poll until both recorded expectations are visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 2);
 
         // when - filter by path
         ObjectNode params = objectMapper.createObjectNode();
@@ -269,7 +300,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(200).withBody("[]"))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when - filter by a path that doesn't match
         ObjectNode params = objectMapper.createObjectNode();
@@ -295,7 +327,8 @@ public class CreateExpectationsFromRecordedTrafficIntegrationTest {
             .setArguments(response().withStatusCode(200).withBody("{\"key\":\"value\"}"))
         );
 
-        Thread.sleep(500);
+        // poll until the recorded expectation is visible
+        pollUntilTrue(() -> retrieveRecordedExpectationCount() >= 1);
 
         // when - create expectations from recorded traffic
         ObjectNode params = objectMapper.createObjectNode();

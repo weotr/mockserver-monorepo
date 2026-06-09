@@ -21,9 +21,51 @@ function build_docker() {
     runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing --build-arg source=copy ${SCRIPT_DIR}/../docker"
     runCommand "rm ${SCRIPT_DIR}/../docker/mockserver-netty-jar-with-dependencies.jar"
   fi
+  if [[ "${SKIP_DOCKER_BUILD_MOCKSERVER:-}" != "true" ]]; then
+    build_clustered_docker
+  fi
   if [[ "${SKIP_DOCKER_REBUILD_CLIENT:-}" != "true" ]]; then
     runCommand "docker build -t mockserver/mockserver:integration_testing_client_curl -f ${SCRIPT_DIR}/client_docker_images/CurlClientDockerfile ${SCRIPT_DIR}/client_docker_images"
   fi
+}
+
+# Build the -clustered image variant that includes the Infinispan state
+# backend module and its transitive dependencies. The /libs/* classpath
+# glob in the ENTRYPOINT picks up these additional JARs at runtime.
+function build_clustered_docker() {
+  local clustered_dir="${SCRIPT_DIR}/../docker/clustered"
+  local libs_dir="${clustered_dir}/libs"
+
+  # The clustered image is assembled from Maven outputs: the locally-built fat
+  # jar plus the Infinispan module's runtime classpath resolved via ./mvnw.
+  # The CI container-tests step runs on a bare host (Docker only, no JDK, with
+  # SKIP_JAVA_BUILD=true) where neither is present, so skip gracefully there —
+  # the clustered smoke test then non-blocking-skips (image absent). This still
+  # builds and smoke-tests fully in local dev where the reactor + JDK exist.
+  if ! command -v java >/dev/null 2>&1; then
+    printMessage "clustered: skipping build (no JDK on host — needs Maven to resolve the Infinispan classpath)"
+    return 0
+  fi
+
+  # Copy fat jar
+  local source_jar
+  source_jar=$(ls "${SCRIPT_DIR}"/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1)
+  if [[ -z "${source_jar}" ]]; then
+    printMessage "clustered: skipping build (no local mockserver-netty fat jar — run a reactor package first)"
+    return 0
+  fi
+  cp "${source_jar}" "${clustered_dir}/mockserver-netty-jar-with-dependencies.jar"
+
+  # Copy infinispan module jar + its runtime dependencies (excluding org.mock-server)
+  rm -rf "${libs_dir}" && mkdir -p "${libs_dir}"
+  runCommand "(cd ${SCRIPT_DIR}/../mockserver && ./mvnw -pl mockserver-state-infinispan dependency:copy-dependencies -DincludeScope=runtime -DexcludeGroupIds=org.mock-server -DoutputDirectory=${libs_dir} -q)"
+  cp "${SCRIPT_DIR}"/../mockserver/mockserver-state-infinispan/target/mockserver-state-infinispan-*.jar "${libs_dir}/"
+
+  runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing_clustered ${clustered_dir}"
+
+  # Clean up build context
+  rm -f "${clustered_dir}/mockserver-netty-jar-with-dependencies.jar"
+  rm -rf "${libs_dir}"
 }
 
 function test() {
@@ -73,8 +115,21 @@ function smoke_test_variant() {
     build_args="--build-arg source=copy"
   fi
 
+  # The graaljs Dockerfile COPYs ca-bundle.pem from the build context (for
+  # corporate proxies); ensure an empty placeholder exists when no real bundle
+  # is provided, so the COPY instruction does not fail.
+  local ca_bundle_path="${variant_dir}/ca-bundle.pem"
+  local ca_bundle_created="false"
+  if [[ "${variant}" == "graaljs" && ! -f "${ca_bundle_path}" ]]; then
+    touch "${ca_bundle_path}"
+    ca_bundle_created="true"
+  fi
+
   runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
   rm -f "${jar_path}"
+  if [[ "${ca_bundle_created}" == "true" ]]; then
+    rm -f "${ca_bundle_path}"
+  fi
 
   if [[ ${exit_code} -eq 0 ]]; then
     runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
@@ -106,9 +161,245 @@ function smoke_test_variant() {
   return ${exit_code}
 }
 
+# Non-blocking wrapper around smoke_test_variant: records pass/fail to the
+# warning log instead of the failure log. Used for new/unproven variants
+# whose CI behaviour has not yet been validated.
+function smoke_test_variant_nonblocking() {
+  local variant="$1"
+  local tag="mockserver/mockserver:smoke-${variant}"
+  local container="smoke-${variant}"
+  local variant_dir="${SCRIPT_DIR}/../docker/${variant}"
+  local jar_path="${variant_dir}/mockserver-netty-jar-with-dependencies.jar"
+  export TEST_CASE="docker_variant_smoke_${variant}"
+  printMessage "Smoke test (non-blocking): variant \"${variant}\""
+
+  local exit_code=0
+  local source_jar
+  source_jar=$(ls "${SCRIPT_DIR}"/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1)
+  if [[ -z "${source_jar}" ]]; then
+    source_jar=$(ls "${SCRIPT_DIR}"/../docker/mockserver-netty-jar-with-dependencies.jar 2>/dev/null | head -1)
+  fi
+  if [[ -z "${source_jar}" ]]; then
+    printFailureMessage "${variant}: no local mockserver-netty fat jar found - build it first"
+    logTestResultNonBlocking "1" "${TEST_CASE}"
+    return 0
+  fi
+
+  cp "${source_jar}" "${jar_path}"
+  local build_args=""
+  if [[ "${variant}" != "local" ]]; then
+    build_args="--build-arg source=copy"
+  fi
+
+  local ca_bundle_path="${variant_dir}/ca-bundle.pem"
+  local ca_bundle_created="false"
+  if [[ "${variant}" == "graaljs" && ! -f "${ca_bundle_path}" ]]; then
+    touch "${ca_bundle_path}"
+    ca_bundle_created="true"
+  fi
+
+  runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
+  rm -f "${jar_path}"
+  if [[ "${ca_bundle_created}" == "true" ]]; then
+    rm -f "${ca_bundle_path}"
+  fi
+
+  if [[ ${exit_code} -eq 0 ]]; then
+    runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+    runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
+    local host_port
+    host_port=$(docker port "${container}" 1080 2>/dev/null | head -1 | awk -F: '{print $NF}')
+    if [[ -z "${host_port}" ]]; then
+      printFailureMessage "${variant}: could not resolve host port for container ${container}"
+      exit_code=1
+    else
+      local i status
+      status=000
+      for i in $(seq 1 15); do
+        status=$(curl -sf -o /dev/null -w '%{http_code}' -X PUT "http://localhost:${host_port}/mockserver/status" 2>/dev/null || echo "000")
+        [[ "${status}" == "200" ]] && break
+        sleep 2
+      done
+      if [[ "${status}" != "200" ]]; then
+        printFailureMessage "${variant}: /mockserver/status returned \"${status}\" (expected 200)"
+        runCommand "docker logs ${container} | tail -30 || true"
+        exit_code=1
+      fi
+    fi
+    runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  fi
+  runCommand "docker rmi -f ${tag} >/dev/null 2>&1 || true"
+  # Non-blocking: warn on failure, never set EXIT_CODE
+  logTestResultNonBlocking "${exit_code}" "${TEST_CASE}"
+  return 0
+}
+
+# Assert that the Docker HEALTHCHECK defined in the Dockerfile transitions the
+# container to "healthy" within a reasonable period. Every Dockerfile ships
+# HEALTHCHECK ... org.mockserver.cli.HealthCheck but no test has exercised it.
+function test_healthcheck() {
+  local tag="mockserver/mockserver:integration_testing"
+  local container="healthcheck-test"
+  export TEST_CASE="docker_healthcheck"
+  printMessage "Test: HEALTHCHECK reaches healthy"
+
+  local exit_code=0
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
+
+  # Poll docker inspect for health status; the Dockerfile defines
+  # --start-period=120s --interval=10s --retries=3 so we allow up to 180s.
+  local i health_status
+  health_status="starting"
+  for i in $(seq 1 60); do
+    health_status=$(docker inspect --format='{{.State.Health.Status}}' "${container}" 2>/dev/null || echo "unknown")
+    if [[ "${health_status}" == "healthy" ]]; then
+      break
+    elif [[ "${health_status}" == "unhealthy" ]]; then
+      printFailureMessage "HEALTHCHECK: container reached 'unhealthy' state"
+      runCommand "docker logs ${container} | tail -30 || true"
+      exit_code=1
+      break
+    fi
+    sleep 3
+  done
+  if [[ "${exit_code}" -eq 0 && "${health_status}" != "healthy" ]]; then
+    printFailureMessage "HEALTHCHECK: container never reached 'healthy' (last status: ${health_status})"
+    runCommand "docker logs ${container} | tail -30 || true"
+    exit_code=1
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  logTestResult "${exit_code}" "${TEST_CASE}"
+  return ${exit_code}
+}
+
+# Assert that the default (distroless) image runs as a non-root user.
+# The Dockerfile declares USER nonroot but this has never been asserted by a test.
+function test_nonroot_user() {
+  local tag="mockserver/mockserver:integration_testing"
+  local container="nonroot-test"
+  export TEST_CASE="docker_nonroot_user"
+  printMessage "Test: non-root runtime user"
+
+  local exit_code=0
+  # The distroless image has no shell or 'id' binary, so we inspect the
+  # image's configured user via docker inspect.
+  local configured_user
+  configured_user=$(docker inspect --format='{{.Config.User}}' "${tag}" 2>/dev/null || echo "")
+  if [[ -z "${configured_user}" || "${configured_user}" == "root" || "${configured_user}" == "0" ]]; then
+    printFailureMessage "Non-root user: image configured user is '${configured_user}' (expected non-root)"
+    exit_code=1
+  fi
+
+  # Also verify at runtime: start the container and check the process UID.
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  runCommand "docker run -d --name ${container} -p 0:1080 ${tag}"
+  # Wait briefly for the process to start
+  sleep 2
+  # docker top (default ps format) outputs UID as the first column. On
+  # distroless, the nonroot user maps to UID 65532. Reject UID 0 (root).
+  local runtime_uid
+  runtime_uid=$(docker top "${container}" 2>/dev/null | tail -1 | awk '{print $1}')
+  if [[ "${runtime_uid}" == "0" || "${runtime_uid}" == "root" ]]; then
+    printFailureMessage "Non-root user: runtime process UID is '${runtime_uid}' (expected non-root)"
+    exit_code=1
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  logTestResult "${exit_code}" "${TEST_CASE}"
+  return ${exit_code}
+}
+
+# Build the main Dockerfile for linux/arm64 via buildx. Release builds publish
+# linux/amd64+arm64 via buildx but the test suite only exercises the host arch.
+# This build gate catches arch-specific Dockerfile breakage early; booting the
+# image would require QEMU user-mode emulation, so a successful BUILD is the
+# gate — no runtime assertion.
+function test_arm64_build_gate() {
+  local docker_dir="${SCRIPT_DIR}/../docker"
+  local jar_path="${docker_dir}/mockserver-netty-jar-with-dependencies.jar"
+  export TEST_CASE="docker_arm64_build_gate"
+  printMessage "Test (non-blocking): arm64 build gate (buildx --platform linux/arm64)"
+
+  local exit_code=0
+  # Locate locally-built fat jar
+  local source_jar
+  source_jar=$(ls "${SCRIPT_DIR}"/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1)
+  if [[ -z "${source_jar}" ]]; then
+    printFailureMessage "arm64 build gate: no local mockserver-netty fat jar found"
+    logTestResultNonBlocking "1" "${TEST_CASE}"
+    return 0
+  fi
+
+  cp "${source_jar}" "${jar_path}"
+  # Ensure a buildx builder that supports cross-platform builds exists.
+  # The default "docker" driver cannot cross-build; create a
+  # "docker-container" driver builder matching the release pipeline.
+  docker buildx create --use --name multiarch --driver docker-container 2>/dev/null \
+    || docker buildx use multiarch 2>/dev/null \
+    || true
+  # Build-only (no --load / --push) for linux/arm64.
+  runCommand "docker buildx build --platform linux/arm64 --build-arg source=copy -t mockserver/mockserver:arm64-gate ${docker_dir}" || exit_code=1
+  rm -f "${jar_path}"
+
+  # Non-blocking: a failure here warns but does not fail the pipeline.
+  logTestResultNonBlocking "${exit_code}" "${TEST_CASE}"
+  return 0
+}
+
+# Smoke test for the -clustered image variant. Uses the image already built
+# by build_clustered_docker() — no rebuild needed. Verifies the container
+# starts and /mockserver/status responds 200 (Infinispan boots in LOCAL
+# mode when MOCKSERVER_CLUSTER_ENABLED is not set).
+function smoke_test_clustered() {
+  local tag="mockserver/mockserver:integration_testing_clustered"
+  local container="smoke-clustered"
+  export TEST_CASE="docker_variant_smoke_clustered"
+  printMessage "Smoke test: clustered variant"
+
+  local exit_code=0
+  # Verify the image exists (build_clustered_docker should have created it)
+  if ! docker image inspect "${tag}" >/dev/null 2>&1; then
+    printFailureMessage "clustered: image ${tag} not found — was build_clustered_docker() skipped?"
+    logTestResultNonBlocking "1" "${TEST_CASE}"
+    return 0
+  fi
+
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  # Boot with stateBackend=infinispan but cluster disabled (LOCAL mode) —
+  # validates that the Infinispan module is on the classpath and loads.
+  runCommand "docker run -d --name ${container} -p 0:1080 -e MOCKSERVER_STATE_BACKEND=infinispan ${tag}"
+  local host_port
+  host_port=$(docker port "${container}" 1080 2>/dev/null | head -1 | awk -F: '{print $NF}')
+  if [[ -z "${host_port}" ]]; then
+    printFailureMessage "clustered: could not resolve host port for container ${container}"
+    exit_code=1
+  else
+    local i status
+    status=000
+    for i in $(seq 1 15); do
+      status=$(curl -sf -o /dev/null -w '%{http_code}' -X PUT "http://localhost:${host_port}/mockserver/status" 2>/dev/null || echo "000")
+      [[ "${status}" == "200" ]] && break
+      sleep 2
+    done
+    if [[ "${status}" != "200" ]]; then
+      printFailureMessage "clustered: /mockserver/status returned \"${status}\" (expected 200)"
+      runCommand "docker logs ${container} | tail -30 || true"
+      exit_code=1
+    fi
+  fi
+  runCommand "docker rm -f ${container} >/dev/null 2>&1 || true"
+  # Non-blocking: new variant, does not fail the pipeline
+  logTestResultNonBlocking "${exit_code}" "${TEST_CASE}"
+  return 0
+}
+
 function run_all_tests() {
   export PASS_LOG_FILE=$(mktemp)
   export FAIL_LOG_FILE=$(mktemp)
+  export WARN_LOG_FILE=$(mktemp)
+  export SKIP_LOG_FILE=$(mktemp)
 
   if [[ "${SKIP_ALL_TESTS:-}" != "true" ]]; then
     set +euo pipefail
@@ -133,11 +424,25 @@ function run_all_tests() {
       # Same gate as docker_compose_* tests: they share the same JAR + docker
       # daemon, and the helm-only CI step (helm-integration-test.sh) sets
       # SKIP_DOCKER_TESTS=true to skip both.
+      # HEALTHCHECK and non-root user assertions on the default image.
+      test_healthcheck || true
+      test_nonroot_user || true
       if [[ "${SKIP_VARIANT_TESTS:-}" != "true" ]]; then
         smoke_test_variant "root" || true
         smoke_test_variant "snapshot" || true
         smoke_test_variant "local" || true
+        smoke_test_variant "graaljs" || true
+        # root-snapshot is a new variant not yet proven in CI — non-blocking.
+        smoke_test_variant_nonblocking "root-snapshot" || true
       fi
+      # Clustered variant: test that the -clustered image boots and responds
+      # to /mockserver/status. The image is already built by build_clustered_docker().
+      smoke_test_clustered || true
+      # arm64 cross-platform build gate (buildx --platform linux/arm64).
+      test_arm64_build_gate || true
+      # WAR deployment test (Tomcat container); requires mockserver-war to
+      # have been built by the Maven package step.
+      test "docker_compose_war_tomcat"
       clean-up-docker-containers
     fi
     if [[ "${SKIP_HELM_TESTS:-}" != "true" ]]; then
@@ -150,6 +455,12 @@ function run_all_tests() {
       test "helm_inline_config"
       test "helm_configmap_injection"
       test "helm_mockserver_config_chart"
+      # Clustered state convergence e2e (non-blocking — new test, may be flaky)
+      if [[ "${SKIP_CLUSTERED_TEST:-}" != "true" ]]; then
+        # Import the -clustered image into k3d so pods can pull it locally
+        k3d image import --cluster "${CLUSTER_NAME}" mockserver/mockserver:integration_testing_clustered 2>/dev/null || true
+        test "helm_clustered_convergence" || true
+      fi
       tear-down-k8s
     fi
     set -euo pipefail
@@ -160,17 +471,31 @@ function run_all_tests() {
     NUMBER_OF_PASSED_TESTS=$(cat "${PASS_LOG_FILE}" | wc -l | sed -r 's/( )+//g')
     printMessage "PASSED: ${NUMBER_OF_PASSED_TESTS}"
     cat "${PASS_LOG_FILE}"
-    rm "${PASS_LOG_FILE}"
     printf "\n\n"
   fi
+  rm -f "${PASS_LOG_FILE}"
+  if [[ -s "${SKIP_LOG_FILE}" ]]; then
+    NUMBER_OF_SKIPPED_TESTS=$(cat "${SKIP_LOG_FILE}" | wc -l | sed -r 's/( )+//g')
+    printMessage "SKIPPED: ${NUMBER_OF_SKIPPED_TESTS}"
+    cat "${SKIP_LOG_FILE}"
+    printf "\n\n"
+  fi
+  rm -f "${SKIP_LOG_FILE}"
+  if [[ -s "${WARN_LOG_FILE}" ]]; then
+    NUMBER_OF_WARNED_TESTS=$(cat "${WARN_LOG_FILE}" | wc -l | sed -r 's/( )+//g')
+    printMessage "WARNINGS (non-blocking): ${NUMBER_OF_WARNED_TESTS}"
+    cat "${WARN_LOG_FILE}"
+    printf "\n\n"
+  fi
+  rm -f "${WARN_LOG_FILE}"
   if [[ -s "${FAIL_LOG_FILE}" ]]; then
     NUMBER_OF_FAILED_TESTS=$(cat "${FAIL_LOG_FILE}" | wc -l | sed -r 's/( )+//g')
     printMessage "FAILED: ${NUMBER_OF_FAILED_TESTS}"
     cat "${FAIL_LOG_FILE}"
-    rm "${FAIL_LOG_FILE}"
     printf "\n\n"
     EXIT_CODE=1
   fi
+  rm -f "${FAIL_LOG_FILE}"
 
   exit ${EXIT_CODE:-0}
 }

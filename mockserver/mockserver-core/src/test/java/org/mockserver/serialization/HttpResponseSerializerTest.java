@@ -21,12 +21,13 @@ import org.mockserver.validator.jsonschema.JsonSchemaHttpResponseValidator;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.model.Cookie.cookie;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.StringBody.exact;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -82,7 +83,7 @@ public class HttpResponseSerializerTest {
         HttpResponse httpResponse = httpResponseSerializer.deserialize("responseBytes");
 
         // then
-        assertEquals(fullHttpResponse, httpResponse);
+        assertThat( httpResponse, is(fullHttpResponse));
     }
 
     @Test
@@ -93,7 +94,6 @@ public class HttpResponseSerializerTest {
         // then
         verify(objectWriter).writeValueAsString(fullHttpResponseDTO);
     }
-
 
     @Test
     @SuppressWarnings("RedundantArrayCreation")

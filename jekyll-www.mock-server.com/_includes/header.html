@@ -14,34 +14,65 @@
 			</ul>
 		</div>
 		<div class="pure-menu pure-menu-open">
-			<!--			<span class="pure-menu-heading">MockServer</span>-->
+			<span class="pure-menu-heading">Getting Started</span>
 			<ul>
 				{% for page in sorted_pages %}
-				{% if page.section == 'General' and page.subsection %}
-				{% if page.shortTitle %}
-				{% assign title = page.shortTitle %}
-				{% else %}
-				{% assign title = page.title %}
-				{% endif %}
+					{% if page.section == 'Getting Started' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
-				{% endif %}
+					{% endif %}
 				{% endfor %}
-				<li><a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">REST API Reference</a></li><!-- <img src="/images/openapi.png" width="100px"/></a> -->
+				<li><a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">REST API Reference</a></li>
 				<li><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples" target="_blank" rel="noopener noreferrer">Example Code</a></li>
 			</ul>
 		</div>
 		<div class="pure-menu pure-menu-open">
-			<span class="pure-menu-heading">Mocking</span>
+			<span class="pure-menu-heading">Creating Mocks</span>
 			<ul>
 				{% for page in sorted_pages %}
-					{% if page.section == 'Mock Server' and page.subsection %}
-						{% if page.shortTitle %}
-							{% assign title = page.shortTitle %}
-						{% else %}
-							{% assign title = page.title %}
-						{% endif %}
+					{% if page.section == 'Creating Mocks' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
+				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
+					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
+				</li>
+					{% endif %}
+				{% endfor %}
+			</ul>
+		</div>
+		<div class="pure-menu pure-menu-open">
+			<span class="pure-menu-heading">Data &amp; State</span>
+			<ul>
+				{% for page in sorted_pages %}
+					{% if page.section == 'Data & State' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
+				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
+					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
+				</li>
+					{% endif %}
+				{% endfor %}
+			</ul>
+		</div>
+		<div class="pure-menu pure-menu-open">
+			<span class="pure-menu-heading">Verify &amp; Test</span>
+			<ul>
+				{% for page in sorted_pages %}
+					{% if page.section == 'Verify & Test' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
+				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
+					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
+				</li>
+					{% endif %}
+				{% endfor %}
+			</ul>
+		</div>
+		<div class="pure-menu pure-menu-open">
+			<span class="pure-menu-heading">Protocols &amp; Advanced</span>
+			<ul>
+				{% for page in sorted_pages %}
+					{% if page.section == 'Protocols & Advanced' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
@@ -54,11 +85,7 @@
 			<ul>
 				{% for page in sorted_pages %}
 					{% if page.section == 'AI Integration' and page.subsection %}
-						{% if page.shortTitle %}
-							{% assign title = page.shortTitle %}
-						{% else %}
-							{% assign title = page.title %}
-						{% endif %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
@@ -72,11 +99,7 @@
 			<ul>
 				{% for page in sorted_pages %}
 					{% if page.section == 'Chaos Testing' and page.subsection %}
-						{% if page.shortTitle %}
-							{% assign title = page.shortTitle %}
-						{% else %}
-							{% assign title = page.title %}
-						{% endif %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
@@ -89,11 +112,33 @@
 			<ul>
 				{% for page in sorted_pages %}
 					{% if page.section == 'Proxy' and page.subsection %}
-						{% if page.shortTitle %}
-							{% assign title = page.shortTitle %}
-						{% else %}
-							{% assign title = page.title %}
-						{% endif %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
+				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
+					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
+				</li>
+					{% endif %}
+				{% endfor %}
+			</ul>
+		</div>
+		<div class="pure-menu pure-menu-open">
+			<span class="pure-menu-heading">Security</span>
+			<ul>
+				{% for page in sorted_pages %}
+					{% if page.section == 'Security' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
+				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
+					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
+				</li>
+					{% endif %}
+				{% endfor %}
+			</ul>
+		</div>
+		<div class="pure-menu pure-menu-open">
+			<span class="pure-menu-heading">Operations</span>
+			<ul>
+				{% for page in sorted_pages %}
+					{% if page.section == 'Operations' and page.subsection %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
@@ -106,24 +151,15 @@
 			<ul>
 				{% for page in sorted_pages %}
 					{% if page.section == 'Where' and page.subsection %}
-						{% if page.shortTitle %}
-							{% assign title = page.shortTitle %}
-						{% else %}
-							{% assign title = page.title %}
-						{% endif %}
+						{% if page.shortTitle %}{% assign title = page.shortTitle %}{% else %}{% assign title = page.title %}{% endif %}
 				<li typeof="sioc:Page" about="{{ page.url | prepend: site.baseurl }}" class="{% if url == page.url %}active{% endif %}">
 					<a href="{{ page.url | prepend: site.baseurl }}" property="dc:title">{{ title }}</a>
 				</li>
 					{% endif %}
 				{% endfor %}
-				<li><a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">Swagger Hub</a></li><!-- <img src="/images/openapi.png" width="100px"/></a> -->
+				<li><a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">Swagger Hub</a></li>
 			</ul>
 		</div>
-		<!--<div class="pure-menu pure-menu-open">-->
-			<!--<ul>-->
-				<!--<li id="siteMapLink" class="pure-menu-heading"><a href="/sitemap.html">Site Map</a></li>-->
-			<!--</ul>-->
-		<!--</div>-->
 	</nav>
 
 </header>

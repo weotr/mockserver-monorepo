@@ -13,7 +13,6 @@ import org.mockserver.serialization.model.OpenAPIExpectationDTO;
 
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -65,12 +64,12 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
         OpenAPIExpectation httpResponse = new OpenAPIExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(openAPIExpectation()
+        assertThat( httpResponse, is(openAPIExpectation()
             .withSpecUrlOrPayload("org/mockserver/openapi/openapi_simple_example.json")
             .withOperationsAndResponses(ImmutableMap.<String, Object>of(
                 "listPets", "200",
                 "createPets", "201"
-            )), httpResponse);
+            ))));
     }
 
     @Test
@@ -85,9 +84,9 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
         OpenAPIExpectation httpResponse = new OpenAPIExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new OpenAPIExpectationDTO()
+        assertThat( httpResponse, is(new OpenAPIExpectationDTO()
             .setSpecUrlOrPayload("org/mockserver/openapi/openapi_simple_example.json")
-            .buildObject(), httpResponse);
+            .buildObject()));
     }
 
     @Test
@@ -103,13 +102,13 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonOpenAPIExpectation, is("{" + NEW_LINE +
             "  \"specUrlOrPayload\" : \"org/mockserver/openapi/openapi_simple_example.json\"," + NEW_LINE +
             "  \"operationsAndResponses\" : {" + NEW_LINE +
             "    \"listPets\" : \"200\"," + NEW_LINE +
             "    \"createPets\" : \"201\"" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonOpenAPIExpectation);
+            "}"));
     }
 
     @Test
@@ -134,7 +133,7 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("[ {" + NEW_LINE +
+        assertThat( jsonOpenAPIExpectation, is("[ {" + NEW_LINE +
             "  \"specUrlOrPayload\" : \"org/mockserver/openapi/openapi_simple_example.json\"," + NEW_LINE +
             "  \"operationsAndResponses\" : {" + NEW_LINE +
             "    \"listPets\" : \"200\"," + NEW_LINE +
@@ -146,7 +145,7 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
             "    \"listPets\" : \"200\"," + NEW_LINE +
             "    \"createPets\" : \"201\"" + NEW_LINE +
             "  }" + NEW_LINE +
-            "} ]", jsonOpenAPIExpectation);
+            "} ]"));
     }
 
     @Test
@@ -170,7 +169,7 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("[ {" + NEW_LINE +
+        assertThat( jsonOpenAPIExpectation, is("[ {" + NEW_LINE +
             "  \"specUrlOrPayload\" : \"org/mockserver/openapi/openapi_simple_example.json\"," + NEW_LINE +
             "  \"operationsAndResponses\" : {" + NEW_LINE +
             "    \"listPets\" : \"200\"," + NEW_LINE +
@@ -182,7 +181,7 @@ public class OpenAPIExpectationSerializerSchemaValidationTest {
             "    \"listPets\" : \"200\"," + NEW_LINE +
             "    \"createPets\" : \"201\"" + NEW_LINE +
             "  }" + NEW_LINE +
-            "} ]", jsonOpenAPIExpectation);
+            "} ]"));
     }
 
     @Test

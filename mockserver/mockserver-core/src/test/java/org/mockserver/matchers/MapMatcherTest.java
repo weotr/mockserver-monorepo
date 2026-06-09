@@ -4,9 +4,8 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.Headers;
-
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -32,7 +31,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -45,7 +44,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar", "bob");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -58,7 +57,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar", "bob");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -71,7 +70,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -84,7 +83,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -99,7 +98,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -115,7 +114,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -131,7 +130,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -147,7 +146,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -163,7 +162,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -178,7 +177,7 @@ public class MapMatcherTest {
         matched.withEntry("FOO2", "bar2");
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -187,7 +186,7 @@ public class MapMatcherTest {
         MultiValueMapMatcher mapMatcher = new MultiValueMapMatcher(new MockServerLogger(), matcher, true);
 
         // then
-        assertTrue(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(true));
     }
 
     @Test
@@ -200,7 +199,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -213,7 +212,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "bar2");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -226,7 +225,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -239,7 +238,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -254,7 +253,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -269,7 +268,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -284,7 +283,7 @@ public class MapMatcherTest {
         matched.withEntry("foo2", "bar2");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -297,7 +296,7 @@ public class MapMatcherTest {
         matched.withEntry("foo", "/{}/");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 
     @Test
@@ -310,6 +309,6 @@ public class MapMatcherTest {
         matched.withEntry("foo", "/{}/");
 
         // then
-        assertFalse(mapMatcher.matches(null, matched));
+        assertThat(mapMatcher.matches(null, matched), is(false));
     }
 }

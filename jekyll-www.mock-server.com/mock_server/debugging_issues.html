@@ -2,8 +2,8 @@
 title: Logging & Debugging
 description: Retrieve active expectations, recorded requests, logs, and metrics from MockServer to diagnose matching failures and integration issues.
 layout: page
-pageOrder: 5
-section: 'General'
+pageOrder: 2
+section: 'Operations'
 subsection: true
 sitemap:
 priority: 0.7
@@ -45,7 +45,7 @@ lastmod: 2019-11-10T08:00:00+01:00
 
 <p>It is possible to retrieve the active expectations, as show below in the code examples.</p>
 
-<p>Expectations are returned in the order they have been added. The expectations are returned can be filter using a <a href="/mock_server/getting_started.html#request_matchers">request matcher</a>.</p>
+<p>Expectations are returned in the order they have been added. The expectations are returned can be filter using a <a href="/mock_server/creating_expectations.html#request_matchers">request matcher</a>.</p>
 
 <button id="button_active_expectations" class="accordion title"><strong>Retrieving Active Expectations Code Examples</strong></button>
 <div class="panel title">
@@ -219,9 +219,9 @@ mockServerClient("localhost", 1080).retrieveActiveExpectations({
 <p>MockServer and the proxy record log messages for all major actions, including:</p>
 <ul>
     <li>adding expectations</li>
-    <li><a href="/mock_server/getting_started.html#request_matchers">matching requests</a></li>
-    <li>executing actions (<a href="/mock_server/getting_started.html#response_action">response</a>, <a href="/mock_server/getting_started.html#forward_action">forward</a>, <a href="/mock_server/getting_started.html#callback_action">callback</a>
-        & <a href="/mock_server/getting_started.html#error_action">error</a>)
+    <li><a href="/mock_server/creating_expectations.html#request_matchers">matching requests</a></li>
+    <li>executing actions (<a href="/mock_server/creating_expectations.html#response_action">response</a>, <a href="/mock_server/creating_expectations.html#forward_action">forward</a>, <a href="/mock_server/creating_expectations.html">callback</a>
+        & <a href="/mock_server/creating_expectations.html#error_action">error</a>)
     </li>
     <li>returning responses</li>
     <li><strong>forwarded requests and responses when MockServer is used as a proxy</strong> - both the request sent to the destination server and the actual response received are logged</li>
@@ -233,7 +233,7 @@ mockServerClient("localhost", 1080).retrieveActiveExpectations({
 
 <p>It is possible to retrieve the recorded log messages, as show below in the code examples.</p>
 
-<p>Log messages are returned in the order they have been recorded, and which log messages are returned can be filter using a <a href="/mock_server/getting_started.html#request_matchers">request matcher</a>.</p>
+<p>Log messages are returned in the order they have been recorded, and which log messages are returned can be filter using a <a href="/mock_server/creating_expectations.html#request_matchers">request matcher</a>.</p>
 
 <button id="button_recorded_log_messages" class="accordion title"><strong>Retrieving Recorded Log Events Code Examples</strong></button>
 <div class="panel title">
@@ -482,7 +482,7 @@ LogManager.getLogManager().readConfiguration(new ByteArrayInputStream(loggingCon
 
 <p>When running MockServer from the command line it relies on the Java Logger <span class="inline_code">java.util.logging.Logger</span> in addition to controlling the log level of MockServer using <span class="inline_code">-logLevel</span>
     the underlying logging framework can be configured (overriding the default configuration) by specifying the System Property <span class="inline_code">java.util.logging.config.file</span> or <span class="inline_code">java.util.logging.config.class</span>
-    as detailed in the <a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/util/logging/LogManager.html" rel="noopener noreferrer">LogManager JavaDoc</a>.</p>
+    as detailed in the <a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.logging/java/util/logging/LogManager.html" rel="noopener noreferrer">LogManager JavaDoc</a>.</p>
 
 <p>The MockServer github repository contains an example <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/blob/master/mockserver/mockserver-netty/src/main/resources/example_logging_configuration.properties" rel="noopener noreferrer">Java Logger configuration file</a> (which
     would be configured using <span class="inline_code">java.util.logging.config.file</span>).</p>

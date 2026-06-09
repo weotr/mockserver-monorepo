@@ -10,6 +10,7 @@ jobs:
   add-to-project:
     name: Add issue to MockServer Roadmap
     runs-on: ubuntu-latest
+    permissions: {}
     environment: project-automation
     steps:
       # PROJECT_TOKEN must be a classic PAT with 'project' scope,

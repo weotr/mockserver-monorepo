@@ -2,8 +2,8 @@
 title: CORS Support
 description: Enable and configure CORS headers in MockServer for control-plane and mocked responses, with examples for permissive and restrictive policies.
 layout: page
-pageOrder: 9
-section: 'General'
+pageOrder: 3
+section: 'Security'
 subsection: true
 sitemap:
   priority: 0.7
@@ -13,18 +13,18 @@ sitemap:
 
 <p>MockServer and the proxy has support for CORS.  By default, CORS support is not enabled for the Control Plane API and or for mocked response, such as, when expectations are matched, or proxied requests.</p>
 
-<p>When CORS support is enabled the following headers are be added by default:</p>
+<p>When CORS support is enabled, and the <code class="inline code">corsAllowMethods</code> / <code class="inline code">corsAllowHeaders</code> / <code class="inline code">corsAllowOrigin</code> properties are left at their defaults (blank), MockServer emits sensible defaults so the Control Plane API and dashboard are usable cross-origin out of the box:</p>
 
-<pre class="prettyprint code"><code class="code">Access-Control-Allow-Origin: ""
-Access-Control-Allow-Methods: ""
-Access-Control-Allow-Headers: ""
-Access-Control-Expose-Headers: ""
+<pre class="prettyprint code"><code class="code">Access-Control-Allow-Origin: &lt;request Origin&gt;   # the requesting Origin is reflected; "*" when there is no Origin
+Access-Control-Allow-Methods: "CONNECT, DELETE, GET, HEAD, OPTIONS, POST, PUT, PATCH, TRACE"
+Access-Control-Allow-Headers: "Allow, Content-Encoding, Content-Length, Content-Type, ETag, Expires, Last-Modified, Location, Server, Vary, Authorization"
+Access-Control-Expose-Headers: "Allow, Content-Encoding, Content-Length, Content-Type, ETag, Expires, Last-Modified, Location, Server, Vary, Authorization"
 Access-Control-Allow-Credentials: "false"
 Access-Control-Max-Age: "0"</code></pre>
 
-<p style="color: darkred"><strong>NOTE:</strong> the default configuration will prevent all cross-site requests</p>
+<p style="color: darkred"><strong>NOTE:</strong> by default the requesting <code class="inline code">Origin</code> is reflected, so cross-site requests are allowed out of the box. Set an explicit <code class="inline code">corsAllowOrigin</code> (for example an allow-list) to restrict which origins are permitted.</p>
 
-<p>To avoid security risk from cross-site requests CORS headers should be configured to the minimum required values for your use case, using the CORS <a href="#cors_configuration">configuration properties</a>, as below.</p>
+<p>To reduce the security risk from cross-site requests, CORS headers should be configured to the minimum required values for your use case, using the CORS <a href="#cors_configuration">configuration properties</a>, as below.</p>
 
 <p>A more permission approach that enables most use cases would configure the CORS headers, as follows:</p>
 
@@ -112,3 +112,12 @@ mockserver.start_mockserver({
 });</code></pre>
     </div>
 </div>
+
+<h2>See Also</h2>
+
+<ul>
+    <li><a href="/mock_server/configuration_properties.html#cors_configuration"><strong>CORS Configuration Properties</strong></a> &mdash; all CORS-related configuration properties and their defaults</li>
+    <li><a href="/mock_server/control_plane_authorisation.html#hardening_control_plane_cors"><strong>Hardening Control Plane CORS</strong></a> &mdash; restrict cross-origin access to MockServer's control plane in shared or exposed environments</li>
+    <li><a href="/mock_server/HTTPS_TLS.html"><strong>HTTPS &amp; TLS</strong></a> &mdash; serve cross-origin requests securely over HTTPS</li>
+    <li><a href="/mock_server/mocking_oauth2.html"><strong>Mocking OAuth2 Flows</strong></a> &mdash; mock OAuth2 endpoints for browser-based clients that rely on CORS</li>
+</ul>

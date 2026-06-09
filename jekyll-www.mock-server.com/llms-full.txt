@@ -348,6 +348,54 @@ Response (200 OK):
 
     {"currentInstant": "2025-01-15T09:30:00Z", "currentEpochMillis": 1736933400000, "frozen": true}
 
+### Stateful Scenarios
+
+Stateful scenarios model multi-step flows where the response depends on the current state. Scenarios are created implicitly by registering expectations with `scenarioName` and `scenarioState`, or explicitly via the endpoints below. All scenario state is reset when MockServer is reset.
+
+#### GET /mockserver/scenario
+
+List all known scenarios and their current state.
+
+Response (200 OK):
+
+    {"scenarios": [{"scenarioName": "DeployFlow", "currentState": "Deploying"}]}
+
+#### GET /mockserver/scenario/{name}
+
+Get the current state of one scenario.
+
+Response (200 OK):
+
+    {"scenarioName": "DeployFlow", "currentState": "Deploying"}
+
+#### PUT /mockserver/scenario/{name}
+
+Set a scenario's state immediately. Optionally schedule a timed auto-transition to `nextState` after `transitionAfterMs` milliseconds (the transition only fires if the scenario is still in the set state when the timer expires; scheduling a new transition cancels any pending one).
+
+Request body (set state immediately):
+
+    {"state": "Deploying"}
+
+Request body (with timed auto-transition):
+
+    {"state": "Deploying", "transitionAfterMs": 5000, "nextState": "Deployed"}
+
+Response (200 OK):
+
+    {"scenarioName": "DeployFlow", "currentState": "Deploying", "nextState": "Deployed", "transitionAfterMs": 5000}
+
+#### PUT /mockserver/scenario/{name}/trigger
+
+Externally advance a scenario to a specific state (e.g. from a test harness or CI pipeline).
+
+Request body:
+
+    {"newState": "Failed"}
+
+Response (200 OK):
+
+    {"scenarioName": "DeployFlow", "currentState": "Failed"}
+
 ## Request Matching
 
 ### Match Fields
@@ -1129,7 +1177,7 @@ Maven dependency:
     <dependency>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-client-java</artifactId>
-      <version>6.1.0</version>
+      <version>7.0.0</version>
     </dependency>
 
 Basic usage:
@@ -1494,7 +1542,7 @@ Basic:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.1.0
+        image: mockserver/mockserver:7.0.0
         ports:
           - "1080:1080"
         environment:
@@ -1504,7 +1552,7 @@ With configuration and initialization:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.1.0
+        image: mockserver/mockserver:7.0.0
         ports:
           - "1080:1080"
         environment:
@@ -1519,7 +1567,7 @@ With OpenAPI initialization and file watching:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.1.0
+        image: mockserver/mockserver:7.0.0
         ports:
           - "1080:1080"
         environment:
@@ -1534,7 +1582,7 @@ Using command line arguments:
 
     services:
       mockserver:
-        image: mockserver/mockserver:6.1.0
+        image: mockserver/mockserver:7.0.0
         command: -logLevel DEBUG -serverPort 1090
         ports:
           - "1080:1090"
@@ -1896,6 +1944,8 @@ The MCP endpoint follows the Model Context Protocol specification and provides t
 
 **retrieve_request_responses** - Retrieve request-response pairs recorded by MockServer.
 
+**retrieve_logs** - Retrieve MockServer's recorded log messages (request matching, mismatches, actions, errors) to debug why a test or request behaved as it did. Supports correlationId filtering and a limit parameter.
+
 **clear_expectations** - Clear expectations and/or logs matching a request.
 
 **reset** - Reset all state (expectations, logs, recorded requests).
@@ -2004,7 +2054,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
     <plugin>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-maven-plugin</artifactId>
-      <version>6.1.0</version>
+      <version>7.0.0</version>
       <configuration>
         <serverPort>1080</serverPort>
         <logLevel>WARN</logLevel>
@@ -2025,7 +2075,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
 
 ### Standalone JAR
 
-    java -jar mockserver-netty-no-dependencies-6.1.0.jar -serverPort 1080 -logLevel INFO
+    java -jar mockserver-netty-no-dependencies-7.0.0.jar -serverPort 1080 -logLevel INFO
 
 ### npm Module
 

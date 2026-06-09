@@ -12,6 +12,7 @@ graph TB
         JC[mockserver-client-java]
         NC["mockserver-client-node
 monorepo: mockserver-client-node/"]
+        TC[mockserver-testcontainers]
     end
 
     subgraph "Server Layer"
@@ -21,6 +22,8 @@ Standalone server"]
 WAR deployment"]
         MPW["mockserver-proxy-war
 WAR proxy"]
+        KW["mockserver-k8s-webhook
+K8s admission webhook"]
     end
 
     subgraph "Integration Layer"
@@ -35,6 +38,16 @@ Spring"]
     subgraph "Core Layer"
         MC["mockserver-core
 Domain model, matching, TLS"]
+        AS["mockserver-async
+AsyncAPI broker mocking"]
+    end
+
+    subgraph "State Backends"
+        SI["mockserver-state-infinispan
+Clustered state"]
+        BS3["mockserver-blob-s3"]
+        BGCS["mockserver-blob-gcs"]
+        BAZURE["mockserver-blob-azure"]
     end
 
     subgraph "Test Infrastructure"
@@ -47,9 +60,16 @@ Examples"]
     end
 
     JC --> MC
+    TC --> MC
     MN --> MC
+    MN --> AS
     MW --> MC
     MPW --> MC
+    KW --> MC
+    SI --> MC
+    BS3 --> MC
+    BGCS --> MC
+    BAZURE --> MC
     JR --> MN
     JR --> JC
     JJ --> MN
@@ -144,6 +164,44 @@ Usage examples:
 
 - Docker Compose configuration samples (11 scenarios including mTLS)
 - Code examples referenced by the Jekyll documentation site
+
+### mockserver-async
+
+AsyncAPI broker mocking:
+
+- Parses AsyncAPI specifications to derive expected message schemas
+- Publishes mock messages to Kafka, MQTT, and AMQP brokers via `MessagePublisher` adapters
+- Orchestrated by `AsyncApiMockOrchestrator`
+
+### mockserver-testcontainers
+
+Testcontainers integration:
+
+- `MockServerContainer` — starts MockServer as a Testcontainers container for use in JVM tests
+- Simplifies lifecycle management and port mapping for container-based tests
+
+### mockserver-state-infinispan
+
+Infinispan-backed clustered state backend:
+
+- Implements the `StateBackend` SPI with Infinispan as the distributed store
+- Enables expectation and log-entry sharing across MockServer cluster nodes
+- Activated via `MOCKSERVER_STATE_BACKEND=infinispan`
+
+### mockserver-blob-s3 / mockserver-blob-gcs / mockserver-blob-azure
+
+Cloud blob storage backends for persisted expectations and recordings:
+
+- Each module implements the blob storage SPI for its respective cloud provider (AWS S3, Google Cloud Storage, Azure Blob Storage)
+- Allows expectations to be stored externally and shared across instances
+
+### mockserver-k8s-webhook
+
+Kubernetes admission webhook for automatic sidecar injection:
+
+- HTTPS webhook server (`WebhookServer`) that handles `AdmissionReview` requests
+- `SidecarPatchBuilder` generates the JSON Patch to inject the MockServer sidecar and init container into opted-in pods
+- Packaged as a fat JAR and published as `mockserver/mockserver-webhook` Docker image
 
 ## Request Processing Flow
 

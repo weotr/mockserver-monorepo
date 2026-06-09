@@ -1,4 +1,11 @@
 steps:
+  - label: ":s3: restore bundler cache"
+    command: ".buildkite/scripts/cache-restore.sh bundler"
+    timeout_in_minutes: 10
+    soft_fail: true
+
+  - wait
+
   - label: ":ruby: Ruby client unit tests"
     command: ".buildkite/scripts/steps/ruby-unit-test.sh"
     artifact_paths:
@@ -9,7 +16,7 @@ steps:
     command: ".buildkite/scripts/steps/ruby-integration-test.sh"
     artifact_paths:
       - "mockserver-client-ruby/test-reports/*.xml"
-    timeout_in_minutes: 10
+    timeout_in_minutes: 20
 
   - wait: ~
     continue_on_failure: true
@@ -19,3 +26,8 @@ steps:
       - junit-annotate#8a549e5220869601737287b4d6a9293703dc5a6f:  # v2.7.0
           artifacts: "mockserver-client-ruby/test-reports/*.xml"
           always-annotate: true
+
+  - label: ":s3: save bundler cache"
+    command: ".buildkite/scripts/cache-save.sh bundler"
+    timeout_in_minutes: 10
+    soft_fail: true

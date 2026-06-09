@@ -140,6 +140,10 @@ terraform/**/.terraform.lock.hcl
 terraform/**/tfplan
 terraform/**/*.tfplan
 
+# Buildkite CI dependency cache (workspace-local) #
+#####################################################
+.buildkite-cache/
+
 # Buildkite CLI config (local only) #
 ######################################
 .bk.yaml
@@ -187,3 +191,8 @@ kube_config.yaml
 ########################################################
 __pycache__/
 *.pyc
+
+# Paho MQTT client file-persistence dirs created when MockServer connects to an  #
+# MQTT broker (e.g. the demo's launch-with-demo-data.sh --with-broker mode)      #
+##################################################################################
+mockserver-mqtt-*/

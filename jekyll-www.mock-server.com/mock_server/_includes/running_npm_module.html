@@ -34,7 +34,7 @@ mockserver.start_mockserver({
                   <span class="string_literal">'-Dmockserver.enableCORSForAllResponses=true'</span>,
                   <span class="string_literal">'-Dmockserver.corsAllowMethods="CONNECT, DELETE, GET, HEAD, OPTIONS, POST, PUT, PATCH, TRACE"'</span>,
                   <span class="string_literal">'-Dmockserver.corsAllowHeaders="Allow, Content-Encoding, Content-Length, Content-Type, ETag, Expires, Last-Modified, Location, Server, Vary, Authorization"'</span>,
-                  <span class="string_literal">'-Dmockserver.corsAllowCredentials=true'</span>
+                  <span class="string_literal">'-Dmockserver.corsAllowCredentials=true'</span>,
                   <span class="string_literal">'-Dmockserver.corsMaxAgeInSeconds=300'</span>
               ],
               mockServerVersion: <span class="string_literal">"{{ site.mockserver_version }}"</span>,
@@ -50,7 +50,7 @@ mockserver.start_mockserver({
 
 <p>In your project's Gruntfile, add a section named <span class="inline_code">start_mockserver</span> and <span class="inline_code">stop_mockserver</span> to the data object passed into <span class="inline_code">grunt.initConfig()</span>.</p>
 
-<p>The following example will result in a both a MockServer being started on ports <strong>1080</strong> and <strong>1080</strong>.</p>
+<p>The following example starts a MockServer on port <strong>1080</strong> (with a matching task to stop it again).</p>
 
 <pre><code class="code">grunt.initConfig({
     start_mockserver: {

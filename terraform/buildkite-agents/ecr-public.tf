@@ -16,6 +16,18 @@ resource "aws_ecrpublic_repository" "mockserver" {
   }
 }
 
+resource "aws_ecrpublic_repository" "mockserver_webhook" {
+  provider        = aws.us_east_1
+  repository_name = "mockserver-webhook"
+
+  catalog_data {
+    about_text        = "MockServer Admission Webhook - Kubernetes sidecar injection for MockServer transparent proxy"
+    description       = "Admission webhook that automatically injects MockServer transparent-proxy sidecars into Kubernetes pods"
+    operating_systems = ["Linux"]
+    architectures     = ["x86-64", "ARM 64"]
+  }
+}
+
 resource "aws_iam_policy" "ecr_public_push" {
   name        = "buildkite-ecr-public-push"
   description = "Allow Buildkite agents to push Docker images to ECR Public"

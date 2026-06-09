@@ -66,6 +66,9 @@ public class MockServerServlet extends HttpServlet implements ServletContextList
         this.portBindingSerializer = new PortBindingSerializer(mockServerLogger);
         this.workerGroup = new NioEventLoopGroup(configuration.nioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-eventLoop"));
         this.actionHandler = new HttpActionHandler(configuration(), workerGroup, httpStateHandler, null, new NettySslContextFactory(this.configuration, this.mockServerLogger, true));
+        // Wire the replay handler so PUT /mockserver/replay can re-issue
+        // requests using the existing NettyHttpClient (forward/proxy client).
+        this.httpStateHandler.setReplayHandler(req -> actionHandler.getHttpClient().sendRequest(req));
     }
 
     @Override

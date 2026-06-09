@@ -1,0 +1,671 @@
+---
+title: Centralized Deployment
+shortTitle: Centralized Deployment
+description: Deploy MockServer as a shared instance across multiple teams or CI pipelines, with options for single-node, persistence-only durability, and clustered HA using the Infinispan state backend.
+layout: page
+pageOrder: 4
+section: 'Operations'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-05T00:00:00+00:00
+keywords: shared mockserver, centralized mock server, clustered mockserver, infinispan clustering, shared test environment, mockserver ha, mockserver kubernetes cluster, stateBackend, clusterEnabled, cloud blob storage, s3 gcs azure blob store
+---
+
+<p>
+    Many teams share a single MockServer deployment across multiple CI pipelines, test suites, or squads rather than running one instance per test.
+    This page describes the deployment models available and helps you choose the right one for your needs.
+</p>
+
+<ul>
+    <li><a href="#option1">Option 1: Single shared instance (no clustering)</a></li>
+    <li><a href="#option2">Option 2: Clustered HA fleet (Infinispan)</a></li>
+    <li><a href="#option3">Option 3: Persistence-only durability (no clustering)</a></li>
+    <li><a href="#cloud-blob">Cloud blob storage (durable shared storage for any model)</a></li>
+    <li><a href="#decision">Decision table</a></li>
+</ul>
+
+<a id="option1" class="anchor" href="#option1">&nbsp;</a>
+<h2>Option 1: Single Shared Instance</h2>
+
+<h3>When to use</h3>
+<p>
+    This is the right choice when you have a small number of teams sharing a stable set of expectations in a shared test environment,
+    and you can tolerate the server being unavailable during a restart.
+    It has no extra dependencies and zero operational overhead.
+</p>
+
+<h3>Architecture</h3>
+
+<div class="mermaid">
+flowchart LR
+    LB["Load Balancer / Ingress\n(optional, single upstream)"]
+    MS["MockServer\n(single node)"]
+    T1["Team A CI"]
+    T2["Team B CI"]
+    T3["Team C CI"]
+    T1 --> LB
+    T2 --> LB
+    T3 --> LB
+    LB --> MS
+</div>
+
+<p>
+    One MockServer process (or Kubernetes Deployment with <code class="inline code">replicas: 1</code>) receives all traffic.
+    Expectations, scenario state, and CRUD entities live in-memory on that single node.
+    No state-backend module is needed.
+</p>
+
+<h3>Setup</h3>
+
+<p>Run the Docker image directly:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">docker run --rm -p 1080:1080 mockserver/mockserver:{{ site.mockserver_version }}</code></pre>
+
+<p>Or on Kubernetes with the Helm chart:</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">replicaCount: 1
+
+app:
+  serverPort: "1080"
+  logLevel: INFO</code></pre>
+
+<pre class="prettyprint lang-bash code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace \
+  --version {{ site.mockserver_version }} \
+  mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
+
+<p>
+    All configuration properties for log level, TLS, and performance tuning apply exactly as documented in
+    <a href="/mock_server/configuration_properties.html">Configuration Properties</a>.
+</p>
+
+<h3>Parallel test isolation</h3>
+
+<p>
+    When multiple teams or pipelines share a single instance simultaneously, use a unique session identifier
+    (such as a UUID) in every expectation's request matcher &mdash; for example as a header or cookie value &mdash;
+    so expectations from one test run do not match requests from another.
+    See <a href="/mock_server/running_tests_in_parallel.html">Running Tests In Parallel</a>.
+</p>
+
+<h3>Trade-offs</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Concern</th><th>Detail</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Availability</td><td>Single point of failure. A restart or crash makes the server unavailable to all teams until it comes back up.</td></tr>
+        <tr><td>Scale</td><td>MockServer handles very high throughput from a single node (see <a href="/mock_server/performance.html">Scalability &amp; Latency</a>), but there is no horizontal scale path without clustering.</td></tr>
+        <tr><td>State durability</td><td>All expectations are lost on restart unless you add filesystem persistence (see <a href="#option3">Option 3</a>).</td></tr>
+        <tr><td>Simplicity</td><td>Lowest operational overhead: one process, default configuration, no extra dependencies.</td></tr>
+    </tbody>
+</table>
+
+<a id="option2" class="anchor" href="#option2">&nbsp;</a>
+<h2>Option 2: Clustered HA Fleet</h2>
+
+<h3>When to use</h3>
+<p>
+    Use this when you need high availability (no single point of failure), horizontal scale beyond a single node,
+    or zero-downtime rolling updates.
+    Clustering requires the <code class="inline code">mockserver-state-infinispan</code> module on the classpath
+    and a JGroups-capable network between nodes.
+</p>
+
+<h3>The <code class="inline code">-clustered</code> image variant</h3>
+<p>
+    The default <code class="inline code">mockserver/mockserver</code> Docker image does <strong>not</strong> include
+    the Infinispan and JGroups libraries to keep its size lean for single-node use.
+    For clustering, use the <code class="inline code">-clustered</code> image variant which bundles the
+    <code class="inline code">mockserver-state-infinispan</code> module and all of its transitive dependencies:
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">docker pull mockserver/mockserver:clustered-{{ site.mockserver_version }}</code></pre>
+
+<p>
+    This image is published to Docker Hub and ECR Public alongside every release, built for both
+    <code class="inline code">linux/amd64</code> and <code class="inline code">linux/arm64</code>.
+    It also includes <code class="inline code">netty-tcnative-boringssl-static</code> for native TLS performance,
+    the same as the base image.
+</p>
+
+<p>
+    <strong>Important:</strong> setting <code class="inline code">MOCKSERVER_STATE_BACKEND=infinispan</code> with the default
+    (non-clustered) image will fail at startup with a <code class="inline code">ClassNotFoundException</code>.
+    Always use the <code class="inline code">clustered-</code> image tag when enabling clustering.
+</p>
+
+<h3>What is clustered</h3>
+
+<p>
+    The following state is replicated synchronously across all cluster nodes via JGroups REPL_SYNC:
+</p>
+
+<ul>
+    <li>Expectations (add, update, delete)</li>
+    <li>Scenario state (atomic compare-and-set transitions across nodes)</li>
+    <li>CRUD entity stores</li>
+    <li>Chaos profiles (HTTP service, TCP, gRPC)</li>
+</ul>
+
+<p>
+    The following state is <strong>node-local</strong> and is NOT clustered:
+</p>
+
+<ul>
+    <li>
+        <strong>The event log and request verification ring buffer.</strong>
+        A <code class="inline code">verify()</code> call (or <code class="inline code">MockServerClient.verify()</code>)
+        checks only the node that received that call. In a load-balanced cluster, requests
+        may be spread across nodes, so verification must be sent to the specific node that received the
+        request being verified &mdash; or verification must be performed per-node and the results combined
+        in your test logic.
+        <strong>This is the most significant operational constraint of the clustered model.</strong>
+    </li>
+</ul>
+
+<h3>Architecture</h3>
+
+<div class="mermaid">
+flowchart LR
+    LB["Load Balancer / Ingress"]
+    NA["MockServer Node A"]
+    NB["MockServer Node B"]
+    NC["MockServer Node C"]
+    INF["JGroups REPL_SYNC\n(Infinispan embedded)"]
+    T1["Team A CI"]
+    T2["Team B CI"]
+    T1 --> LB
+    T2 --> LB
+    LB --> NA
+    LB --> NB
+    LB --> NC
+    NA <--> INF
+    NB <--> INF
+    NC <--> INF
+</div>
+
+<p>
+    Infinispan runs <strong>embedded inside each MockServer node</strong> &mdash; there is no separate data grid to operate.
+    When one node receives an expectation write, Infinispan replicates it synchronously to all other cluster members
+    before the write call returns.
+    Each node then updates its local matcher cache so it can match incoming requests immediately.
+</p>
+
+<h3>Configuration properties</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Env var</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">mockserver.stateBackend</code></td>
+            <td><code class="inline code">MOCKSERVER_STATE_BACKEND</code></td>
+            <td><code class="inline code">memory</code></td>
+            <td>Set to <code class="inline code">infinispan</code> to enable the Infinispan backend. Requires the <code class="inline code">mockserver-state-infinispan</code> module on the classpath. Fails at startup if the module is missing.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.clusterEnabled</code></td>
+            <td><code class="inline code">MOCKSERVER_CLUSTER_ENABLED</code></td>
+            <td><code class="inline code">false</code></td>
+            <td>Set to <code class="inline code">true</code> to activate JGroups transport and REPL_SYNC caches. When <code class="inline code">false</code>, Infinispan runs in LOCAL mode (no replication) &mdash; useful for testing the code path without a multi-node cluster.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.clusterName</code></td>
+            <td><code class="inline code">MOCKSERVER_CLUSTER_NAME</code></td>
+            <td><code class="inline code">mockserver-cluster</code></td>
+            <td>JGroups cluster identifier. All nodes that should share state must use the same value.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.clusterTransportConfig</code></td>
+            <td><code class="inline code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG</code></td>
+            <td>Built-in loopback stack</td>
+            <td>Path to a JGroups XML transport configuration file. The built-in default is a loopback stack suitable only for in-JVM tests. <strong>For any real multi-node deployment you must supply a UDP or TCP stack here.</strong></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    See <a href="/mock_server/configuration_properties.html">Configuration Properties</a> for the full property reference.
+</p>
+
+<h3>Setup: Docker Compose (two-node example)</h3>
+
+<p>Create a JGroups TCP stack file (<code class="inline code">jgroups-tcp.xml</code>) — JGroups ships several ready-to-use
+stacks; the snippet below is representative only. See the
+<a target="_blank" href="https://jgroups.org/manual5/index.html#protlist" rel="noopener noreferrer">JGroups documentation</a>
+for production-grade stacks with discovery appropriate for your network.</p>
+
+<pre class="prettyprint lang-xml code"><code class="code">&lt;config xmlns="urn:org:jgroups"&gt;
+    &lt;TCP bind_port="7600" /&gt;
+    &lt;TCPPING initial_hosts="mockserver-a[7600],mockserver-b[7600]" /&gt;
+    &lt;MERGE3/&gt;
+    &lt;FD_SOCK/&gt;
+    &lt;FD_ALL/&gt;
+    &lt;VERIFY_SUSPECT/&gt;
+    &lt;pbcast.NAKACK2/&gt;
+    &lt;UNICAST3/&gt;
+    &lt;pbcast.STABLE/&gt;
+    &lt;pbcast.GMS/&gt;
+    &lt;pbcast.STATE_TRANSFER/&gt;
+&lt;/config&gt;</code></pre>
+
+<pre class="prettyprint lang-yaml code"><code class="code">services:
+  mockserver-a:
+    image: mockserver/mockserver:clustered-{{ site.mockserver_version }}
+    environment:
+      MOCKSERVER_STATE_BACKEND: infinispan
+      MOCKSERVER_CLUSTER_ENABLED: "true"
+      MOCKSERVER_CLUSTER_NAME: shared-cluster
+      MOCKSERVER_CLUSTER_TRANSPORT_CONFIG: /config/jgroups-tcp.xml
+    volumes:
+      - ./jgroups-tcp.xml:/config/jgroups-tcp.xml:ro
+    ports:
+      - "1080:1080"
+
+  mockserver-b:
+    image: mockserver/mockserver:clustered-{{ site.mockserver_version }}
+    environment:
+      MOCKSERVER_STATE_BACKEND: infinispan
+      MOCKSERVER_CLUSTER_ENABLED: "true"
+      MOCKSERVER_CLUSTER_NAME: shared-cluster
+      MOCKSERVER_CLUSTER_TRANSPORT_CONFIG: /config/jgroups-tcp.xml
+    volumes:
+      - ./jgroups-tcp.xml:/config/jgroups-tcp.xml:ro
+    ports:
+      - "1081:1080"</code></pre>
+
+<h3>Setup: Kubernetes (Helm chart)</h3>
+
+<p>
+    The MockServer Helm chart has built-in support for clustering via the <code class="inline code">clustering.enabled</code> value.
+    When enabled, the chart automatically:
+</p>
+
+<ol>
+    <li>Sets the <code class="inline code">MOCKSERVER_STATE_BACKEND</code>, <code class="inline code">MOCKSERVER_CLUSTER_ENABLED</code>,
+        <code class="inline code">MOCKSERVER_CLUSTER_NAME</code>, and <code class="inline code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG</code>
+        environment variables</li>
+    <li>Creates a <strong>headless Service</strong> for JGroups <code class="inline code">DNS_PING</code> pod discovery</li>
+    <li>Sets the <code class="inline code">JGROUPS_DNS_QUERY</code> environment variable so JGroups discovers all pod IPs
+        automatically</li>
+    <li>Exposes the JGroups TCP port (default 7800) as a container port</li>
+</ol>
+
+<p>
+    You only need to set <code class="inline code">clustering.enabled=true</code>, point the image to the
+    <code class="inline code">-clustered</code> variant, and increase <code class="inline code">replicaCount</code>.
+    A minimal values file:
+</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">replicaCount: 3
+
+image:
+  repositoryNameAndTag: "mockserver/mockserver:clustered-{{ site.mockserver_version }}"
+
+clustering:
+  enabled: true
+  # clusterName: "mockserver-cluster"   # default
+  # transportConfig: "jgroups-kubernetes.xml"  # default — uses DNS_PING
+  # jgroupsPort: 7800                   # default</code></pre>
+
+<pre class="prettyprint lang-bash code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace \
+  --version {{ site.mockserver_version }} \
+  -f cluster-values.yaml \
+  mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
+
+<p>
+    <strong>How DNS_PING discovery works:</strong>
+    the chart creates a headless Service (ClusterIP: None) with <code class="inline code">publishNotReadyAddresses: true</code>.
+    JGroups <code class="inline code">DNS_PING</code> queries the headless Service DNS name
+    (<code class="inline code">&lt;release&gt;-headless.&lt;namespace&gt;.svc.cluster.local</code>)
+    and receives A records for all pod IPs, including pods still starting up.
+    This allows the cluster to form without additional RBAC or Kubernetes API access.
+</p>
+
+<h4>Advanced: custom JGroups transport</h4>
+
+<p>
+    The built-in <code class="inline code">jgroups-kubernetes.xml</code> transport uses TCP + DNS_PING and works
+    out of the box with the headless Service. For non-Kubernetes environments or advanced tuning, you can
+    supply a custom JGroups XML via the chart's <code class="inline code">app.config.extraFiles</code> value:
+</p>
+
+<pre class="prettyprint lang-yaml code"><code class="code">replicaCount: 3
+
+image:
+  repositoryNameAndTag: "mockserver/mockserver:clustered-{{ site.mockserver_version }}"
+
+clustering:
+  enabled: true
+  transportConfig: /config/jgroups-custom.xml
+
+app:
+  config:
+    enabled: true
+    extraFiles:
+      jgroups-custom.xml: |
+        &lt;config xmlns="urn:org:jgroups"&gt;
+            &lt;TCP bind_port="7800" /&gt;
+            &lt;dns.DNS_PING dns_query="my-headless-svc.my-ns.svc.cluster.local" /&gt;
+            &lt;MERGE3/&gt;
+            &lt;FD_SOCK/&gt;
+            &lt;FD_ALL/&gt;
+            &lt;VERIFY_SUSPECT/&gt;
+            &lt;pbcast.NAKACK2/&gt;
+            &lt;UNICAST3/&gt;
+            &lt;pbcast.STABLE/&gt;
+            &lt;pbcast.GMS/&gt;
+            &lt;pbcast.STATE_TRANSFER/&gt;
+        &lt;/config&gt;</code></pre>
+
+<p>
+    See the <a target="_blank" href="https://jgroups.org/manual5/index.html#protlist" rel="noopener noreferrer">JGroups documentation</a>
+    for the full protocol reference. Alternative discovery protocols include
+    <a target="_blank" href="https://github.com/jgroups-extras/jgroups-kubernetes" rel="noopener noreferrer">KUBE_PING</a>
+    (uses the Kubernetes API; requires a ServiceAccount with pod list/get RBAC) and
+    <code class="inline code">TCPPING</code> (static member list).
+</p>
+
+<h3>Trade-offs and limitations</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Concern</th><th>Detail</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Availability</td>
+            <td>No single point of failure. Losing one node does not affect the rest of the cluster. Nodes can be rolled without downtime when behind a load balancer.</td>
+        </tr>
+        <tr>
+            <td>Horizontal scale</td>
+            <td>Requests can be distributed across nodes. Expectations, scenarios, CRUD entities, and chaos profiles are immediately visible on all nodes after any write, and per-expectation <code class="inline code">Times</code> match limits are enforced cluster-wide (a <code class="inline code">Times(3)</code> limit serves exactly 3 total matches across the whole fleet, not 3 per node).</td>
+        </tr>
+        <tr>
+            <td>Verification</td>
+            <td><strong>The event log is node-local.</strong> <code class="inline code">verify()</code> checks only the node it is sent to. When a load balancer distributes requests, a request handled by Node A is not visible in Node B's log. Either pin verification calls to specific nodes, run verification against all nodes, or use a single-node deployment when cross-node assertion is required.</td>
+        </tr>
+        <tr>
+            <td>Eviction</td>
+            <td>Infinispan uses approximate LRU eviction. The node-local matcher cache may briefly contain one extra entry between an eviction event and the next reconcile cycle.</td>
+        </tr>
+        <tr>
+            <td>JGroups transport</td>
+            <td>The built-in loopback transport is for in-JVM tests only. A production cluster requires a proper UDP or TCP JGroups stack configured via <code class="inline code">clusterTransportConfig</code>.</td>
+        </tr>
+        <tr>
+            <td>Operational complexity</td>
+            <td>Adds the Infinispan module, JGroups network configuration, and (on Kubernetes) RBAC for pod discovery. More moving parts than Option 1.</td>
+        </tr>
+        <tr>
+            <td>CrossProtocol event bus</td>
+            <td>Scenario event bus registrations (which scenarios fire on which triggers) are node-local. The downstream scenario state changes are clustered, but the trigger registrations themselves are not replicated.</td>
+        </tr>
+        <tr>
+            <td>Chaos TTL clock skew</td>
+            <td>TTL-based chaos profile expiry uses the node-local clock. If you advance the clock via <code class="inline code">PUT /mockserver/clock</code> on individual nodes, TTL expiry may differ between nodes. For deterministic cross-node cleanup, use the REST <code class="inline code">DELETE</code> endpoint instead.</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="option3" class="anchor" href="#option3">&nbsp;</a>
+<h2>Option 3: Persistence-Only Durability</h2>
+
+<p>
+    A middle ground between Options 1 and 2: a single non-clustered node that persists expectations to the
+    filesystem so they survive a restart. No extra modules are needed, and there is no clustering overhead.
+    This is the right choice when you want restart durability but do not need HA or horizontal scale.
+</p>
+
+<p>Enable filesystem persistence:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">docker run --rm \
+  -p 1080:1080 \
+  -v /var/mockserver:/persistence \
+  -e MOCKSERVER_PERSIST_EXPECTATIONS=true \
+  -e MOCKSERVER_PERSISTED_EXPECTATIONS_PATH=/persistence/persistedExpectations.json \
+  -e MOCKSERVER_INITIALIZATION_JSON_PATH=/persistence/persistedExpectations.json \
+  mockserver/mockserver:{{ site.mockserver_version }}</code></pre>
+
+<p>
+    On Kubernetes use the Helm chart's built-in persistence support:
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">helm upgrade --install --namespace mockserver --create-namespace \
+  --version {{ site.mockserver_version }} \
+  --set app.persistence.enabled=true \
+  mockserver oci://ghcr.io/mock-server/charts/mockserver</code></pre>
+
+<p>
+    See <a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> for full details.
+</p>
+
+<p>
+    <strong>Limitations:</strong>
+    State is still in-memory at runtime &mdash; all active requests hit one node.
+    The same single-point-of-failure and no-horizontal-scale constraints as Option 1 apply.
+    If the process crashes mid-write, persisted expectations may be incomplete until the next
+    successful write cycle.
+</p>
+
+<a id="cloud-blob" class="anchor" href="#cloud-blob">&nbsp;</a>
+<h2>Cloud Blob Storage</h2>
+
+<h3>When to use</h3>
+<p>
+    By default MockServer reads and writes persisted expectations, recorded proxy traffic, and fixture files
+    on the local filesystem (<code class="inline code">blobStoreType=filesystem</code>). When several nodes &mdash;
+    or several short-lived CI runners &mdash; need to share that durable data <strong>without</strong> a shared
+    POSIX volume (NFS / EFS / Azure Files), MockServer can store it in a cloud object store instead.
+    This is useful for centralized fixture libraries, record-and-replay cassettes captured by one job and
+    replayed by another, and snapshots that must outlive any individual pod.
+</p>
+
+<p>
+    Cloud blob storage is an <strong>opt-in module</strong>: <code class="inline code">mockserver-core</code> ships with
+    no cloud SDK on its classpath. You add the module for the backend you want, and the backend registers itself
+    automatically when <code class="inline code">blobStoreType</code> is set to its name. It is orthogonal to the
+    clustering option above &mdash; you can use it with a single node, a persisted single node, or an Infinispan
+    cluster.
+</p>
+
+<h3>Choosing a backend module</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th><code class="inline code">blobStoreType</code></th><th>Backend</th><th>Maven module</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">s3</code></td>
+            <td>Amazon S3 (and S3-compatible stores such as MinIO / LocalStack)</td>
+            <td><code class="inline code">org.mock-server:mockserver-blob-s3</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">gcs</code></td>
+            <td>Google Cloud Storage</td>
+            <td><code class="inline code">org.mock-server:mockserver-blob-gcs</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">azure</code></td>
+            <td>Azure Blob Storage</td>
+            <td><code class="inline code">org.mock-server:mockserver-blob-azure</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    Add the relevant dependency (matching your MockServer version) so the cloud SDK is on the classpath:
+</p>
+
+<pre class="prettyprint lang-xml code"><code class="code">&lt;dependency&gt;
+    &lt;groupId&gt;org.mock-server&lt;/groupId&gt;
+    &lt;artifactId&gt;mockserver-blob-s3&lt;/artifactId&gt;
+    &lt;version&gt;{{ site.mockserver_version }}&lt;/version&gt;
+&lt;/dependency&gt;</code></pre>
+
+<h3>Configuration properties</h3>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Env var</th><th>Applies to</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreType</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_TYPE</code></td>
+            <td>all</td>
+            <td>Backend selector. Defaults to <code class="inline code">filesystem</code>. Set to <code class="inline code">s3</code>, <code class="inline code">gcs</code>, or <code class="inline code">azure</code> (the matching module must be on the classpath, otherwise startup fails).</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreBucket</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_BUCKET</code></td>
+            <td>s3, gcs</td>
+            <td>Bucket name. Required for <code class="inline code">s3</code> and <code class="inline code">gcs</code>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreRegion</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_REGION</code></td>
+            <td>s3</td>
+            <td>Region for the S3 bucket (e.g. <code class="inline code">eu-west-1</code>).</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreEndpoint</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_ENDPOINT</code></td>
+            <td>s3, gcs</td>
+            <td>Endpoint override URL for S3-compatible stores (MinIO, LocalStack) or GCS emulators. Optional.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreKeyPrefix</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_KEY_PREFIX</code></td>
+            <td>all cloud</td>
+            <td>Optional key prefix so multiple deployments can share one bucket/container without colliding.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreAccessKeyId</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID</code></td>
+            <td>s3</td>
+            <td>Explicit AWS access key ID. Optional &mdash; when empty the default AWS credential chain (environment, profile, instance/IRSA role) is used.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreSecretAccessKey</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY</code></td>
+            <td>s3</td>
+            <td>Explicit AWS secret access key. Optional &mdash; paired with the access key ID above.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreProjectId</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_PROJECT_ID</code></td>
+            <td>gcs</td>
+            <td>Google Cloud project ID. Optional &mdash; when empty it is inferred from Application Default Credentials.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreContainer</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_CONTAINER</code></td>
+            <td>azure</td>
+            <td>Azure Blob Storage container name. Required for <code class="inline code">azure</code>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.blobStoreConnectionString</code></td>
+            <td><code class="inline code">MOCKSERVER_BLOB_STORE_CONNECTION_STRING</code></td>
+            <td>azure</td>
+            <td>Azure connection string (account name, key, and endpoint). Required for <code class="inline code">azure</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    All blob-store properties default to an empty string. See
+    <a href="/mock_server/configuration_properties.html">Configuration Properties</a> for the full reference, and
+    <a href="/mock_server/persisting_expectations.html#cloud_blob_storage">Persisting Expectations &rarr; Cloud Blob Storage</a>
+    for how persisted and recorded expectations map onto the blob store.
+</p>
+
+<h3>Example: S3 backend</h3>
+
+<pre class="prettyprint lang-bash code"><code class="code">docker run --rm -p 1080:1080 \
+  -e MOCKSERVER_BLOB_STORE_TYPE=s3 \
+  -e MOCKSERVER_BLOB_STORE_BUCKET=my-mockserver-fixtures \
+  -e MOCKSERVER_BLOB_STORE_REGION=eu-west-1 \
+  -e MOCKSERVER_BLOB_STORE_KEY_PREFIX=ci-shared/ \
+  mockserver/mockserver:{{ site.mockserver_version }}</code></pre>
+
+<p>
+    <strong>Note:</strong> the default <code class="inline code">mockserver/mockserver</code> image does not bundle the cloud SDK
+    modules. To use a cloud blob store from a container, build an image that adds the relevant
+    <code class="inline code">mockserver-blob-*</code> jar to the classpath, or run via the
+    <code class="inline code">-no-dependencies</code> jar with the module (and its transitive cloud SDK) on the classpath.
+</p>
+
+<a id="decision" class="anchor" href="#decision">&nbsp;</a>
+<h2>Choosing an Option</h2>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr>
+            <th>Need</th>
+            <th>Option 1<br>Single node</th>
+            <th>Option 2<br>Clustered HA</th>
+            <th>Option 3<br>Persisted single node</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>No extra dependencies</td>
+            <td>Yes</td>
+            <td>No (Infinispan + JGroups)</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Survives a single node failure</td>
+            <td>No</td>
+            <td>Yes</td>
+            <td>No</td>
+        </tr>
+        <tr>
+            <td>Survives a restart without losing expectations</td>
+            <td>No</td>
+            <td>Yes (state replicated)</td>
+            <td>Yes (filesystem persistence)</td>
+        </tr>
+        <tr>
+            <td>Horizontal scale (multiple nodes behind LB)</td>
+            <td>No</td>
+            <td>Yes</td>
+            <td>No</td>
+        </tr>
+        <tr>
+            <td>verify() works across all nodes</td>
+            <td>Yes (one node)</td>
+            <td>No — node-local log</td>
+            <td>Yes (one node)</td>
+        </tr>
+        <tr>
+            <td>Times match limits are global</td>
+            <td>Yes</td>
+            <td>Yes — cluster-wide CAS</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td>Lowest operational complexity</td>
+            <td>Yes</td>
+            <td>No</td>
+            <td>Yes</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/configuration_properties.html">Configuration Properties</a> &mdash; full reference for <code class="inline code">stateBackend</code>, <code class="inline code">clusterEnabled</code>, <code class="inline code">clusterName</code>, <code class="inline code">clusterTransportConfig</code>, <code class="inline code">blobStoreType</code>, and all other properties</li>
+    <li><a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> &mdash; filesystem and cloud blob persistence in detail, including record-and-replay</li>
+    <li><a href="/mock_server/running_tests_in_parallel.html">Running Tests In Parallel</a> &mdash; session-ID isolation when multiple teams share one instance</li>
+    <li><a href="/mock_server/performance.html">Scalability &amp; Latency</a> &mdash; single-node throughput benchmarks and tuning guidance</li>
+    <li><a href="/where/kubernetes.html">Helm &amp; Kubernetes</a> &mdash; Helm chart reference and Kubernetes deployment patterns</li>
+</ul>

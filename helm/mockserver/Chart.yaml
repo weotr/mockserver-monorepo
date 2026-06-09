@@ -1,8 +1,8 @@
 apiVersion: v1
 name: mockserver
-version: "6.1.0"
-appVersion: "6.1.0"
-description: Chart to deploy MockServer to Kubernetes.  MockServer enables easy mocking of any system you integrate with via HTTP or HTTPS with clients written in Java, JavaScript and Ruby.  MockServer also includes a proxy that introspects all proxied traffic including encrypted SSL traffic and supports Port Forwarding, Web Proxying (i.e. HTTP proxy), HTTPS Tunneling Proxying (using HTTP CONNECT) and SOCKS Proxying (i.e. dynamic port forwarding).
+version: "7.0.0"
+appVersion: "7.0.0"
+description: Chart to deploy MockServer to Kubernetes.  MockServer is a mocking, debugging proxy and chaos engineering tool for multiple protocols (HTTP, gRPC, GraphQL, LLM, MCP, Kafka, TCP and more) — mock any system you integrate with, record, replay and verify traffic, and inject faults for resilience testing.  Its proxy introspects all proxied traffic including encrypted TLS and supports Port Forwarding, Web Proxying (i.e. HTTP proxy), HTTPS Tunneling Proxying (using HTTP CONNECT) and SOCKS Proxying (i.e. dynamic port forwarding).  Clients are available for Java, JavaScript, Python, Ruby, Go, .NET and more.
 keywords:
   - mocking
   - mock-server
@@ -14,7 +14,17 @@ keywords:
   - http-proxy
   - socks-proxy
   - https-proxy
-home: "http://mock-server.com"
+  - debugging-proxy
+  - grpc
+  - graphql
+  - llm
+  - mcp
+  - kafka
+  - mqtt
+  - tcp
+  - chaos-engineering
+  - fault-injection
+home: "https://www.mock-server.com"
 sources:
   - "https://github.com/mock-server/mockserver-monorepo"
   - "https://hub.docker.com/r/mockserver/mockserver"
@@ -22,13 +32,26 @@ sources:
 maintainers:
   - name: James D Bloom
     email: jamesdbloom+mockserver@gmail.com
-icon: http://mock-server.com/apple-touch-icon.png
+icon: https://www.mock-server.com/apple-touch-icon.png
 annotations:
   # Artifact Hub listing metadata (https://artifacthub.io). name/description/keywords/home/sources/
   # maintainers/icon above are read natively; these add the license and quick links.
   artifacthub.io/license: Apache-2.0
+  # Populates the Artifact Hub "Changelog" tab for this version (without it the
+  # changelog view is empty). Update per release with the notable changes.
+  artifacthub.io/changes: |
+    - kind: added
+      description: First-class LLM / AI-agent mocking (Anthropic, OpenAI, Azure OpenAI, Gemini, Bedrock, Ollama) with streaming, conversations and an MCP toolset
+    - kind: added
+      description: HTTP/3 (QUIC) streaming responses and an optional clustered state backend (mockserver-state-infinispan)
+    - kind: added
+      description: HTTP chaos / fault injection attachable to mocked or forwarded responses
+    - kind: changed
+      description: Platform modernised to Java 17 baseline, Netty 4.2 and Jackson 2.22
   artifacthub.io/links: |
     - name: Documentation
       url: https://www.mock-server.com
     - name: Chart install guide
       url: https://github.com/mock-server/mockserver-monorepo/blob/master/helm/mockserver/README.md
+    - name: Signing public key (cosign)
+      url: https://www.mock-server.com/mockserver-cosign.pub

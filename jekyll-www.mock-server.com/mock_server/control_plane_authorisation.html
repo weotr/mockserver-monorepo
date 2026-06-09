@@ -2,8 +2,8 @@
 title: API Security
 description: Secure the MockServer control plane with mTLS client certificate authentication, JWT bearer tokens, or both, plus network and CORS hardening tips.
 layout: page
-pageOrder: 8
-section: 'General'
+pageOrder: 2
+section: 'Security'
 subsection: true
 sitemap:
   priority: 0.7
@@ -105,4 +105,14 @@ sitemap:
 <ul>
     <li>Require authentication on every control-plane request &mdash; enable <a href="#control_plane_authentication">mTLS and/or JWT</a> as described above.</li>
     <li><code class="inline_code">mockserver.corsAllowOrigin</code> &mdash; set this to the specific origin(s) you trust rather than allowing any origin, and keep <code class="inline_code">mockserver.corsAllowCredentials=false</code> unless credentialed cross-origin requests are genuinely required. See <a href="/mock_server/CORS_support.html">CORS</a>.</li>
+</ul>
+
+<h2>See Also</h2>
+
+<ul>
+    <li><a href="/mock_server/HTTPS_TLS.html#mtls_control_plane"><strong>HTTPS &amp; TLS: mTLS for the Control Plane</strong></a> &mdash; generate and trust the client certificates used for control-plane mutual TLS</li>
+    <li><a href="/mock_server/mocking_oauth2.html"><strong>Mocking OAuth2 Flows</strong></a> &mdash; mock the OAuth2/OpenID Connect token and JWKS endpoints that issue the JWTs used for authentication</li>
+    <li><a href="/mock_server/CORS_support.html"><strong>CORS Support</strong></a> &mdash; harden cross-origin access to the control plane (see also the CORS hardening note above)</li>
+    <li><a href="/mock_server/configuration_properties.html#control_plane_authentication_configuration"><strong>Control Plane Authentication Configuration</strong></a> &mdash; all mTLS and JWT control-plane authentication configuration properties</li>
+    <li><a href="/mock_server/configuration_properties.html#tls_configuration"><strong>TLS Configuration Properties</strong></a> &mdash; certificate and key configuration used by control-plane mTLS</li>
 </ul>

@@ -8,9 +8,8 @@ import org.mockserver.matchers.Times;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.scheduler.Scheduler;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
 import static org.mockito.Mockito.mock;
 import static org.mockserver.configuration.Configuration.configuration;
@@ -37,7 +36,7 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(expectation));
     }
 
     @Test
@@ -50,7 +49,7 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(expectation));
     }
 
     @Test
@@ -63,7 +62,7 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(expectation, API);
 
         // then - scenario is in "Started" state, not "Step1"
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), nullValue());
     }
 
     @Test
@@ -83,10 +82,10 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(step2, API);
 
         // when - first request matches step1 and transitions to Step1
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
 
         // then - second request matches step2 because scenario is now in "Step1"
-        assertEquals(step2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
     }
 
     @Test
@@ -113,9 +112,9 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(step3, API);
 
         // then
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
-        assertEquals(step2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
-        assertEquals(step3, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step3));
     }
 
     @Test
@@ -148,10 +147,10 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(scenarioBStep2, API);
 
         // then - interleave requests to different scenarios
-        assertEquals(scenarioAStep1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathA")));
-        assertEquals(scenarioBStep1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathB")));
-        assertEquals(scenarioAStep2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathA")));
-        assertEquals(scenarioBStep2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathB")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathA")), is(scenarioAStep1));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathB")), is(scenarioBStep1));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathA")), is(scenarioAStep2));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("pathB")), is(scenarioBStep2));
     }
 
     @Test
@@ -171,7 +170,7 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(step2, API);
 
         // transition to Step1
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
 
         // when - reset
         requestMatchers.reset(API);
@@ -179,7 +178,7 @@ public class MockServerMatcherScenarioTest {
         // then - re-add expectations and verify scenario is back to Started
         requestMatchers.add(step1, API);
         requestMatchers.add(step2, API);
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
     }
 
     @Test
@@ -192,7 +191,7 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(expectation, API);
 
         // then - should match regardless of scenario state
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(expectation));
     }
 
     @Test
@@ -211,10 +210,10 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(step2, API);
 
         // when - first request matches step1 (no state required) and transitions to Step1
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
 
         // then - second request matches step2 because scenario is now in "Step1" and step1 is consumed
-        assertEquals(step2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
     }
 
     @Test
@@ -234,11 +233,11 @@ public class MockServerMatcherScenarioTest {
         requestMatchers.add(step2, API);
 
         // when
-        assertEquals(step1, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
 
         // then - step1 is consumed (times=1), step2 matches
-        assertEquals(step2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
-        assertEquals(step2, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
     }
 
     @Test

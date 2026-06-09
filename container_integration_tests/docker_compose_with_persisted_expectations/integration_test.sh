@@ -13,7 +13,7 @@ function integration_test() {
   runCommand "mkdir -p ${SCRIPT_DIR}/config && chmod 777 ${SCRIPT_DIR}/config"
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
   docker-exec-client "curl -v -s -X PUT 'http://mockserver:1080/mockserver/expectation' -d \\\"{
                         'httpRequest' : {
                           'path' : '/some/path'

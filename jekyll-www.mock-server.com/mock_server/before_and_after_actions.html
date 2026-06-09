@@ -3,8 +3,8 @@ title: Before & After Actions
 description: Run extra HTTP webhooks or callbacks before or after an expectation's response — to mirror (tee), shadow, fan-out, or gate live traffic against other services.
 shortTitle: Before & After Actions
 layout: page
-pageOrder: 4.5
-section: 'Mock Server'
+pageOrder: 3
+section: 'Creating Mocks'
 subsection: true
 sitemap:
   priority: 0.7
@@ -61,7 +61,7 @@ sitemap:
     <li><strong>Before-actions</strong> run <em>before</em> the primary response. By default they <em>block</em> the response until they complete, so they can be used as a precondition — and they can abort the response entirely if they fail.</li>
 </ul>
 
-<p>For a matched request the order is: <span class="inline_code">beforeActions</span> (may block or gate the response) &rarr; the primary action (response or forward) &rarr; <span class="inline_code">afterActions</span> (fire-and-forget) &rarr; the client response is sent.</p>
+<p>For a matched request the order is: <span class="inline_code">beforeActions</span> (may block or gate the response) &rarr; the primary action (response or forward) &rarr; <strong>the client response is written</strong> &rarr; <span class="inline_code">afterActions</span> (fire-and-forget, after the response). After-actions run only once the response has been written, so they cannot change or delay what the client receives.</p>
 
 <a id="action_shape" class="anchor" href="#action_shape">&nbsp;</a>
 
@@ -120,9 +120,9 @@ sitemap:
         </tr>
         <tr>
             <td><span class="inline_code">timeout</span></td>
-            <td>delay</td>
+            <td><span class="inline_code">Delay</span> object — <span class="inline_code">{ "timeUnit": &hellip;, "value": &hellip; }</span></td>
             <td>server <span class="inline_code">maxSocketTimeout</span></td>
-            <td>Maximum time to wait for a blocking action. If it elapses the action is treated as failed.</td>
+            <td>Maximum time to wait for a blocking action, expressed as a structured <span class="inline_code">Delay</span> (a <span class="inline_code">timeUnit</span> plus a <span class="inline_code">value</span>), not a bare number. If it elapses the action is treated as failed.</td>
         </tr>
         <tr>
             <td><span class="inline_code">failurePolicy</span></td>

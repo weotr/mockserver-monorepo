@@ -9,6 +9,7 @@ describe('DashboardStore', () => {
       activeExpectations: [],
       recordedRequests: [],
       proxiedRequests: [],
+      view: 'get-started',
       requestFilter: {},
       filterEnabled: false,
       filterExpanded: false,
@@ -18,7 +19,9 @@ describe('DashboardStore', () => {
       expectationSearch: '',
       receivedSearch: '',
       proxiedSearch: '',
+      trafficSearch: '',
       error: null,
+      notification: null,
     });
   });
 
@@ -76,6 +79,45 @@ describe('DashboardStore', () => {
       });
       expect(useDashboardStore.getState().error).toBeNull();
     });
+
+    it('auto-switches from get-started to dashboard on empty→has-data transition', () => {
+      // Start on get-started with no data (first-run scenario)
+      useDashboardStore.setState({
+        view: 'get-started',
+        activeExpectations: [],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: {} }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+
+      expect(useDashboardStore.getState().view).toBe('dashboard');
+    });
+
+    it('does NOT bounce user off get-started when data already exists', () => {
+      // User has navigated back to get-started while server has data
+      useDashboardStore.setState({
+        view: 'get-started',
+        activeExpectations: [{ key: 'e1', value: {} }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+
+      // Another data message arrives — should NOT switch away
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: {} }, { key: 'e2', value: {} }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+
+      expect(useDashboardStore.getState().view).toBe('get-started');
+    });
   });
 
   describe('clearUI', () => {
@@ -96,6 +138,18 @@ describe('DashboardStore', () => {
       expect(state.recordedRequests).toEqual([]);
       expect(state.proxiedRequests).toEqual([]);
       expect(state.error).toBeNull();
+    });
+
+    it('resets view to get-started after server reset', () => {
+      useDashboardStore.setState({
+        view: 'dashboard',
+        activeExpectations: [{ key: 'e', value: {} }],
+        recordedRequests: [{ key: 'r', value: {} }],
+        proxiedRequests: [{ key: 'p', value: {} }],
+      });
+
+      useDashboardStore.getState().clearUI();
+      expect(useDashboardStore.getState().view).toBe('get-started');
     });
   });
 

@@ -57,6 +57,7 @@ The monorepo uses a path-based pipeline orchestrator that dynamically triggers s
 | `default` | `c5.2xlarge`, `c5a.2xlarge`, `m5.2xlarge` | Build and test workloads (Maven, Docker, k3d) |
 | `trigger` | `t3.small`, `t3a.small`, `t3.micro` | Trigger polling jobs (`sleep` + `curl` loops) |
 | `release` | Same as `default` | Release pipeline steps that access release secrets |
+| `perf` | `c5.4xlarge` | Daily performance-regression benchmarks (k6 + JMH); scale-to-zero, max 1, 100% on-demand |
 
 Trigger jobs (which poll child builds via the Buildkite API) run on cheap `trigger` queue instances to avoid starving build agents. See [Agent Starvation](#agent-starvation-from-script-based-triggers-resolved) for background.
 
@@ -98,8 +99,8 @@ All pipelines are managed via Terraform in `terraform/buildkite-pipelines/pipeli
 | `mockserver-java` | `pipeline-java.yml` | Orchestrator | Full Maven build and test |
 | `mockserver-ui` | `pipeline-ui.yml` | Orchestrator | UI lint, typecheck, test, build |
 | `mockserver-node` | `pipeline-node.yml` | Orchestrator | Node.js lint and typecheck |
-| `mockserver-python` | `pipeline-python.yml` | Orchestrator | Python unit + integration tests |
-| `mockserver-ruby` | `pipeline-ruby.yml` | Orchestrator | Ruby unit + integration tests |
+| `mockserver-python` | `pipeline-python.yml` | Orchestrator | Python unit + integration tests (builds MockServer image from HEAD) |
+| `mockserver-ruby` | `pipeline-ruby.yml` | Orchestrator | Ruby unit + integration tests (builds MockServer image from HEAD) |
 | `mockserver-maven-plugin` | `pipeline-maven-plugin.yml` | Orchestrator | Maven plugin build and test |
 | `mockserver-performance-test` | `pipeline-perf-test.yml` | Orchestrator | Perf test script validation |
 | `mockserver-container-tests` | `pipeline-container-tests.yml` | Orchestrator | Shell script validation |
@@ -109,6 +110,7 @@ All pipelines are managed via Terraform in `terraform/buildkite-pipelines/pipeli
 | `mockserver-release-image` | `docker-push-release.yml` | Manual | Build/push release image |
 | `mockserver-release` | `release-pipeline.yml` | Manual | Automated release pipeline (TOTP, Maven Central, maven-plugin, Docker Hub + ECR Public, npm, Helm, Javadoc, SwaggerHub, website, JSON Schema, PyPI, RubyGems, GitHub Release, optional versioned site) |
 | `mockserver-cleanup` | `pipeline-cleanup.yml` | GitHub webhook + scheduled | Clean up builds for closed PRs |
+| `mockserver-perf-regression` | `pipeline-perf-test.yml` | Daily Buildkite schedule (04:00 UTC) | Daily performance-regression pipeline — guard + k6 run + JMH microbench + rolling-baseline compare |
 
 A single commit can trigger multiple child pipelines if it changes files in multiple areas. For example, a commit touching both `mockserver/` and `mockserver-ui/` triggers both `mockserver-java` and `mockserver-ui` pipelines.
 
@@ -152,6 +154,35 @@ Steps 1 and 4 are managed by Terraform (`terraform/buildkite-pipelines/pipelines
    - Secret: same as step 2
    - Events: select "Let me select individual events" → check only "Pull requests"
 4. **Daily schedule** (Terraform): Created automatically by step 1 — runs at 06:00 UTC daily as a safety net.
+
+### Performance Regression Pipeline
+
+**File:** `.buildkite/pipeline-perf-test.yml`
+
+**Trigger:** Daily Buildkite schedule at 04:00 UTC (`build.source == 'schedule'`), or via the Buildkite UI (`build.source == 'ui'`). Not triggered by the path-based orchestrator.
+
+**Purpose:** Catch performance regressions automatically without requiring manual perf runs after every commit. The pipeline is notify-only — it never fails a build, only annotates.
+
+#### Commit-guard dynamic-dispatch pattern
+
+The pipeline's first step (`perf-test-guard.sh`, `trigger` queue) implements a "daily but only if there's something new" gate:
+
+1. Calls `last_perf_run_commit` (in `lib/last-successful-commit.sh`) — resolves the commit the heavy regression run *last actually executed against*, by reading the most recent `perf_regression_ran_commit` Buildkite build meta-data (set by `perf-test-run.sh`) via the Buildkite API (token in AWS Secrets Manager `mockserver-build/buildkite-api-token`). This is deliberately distinct from the sibling `last_successful_commit` (last *passed build*, used by `generate-pipeline.sh`): the perf-test pipeline passes on its lint step on every push, so "last passed build" would almost always be `HEAD` and the guard would skip forever.
+2. If `HEAD` equals the last run commit, annotates "skipped" and exits 0 — no compute is consumed.
+3. Otherwise (new commit, or no prior run recorded) uses `buildkite-agent pipeline upload` to dynamically inject the run, microbench, and compare steps into the running build. These three steps target the `perf` agent queue (c5.4xlarge, on-demand).
+
+This pattern avoids a fixed multi-step pipeline definition (which would always run all steps) while keeping the guard cheap on the `trigger` queue.
+
+#### Steps
+
+| Step script | Queue | What it does |
+|---|---|---|
+| `perf-test-guard.sh` | `trigger` | Commit guard + dynamic step upload |
+| `perf-test-run.sh` | `perf` | k6 regression.js (HTTP + HTTPS/H2) + growth.js + background sampler; uploads `perf-result.json` |
+| `perf-test-microbench.sh` | `perf` | JMH MatchingBenchmark with `-prof gc`; uploads `perf-microbench.json` |
+| `perf-test-compare.sh` | `perf` | Merge artifacts + S3 persist + rolling median+MAD compare + Buildkite annotation |
+
+See [Performance Tuning](../operations/performance-tuning.md#performance-regression-pipeline) for the full description of behaviours, thresholds, result schema, and how to re-baseline.
 
 ### CI Build Pipeline
 
@@ -208,6 +239,16 @@ On `master` only, three additional steps run sequentially:
 - **Container integration tests:** `.buildkite/scripts/steps/container-tests-run.sh` — runs Docker Compose and Helm integration tests
 - **Build and push :snapshot:** `.buildkite/scripts/steps/java-docker-push-snapshot.sh` — builds and pushes the `:snapshot` and `:mockserver-snapshot` Docker images (`:latest` is only pushed during releases)
 
+### Python and Ruby Client Integration Tests
+
+**Files:** `.buildkite/scripts/steps/python-integration-test.sh`, `.buildkite/scripts/steps/ruby-integration-test.sh`
+
+These pipelines run independently from the Java pipeline and do not have access to Java build artifacts. To test against the HEAD-built MockServer (not a stale `:snapshot` from Docker Hub), both scripts source a shared helper:
+
+- **Helper:** `.buildkite/scripts/build-local-mockserver-image.sh` — builds the `mockserver-netty-no-dependencies` shaded JAR from the Maven reactor (skipped if the JAR already exists), copies it into `docker/local/`, and runs `docker build` to produce a local image tagged `mockserver-under-test:local` (configurable via `MOCKSERVER_IMAGE` env var).
+
+The test fixtures (`conftest.py` for Python, `integration_spec.rb` for Ruby) also respect the `MOCKSERVER_IMAGE` env var when launching a container in standalone/local mode.
+
 ### Maven CI Image Push Pipeline
 
 **File:** `.buildkite/docker-push-maven.yml`
@@ -239,32 +280,77 @@ The pipeline has two steps separated by a `- wait` directive:
 
 **Trigger:** Manual (during release process, step 7)
 
-Builds and pushes the production MockServer Docker image as a multi-arch image (`linux/amd64` + `linux/arm64` via QEMU).
+**Queue:** `release` — runs on the release agent queue so it has access to release secrets.
 
-Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-6.1.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
+Builds and pushes the production MockServer Docker images as multi-arch images (`linux/amd64` + `linux/arm64` via QEMU). Three image variants are published: main, GraalJS, and webhook.
 
-Two Docker tags are pushed:
-- `mockserver/mockserver:mockserver-X.Y.Z` (full tag)
-- `mockserver/mockserver:X.Y.Z` (short tag)
+Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-7.0.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
+
+Tags pushed per image:
+- `mockserver/mockserver:mockserver-X.Y.Z` + `:X.Y.Z` (main + GraalJS variants)
+- `mockserver/mockserver-webhook:mockserver-X.Y.Z` + `:X.Y.Z` (admission webhook)
+- Same tags to ECR Public (URI resolved dynamically via `aws ecr-public describe-repositories`)
 
 ```mermaid
 flowchart LR
     TRIGGER["Manual trigger
-RELEASE_TAG=mockserver-X.Y.Z"] --> LOGIN["Docker Hub login
+RELEASE_TAG=mockserver-X.Y.Z"] --> LOGIN["Docker Hub + ECR login
 via Secrets Manager"]
-    LOGIN --> BUILD["docker buildx build
+    LOGIN --> ECR_RESOLVE["Resolve ECR URI dynamically
+ecr-public describe-repositories"]
+    ECR_RESOLVE --> BUILD["docker buildx build
 linux/amd64 + linux/arm64"]
-    BUILD --> PUSH["Push to Docker Hub
+    BUILD --> PUSH["Push main + GraalJS + webhook
 :mockserver-X.Y.Z + :X.Y.Z"]
 ```
+
+The ECR repository URI is resolved at runtime via `aws ecr-public describe-repositories` rather than hardcoded — the registry alias is AWS-assigned and must not be hardcoded (`.buildkite/scripts/steps/docker-push-release.sh`).
+
+### Release Pipeline Security
+
+#### File-based secrets (no `-e` in docker run)
+
+All release scripts that run toolchains inside Docker containers (`scripts/release/components/maven-central.sh`, `maven-plugin.sh`, `helm.sh`, `docker.sh`) write secrets to `0600` files under `.tmp/` and read them from inside the container via mounted volume, rather than passing them as `docker run -e VAR=value`. Environment variables are readable from `/proc/1/environ` and via `docker inspect`; file-based secrets under `.tmp/` are not.
+
+| Secret | File pattern | Removed from container via |
+|--------|-------------|---------------------------|
+| GPG key (base64) | `.tmp/gpg-key.$PID` | `trap` cleanup function on EXIT |
+| GPG passphrase | `.tmp/gpg-passphrase.$PID` | same trap |
+| Sonatype credentials | `.tmp/sonatype-creds.$PID` (username\npassword) | same trap |
+| GHCR token | `.tmp/ghcr-creds.$PID` (username\ntoken) | `trap ... EXIT` in helm.sh |
+| cosign key | `.tmp/cosign-key.$PID` | removed after signing |
+| cosign password | `.tmp/cosign-pw.$PID` | removed after signing |
+| Sonatype netrc | `.tmp/sonatype-netrc.$PID` | `trap ... EXIT` in polling loop |
+
+Curl calls to the Sonatype Central Portal API use `--netrc-file` rather than `Authorization: Basic <base64>` in a shell variable, so credentials are not held in the shell environment across the 30-minute polling loop.
+
+#### TOTP tolerance window (by design)
+
+The TOTP verification step (`release-verify-totp.sh`) accepts ±5 minutes of clock skew (`TOTP_TOLERANCE_WINDOWS=10`). This is intentional — release-queue agents scale to zero, so the agent that runs the verifier cold-starts after the operator enters the code in the Buildkite block step. The Lambda autoscaler poll, EC2 spot acquisition, and agent bootstrap together take up to ~2.5 minutes. A standard ±1-window tolerance would produce false rejections on every cold-start without adding security, because the `allowed_teams: ["release-managers"]` gate on the block step is the primary access control.
+
+To change this behaviour: either pre-warm the release queue or move TOTP validation into the block step itself (which runs in the Buildkite control plane, not on an agent).
+
+#### Docker image cosign signing
+
+After pushing release images to Docker Hub and ECR, the release pipeline cosign-signs each image digest using the same key infrastructure as Helm chart signing (`mockserver-release/cosign-key` in Secrets Manager). Signing is by digest so the signature binds to the exact manifest content, not a mutable tag.
+
+Signing is strictly non-fatal: if the cosign key is absent or the binary is not installed, the images remain published and the release continues. The guard is:
+
+```bash
+if aws secretsmanager describe-secret --secret-id mockserver-release/cosign-key; then
+  # sign
+fi
+```
+
+See [Docker image verification](docker.md#verifying-image-signatures) for how to verify a signed image.
 
 ### Build Docker Image
 
 The `mockserver/mockserver:maven` image is defined in `docker_build/maven/Dockerfile`:
 
 - Base: Ubuntu 24.04 (Noble)
-- JDK: OpenJDK 21
-- Maven: 3.9.15 (manually installed from Apache)
+- JDK: OpenJDK 17
+- Maven: 3.9.16 (manually installed from Apache)
 - Dependencies: Pre-fetched by running a throwaway build during image creation
 - Corporate CA: Optional certificate injection for TLS proxy environments (see [Docker](docker.md#maven-ci-image))
 
@@ -319,7 +405,7 @@ Two workflows run on GitHub Actions, both triggered automatically on push and pu
 ```mermaid
 flowchart LR
     TRIGGER[Push/PR/Schedule] --> CHECKOUT[Checkout code]
-    CHECKOUT --> SETUP_JDK[Set up JDK 11]
+    CHECKOUT --> SETUP_JDK[Set up JDK 17]
     SETUP_JDK --> INIT[Initialize CodeQL]
     INIT --> BUILD[Maven compile
 skip tests]
@@ -329,7 +415,7 @@ skip tests]
 
 The workflow:
 1. Checks out the repository
-2. Sets up JDK 11 (Temurin distribution)
+2. Sets up JDK 17 (Temurin distribution)
 3. Initializes CodeQL for Java, JavaScript, Python, and Ruby
 4. For Java: Runs `./mvnw clean compile -DskipTests -Dmaven.javadoc.skip=true` (CodeQL autobuild)
 5. For JavaScript, Python, and Ruby: Analyzes source files directly (no build required)
@@ -425,6 +511,15 @@ curl -sH "Authorization: Bearer $TOKEN" \
 
 This avoids creating and managing separate API tokens. The token is the same OAuth token created by `bk auth login`.
 
+> **Reading build logs requires the `bk` CLI token — not the Secrets Manager API tokens.** The Buildkite API tokens in Secrets Manager (`mockserver-build/buildkite-api-token` and `-readonly`) are scoped for build state, triggering, and retrying jobs, but **lack the `read_build_logs` scope**, so `/jobs/<id>/log` returns `"doesn't have the read_build_logs scope"`. Use `bk auth token` (above) or `bk api` with the locally-authenticated CLI:
+>
+> ```bash
+> bk api "pipelines/mockserver-release/builds/<N>/jobs/<JOB_ID>/log" \
+>   | python3 -c "import sys,json; print(json.load(sys.stdin).get('content',''))"
+> ```
+>
+> The `chrome-devtools` MCP browser cannot read the UI either — it is a separate browser profile that is not logged into Buildkite.
+
 ### Opencode Integration
 
 Once `bk` is installed and authenticated, opencode agents can use it directly for build operations (cancel, rebuild, inspect) without needing a separate API token. The `bk` CLI is the recommended approach.
@@ -496,7 +591,7 @@ Add a second, cheap agent stack on small instances (e.g. `t3.small` or `t3.micro
 
       agents_per_instance         = 4
       associate_public_ip_address = true
-      managed_policy_arns         = [aws_iam_policy.read_build_secrets.arn]
+      managed_policy_arns         = [aws_iam_policy.read_buildkite_api_token.arn]
    }
    ```
 
@@ -569,6 +664,66 @@ Combine Options A and B: run triggers on cheap instances AND limit concurrency p
 **Pipeline:** `.buildkite/scripts/generate-pipeline.sh` — `agents: { queue: trigger }`
 
 If concurrent master builds remain a problem, Option E (adding concurrency groups) can be layered on top.
+
+## Dependency Caching
+
+Each pipeline caches its dependency manager's artifacts in S3, keyed on lockfile hashes, to avoid re-downloading dependencies on every ephemeral agent. The cache is fail-safe by design -- every failure mode (missing bucket, missing credentials, non-root agent, corrupt tarball, empty cache) results in a clean no-op (exit 0) and a cold build proceeds normally.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    RESTORE["cache-restore.sh
+    runs on host agent"] -->|download + extract| LOCAL[".buildkite-cache/TYPE/
+    workspace-local dir"]
+    LOCAL -->|volume mount via
+    run-in-docker.sh --cache| CONTAINER["Docker container
+    /root/.m2/repository
+    /root/.npm
+    etc."]
+    CONTAINER -->|build populates cache| LOCAL
+    LOCAL -->|tar + upload| SAVE["cache-save.sh
+    runs on host agent"]
+    RESTORE -->|"s3://mockserver-ci-
+    dependency-cache/TYPE/KEY.tar.gz"| S3[(S3 Bucket)]
+    SAVE -->|same key| S3
+```
+
+### How It Works
+
+1. **Cache restore** (pipeline step, `soft_fail: true`): `cache-restore.sh <type>` computes a SHA-256 key from the relevant lockfiles, downloads `s3://mockserver-ci-dependency-cache/<type>/<key>.tar.gz`, and extracts it into `$BUILDKITE_BUILD_CHECKOUT_PATH/.buildkite-cache/<type>/`. If anything fails, it exits 0.
+
+2. **Build** (existing step): `run-in-docker.sh --cache <type>` volume-mounts the workspace-local cache directory into the Docker container at the tool's default cache path (e.g., `/root/.m2/repository` for Maven, `/root/.npm` for npm). If the directory is empty (cache miss), the build starts with a cold cache -- no different from before caching was enabled.
+
+3. **Cache save** (pipeline step, `soft_fail: true`): `cache-save.sh <type>` tars the populated cache directory and uploads it to S3 with the same key. If the key already exists in S3 (cache hit on a previous build), the upload is skipped.
+
+### Cache Types and Keys
+
+| Type | Lockfiles hashed | Container mount target |
+|------|-----------------|----------------------|
+| `maven` | All `pom.xml` files in `mockserver/` | `/root/.m2/repository` |
+| `npm` | `package-lock.json` + `package.json` from `mockserver-ui/`, `mockserver-client-node/`, `mockserver-node/` | `/root/.npm` |
+| `pip` | `pyproject.toml`, `setup.cfg`, `requirements.txt` from `mockserver-client-python/` | `/root/.cache/pip` |
+| `bundler` | `Gemfile` + `Gemfile.lock` from `mockserver-client-ruby/`, `jekyll-www.mock-server.com/` | `/usr/local/bundle/cache` |
+
+### Fail-Safe Design
+
+The previous caching attempt (reverted) broke builds by writing to `/var/cache` (requires root) and bridging state across ephemeral agents via host volumes. This redesign avoids both problems:
+
+- **No root-owned host paths**: caches live under the workspace checkout directory, which the `buildkite-agent` user always owns
+- **No cross-agent state**: each job downloads its own cache from S3; no host-volume bridge between jobs
+- **`set -uo pipefail` without `set -e`**: errors are handled inline, never propagated
+- **`soft_fail: true`**: pipeline-level safety net -- even if the script somehow exits non-zero, the build continues
+- **Credential check up-front**: `aws sts get-caller-identity` is tested before any S3 operation; if it fails, the script bails immediately with exit 0
+- **Idempotent keys**: cache key is a pure function of lockfile content; same deps = same key = upload skipped
+
+### Activation
+
+The S3 bucket and IAM policy are defined in `terraform/buildkite-agents/dependency-cache.tf`. The IAM policy is currently **detached from all agent roles** — the runtime pipeline wiring (cache-restore/cache-save steps) was reverted. The bucket and policy remain in place so the infrastructure is ready to re-enable once cache-integrity verification (signed or content-addressed entries) is implemented.
+
+To re-activate: attach `aws_iam_policy.dependency_cache` to the relevant queues in `main.tf` and re-add the cache restore/save steps to the affected pipelines.
+
+Until the IAM policy is re-attached, the cache scripts will detect missing credentials and no-op gracefully. No pipeline will break.
 
 ## Local CI Simulation
 

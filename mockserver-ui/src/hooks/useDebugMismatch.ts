@@ -25,6 +25,8 @@ export function useDebugMismatch(params: ConnectionParams) {
           setError(data.error ?? `Request failed: ${response.status}`);
           return;
         }
+        // Attach the original request so the dialog can offer "Create Expectation"
+        data.unmatchedRequest = request;
         openDebugMismatch(data);
       } catch {
         setError('Failed to connect to MockServer');

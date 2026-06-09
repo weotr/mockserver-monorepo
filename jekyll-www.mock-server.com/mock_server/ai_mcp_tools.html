@@ -30,9 +30,11 @@ sitemap:
         <tr><td><a href="#verify_request_sequence"><code>verify_request_sequence</code></a></td><td>Verify requests were received in order</td><td>High</td></tr>
         <tr><td><a href="#retrieve_recorded_requests"><code>retrieve_recorded_requests</code></a></td><td>Get recorded requests</td><td>High</td></tr>
         <tr><td><a href="#retrieve_request_responses"><code>retrieve_request_responses</code></a></td><td>Get request-response pairs</td><td>High</td></tr>
+        <tr><td><a href="#retrieve_logs"><code>retrieve_logs</code></a></td><td>Get log messages for debugging</td><td>High</td></tr>
         <tr><td><a href="#clear_expectations"><code>clear_expectations</code></a></td><td>Clear matching expectations and/or logs</td><td>High</td></tr>
         <tr><td><a href="#reset"><code>reset</code></a></td><td>Reset all MockServer state</td><td>High</td></tr>
         <tr><td><a href="#get_status"><code>get_status</code></a></td><td>Server status and ports</td><td>High</td></tr>
+        <tr><td><a href="#manage_service_chaos"><code>manage_service_chaos</code></a></td><td>Register, remove, or clear service-scoped HTTP chaos per upstream host</td><td>High</td></tr>
         <tr><td><a href="#create_forward_expectation"><code>create_forward_expectation</code></a></td><td>Create a forwarding proxy expectation</td><td>High</td></tr>
         <tr><td><a href="#debug_request_mismatch"><code>debug_request_mismatch</code></a></td><td>Diagnose why a request did not match</td><td>High</td></tr>
         <tr><td><a href="#explain_unmatched_requests"><code>explain_unmatched_requests</code></a></td><td>Explain recent unmatched requests with ranked diagnostics</td><td>High</td></tr>
@@ -82,6 +84,36 @@ sitemap:
         <tr><td><code>responseHeaders</code></td><td>object</td><td>No</td><td>Response headers as key-value pairs</td></tr>
         <tr><td><code>times</code></td><td>integer</td><td>No</td><td>Number of times the expectation should be used. Defaults to unlimited.</td></tr>
         <tr><td><code>timeToLive</code></td><td>string</td><td>No</td><td>How long the expectation remains active, in format <code>&lt;number&gt; &lt;UNIT&gt;</code> (e.g. <code>"60 SECONDS"</code>). Defaults to unlimited.</td></tr>
+        <tr><td><code>chaos</code></td><td>object</td><td>No</td><td>Declarative HTTP chaos/fault-injection profile for resilience testing &mdash; probabilistic errors, latency, connection drops, body corruption, slow (dribbled) responses, time/count-based outage windows, and a stateful request quota (see the table below).</td></tr>
+    </tbody>
+</table>
+
+<p><strong><code>chaos</code> fields</strong> (all optional):</p>
+
+<table>
+    <thead>
+        <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>errorStatus</code></td><td>integer</td><td>HTTP status to inject on error (e.g. <code>500</code>, <code>503</code>, <code>429</code>).</td></tr>
+        <tr><td><code>errorProbability</code></td><td>number</td><td>Probability 0.0&ndash;1.0 of injecting an error. Fractional values are non-deterministic unless <code>seed</code> is set.</td></tr>
+        <tr><td><code>retryAfter</code></td><td>string</td><td>Optional <code>Retry-After</code> header value on an injected error.</td></tr>
+        <tr><td><code>latency</code></td><td>object</td><td>Injected latency delay &mdash; an object with <code>timeUnit</code> (e.g. <code>MILLISECONDS</code>, <code>SECONDS</code>) and <code>value</code> (integer).</td></tr>
+        <tr><td><code>dropConnectionProbability</code></td><td>number</td><td>Probability 0.0&ndash;1.0 of dropping the TCP connection without sending any response.</td></tr>
+        <tr><td><code>seed</code></td><td>integer</td><td>Optional seed for reproducible probabilistic draws.</td></tr>
+        <tr><td><code>succeedFirst</code></td><td>integer</td><td>First N matches are <strong>not</strong> eligible for chaos (&ge; 0).</td></tr>
+        <tr><td><code>failRequestCount</code></td><td>integer</td><td>After <code>succeedFirst</code>, the next M matches <strong>are</strong> eligible for chaos (&ge; 1).</td></tr>
+        <tr><td><code>outageAfterMillis</code></td><td>integer</td><td>Time-based outage window: chaos becomes active this many ms after the first match (&ge; 0).</td></tr>
+        <tr><td><code>outageDurationMillis</code></td><td>integer</td><td>Time-based outage window: chaos stays active for this many ms then self-heals (&ge; 1).</td></tr>
+        <tr><td><code>truncateBodyAtFraction</code></td><td>number</td><td>Corrupt the response body by keeping only this leading fraction (0.0&ndash;1.0) of its bytes.</td></tr>
+        <tr><td><code>malformedBody</code></td><td>boolean</td><td>Corrupt the response body by appending a broken-JSON fragment so it fails to parse.</td></tr>
+        <tr><td><code>slowResponseChunkSize</code></td><td>integer</td><td>Dribble the response body in chunks of this many bytes (&ge; 1); requires <code>slowResponseChunkDelay</code>.</td></tr>
+        <tr><td><code>slowResponseChunkDelay</code></td><td>object</td><td>Delay between dribbled response chunks &mdash; an object with <code>timeUnit</code> and <code>value</code> (integer).</td></tr>
+        <tr><td><code>quotaName</code></td><td>string</td><td>Stateful quota: shared counter key; expectations with the same <code>quotaName</code> share one rate-limit counter.</td></tr>
+        <tr><td><code>quotaLimit</code></td><td>integer</td><td>Stateful quota: max requests allowed per window before requests are rejected (&ge; 1).</td></tr>
+        <tr><td><code>quotaWindowMillis</code></td><td>integer</td><td>Stateful quota: fixed-window length in milliseconds (&ge; 1).</td></tr>
+        <tr><td><code>quotaErrorStatus</code></td><td>integer</td><td>Stateful quota: status returned when the quota is exceeded (default <code>429</code>).</td></tr>
+        <tr><td><code>degradationRampMillis</code></td><td>integer</td><td>Gradual degradation: ramp <code>errorProbability</code> and <code>dropConnectionProbability</code> from 0 to full over this many ms from the first match (&ge; 1).</td></tr>
     </tbody>
 </table>
 
@@ -133,7 +165,7 @@ sitemap:
     </thead>
     <tbody>
         <tr><td><code>method</code></td><td>string</td><td>No</td><td>HTTP method to match</td></tr>
-        <tr><td><code>path</code></td><td>string</td><td>Yes</td><td>URL path to match</td></tr>
+        <tr><td><code>path</code></td><td>string</td><td>No</td><td>URL path to match</td></tr>
         <tr><td><code>atLeast</code></td><td>integer</td><td>No</td><td>Minimum number of times the request must have been received</td></tr>
         <tr><td><code>atMost</code></td><td>integer</td><td>No</td><td>Maximum number of times the request must have been received</td></tr>
     </tbody>
@@ -285,6 +317,53 @@ sitemap:
   }
 }</code></pre>
 
+<a id="retrieve_logs" class="anchor" href="#retrieve_logs">&nbsp;</a>
+
+<h3>retrieve_logs</h3>
+
+<p>Retrieve MockServer's recorded log messages — request matching, mismatches, actions and errors — to debug why a test or request behaved as it did. Returns structured <code>LOG_ENTRIES</code> format. Use the <code>correlationId</code> filter to narrow to a single request's lifecycle.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>correlationId</code></td><td>string</td><td>No</td><td>Filter to a single request's log entries by its correlation ID. Each incoming request is assigned a unique correlation ID that links all log entries for that request's lifecycle.</td></tr>
+        <tr><td><code>limit</code></td><td>integer</td><td>No</td><td>Maximum number of log entries to return (default 100, max 500). Returns the most recent entries when more are available.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "retrieve_logs",
+    "arguments": {
+      "correlationId": "abc-123-def",
+      "limit": 20
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"logEntries\":[{\"description\":\"received request\",\"logLevel\":\"INFO\",\"timestamp\":\"...\"}],\"total\":1,\"returned\":1}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
 <a id="clear_expectations" class="anchor" href="#clear_expectations">&nbsp;</a>
 
 <h3>clear_expectations</h3>
@@ -362,10 +441,48 @@ sitemap:
     "content": [
       {
         "type": "text",
-        "text": "{\"ports\": [1080]}"
+        "text": "{\"ports\": [1080], \"running\": true}"
       }
     ],
     "isError": false
+  }
+}</code></pre>
+
+<a id="manage_service_chaos" class="anchor" href="#manage_service_chaos">&nbsp;</a>
+
+<h3>manage_service_chaos</h3>
+
+<p>Manage service-scoped HTTP chaos. Register one chaos profile per upstream host (applied to all matched forwards to that host that have no chaos of their own), remove a host's profile, or clear all host-keyed profiles. An expectation's own chaos always takes precedence over a host-keyed profile.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>action</code></td><td>string</td><td>Yes</td><td>One of <code>register</code> (set a host's chaos), <code>remove</code> (clear one host), or <code>clear</code> (clear all)</td></tr>
+        <tr><td><code>host</code></td><td>string</td><td>For <code>register</code>/<code>remove</code></td><td>Upstream host to break; matched case-insensitively, ignoring any <code>:port</code></td></tr>
+        <tr><td><code>chaos</code></td><td>object</td><td>For <code>register</code></td><td>The chaos profile to apply &mdash; same fields as the <code>create_expectation</code> <code>chaos</code> block (e.g. <code>errorStatus</code>, <code>errorProbability</code>, <code>dropConnectionProbability</code>, <code>latency</code>, <code>truncateBodyAtFraction</code>, <code>malformedBody</code>)</td></tr>
+        <tr><td><code>ttlMillis</code></td><td>integer</td><td>No</td><td>Optional time-to-live for a <code>register</code>: the chaos auto-reverts after this many milliseconds (a dead-man's switch so chaos self-heals if no clear is sent). Omit for chaos that persists until explicitly cleared.</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "method": "tools/call",
+  "params": {
+    "name": "manage_service_chaos",
+    "arguments": {
+      "action": "register",
+      "host": "payments.example.com",
+      "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.5
+      },
+      "ttlMillis": 60000
+    }
   }
 }</code></pre>
 
@@ -553,7 +670,8 @@ sitemap:
     </thead>
     <tbody>
         <tr><td><code>specUrlOrPayload</code></td><td>string</td><td>Yes</td><td>URL, file path, or inline OpenAPI specification (JSON or YAML)</td></tr>
-        <tr><td><code>operationsAndResponses</code></td><td>object</td><td>No</td><td>Map of <code>operationId</code> to status code to control which operations and responses are mocked</td></tr>
+        <tr><td><code>operationsAndResponses</code></td><td>object</td><td>No</td><td>Map of <code>operationId</code> to control which operations and responses are mocked. Each value is either a status-code string (e.g. <code>"200"</code>) or an object <code>{ "statusCode": "200", "exampleName": "..." }</code> to pick a named example for that operation</td></tr>
+        <tr><td><code>contextPathPrefix</code></td><td>string</td><td>No</td><td>Path prefix prepended to every path in the OpenAPI spec (e.g. <code>/api/v1</code>)</td></tr>
     </tbody>
 </table>
 
@@ -1031,6 +1149,7 @@ sitemap:
     <tbody>
         <tr><td><code>turnIndex</code></td><td>integer</td><td>Match when the conversation has this many completed assistant turns (0-based)</td></tr>
         <tr><td><code>latestMessageContains</code></td><td>string</td><td>Match when the latest message in the conversation contains this substring</td></tr>
+        <tr><td><code>latestMessageMatches</code></td><td>string</td><td>Match when the latest message in the conversation matches this Java regular-expression pattern</td></tr>
         <tr><td><code>latestMessageRole</code></td><td>string</td><td>Match when the latest message has this role: <code>USER</code>, <code>ASSISTANT</code>, <code>SYSTEM</code>, or <code>TOOL</code></td></tr>
         <tr><td><code>containsToolResultFor</code></td><td>string</td><td>Match when the conversation contains a tool result for the named tool</td></tr>
         <tr><td><code>semanticMatchAgainst</code></td><td>string</td><td>Opt-in, exploratory: the intent the latest message should express, judged by a runtime LLM. <strong>Off by default</strong> and ignored unless <code>mockserver.llmSemanticMatchingEnabled</code> is set and a backend resolves. Non-deterministic &mdash; for exploration only, never for CI assertions.</td></tr>
@@ -1363,7 +1482,7 @@ sitemap:
     "content": [
       {
         "type": "text",
-        "text": "{\"status\":\"all_passed\",\"protocolVersion\":\"2025-03-26\",\"serverInfo\":{\"name\":\"MockServer\"},\"totalChecks\":5,\"passed\":5,\"failed\":0,\"results\":[{\"check\":\"initialize\",\"passed\":true,\"statusCode\":200,\"detail\":\"session established\"},{\"check\":\"notifications/initialized\",\"passed\":true,\"statusCode\":202},{\"check\":\"ping\",\"passed\":true,\"statusCode\":200},{\"check\":\"tools/list\",\"passed\":true,\"statusCode\":200,\"detail\":\"29 tools advertised\"},{\"check\":\"rejects unknown method\",\"passed\":true,\"statusCode\":200,\"detail\":\"responded with code -32601\"}]}"
+        "text": "{\"status\":\"all_passed\",\"protocolVersion\":\"2025-03-26\",\"serverInfo\":{\"name\":\"MockServer\"},\"totalChecks\":5,\"passed\":5,\"failed\":0,\"results\":[{\"check\":\"initialize\",\"passed\":true,\"statusCode\":200,\"detail\":\"session established\"},{\"check\":\"notifications/initialized\",\"passed\":true,\"statusCode\":202},{\"check\":\"ping\",\"passed\":true,\"statusCode\":200},{\"check\":\"tools/list\",\"passed\":true,\"statusCode\":200,\"detail\":\"34 tools advertised\"},{\"check\":\"rejects unknown method\",\"passed\":true,\"statusCode\":200,\"detail\":\"responded with code -32601\"}]}"
       }
     ],
     "isError": false
@@ -1570,3 +1689,5 @@ sitemap:
 </table>
 
 <p>Resources are read-only and are updated in real time. AI assistants can use these to understand the current state of MockServer before taking actions. For example, an assistant might read <code class="code inline">mockserver://expectations</code> to see what mocks are already configured before creating a new one.</p>
+
+{% include_subpage _includes/ai_see_also.html %}

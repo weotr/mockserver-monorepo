@@ -10,20 +10,20 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 /**
- * {@link KeyValueStore} backed by an Infinispan {@link Cache} in LOCAL
- * (non-clustered) mode. Versioning is managed explicitly via a
- * {@link VersionedWrapper} stored as the cache value, since LOCAL caches
- * do not support Infinispan's metadata versioning API.
+ * {@link KeyValueStore} backed by an Infinispan {@link Cache}. Supports
+ * both LOCAL (non-clustered) and REPL_SYNC (clustered) cache modes.
+ * Versioning is managed explicitly via a {@link VersionedWrapper} stored
+ * as the cache value.
  * <p>
  * CAS ({@link #compareAndSet}) uses {@code cache.replace(key, oldValue, newValue)}
- * which is atomic in Infinispan LOCAL mode, ensuring no lost updates.
- * <p>
- * Phase 2b: single-node only. Cluster pub/sub invalidation is deferred to
- * phase 2c (listeners are fired locally only).
+ * which is atomic in both LOCAL and clustered modes. The previous
+ * {@code cache.compute()}-based CAS approach was unsafe in REPL_SYNC mode
+ * because Infinispan may re-execute the compute lambda on retry/conflict,
+ * causing a side-channel AtomicBoolean to be overwritten by the retry
+ * invocation.
  *
  * @param <V> the value type
  */
@@ -64,25 +64,43 @@ public class InfinispanKeyValueStore<V> implements KeyValueStore<V> {
     }
 
     @Override
+    public Optional<Versioned<V>> putIfAbsent(String key, V value) {
+        VersionedWrapper<V> newWrapper = new VersionedWrapper<>(value, 1L);
+        VersionedWrapper<V> existing = cache.putIfAbsent(key, newWrapper);
+        if (existing != null) {
+            // Key already existed — return the existing value without modification
+            return Optional.of(new Versioned<>(existing.getValue(), existing.getVersion()));
+        }
+        // Successfully created the entry
+        fireChanged(key);
+        return Optional.empty();
+    }
+
+    @Override
     public boolean compareAndSet(String key, long expectedVersion, V value) {
-        // Track whether the remapping lambda actually performed the CAS via
-        // an AtomicBoolean. We cannot rely on the returned wrapper's version
-        // alone because if the existing version already equals expectedVersion+1
-        // (e.g. put→v1 then compareAndSet(expectedVersion=0)), the version
-        // check would falsely report success without changing the value.
-        // The AtomicBoolean is set to the final decision on every invocation
-        // of the lambda (Infinispan may invoke it more than once in retries),
-        // so no side-effects other than the boolean are performed inside.
-        AtomicBoolean didCas = new AtomicBoolean(false);
-        cache.compute(key, (k, existing) -> {
-            if (existing == null || existing.getVersion() != expectedVersion) {
-                didCas.set(false);
-                return existing; // no change — CAS failed
-            }
-            didCas.set(true);
-            return new VersionedWrapper<>(value, expectedVersion + 1);
-        });
-        boolean success = didCas.get();
+        // Use Infinispan's native cache.replace(key, oldValue, newValue)
+        // for atomic CAS. This avoids the re-execution problem with
+        // cache.compute() in REPL_SYNC clustered mode: Infinispan may
+        // re-execute the compute lambda on retry/conflict, and a
+        // side-channel AtomicBoolean can be overwritten by the retry,
+        // falsely reporting failure even though the CAS succeeded.
+        //
+        // cache.replace(K, V oldValue, V newValue) is a true CAS: it
+        // atomically replaces the entry only if the current value
+        // equals(oldValue). The VersionedWrapper.equals() method
+        // checks both the version AND the value, so version-based CAS
+        // works correctly as long as the old VersionedWrapper instance
+        // matches what is in the cache.
+        //
+        // We first get() to obtain the current wrapper, verify its
+        // version matches expectedVersion, then replace() with the
+        // new wrapper. The replace() is atomic within Infinispan.
+        VersionedWrapper<V> current = cache.get(key);
+        if (current == null || current.getVersion() != expectedVersion) {
+            return false;
+        }
+        VersionedWrapper<V> updated = new VersionedWrapper<>(value, expectedVersion + 1);
+        boolean success = cache.replace(key, current, updated);
         if (success) {
             fireChanged(key);
         }
@@ -91,22 +109,13 @@ public class InfinispanKeyValueStore<V> implements KeyValueStore<V> {
 
     @Override
     public boolean compareAndRemove(String key, long expectedVersion) {
-        // Track whether the remapping lambda actually performed the removal
-        // via an AtomicBoolean — same pattern as compareAndSet. The entire
-        // version check + removal decision is made inside the compute lambda
-        // to avoid a TOCTOU race from a pre-compute get(). The AtomicBoolean
-        // is set to the final decision on every lambda invocation (Infinispan
-        // may retry), so no side-effects other than the boolean are performed.
-        AtomicBoolean didRemove = new AtomicBoolean(false);
-        cache.compute(key, (k, existing) -> {
-            if (existing == null || existing.getVersion() != expectedVersion) {
-                didRemove.set(false);
-                return existing; // no change
-            }
-            didRemove.set(true);
-            return null; // remove
-        });
-        boolean success = didRemove.get();
+        // Use get-then-conditional-remove to avoid the compute lambda
+        // re-execution issue in REPL_SYNC clustered mode (see compareAndSet).
+        VersionedWrapper<V> current = cache.get(key);
+        if (current == null || current.getVersion() != expectedVersion) {
+            return false;
+        }
+        boolean success = cache.remove(key, current);
         if (success) {
             fireChanged(key);
         }

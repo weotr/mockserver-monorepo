@@ -14,6 +14,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.llm.codec.CodecTestUtil.escapeForJson;
 import static org.mockserver.model.ToolUse.toolUse;
 
 /**
@@ -207,12 +208,5 @@ public class AzureOpenAiCodecRoundTripTest {
         assertThat(response.getStatusCode(), is(200));
         JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
         assertThat(root.get("data").get(0).get("embedding").size(), is(1536));
-    }
-
-    private static String escapeForJson(String value) {
-        return value.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\t", "\\t");
     }
 }

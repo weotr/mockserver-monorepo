@@ -11,7 +11,7 @@ printMessage "Start: \"${SCRIPT_DIR/\//}\""
 function integration_test() {
   start-up
   TEST_EXIT_CODE=0
-  sleep 3
+  wait_ready "mockserver" "1234" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
   docker-exec-client "curl -v -s -X PUT 'http://mockserver:1234/mockserver/expectation' -d \\\"{
                         'httpRequest' : {
                           'path' : '/some/path'

@@ -112,11 +112,18 @@ sitemap:
 
 <h3>OpenCode</h3>
 
-<p>Add the following to your <code class="code inline">.opencode/config.toml</code> file:</p>
+<p>Add the following to your <code class="code inline">opencode.json</code> file:</p>
 
-<pre class="prettyprint code"><code class="code">[mcpServers.mockserver]
-type = "streamable-http"
-url = "http://localhost:1080/mockserver/mcp"</code></pre>
+<pre class="prettyprint code"><code class="code">{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mockserver": {
+      "type": "remote",
+      "url": "http://localhost:1080/mockserver/mcp",
+      "enabled": true
+    }
+  }
+}</code></pre>
 
 <p>OpenCode will detect the new MCP server on the next session.</p>
 
@@ -165,3 +172,5 @@ agent = create_react_agent(model, tools)</code></pre>
     <li><a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a> — inspect and record LLM/MCP traffic for debugging and deterministic replay</li>
     <li><a href="/mock_server/ai_openapi.html"><strong>OpenAPI for AI</strong></a> — using MockServer's OpenAPI spec as a fallback for AI tools without MCP support</li>
 </ul>
+
+{% include_subpage _includes/ai_see_also.html %}

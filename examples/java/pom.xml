@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>6.1.1-SNAPSHOT</version>
+        <version>7.0.1-SNAPSHOT</version>
         <!-- examples/ lives at the repo root, alongside (not under) the mockserver reactor -->
         <relativePath>../../mockserver/pom.xml</relativePath>
     </parent>
@@ -171,10 +171,12 @@
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-client</artifactId>
+            <version>${jetty.version}</version>
         </dependency>
         <dependency>
             <groupId>org.eclipse.jetty</groupId>
             <artifactId>jetty-util</artifactId>
+            <version>${jetty.version}</version>
         </dependency>
 
         <!-- Apache HTTP Client -->

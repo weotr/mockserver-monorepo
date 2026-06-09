@@ -6,6 +6,14 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // @mui/material's ESM build (Transition.mjs) uses an extensionless directory import of
+    // `react-transition-group/TransitionGroupContext`, which Node's strict ESM resolver (used for
+    // externalised deps) rejects. Inline @mui so Vite transforms it and resolves the import.
+    server: {
+      deps: {
+        inline: [/@mui\/material/],
+      },
+    },
     // Heavier component tests (render + multiple userEvent interactions + React
     // re-renders) can exceed the 5s default on slower/loaded CI agents, even with
     // userEvent delay:null. Use a generous global timeout so CI-load latency does
@@ -17,6 +25,14 @@ export default defineConfig({
     reporters: ['default', 'junit'],
     outputFile: {
       junit: 'test-reports/junit.xml',
+    },
+    coverage: {
+      thresholds: {
+        statements: 64,
+        branches: 55,
+        functions: 54,
+        lines: 67,
+      },
     },
   },
 });

@@ -2,15 +2,22 @@
 #
 # The chart is published to GitHub Container Registry as an OCI artifact
 # (oci://ghcr.io/mock-server/charts/mockserver). To list it on https://artifacthub.io so it is
-# discoverable, this metadata file must be published to the registry root and the repository
+# discoverable, this metadata file must be published to the chart path and the repository
 # registered once in the Artifact Hub control panel.
+#
+# IMPORTANT: the registered URL MUST be the full chart path
+# (oci://ghcr.io/mock-server/charts/mockserver), NOT the namespace
+# (oci://ghcr.io/mock-server/charts). Artifact Hub's OCI Helm format requires
+# oci://registry/namespace/chart-name; pointing it at the namespace indexes
+# zero charts (the namespace holds only the artifacthub.io metadata tag, no
+# semver tags) and the listing silently shows an empty/unverified repository.
 #
 # One-time bootstrap (manual — needs an Artifact Hub account):
 #   1. Artifact Hub → Control Panel → Repositories → Add → kind "Helm charts", OCI based,
-#      URL: oci://ghcr.io/mock-server/charts
+#      URL: oci://ghcr.io/mock-server/charts/mockserver
 #   2. Copy the generated Repository ID into `repositoryID` below.
-#   3. Publish this file to the registry root so Artifact Hub can verify ownership:
-#        oras push ghcr.io/mock-server/charts:artifacthub.io \
+#   3. Publish this file to the chart path so Artifact Hub can verify ownership:
+#        oras push ghcr.io/mock-server/charts/mockserver:artifacthub.io \
 #          artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
 #      (or upload it via the control panel). Thereafter Artifact Hub auto-indexes new chart
 #      versions pushed to the registry.

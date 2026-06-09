@@ -4,7 +4,7 @@
 
     <groupId>org.mock-server</groupId>
     <artifactId>mockserver</artifactId>
-    <version>6.1.1-SNAPSHOT</version>
+    <version>7.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>MockServer</name>
@@ -62,8 +62,8 @@
         <netty.version>4.2.15.Final</netty.version>
         <httpcomponents.version>4.4.1</httpcomponents.version>
         <bouncycastle.version>1.84</bouncycastle.version>
-        <spring.version>7.0.7</spring.version>
-        <spring-web.version>7.0.7</spring-web.version>
+        <spring.version>7.0.8</spring.version>
+        <spring-web.version>7.0.8</spring-web.version>
         <mockito.version>5.23.0</mockito.version>
         <hamcrest.version>3.0</hamcrest.version>
         <xmlunit.version>2.12.0</xmlunit.version>
@@ -79,15 +79,17 @@
         <release.arguments/>
         <javadoc.additional.parameters/>
         <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
-        <jacoco-maven-plugin.version>0.8.14</jacoco-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
         <!-- also update NETTY_TCNATIVE in docker/*/Dockerfile download stages -->
         <netty-tcnative-boringssl-static.version>2.0.77.Final</netty-tcnative-boringssl-static.version>
         <protobuf.version>4.35.0</protobuf.version>
         <chicory.version>1.7.5</chicory.version>
         <jna.version>5.19.0</jna.version>
+        <picocli.version>4.7.7</picocli.version>
     </properties>
 
     <modules>
+        <module>mockserver-bom</module>
         <module>mockserver-testing</module>
         <module>mockserver-client-java</module>
         <module>mockserver-client-java-no-dependencies</module>
@@ -109,6 +111,10 @@
         <module>mockserver-async</module>
         <module>mockserver-testcontainers</module>
         <module>mockserver-state-infinispan</module>
+        <module>mockserver-blob-s3</module>
+        <module>mockserver-blob-gcs</module>
+        <module>mockserver-blob-azure</module>
+        <module>mockserver-k8s-webhook</module>
     </modules>
 
     <dependencyManagement>
@@ -128,6 +134,13 @@
                 <groupId>${project.groupId}</groupId>
                 <artifactId>mockserver-core</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>mockserver-core</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>${project.groupId}</groupId>
@@ -247,23 +260,6 @@
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-logging-juli</artifactId>
                 <version>8.5.2</version>
-            </dependency>
-
-            <!-- Jetty HTTP Client -->
-            <dependency>
-                <groupId>org.eclipse.jetty</groupId>
-                <artifactId>jetty-client</artifactId>
-                <version>${jetty.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.jetty</groupId>
-                <artifactId>jetty-util</artifactId>
-                <version>${jetty.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.jetty</groupId>
-                <artifactId>jetty-io</artifactId>
-                <version>${jetty.version}</version>
             </dependency>
 
             <!-- Apache HTTP Client -->
@@ -394,11 +390,13 @@
                 <version>${jna.version}</version>
             </dependency>
 
-            <!-- HTTP/3 (QUIC) — experimental; native QUIC transport required at runtime -->
+            <!-- HTTP/3 (QUIC) — graduated from incubator into Netty 4.2; native
+                 QUIC transport required at runtime. The codec version is aligned
+                 with ${netty.version} — no separate version property needed. -->
             <dependency>
-                <groupId>io.netty.incubator</groupId>
-                <artifactId>netty-incubator-codec-http3</artifactId>
-                <version>0.0.30.Final</version>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-codec-http3</artifactId>
+                <version>${netty.version}</version>
             </dependency>
 
             <!-- protobuf (gRPC support) -->
@@ -654,24 +652,24 @@
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>prometheus-metrics-core</artifactId>
-                <version>1.6.1</version>
+                <version>1.7.0</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>prometheus-metrics-exposition-formats</artifactId>
-                <version>1.6.1</version>
+                <version>1.7.0</version>
             </dependency>
             <dependency>
                 <groupId>io.prometheus</groupId>
                 <artifactId>prometheus-metrics-model</artifactId>
-                <version>1.6.1</version>
+                <version>1.7.0</version>
             </dependency>
 
             <!-- opentelemetry (optional metrics export; off by default) -->
             <dependency>
                 <groupId>io.opentelemetry</groupId>
                 <artifactId>opentelemetry-bom</artifactId>
-                <version>1.62.0</version>
+                <version>1.63.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -798,6 +796,13 @@
                 <groupId>com.dylibso.chicory</groupId>
                 <artifactId>runtime</artifactId>
                 <version>${chicory.version}</version>
+            </dependency>
+
+            <!-- CLI (picocli — used for the Main entry point) -->
+            <dependency>
+                <groupId>info.picocli</groupId>
+                <artifactId>picocli</artifactId>
+                <version>${picocli.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -1383,6 +1388,13 @@
                     </excludes>
                     <systemPropertyVariables>
                         <mockserver.logLevel>${mockserver.testLogLevel}</mockserver.logLevel>
+                        <!-- Cap the event-log ring buffer in test JVMs. By default maxLogEntries
+                             is min(heap/8, 100000), so each MockServerEventLog pre-allocates a
+                             disruptor RingBuffer of nextPowerOfTwo(100000)=131072 LogEntry objects.
+                             Tests create many event logs in one reused fork, exhausting the heap
+                             (OutOfMemoryError -> GC thrash -> the build hangs). A small cap keeps
+                             ring buffers tiny in tests; production sizing is unaffected. -->
+                        <mockserver.maxLogEntries>1000</mockserver.maxLogEntries>
                     </systemPropertyVariables>
                     <argLine>@{argLine} -Duser.language=en -Duser.country=GB -Dmockserver.testOutput=${mockserver.testOutput} ${mockserver.testArgLine}</argLine>
                     <disableXmlReport>${disableXmlReport}</disableXmlReport>
@@ -1410,6 +1422,9 @@
                         <mockserver.logLevel>${mockserver.testLogLevel}</mockserver.logLevel>
                         <project.version>${project.version}</project.version>
                         <project.basedir>${project.basedir}</project.basedir>
+                        <!-- See surefire config above: cap event-log ring buffer in test JVMs
+                             to avoid OutOfMemoryError from oversized disruptor pre-allocation. -->
+                        <mockserver.maxLogEntries>1000</mockserver.maxLogEntries>
                     </systemPropertyVariables>
                     <argLine>@{argLine} -Duser.language=en -Duser.country=GB -Dmockserver.testOutput=${mockserver.testOutput} ${mockserver.testArgLine}</argLine>
                     <disableXmlReport>${disableXmlReport}</disableXmlReport>

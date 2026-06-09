@@ -306,7 +306,7 @@ public class GrpcBidiInterleavingMultiplexTest {
         // Create the router handler
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler
         );
 
@@ -364,7 +364,7 @@ public class GrpcBidiInterleavingMultiplexTest {
         // Router WITH httpState but NO matching expectations
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -414,7 +414,7 @@ public class GrpcBidiInterleavingMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler
         );
 
@@ -738,7 +738,7 @@ public class GrpcBidiInterleavingMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -1055,7 +1055,7 @@ public class GrpcBidiInterleavingMultiplexTest {
 
         GrpcBidiRouterHandler router = new GrpcBidiRouterHandler(
             config, store, logger, false, null,
-            wsHandler, dashHandler, null, traceHandler,
+            wsHandler, dashHandler, null, traceHandler, null,
             grpcRespHandler, grpcReqHandler, reqHandler,
             httpState
         );
@@ -1120,7 +1120,7 @@ public class GrpcBidiInterleavingMultiplexTest {
 
             GrpcBidiRouterHandler router1 = new GrpcBidiRouterHandler(
                 config, store, logger, false, null,
-                wsHandler, dashHandler, null, traceHandler,
+                wsHandler, dashHandler, null, traceHandler, null,
                 grpcRespHandler, grpcReqHandler, reqHandler,
                 httpState
             );
@@ -1156,7 +1156,7 @@ public class GrpcBidiInterleavingMultiplexTest {
 
             GrpcBidiRouterHandler router2 = new GrpcBidiRouterHandler(
                 config, store, logger, false, null,
-                wsHandler2, dashHandler2, null, traceHandler2,
+                wsHandler2, dashHandler2, null, traceHandler2, null,
                 grpcRespHandler2, grpcReqHandler2, reqHandler2,
                 httpState
             );

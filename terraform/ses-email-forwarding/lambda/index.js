@@ -35,39 +35,64 @@ const FROM_ADDRESS = process.env.FROM_ADDRESS;
 const FORWARD_TO = (process.env.FORWARD_TO || "").split(",").map((s) => s.trim()).filter(Boolean);
 
 exports.handler = async (event) => {
-  const record = event.Records[0];
-  const messageId = record.ses.mail.messageId;
-  const s3Key = `${MAIL_KEY_PREFIX}${messageId}`;
+  const errors = [];
+  let forwarded = 0;
 
-  try {
-    console.log(`Processing message ${messageId}`);
+  for (const record of event.Records) {
+    const messageId = record.ses.mail.messageId;
+    const s3Key = `${MAIL_KEY_PREFIX}${messageId}`;
 
-    // 1. Read the raw MIME email from S3
-    const s3Response = await s3.send(
-      new GetObjectCommand({ Bucket: MAIL_BUCKET, Key: s3Key })
-    );
-    const rawEmail = await s3Response.Body.transformToString("utf-8");
+    try {
+      console.log(`Processing message ${messageId}`);
 
-    // 2. Rewrite headers for forwarding
-    const rewrittenEmail = rewriteHeaders(rawEmail, messageId);
+      // 1. Read the raw MIME email from S3
+      const s3Response = await s3.send(
+        new GetObjectCommand({ Bucket: MAIL_BUCKET, Key: s3Key })
+      );
+      const rawEmail = await s3Response.Body.transformToString("utf-8");
 
-    // 3. Send the rewritten email via SES
-    await ses.send(
-      new SendRawEmailCommand({
-        Destinations: FORWARD_TO,
-        RawMessage: {
-          Data: Buffer.from(rewrittenEmail, "utf-8"),
-        },
-      })
-    );
+      // 2. Rewrite headers for forwarding
+      const rewrittenEmail = rewriteHeaders(rawEmail, messageId);
 
-    console.log(`Forwarded message ${messageId} to ${FORWARD_TO.join(", ")}`);
-  } catch (error) {
+      // 3. Send the rewritten email via SES
+      await ses.send(
+        new SendRawEmailCommand({
+          Destinations: FORWARD_TO,
+          RawMessage: {
+            Data: Buffer.from(rewrittenEmail, "utf-8"),
+          },
+        })
+      );
+
+      console.log(`Forwarded message ${messageId} to ${FORWARD_TO.join(", ")}`);
+      forwarded++;
+    } catch (error) {
+      console.error(
+        `Failed to forward message ${messageId} (S3 key: ${s3Key}):`,
+        error
+      );
+      errors.push(error);
+    }
+  }
+
+  if (errors.length > 0) {
+    // SES invokes this function asynchronously ("Event"), so throwing makes AWS
+    // replay the WHOLE event on retry. Only throw when nothing was forwarded —
+    // a retry is then safe and recovers from transient S3/SES failures (this is
+    // the realistic case: SES delivers one record per invocation). When a
+    // multi-record batch partially succeeded, do NOT throw: replaying would
+    // re-forward the already-sent messages (duplicate delivery). Log instead so
+    // the CloudWatch error-log alarm still fires.
+    if (forwarded === 0) {
+      throw new AggregateError(
+        errors,
+        `Failed to forward all ${event.Records.length} message(s)`
+      );
+    }
     console.error(
-      `Failed to forward message ${messageId} (S3 key: ${s3Key}):`,
-      error
+      `Partial failure: forwarded ${forwarded}, failed ${errors.length} of ` +
+        `${event.Records.length} message(s); not retrying to avoid duplicate sends`
     );
-    throw error;
   }
 };
 

@@ -41,8 +41,6 @@ import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -54,6 +52,7 @@ import static org.mockserver.test.Assert.assertContains;
 import static org.mockserver.testing.tls.SSLSocketFactory.sslSocketFactory;
 import static org.mockserver.verify.VerificationTimes.exactly;
 import static org.slf4j.event.Level.ERROR;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -426,8 +425,8 @@ public class NettyHttpsProxyIntegrationTest {
         HttpResponse response = httpClient.execute(request);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
-        assertEquals("an_example_body", new String(EntityUtils.toByteArray(response.getEntity()), UTF_8));
+        assertThat(response.getStatusLine().getStatusCode(), is(HttpStatusCode.OK_200.code()));
+        assertThat(new String(EntityUtils.toByteArray(response.getEntity()), UTF_8), is("an_example_body"));
 
         // and
         mockServerClient.verify(

@@ -86,7 +86,8 @@ public class McpToolRegistryTest {
         assertThat(tools.containsKey("verify_cost_budget"), is(true));
         assertThat(tools.containsKey("manage_service_chaos"), is(true));
         assertThat(tools.containsKey("list_mock_tools"), is(true));
-        assertThat(tools.size(), is(33));
+        assertThat(tools.containsKey("retrieve_logs"), is(true));
+        assertThat(tools.size(), is(34));
     }
 
     @Test
@@ -2013,5 +2014,145 @@ public class McpToolRegistryTest {
         assertThat(tool.path("description").asText(), is("Mock for GET /users"));
         assertThat(tool.at("/_mockserver/method").asText(), is("GET"));
         assertThat(tool.at("/_mockserver/path").asText(), is("/users"));
+    }
+
+    // --- retrieve_logs tool tests ---
+
+    @Test
+    public void shouldRetrieveEmptyLogs() {
+        ObjectNode params = objectMapper.createObjectNode();
+
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+        assertThat(result.path("total").asInt(), is(0));
+        assertThat(result.path("returned").asInt(), is(0));
+        assertThat(result.path("logEntries").isArray(), is(true));
+    }
+
+    @Test
+    public void shouldRetrieveLogEntriesAfterActivity() throws Exception {
+        // given - create an expectation and trigger some log activity
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/test"))
+            .setMessageFormat("received request:{}")
+            .setArguments(request().withMethod("GET").withPath("/api/test"))
+        );
+
+        Thread.sleep(500);
+
+        // when
+        ObjectNode params = objectMapper.createObjectNode();
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+
+        // then
+        assertThat(result.path("total").asInt() >= 1, is(true));
+        assertThat(result.path("logEntries").isArray(), is(true));
+        assertThat(result.path("returned").asInt() >= 1, is(true));
+    }
+
+    @Test
+    public void shouldRetrieveLogsFilteredByCorrelationId() throws Exception {
+        // given - log two entries with different correlation IDs
+        String targetCorrelationId = "test-correlation-id-123";
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setCorrelationId(targetCorrelationId)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/filtered"))
+            .setMessageFormat("received request:{}")
+            .setArguments(request().withMethod("GET").withPath("/api/filtered"))
+        );
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setCorrelationId("other-correlation-id-456")
+            .setHttpRequest(request().withMethod("POST").withPath("/api/other"))
+            .setMessageFormat("received request:{}")
+            .setArguments(request().withMethod("POST").withPath("/api/other"))
+        );
+
+        Thread.sleep(500);
+
+        // when - filter by correlation ID
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("correlationId", targetCorrelationId);
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+
+        // then - should only return entries matching the correlation ID
+        assertThat(result.path("total").asInt() >= 1, is(true));
+        assertThat(result.path("logEntries").isArray(), is(true));
+        // verify all returned entries have the target correlation ID
+        for (JsonNode entry : result.path("logEntries")) {
+            assertThat("every returned log entry must carry the correlationId field", entry.has("correlationId"), is(true));
+            assertThat(entry.path("correlationId").asText(), is(targetCorrelationId));
+        }
+    }
+
+    @Test
+    public void shouldRetrieveLogsWithLimit() throws Exception {
+        // given - create multiple log entries
+        for (int i = 0; i < 5; i++) {
+            httpState.log(new LogEntry()
+                .setType(RECEIVED_REQUEST)
+                .setLogLevel(org.slf4j.event.Level.INFO)
+                .setHttpRequest(request().withMethod("GET").withPath("/api/item/" + i))
+                .setMessageFormat("received request:{}")
+                .setArguments(request().withMethod("GET").withPath("/api/item/" + i))
+            );
+        }
+
+        Thread.sleep(500);
+
+        // when - retrieve with limit=2
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 2);
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+
+        // then - should return at most 2 entries (the most recent ones)
+        assertThat(result.path("returned").asInt() <= 2, is(true));
+        assertThat(result.path("logEntries").isArray(), is(true));
+        // total should be >= 5 (there are at least 5 entries in the log)
+        assertThat(result.path("total").asInt() >= 5, is(true));
+    }
+
+    @Test
+    public void shouldRejectNegativeLimitForRetrieveLogs() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", -1);
+
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'limit' must be between 1 and 500"));
+    }
+
+    @Test
+    public void shouldRejectZeroLimitForRetrieveLogs() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 0);
+
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'limit' must be between 1 and 500"));
+    }
+
+    @Test
+    public void shouldRejectLimitAboveMaximumForRetrieveLogs() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 501);
+
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), is("'limit' must be between 1 and 500"));
+    }
+
+    @Test
+    public void shouldAcceptLimitAtMaximumForRetrieveLogs() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("limit", 500);
+
+        JsonNode result = toolRegistry.callTool("retrieve_logs", params);
+        assertThat(result.path("total").asInt(), is(0));
+        assertThat(result.path("logEntries").isArray(), is(true));
     }
 }

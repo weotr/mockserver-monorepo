@@ -11,8 +11,6 @@ import org.mockserver.scheduler.Scheduler;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
@@ -47,10 +45,10 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationTwo, API);
 
         // then
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationTwo, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationOne));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationTwo));
     }
 
     @Test
@@ -64,10 +62,10 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationTwo, API);
 
         // then
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationTwo, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationOne));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationTwo));
     }
 
     @Test
@@ -81,7 +79,7 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationTwo, API);
 
         // then - match in priority order 10 (one) -> 5 (two) -> 0 (zero)
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationOne));
 
         // when
         Expectation expectationZeroWithHigherPriority = new Expectation(new HttpRequest().withPath("somepath"), Times.unlimited(), TimeToLive.unlimited(), 15)
@@ -90,7 +88,7 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.update(new Expectation[]{expectationZeroWithHigherPriority}, API);
 
         // then - match in priority order 15 (zero) -> 10 (one) -> 5 (two)
-        assertEquals(expectationZeroWithHigherPriority, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZeroWithHigherPriority));
 
         // when
         Expectation expectationTwoWithHigherPriority = new Expectation(new HttpRequest().withPath("somepath"), Times.unlimited(), TimeToLive.unlimited(), 20)
@@ -99,7 +97,7 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.update(new Expectation[]{expectationTwoWithHigherPriority}, API);
 
         // then - match in priority order 20 (two) -> 15 (zero) -> 10 (one)
-        assertEquals(expectationTwoWithHigherPriority, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationTwoWithHigherPriority));
     }
 
     @Test
@@ -111,12 +109,12 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationOne, API);
 
         // then
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")), is(expectationOne));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")), is(expectationOne));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath1")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath2")), is(expectationOne));
     }
 
     @Test
@@ -126,9 +124,9 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationZero, API);
 
         // then
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), nullValue());
     }
 
     @Test
@@ -138,10 +136,10 @@ public class MockServerMatcherSequentialResponsesTest {
         requestMatchers.add(expectationZero, API);
 
         // then
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationZero));
         MILLISECONDS.sleep(2250L);
         assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(nullValue()));
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), nullValue());
     }
 
 }

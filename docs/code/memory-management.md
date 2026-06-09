@@ -57,13 +57,13 @@ maxExpectations  = min(heapAvailableInKB / 10, 15000)
 
 ### Source Code
 
-| Component | File | Line |
-|-----------|------|------|
-| `heapAvailableInKB()` | `ConfigurationProperties.java` | 493 |
-| `maxLogEntries()` default | `ConfigurationProperties.java` | 517 |
-| `maxExpectations()` default | `ConfigurationProperties.java` | 499 |
-| `ringBufferSize()` | `Configuration.java` | 2220 |
-| Heap measurement | `MemoryMonitoring.getJVMMemory()` | `MemoryMonitoring.java:59` |
+| Component | File | Method |
+|-----------|------|--------|
+| Heap available probe | `ConfigurationProperties.java` | `heapAvailableInKB()` |
+| `maxLogEntries()` default | `ConfigurationProperties.java` | `maxLogEntries()` |
+| `maxExpectations()` default | `ConfigurationProperties.java` | `maxExpectations()` |
+| Ring buffer sizing | `Configuration.java` | `ringBufferSize()` |
+| Heap measurement | `MemoryMonitoring.java` | `getJVMMemory()` |
 
 ### Example: Default Limits by Heap Size
 
@@ -80,6 +80,10 @@ The table below shows the computed defaults for different JVM heap configuration
 | 4 GB | 1,229 MB | 2,843,648 | 100,000 (capped) | 15,000 (capped) |
 
 With the default Docker image (no `-Xmx` set, JVM defaults to ~256 MB), users get roughly **20,000 log entries**. Since each HTTP request generates 2-3 log entries (RECEIVED_REQUEST + EXPECTATION_MATCHED + EXPECTATION_RESPONSE), this means approximately **~7,000-10,000 HTTP requests** are retained before eviction begins.
+
+### Dev Mode Override
+
+When `devMode` is enabled (`--dev` CLI flag, `-Dmockserver.devMode=true`, or `MOCKSERVER_DEV_MODE=true`), `maxLogEntries` and `maxExpectations` default to **1,000** instead of the heap-based formula above. This reduces memory usage for laptop and test-suite workloads. If either property is explicitly set (via system property, environment variable, or properties file), the explicit value takes precedence over the dev-mode default. See [configuration-reference.md](configuration-reference.md) for the full property definition.
 
 ### Shared Heap Pool
 
@@ -273,6 +277,10 @@ When the `CircularConcurrentLinkedDeque` reaches capacity:
 4. The `LogEntry` object itself is also GC-eligible (it is fully removed from the deque)
 
 The LMAX Disruptor ring buffer pre-allocates `LogEntry` slots separately. Data is copied into ring buffer slots via `translateTo()`, then the consumer calls `cloneAndClear()` — creating a new `LogEntry` for persistent storage and clearing the ring buffer slot. Ring buffer slots do not contribute to persistent memory usage.
+
+**O(1) capacity check (CPU).** The eviction check on every insert uses an internal `AtomicInteger` size counter, not `ConcurrentLinkedDeque.size()` (which is O(n) — it walks the whole list). This matters because the check runs on the hot path for every log entry: with the O(n) call, once the log was full each insert cost ~`O(maxLogEntries)` and CPU climbed as the log filled (GitHub issue #2329). With the counter, insert/evict/`size()` are O(1). If you change `CircularConcurrentLinkedDeque`, keep all mutators updating the counter (see its javadoc) so `size()` stays accurate.
+
+**Clearing expectations does NOT clear the log.** `PUT /mockserver/clear?type=EXPECTATIONS` only clears stored expectations; the request/event log is independent and keeps its entries (bounded by `maxLogEntries`). To free the log, use `PUT /mockserver/clear?type=LOG` (or `?type=ALL`), or `PUT /mockserver/reset` (clears both). Long-running, high-throughput servers should either lower `maxLogEntries` or periodically clear the log.
 
 ## Expectation Memory Analysis
 

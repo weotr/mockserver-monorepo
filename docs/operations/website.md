@@ -17,10 +17,10 @@ The MockServer documentation website at `https://www.mock-server.com` is a Jekyl
 | URL | `https://www.mock-server.com` |
 | Markdown engine | kramdown |
 | Sass output | `:compressed` |
-| `mockserver_version` | `6.1.0` |
-| `mockserver_api_version` | `6.1.x` |
-| `mockserver_snapshot_version` | `5.16.0-SNAPSHOT` |
-| Google Analytics | `UA-32687194-4` (in `_includes/head.html`, not `_config.yml`) |
+| `mockserver_version` | `7.0.0` |
+| `mockserver_api_version` | `7.0.x` |
+| `mockserver_snapshot_version` | `6.1.1-SNAPSHOT` |
+| Google Analytics | GA4 measurement ID `G-20BB7EJG4E` (in `_config.yml` as `ga4_measurement_id`) |
 | Custom plugin | `jekyll-code-example-tag` |
 
 ## Site Structure
@@ -148,6 +148,27 @@ Provides two Liquid tags:
 
 Both tags strip YAML front matter before rendering.
 
+## Branding & Fonts
+
+- **Title font:** page titles (`.page_header h1`) and the site/brand header (`.header h1`) use the
+  Google web font **Permanent Marker**, loaded via `_includes/head.html` alongside
+  `Averia Sans Libre`. Section headings (`h2`) intentionally stay on `Averia Sans Libre` for
+  readability. Rules live in `_sass/_styles.scss`. (Apple's *Marker Felt* is **not** usable here —
+  it is a proprietary system font with no web-font licence, so it only renders on Apple devices;
+  Permanent Marker is the cross-platform equivalent.)
+- **Brand "M" icon / favicons:** the marker-style "M" is shared across the site and the dashboard:
+  - Website: `favicon.svg` (adaptive `prefers-color-scheme` fill), `favicon.ico`
+    (native 16/32/48/64/128/256 frames), `apple-touch-icon.png` (180×180),
+    `images/mockserver-icon.png` (195×195). Wired up in `_includes/head.html` (SVG first, `.ico`
+    fallback).
+  - Dashboard: `favicon.svg`, `favicon.ico` and `apple-touch-icon.png` in `mockserver-ui/public/`
+    (no `mockserver-icon.png` — that one is website-only), referenced from `mockserver-ui/index.html`
+    under the `/mockserver/dashboard/` base path.
+- **How the icons/logo are generated:** the "M" and the "MockServer" wordmark are outlined from the
+  *Permanent Marker* font with `fonttools` (text → vector paths, so there is no font dependency),
+  filled `#333333`, with path coordinates rounded to 2 dp. The same source produces the CNCF
+  Landscape wordmark — see [../distribution/cncf-landscape-entry.md](../distribution/cncf-landscape-entry.md).
+
 ## Building the Website
 
 ```bash
@@ -167,11 +188,80 @@ bundle exec jekyll build
 
 ## Deployment
 
+> **Resolve the live target dynamically — do not trust hard-coded bucket/distribution
+> names.** The `versioned-site` release step (`scripts/release/components/versioned-site.sh`)
+> repoints the `mock-server.com` + `www.mock-server.com` CNAME aliases at the **newest
+> _versioned_ bucket and distribution** on every release. So "the current site" moves
+> with each release: as of 7.0.0 it is bucket `aws-website-mockserver-7-0` /
+> distribution `ED1HOMPC7011S`, and the previous current site (`nb9hq` /
+> `E3R1W2C7JJIMNR`) is now frozen as the `5-15.mock-server.com` **archive** — uploading
+> to it corrupts that archive. Older docs and `~/mockserver-aws-ids.md` may name the
+> wrong "current" bucket; always re-resolve before deploying:
+>
+> ```bash
+> # Live bucket + distribution serving www.mock-server.com:
+> aws cloudfront list-distributions --profile mockserver-website \
+>   --query "DistributionList.Items[?contains(Aliases.Items,'www.mock-server.com')].{Id:Id,Origin:Origins.Items[0].DomainName}" \
+>   --output table
+> ```
+
 1. Build: `bundle exec jekyll build`
-2. Upload `_site/` contents to the main website S3 bucket (see `~/mockserver-aws-ids.md`)
-3. Invalidate CloudFront cache (`/*` pattern) for the main distribution (see `~/mockserver-aws-ids.md`)
+2. Resolve the live bucket + distribution with the command above.
+3. Upload `_site/` to that bucket (`aws s3 cp` for a targeted page deploy, or
+   `aws s3 sync --delete` for a full publish).
+4. Invalidate that distribution — `/*` for a full publish, or the specific changed
+   paths for a targeted deploy (CloudFront ignores query strings, so a `?cb=`
+   cache-buster does **not** flush the edge; you must invalidate).
+
+The `mockserver-website` profile authenticates directly into the website account
+(`014848309742`) as admin, so manual deploys do **not** need the cross-account
+`assume_website_role` that CI (`scripts/release/`) uses.
 
 See [AWS Infrastructure](../infrastructure/aws-infrastructure.md) and [Release Process](release-process.md) for details.
+
+## Website Infrastructure Security
+
+The following controls are applied to the CloudFront distributions and DNS for `mock-server.com`. These are managed by Terraform in `terraform/website/`.
+
+### CloudFront Response Security Headers
+
+A shared `aws_cloudfront_response_headers_policy` (`mockserver-security-headers`) is attached to the default cache behaviour of all distributions:
+
+| Header | Value |
+|--------|-------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `SAMEORIGIN` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Content-Security-Policy` | Conservative allow-list (self + Google Analytics) — may need tuning for third-party widgets |
+
+All headers have `override = true` so they cannot be suppressed by S3 object metadata.
+
+### CAA DNS Records
+
+Route 53 CAA records on `mock-server.com` restrict TLS certificate issuance to Amazon CA:
+
+```
+0 issue    "amazon.com"
+0 issuewild "amazon.com"
+```
+
+This prevents a compromised or rogue CA from issuing a certificate for the domain. Managed by `aws_route53_record.caa` in `terraform/website/sites.tf`.
+
+### S3 Static Website Hosting
+
+S3 static-website hosting (`aws_s3_bucket_website_configuration`) is **not** configured. CloudFront uses the private OAC REST S3 origin with `default_root_object = "index.html"`, which avoids exposing the S3 website endpoint publicly.
+
+### Cross-Account Role ExternalId
+
+The `mockserver-release-website` IAM role in the website account enforces `sts:ExternalId` on the trust policy. The ExternalId is **active** -- callers must supply the correct value or the assume-role call will be denied.
+
+- **Secret location:** the `external_id` key in the `mockserver-release/website-role` secret (build account, eu-west-2). The same secret also holds the `role_arn` key.
+- **CI path (`scripts/release/`):** `assume_website_role()` in `_lib.sh` loads the `external_id` from the secret and passes `--external-id` to `aws sts assume-role`. `versioned-site.sh` loads it and passes `TF_VAR_role_external_id` into the dockerized terraform so CI applies keep the trust-policy condition in sync.
+- **Manual apply:** set `TF_VAR_role_external_id=<value>` when running `terraform apply` in `terraform/website/`. The value is in the secret above (never committed to the repo).
+- **Terraform plumbing:** `cross-account-role.tf` conditionally adds the `sts:ExternalId` Condition when `var.role_external_id != ""`. The `main.tf` providers pass `external_id` in their `assume_role` blocks (also conditional).
+
+**OAC-only origin access:** All distributions authenticate to S3 through a single Origin Access Control (OAC), signing origin requests with SigV4. The legacy Origin Access Identity resources and the `AllowLegacyOAIRead` bucket-policy grant were removed (2026-06-05) after confirming all 9 distributions reference only `origin_access_control_id` in their origin config, so the OAI grants were dead code.
 
 ## SEO & Metadata Files
 

@@ -65,13 +65,20 @@ else
   # the step before any S3 mutation. helm push is idempotent against the same
   # version tag, so a step retry after a mid-publish failure is safe.
   log_info "Push chart to GHCR (oci://ghcr.io/mock-server/charts)"
-  GHCR_USERNAME=$(load_secret "mockserver-release/ghcr-token" "username")
-  GHCR_TOKEN=$(load_secret "mockserver-release/ghcr-token" "token")
+  # Write GHCR credentials to 0600 files under .tmp/ (mounted at /build in the
+  # container) instead of passing via `docker run -e`. Env vars are readable
+  # via /proc/1/environ and `docker inspect`; file-based secrets are not.
+  GHCR_CREDS_FILE="$REPO_ROOT/.tmp/ghcr-creds.$$"
+  ( umask 077
+    printf '%s\n' "$(load_secret "mockserver-release/ghcr-token" "username")" > "$GHCR_CREDS_FILE"
+    printf '%s\n' "$(load_secret "mockserver-release/ghcr-token" "token")"   >> "$GHCR_CREDS_FILE"
+  )
+  trap 'rm -f "$GHCR_CREDS_FILE"' EXIT
   in_docker "$HELM_IMAGE" --entrypoint sh -w /build \
-    -e "GHCR_USERNAME=$GHCR_USERNAME" \
-    -e "GHCR_TOKEN=$GHCR_TOKEN" \
     -- -ec '
       set +x
+      GHCR_USERNAME=$(head -1 /build/.tmp/ghcr-creds.'$$')
+      GHCR_TOKEN=$(tail -1 /build/.tmp/ghcr-creds.'$$')
       printf "%s" "$GHCR_TOKEN" | helm registry login ghcr.io \
         --username "$GHCR_USERNAME" --password-stdin
       helm push "helm/charts/mockserver-'"$RELEASE_VERSION"'.tgz" \
@@ -90,25 +97,29 @@ else
   # referenced by path, NOT passed via `docker run -e`, so the PEM never appears in the host process
   # table. The password stays in the env (useless without the key). The cosign binary is SHA256-pinned.
   cosign_sign_chart() {
-    local key_file="$REPO_ROOT/.tmp/cosign-key.$$" pw rc=0
+    local key_file="$REPO_ROOT/.tmp/cosign-key.$$" pw_file="$REPO_ROOT/.tmp/cosign-pw.$$" rc=0
     mkdir -p "$REPO_ROOT/.tmp"
     ( umask 077; load_secret "mockserver-release/cosign-key" "key" > "$key_file" ) \
       || { rm -f "$key_file"; return 1; }
-    pw=$(load_secret "mockserver-release/cosign-key" "password") \
-      || { rm -f "$key_file"; return 1; }
+    ( umask 077; load_secret "mockserver-release/cosign-key" "password" > "$pw_file" ) \
+      || { rm -f "$key_file" "$pw_file"; return 1; }
+    # All secrets are file-based: GHCR creds in ghcr-creds.$$ (written above),
+    # cosign key in cosign-key.$$, cosign password in cosign-pw.$$. The
+    # container reads them from /build/.tmp/ (the repo mount). No `-e` for
+    # secrets.
     in_docker "$HELM_IMAGE" --entrypoint sh -w /build \
-      -e "GHCR_USERNAME=$GHCR_USERNAME" -e "GHCR_TOKEN=$GHCR_TOKEN" \
-      -e "COSIGN_PASSWORD=$pw" \
-      -e "COSIGN_KEY_FILE=/build/.tmp/cosign-key.$$" \
       -- -ec '
         set +x
+        GHCR_USERNAME=$(head -1 /build/.tmp/ghcr-creds.'$$')
+        GHCR_TOKEN=$(tail -1 /build/.tmp/ghcr-creds.'$$')
+        export COSIGN_PASSWORD=$(cat /build/.tmp/cosign-pw.'$$')
         wget -qO /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-linux-amd64"
         echo "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708  /usr/local/bin/cosign" | sha256sum -c -
         chmod +x /usr/local/bin/cosign
         printf "%s" "$GHCR_TOKEN" | cosign login ghcr.io --username "$GHCR_USERNAME" --password-stdin
-        cosign sign --yes --key "$COSIGN_KEY_FILE" "ghcr.io/mock-server/charts/mockserver:'"$RELEASE_VERSION"'"
+        cosign sign --yes --key /build/.tmp/cosign-key.'$$' "ghcr.io/mock-server/charts/mockserver:'"$RELEASE_VERSION"'"
       ' || rc=1
-    rm -f "$key_file"
+    rm -f "$key_file" "$pw_file"
     return $rc
   }
   if aws secretsmanager describe-secret --region "$REGION" \

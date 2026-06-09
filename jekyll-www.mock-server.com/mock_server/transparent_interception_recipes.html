@@ -1,7 +1,7 @@
 ---
 title: Transparent Interception Recipes
 shortTitle: Interception Recipes
-description: A catalogue of every mechanism for delivering traffic to MockServer for transparent interception — Kubernetes sidecars, OS firewall rules, DNS steering, cloud route tables, browser proxy, and CI networks — with a capability matrix to help you choose the right approach.
+description: Transparent interception recipes for routing traffic to MockServer — Kubernetes sidecars, firewall rules, DNS steering, cloud routes, browser and CI proxies.
 layout: page
 pageOrder: 3.5
 section: 'Chaos Testing'
@@ -17,7 +17,7 @@ keywords: transparent interception, iptables redirect, tproxy, dns steering, htt
 
 <ol>
     <li><strong>Traffic must reach MockServer</strong> — covered by this page. Mechanisms range from OS firewall rules to cloud route tables.</li>
-    <li><strong>MockServer must recover the original destination</strong> — covered by <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a>, which explains the resolver chain (PROXY protocol v1/v2, Linux conntrack, DNS-intent, Host header fallback).</li>
+    <li><strong>MockServer must recover the original destination</strong> — covered by <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a>, which explains the resolver chain (PROXY protocol v1/v2, then TPROXY, eBPF, SO_ORIGINAL_DST, Linux conntrack, DNS-intent, and Host header fallback).</li>
 </ol>
 
 <p>This page catalogues the delivery mechanisms — (1) above. For each mechanism, the relevant resolver strategy from (2) is noted so you can check whether it is implemented or future work.</p>
@@ -28,11 +28,12 @@ keywords: transparent interception, iptables redirect, tproxy, dns steering, htt
 
 <h2>Resolver Chain Summary</h2>
 
-<p>When a connection arrives, MockServer resolves the original destination through an ordered chain. The first strategy that succeeds wins; if none succeed, MockServer falls back to the <code class="inline code">Host</code> header. See <a href="/mock_server/service_mesh.html#original_destination_resolution">Original Destination Resolution</a> for full details.</p>
+<p>When a connection arrives, MockServer resolves the original destination through an ordered chain. The first strategy that succeeds wins; if none succeed, MockServer falls back to the <code class="inline code">Host</code> header. The rows below are listed in the real priority order MockServer applies them. (A PROXY protocol header, when present, is detected and consumed earlier in the pipeline, before this resolver chain runs.) See <a href="/mock_server/service_mesh.html#original_destination_resolution">Original Destination Resolution</a> for full details.</p>
 
 <table class="table-standard">
     <thead>
         <tr>
+            <th>Priority</th>
             <th>Strategy</th>
             <th>Status</th>
             <th>When it applies</th>
@@ -40,39 +41,46 @@ keywords: transparent interception, iptables redirect, tproxy, dns steering, htt
     </thead>
     <tbody>
         <tr>
+            <td>—</td>
             <td>PROXY protocol v1 / v2</td>
             <td>Implemented</td>
-            <td>Load balancer (AWS NLB, HAProxy, nginx) prepends a PROXY header to the TCP connection</td>
+            <td>Resolved earlier in the pipeline (before the chain) — load balancer (AWS NLB, HAProxy, nginx) prepends a PROXY header to the TCP connection</td>
         </tr>
         <tr>
-            <td>Linux conntrack</td>
-            <td>Implemented</td>
-            <td>iptables/nftables REDIRECT on Linux with <code class="inline code">nf_conntrack</code> loaded</td>
-        </tr>
-        <tr>
-            <td>DNS-intent</td>
-            <td>Implemented</td>
-            <td>Client resolved via MockServer's DNS server (<code class="inline code">dnsEnabled=true</code>) and connected to the returned IP</td>
-        </tr>
-        <tr>
-            <td>Host header fallback</td>
-            <td>Implemented</td>
-            <td>Always available — requires a valid <code class="inline code">Host</code> header in the HTTP request</td>
-        </tr>
-        <tr>
-            <td>SO_ORIGINAL_DST getsockopt</td>
-            <td>Implemented</td>
-            <td>Linux with the native (epoll) transport; O(1) alternative to conntrack</td>
-        </tr>
-        <tr>
+            <td>1</td>
             <td>TPROXY (IP_TRANSPARENT)</td>
             <td>Implemented</td>
             <td>Linux TPROXY iptables target; enable with <code class="inline code">transparentProxyTproxy=true</code> (needs the native epoll transport and <code class="inline code">CAP_NET_ADMIN</code>)</td>
         </tr>
         <tr>
+            <td>2</td>
             <td>eBPF socket metadata</td>
-            <td>Not yet implemented (requires JNI + eBPF program)</td>
-            <td>eBPF cgroup program keyed by socket cookie</td>
+            <td>Implemented</td>
+            <td>Reads a pinned BPF map (populated by an external BPF program) keyed by socket cookie; enable with <code class="inline code">transparentProxyEbpf=true</code> (Linux, native transport, <code class="inline code">CAP_BPF</code>)</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>SO_ORIGINAL_DST getsockopt</td>
+            <td>Implemented</td>
+            <td>Linux with the native (epoll) transport; O(1) alternative to conntrack</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Linux conntrack</td>
+            <td>Implemented</td>
+            <td>iptables/nftables REDIRECT on Linux with <code class="inline code">nf_conntrack</code> loaded</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>DNS-intent</td>
+            <td>Implemented</td>
+            <td>Client resolved via MockServer's DNS server (<code class="inline code">dnsEnabled=true</code>) and connected to the returned IP</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Host header fallback</td>
+            <td>Implemented</td>
+            <td>Always available — requires a valid <code class="inline code">Host</code> header in the HTTP request</td>
         </tr>
     </tbody>
 </table>
@@ -149,9 +157,9 @@ networks:
 
 <p><strong>Note:</strong> Automatic iptables injection into Docker bridges requires running Docker with sufficient host privileges. In standard Testcontainers usage, the simpler approach is to configure the application's <code class="inline code">HTTP_PROXY</code>/<code class="inline code">HTTPS_PROXY</code> to point at MockServer — see the <a href="#os_host">OS / host</a> section below.</p>
 
-<h3>eBPF-based interception and admission-webhook auto-injection</h3>
+<h3>eBPF original-destination resolution</h3>
 
-<p><strong>Not yet available.</strong> eBPF interception (cgroup-level socket redirection without iptables) and automatic init-container injection via a Kubernetes admission webhook both require native code components that are not yet implemented in MockServer. These are noted as future strategies in the resolver chain.</p>
+<p>MockServer can resolve the original destination from an <strong>eBPF</strong> map: an external BPF program (which you deploy, e.g. via an init container) records the pre-NAT destination keyed by socket cookie in a pinned BPF map, and MockServer reads it. Enable with <code class="inline code">transparentProxyEbpf=true</code> and point <code class="inline code">transparentProxyEbpfMapPath</code> at the pinned map (default <code class="inline code">/sys/fs/bpf/mockserver_orig_dst</code>). Requires Linux, the native (epoll) transport, and <code class="inline code">CAP_BPF</code>. MockServer only <em>reads</em> the map — it does not load or attach the BPF program. Automatic sidecar + init-container injection is available via the <a href="/mock_server/service_mesh.html#admission_webhook">admission webhook</a>.</p>
 
 <a id="os_host" class="anchor" href="#os_host">&nbsp;</a>
 

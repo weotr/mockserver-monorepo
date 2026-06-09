@@ -70,7 +70,9 @@ public class ConfigurationDTOTest {
             .logLevel(Level.TRACE)
             .maxExpectations(42)
             .maxLogEntries(1234)
-            .enableCORSForAPI(true);
+            .enableCORSForAPI(true)
+            .validateProxyOpenAPISpec("https://example.com/spec.json")
+            .validateProxyEnforce(true);
 
         ConfigurationDTO dto = new ConfigurationDTO(original);
         Configuration rebuilt = dto.buildObject();
@@ -79,6 +81,8 @@ public class ConfigurationDTOTest {
         assertThat(rebuilt.maxExpectations(), is(original.maxExpectations()));
         assertThat(rebuilt.maxLogEntries(), is(original.maxLogEntries()));
         assertThat(rebuilt.enableCORSForAPI(), is(original.enableCORSForAPI()));
+        assertThat(rebuilt.validateProxyOpenAPISpec(), is(original.validateProxyOpenAPISpec()));
+        assertThat(rebuilt.validateProxyEnforce(), is(original.validateProxyEnforce()));
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -216,5 +220,79 @@ public class ConfigurationDTOTest {
 
         ConfigurationDTO dto = new ConfigurationDTO(config);
         assertThat(dto.getLogLevelOverrides(), nullValue());
+    }
+
+    @Test
+    public void shouldRoundTripDevMode() {
+        Configuration original = configuration()
+            .devMode(true)
+            .maxExpectations(500);
+
+        ConfigurationDTO dto = new ConfigurationDTO(original);
+        assertThat(dto.getDevMode(), is(true));
+
+        Configuration rebuilt = dto.buildObject();
+        assertThat(rebuilt.devMode(), is(true));
+        assertThat(rebuilt.maxExpectations(), is(500));
+    }
+
+    @Test
+    public void shouldApplyDevModePartially() {
+        Configuration target = configuration()
+            .devMode(false);
+
+        ConfigurationDTO dto = new ConfigurationDTO();
+        dto.setDevMode(true);
+
+        dto.applyTo(target);
+
+        assertThat(target.devMode(), is(true));
+    }
+
+    @Test
+    public void shouldNotApplyDevModeWhenNull() {
+        Configuration target = configuration()
+            .devMode(true);
+
+        ConfigurationDTO dto = new ConfigurationDTO();
+        // devMode is null — should not overwrite
+        dto.applyTo(target);
+
+        assertThat(target.devMode(), is(true));
+    }
+
+    @Test
+    public void shouldRoundTripBreakpointResponseEnabled() {
+        Configuration original = configuration()
+            .breakpointEnabled(true)
+            .breakpointResponseEnabled(true)
+            .breakpointTimeoutMillis(5000L)
+            .breakpointMaxHeld(10);
+
+        ConfigurationDTO dto = new ConfigurationDTO(original);
+        assertThat(dto.getBreakpointEnabled(), is(true));
+        assertThat(dto.getBreakpointResponseEnabled(), is(true));
+        assertThat(dto.getBreakpointTimeoutMillis(), is(5000L));
+        assertThat(dto.getBreakpointMaxHeld(), is(10));
+
+        Configuration rebuilt = dto.buildObject();
+        assertThat(rebuilt.breakpointEnabled(), is(true));
+        assertThat(rebuilt.breakpointResponseEnabled(), is(true));
+        assertThat(rebuilt.breakpointTimeoutMillis(), is(5000L));
+        assertThat(rebuilt.breakpointMaxHeld(), is(10));
+    }
+
+    @Test
+    public void shouldApplyBreakpointResponseEnabledPartially() {
+        Configuration target = configuration()
+            .breakpointEnabled(false)
+            .breakpointResponseEnabled(false);
+
+        ConfigurationDTO dto = new ConfigurationDTO();
+        dto.setBreakpointResponseEnabled(true);
+        dto.applyTo(target);
+
+        assertThat("breakpointEnabled should be unchanged", target.breakpointEnabled(), is(false));
+        assertThat("breakpointResponseEnabled should be updated", target.breakpointResponseEnabled(), is(true));
     }
 }

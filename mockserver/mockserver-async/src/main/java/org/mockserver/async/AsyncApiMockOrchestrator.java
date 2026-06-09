@@ -9,6 +9,7 @@ import org.mockserver.async.asyncapi.AsyncApiMessage;
 import org.mockserver.async.asyncapi.AsyncApiSpec;
 import org.mockserver.async.publish.MessagePublisher;
 import org.mockserver.async.publish.PublishOptions;
+import org.mockserver.metrics.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -109,6 +110,7 @@ public class AsyncApiMockOrchestrator {
                 PublishOptions options = buildPublishOptions(ch, msg, correlationHeaders);
                 LOG.info("Publishing example to channel '{}': {}", ch.getName(), payload);
                 publisher.publish(ch.getName(), payload, options);
+                Metrics.incrementAsyncMessagePublished(ch.getName());
             }
         }
     }

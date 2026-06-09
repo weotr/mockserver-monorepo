@@ -216,7 +216,7 @@ schema_faq:
 </p>
 <p>
     Outage windows are measured with MockServer's controllable clock, so tests do not have to wait in real time. Freeze and
-    advance the clock with the <a href="/mock_server/clearing_and_resetting.html#clock_control"><code class="inline code">PUT /mockserver/clock</code></a>
+    advance the clock with the <a href="/mock_server/clock_control.html"><code class="inline code">PUT /mockserver/clock</code></a>
     control-plane endpoint to step deterministically from "before the outage" to "during the outage" to "recovered" without any
     <code class="inline code">sleep</code> calls.
 </p>
@@ -529,7 +529,7 @@ PATCH /mockserver/serviceChaos
     <li><strong>Kubernetes sidecar or egress proxy:</strong> deploy MockServer as a sidecar container or egress proxy in your K8s pod/namespace and route specific traffic through it with chaos injection enabled</li>
 </ul>
 
-<p>MockServer operates at the <strong>HTTP layer (L7)</strong> and requires explicit routing — it does not transparently intercept traffic at the network layer. See <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for detailed proxy deployment patterns.</p>
+<p>MockServer operates at the <strong>HTTP layer (L7)</strong> and requires either explicit routing <strong>or</strong> transparent interception (Linux iptables <code class="inline code">REDIRECT</code> / <code class="inline code">TPROXY</code>) to place it in-path — see <a href="/mock_server/chaos_testing_kubernetes.html">Service Mesh / Sidecar Mode</a>. See <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for detailed proxy deployment patterns.</p>
 
 <a id="stateful_count_based_faults" class="anchor" href="#stateful_count_based_faults">&nbsp;</a>
 
@@ -586,7 +586,7 @@ PATCH /mockserver/serviceChaos
         <tr>
             <td><code class="inline code">mock_server_http_chaos_injected_total</code></td>
             <td>Counter</td>
-            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">graphql</code></td>
+            <td><code class="inline code">fault_type</code> = <code class="inline code">drop</code> | <code class="inline code">error</code> | <code class="inline code">latency</code> | <code class="inline code">truncate</code> | <code class="inline code">malformed</code> | <code class="inline code">slow</code> | <code class="inline code">quota</code> | <code class="inline code">graphql</code></td>
             <td>Cumulative count of HTTP chaos faults injected, split by fault type</td>
         </tr>
         <tr>
@@ -600,7 +600,9 @@ PATCH /mockserver/serviceChaos
 
 <p>Both metrics are also surfaced in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> Metrics view as an "HTTP Chaos Faults" section — a stat per fault type the server emits (<code class="inline code">drop</code>, <code class="inline code">error</code>, <code class="inline code">latency</code>, <code class="inline code">truncate</code>, <code class="inline code">malformed</code>, <code class="inline code">slow</code>, <code class="inline code">quota</code>, <code class="inline code">graphql</code>), a per-fault-type chart of cumulative injections, and a per-fault-type chart of the active service-scoped chaos gauge (visible only when a chaos metric has non-zero data).</p>
 
-<p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape.</p>
+<p>Both metrics are also mirrored over OpenTelemetry OTLP when <a href="/mock_server/configuration_properties.html">OTLP metrics export is enabled</a>, so OTLP-only consumers can observe them without a Prometheus scrape. Note: over OTLP the <code class="inline code">mock_server_active_service_chaos</code> gauge mirrors every fault type, but the <code class="inline code">mock_server_http_chaos_injected_total</code> counter currently mirrors only the <code class="inline code">drop</code>, <code class="inline code">error</code> and <code class="inline code">latency</code> fault types — the full set of fault types is available on the Prometheus endpoint.</p>
+
+<p>These metrics currently cover <strong>HTTP chaos only</strong>; TCP-layer chaos and gRPC chaos are not yet metered, so faults injected by those features do not appear in the chaos counter or gauge.</p>
 
 <p>Example PromQL queries:</p>
 <pre class="code"><code class="code"># Rate of error faults injected over the last 5 minutes
@@ -619,7 +621,7 @@ mock_server_active_service_chaos{fault_type="drop"}</code></pre>
 
 <h2>Dashboard UI</h2>
 
-<p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for all seven chaos profile properties. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
+<p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for the chaos profile. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
 
 <a id="grpc_fault_injection" class="anchor" href="#grpc_fault_injection">&nbsp;</a>
 
@@ -920,63 +922,140 @@ PATCH /mockserver/tcpChaos
 
 <p><strong>Difference from HTTP chaos:</strong> TCP chaos operates at the raw byte level before HTTP decoding. This means it can simulate faults that are impossible to reproduce with HTTP-level chaos, such as TCP RST, connection timeouts (never sending FIN), bandwidth throttling, and data fragmentation. HTTP chaos operates on decoded HTTP requests/responses and can inject application-level faults like error status codes, body corruption, and rate limiting.</p>
 
-<a id="replay_under_chaos" class="anchor" href="#replay_under_chaos">&nbsp;</a>
+<a id="llm_chaos" class="anchor" href="#llm_chaos">&nbsp;</a>
 
-<h2>Replay Under Chaos (foundational)</h2>
+<h2>LLM Chaos (fault injection for mocked LLM responses)</h2>
 
-<p>MockServer can retrieve recorded proxy traffic and replay it with an optional HTTP chaos overlay so you can compare how a service behaves under fault conditions against its known baseline. This is useful for a "record once, stress under chaos" workflow: record normal traffic through MockServer in proxy mode, then replay that traffic with errors or latency injected and inspect the per-request comparison report.</p>
+<p>When mocking an LLM/chat-completion endpoint, attach an <strong>LLM chaos profile</strong> to a mocked response to test how an AI agent or application copes with provider faults: probabilistic provider errors (e.g. a <code class="inline code">429</code> or <code class="inline code">529</code> with a <code class="inline code">Retry-After</code> header), mid-stream truncation of a streaming (SSE) response, malformed SSE chunks, and a stateful request quota (a fixed-window rate limit). This is a separate profile from the HTTP <code class="inline code">HttpChaosProfile</code> above — it understands LLM streaming physics — and it is carried on the LLM response (<code class="inline code">LlmChaosProfile</code> in the Java client).</p>
 
-<p><strong>Note:</strong> replay is a foundational capability. The report tracking, rate limiting, and chaos overlay infrastructure are complete, but the underlying network sender is a placeholder pending lifecycle wiring — replayed requests currently complete immediately with an error result. The API contract and report shape are stable and described here so you can plan integrations.</p>
+<h3>LLM Chaos Profile Fields</h3>
 
-<h3>Starting a replay</h3>
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Valid range</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">errorStatus</code></td>
+            <td>integer</td>
+            <td>HTTP error status to return instead of the normal response (e.g. <code class="inline code">429</code>, <code class="inline code">529</code>, <code class="inline code">500</code>). Fires on every request unless <code class="inline code">errorProbability</code> is set.</td>
+            <td>100–599</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">errorProbability</code></td>
+            <td>number</td>
+            <td>Probability of injecting the error. <code class="inline code">1.0</code> = always, <code class="inline code">0.0</code>/omitted = never. A fractional value draws once per response.</td>
+            <td>0.0–1.0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">retryAfter</code></td>
+            <td>string</td>
+            <td>Value for the <code class="inline code">Retry-After</code> header on an injected error (probabilistic or quota).</td>
+            <td>—</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">truncateMode</code></td>
+            <td>string</td>
+            <td>Streaming truncation mode: <code class="inline code">NONE</code> (default) or <code class="inline code">MID_STREAM</code> to cut the SSE event stream short.</td>
+            <td><code class="inline code">NONE</code> | <code class="inline code">MID_STREAM</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">truncateAtFraction</code></td>
+            <td>number</td>
+            <td>Fraction of SSE events to emit before truncating (when <code class="inline code">truncateMode</code> is <code class="inline code">MID_STREAM</code>). Deterministic.</td>
+            <td>0.0–1.0</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">malformedSse</code></td>
+            <td>boolean</td>
+            <td>Emit a malformed (broken-JSON) SSE chunk so the client's stream parser must cope with corruption. Deterministic.</td>
+            <td>—</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">seed</code></td>
+            <td>integer</td>
+            <td>Makes a fractional <code class="inline code">errorProbability</code> reproducible (a fixed seed yields the same single decision every time).</td>
+            <td>—</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaName</code></td>
+            <td>string</td>
+            <td>Stateful quota bucket name. Mocked responses sharing the same <code class="inline code">quotaName</code> share one request counter.</td>
+            <td>—</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaLimit</code></td>
+            <td>integer</td>
+            <td>Maximum requests allowed per window before requests are rejected.</td>
+            <td>&ge; 1</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaWindowMillis</code></td>
+            <td>integer</td>
+            <td>Fixed-window length in milliseconds for the quota counter.</td>
+            <td>&ge; 1</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">quotaErrorStatus</code></td>
+            <td>integer</td>
+            <td>HTTP status returned when the quota is exceeded.</td>
+            <td>100–599 (default <code class="inline code">429</code>)</td>
+        </tr>
+    </tbody>
+</table>
 
-<pre class="code"><code class="code">PUT /mockserver/replay
-{
-  "ratePerSecond": 10,
-  "chaosProfile": {
-    "errorStatus": 503,
-    "errorProbability": 0.3
+<p><strong>Determinism:</strong> with <code class="inline code">errorProbability</code> of <code class="inline code">1.0</code> or <code class="inline code">0.0</code>/omitted the error decision is fully deterministic; a fractional probability draws once per response (set <code class="inline code">seed</code> to fix it). Truncation and malformed-SSE are always deterministic. The quota is a real cross-request counter — responses sharing a <code class="inline code">quotaName</code> share one bucket — so requests beyond <code class="inline code">quotaLimit</code> within the window are rejected with <code class="inline code">quotaErrorStatus</code> (default <code class="inline code">429</code>) and the <code class="inline code">retryAfter</code> header.</p>
+
+<h3>Attaching an LLM chaos profile</h3>
+
+<p>In the Java client, build an <code class="inline code">LlmChaosProfile</code> and attach it to the LLM response with <code class="inline code">withChaos(...)</code>:</p>
+
+<pre class="code"><code class="code">import static org.mockserver.model.LlmChaosProfile.llmChaosProfile;
+
+new MockServerClient("localhost", 1080)
+    .when(/* request matcher for your LLM endpoint */)
+    .respond(
+        httpLlmResponse()                        // your mocked LLM/chat-completion response
+            .withChaos(
+                llmChaosProfile()
+                    .withErrorStatus(529)        // overloaded
+                    .withErrorProbability(0.3)   // 30% of requests
+                    .withRetryAfter("2")
+                    .withTruncateMode(LlmChaosProfile.TruncateMode.MID_STREAM)
+                    .withTruncateAtFraction(0.5) // keep first half of the SSE stream
+                    .withMalformedSse(true)
+                    .withQuotaName("openai")      // shared rate-limit bucket
+                    .withQuotaLimit(100)
+                    .withQuotaWindowMillis(60000) // 100 requests / minute
+            )
+    );</code></pre>
+
+<p>For AI assistants, the same profile is supplied as the optional <code class="inline code">chaos</code> object on the <code class="inline code">mock_llm_completion</code> MCP tool (and per-turn on conversation mocks). In JSON it carries the identical field names:</p>
+
+<pre class="code"><code class="code">{
+  "chaos": {
+    "errorStatus": 529,
+    "errorProbability": 0.3,
+    "retryAfter": "2",
+    "truncateMode": "MID_STREAM",
+    "truncateAtFraction": 0.5,
+    "malformedSse": true,
+    "quotaName": "openai",
+    "quotaLimit": 100,
+    "quotaWindowMillis": 60000
   }
 }</code></pre>
 
-<p>Fields:</p>
-<ul>
-    <li><code class="inline code">ratePerSecond</code> — maximum requests per second to send; <code class="inline code">0</code> means unlimited (all requests sent as fast as possible)</li>
-    <li><code class="inline code">chaosProfile</code> — optional <a href="#chaos_profile_fields">chaos profile</a> applied as a service-scoped overlay for all hosts seen in the recorded traffic; uses a 5-minute TTL that auto-clears after the replay window</li>
-</ul>
+<a id="fleet_chaos" class="anchor" href="#fleet_chaos">&nbsp;</a>
 
-<p>MockServer reads all previously-recorded <code class="inline code">FORWARDED_REQUEST</code> log entries as the traffic source. The request returns immediately with a <code class="inline code">201 Created</code> response containing a <code class="inline code">replayId</code> and the total count of requests to replay:</p>
+<h2>Fleet-wide Chaos in a Clustered Deployment</h2>
 
-<pre class="code"><code class="code">{ "replayId": "a3f2...", "totalRequests": 42, "status": "RUNNING" }</code></pre>
-
-<h3>Polling the replay report</h3>
-
-<pre class="code"><code class="code">GET /mockserver/replay/{replayId}</code></pre>
-
-<p>Returns a <code class="inline code">ReplayReport</code> object:</p>
-
-<pre class="code"><code class="code">{
-  "replayId": "a3f2...",
-  "status": "RUNNING",          // RUNNING | COMPLETED | FAILED
-  "totalRequests": 42,
-  "completedRequests": 17,
-  "successCount": 14,
-  "failureCount": 3,
-  "results": [
-    {
-      "method": "GET",
-      "path": "/api/orders",
-      "baselineStatusCode": 200,
-      "replayStatusCode": 503,
-      "baselineLatencyMs": 45,
-      "replayLatencyMs": 38,
-      "latencyDeltaMs": -7,
-      "statusMatch": false
-    }
-  ]
-}</code></pre>
-
-<p>A result entry is added for each completed request. <code class="inline code">statusMatch</code> is <code class="inline code">true</code> when the replayed HTTP status code equals the baseline. <code class="inline code">latencyDeltaMs</code> is positive when the replay was slower than baseline, negative when faster. When the replay finishes, <code class="inline code">status</code> changes to <code class="inline code">COMPLETED</code> and the full <code class="inline code">results</code> array is available. An unknown <code class="inline code">replayId</code> returns 404.</p>
+<p>In a single-node deployment, chaos registrations live in memory on that node. When MockServer runs as a <a href="/mock_server/centralized_deployment.html#option2">clustered HA fleet</a> (a shared, replicated state backend across several nodes), the control-plane chaos registrations — <strong>service-scoped HTTP chaos</strong> (<code class="inline code">PUT /mockserver/serviceChaos</code>), <strong>TCP chaos</strong> (<code class="inline code">PUT /mockserver/tcpChaos</code>) and <strong>gRPC chaos</strong> (<code class="inline code">PUT /mockserver/grpcChaos</code>) — <strong>replicate across all nodes</strong>. Register a fault once on any node and every node enforces it; remove or clear it on any node and it is reverted fleet-wide. TTL auto-revert and clearing on server reset apply consistently across the cluster, so you can break a host for the whole fleet with a single call. With no clustered backend configured (the default) this is a no-op and chaos stays node-local.</p>
 
 <a id="coming_soon" class="anchor" href="#coming_soon">&nbsp;</a>
 
@@ -984,7 +1063,7 @@ PATCH /mockserver/tcpChaos
 
 <p>The following chaos features are planned for future releases:</p>
 <ul>
-    <li><strong>Advanced stateful fault injection</strong> — token-bucket rate limiting (429 that depletes and refills), circuit-breaker windows, and gradual degradation ramps</li>
+    <li><strong>Advanced stateful fault injection</strong> — token-bucket rate limiting (429 that depletes and refills) and circuit-breaker windows</li>
 </ul>
 
 <a id="chaos_examples" class="anchor" href="#chaos_examples">&nbsp;</a>
@@ -1036,3 +1115,14 @@ PATCH /mockserver/tcpChaos
 <div class="panel">
     <p>Set <code class="inline code">omitGrpcStatus: true</code> on a gRPC chaos profile. MockServer will send the HTTP 200 response with a <code class="inline code">content-type: application/grpc</code> header but deliberately omit the <code class="inline code">grpc-status</code> trailer. Most gRPC clients treat this as a protocol error or stream reset — which is exactly what you want to test to ensure the client does not silently accept an incomplete RPC as a success. Register the profile via <code class="inline code">PUT /mockserver/grpcChaos</code> with <code class="inline code">{"service": "...", "chaos": {"omitGrpcStatus": true}}</code>. See the <a href="#grpc_fault_injection">gRPC Fault Injection</a> section above.</p>
 </div>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/service_mesh.html">Service Mesh / Sidecar Mode</a> &mdash; deploy MockServer in-path as a transparent sidecar so you can inject the faults above into live traffic without changing application config</li>
+    <li><a href="/mock_server/transparent_interception_recipes.html">Transparent Interception Recipes</a> &mdash; iptables REDIRECT / TPROXY recipes for routing real traffic through MockServer to apply chaos profiles</li>
+    <li><a href="/mock_server/chaos_testing_kubernetes.html">Chaos Proxy in Kubernetes</a> &mdash; sidecar, egress, and reverse-proxy deployment patterns for injecting faults in a cluster</li>
+    <li><a href="/mock_server/chaos_testing_orchestrators.html">Driving MockServer from Chaos Orchestrators</a> &mdash; Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos recipes against the control plane</li>
+</ul>

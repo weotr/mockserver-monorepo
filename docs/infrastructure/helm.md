@@ -28,8 +28,8 @@ initializerJson.json"]
 
 | Chart | Path | Version | Purpose |
 |-------|------|---------|---------|
-| `mockserver` | `helm/mockserver/` | 6.1.0 | Main deployment chart (includes optional ConfigMap) |
-| `mockserver-config` | `helm/mockserver-config/` | 6.1.0 | Example external ConfigMap chart (for reference) |
+| `mockserver` | `helm/mockserver/` | 7.0.0 | Main deployment chart (includes optional ConfigMap) |
+| `mockserver-config` | `helm/mockserver-config/` | 7.0.0 | Example external ConfigMap chart (for reference) |
 
 ## mockserver Chart
 
@@ -45,6 +45,13 @@ initializerJson.json"]
 | `service-test.yaml` | Helm test pod (curl readiness check) |
 | `_helpers.tpl` | Template helper functions |
 | `NOTES.txt` | Post-install instructions |
+| `headless-service.yaml` | Headless Service for JGroups DNS_PING pod discovery (when `clustering.enabled`) |
+| `webhook-deployment.yaml` | Webhook Deployment (when `webhook.enabled`) |
+| `webhook-service.yaml` | Webhook ClusterIP Service (when `webhook.enabled`) |
+| `webhook-mutatingwebhookconfiguration.yaml` | MutatingWebhookConfiguration (when `webhook.enabled`) |
+| `webhook-rbac.yaml` | ServiceAccount, ClusterRole, ClusterRoleBinding for webhook (when `webhook.enabled`) |
+| `webhook-tls-selfsigned.yaml` | Self-signed TLS bootstrap — two Helm hook Jobs: a pre-install/pre-upgrade Job creates the TLS Secret, a post-install/post-upgrade Job patches the MWC caBundle. Split avoids `helm install --wait` deadlock. Only rendered when `webhook.enabled` and `webhook.certManager.enabled=false` |
+| `webhook-tls-certmanager.yaml` | cert-manager Issuer + Certificate (when `webhook.enabled` and `webhook.certManager.enabled=true`) |
 
 ### Default Values
 
@@ -88,7 +95,7 @@ service:
   loadBalancerSourceRanges: []
   nodePort: ""
   test:
-    image: radial/busyboxplus:curl
+    image: curlimages/curl:8.20.0
 ingress:
   enabled: false
   className: ""
@@ -105,9 +112,34 @@ resources: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+clustering:
+  enabled: false
+  clusterName: "mockserver-cluster"
+  transportConfig: "jgroups-kubernetes.xml"
+  jgroupsPort: 7800
 imagePullSecrets: []
 releasenameOverride: ""
 ```
+
+### Clustering
+
+When `clustering.enabled=true`, the chart:
+
+1. Creates a **headless Service** (`<release>-headless`) for JGroups `DNS_PING` pod discovery
+2. Sets `MOCKSERVER_STATE_BACKEND=infinispan`, `MOCKSERVER_CLUSTER_ENABLED=true`, `MOCKSERVER_CLUSTER_NAME`, `MOCKSERVER_CLUSTER_TRANSPORT_CONFIG`, and `JGROUPS_DNS_QUERY` environment variables
+3. Exposes the JGroups TCP port (default 7800) as a container port
+4. Disables the `/libs` ConfigMap volume mount (the `-clustered` image ships its own `/libs`)
+
+**Requires the `-clustered` image variant** (`mockserver/mockserver:clustered-<version>`) which bundles the Infinispan/JGroups libraries. The default image does not include these — enabling clustering with the default image fails at startup.
+
+| Value | Type | Default | Description |
+|-------|------|---------|-------------|
+| `clustering.enabled` | bool | `false` | Enable clustered state backend |
+| `clustering.clusterName` | string | `mockserver-cluster` | JGroups cluster name; all pods sharing state must use the same value |
+| `clustering.transportConfig` | string | `jgroups-kubernetes.xml` | JGroups transport config file; built-in default uses TCP + DNS_PING |
+| `clustering.jgroupsPort` | int | `7800` | JGroups inter-pod TCP port |
+
+See the [Centralized Deployment](https://www.mock-server.com/mock_server/centralized_deployment.html) consumer docs for deployment examples.
 
 ### Deployment Architecture
 
@@ -170,6 +202,59 @@ When `app.persistence.enabled=true`, the chart:
 
 **PVC retention:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data: `kubectl delete pvc <release-name> -n <namespace>`.
 
+### Admission Webhook (Automatic Sidecar Injection)
+
+When `webhook.enabled=true`, the chart deploys a MutatingAdmissionWebhook that automatically injects the MockServer transparent-proxy sidecar and iptables init container into pods that opt in. This automates the manual sidecar pattern documented in [Transparent Proxy / Sidecar Mode](https://www.mock-server.com/mock_server/service_mesh.html).
+
+**How it works:**
+
+1. The webhook watches for Pod CREATE events in namespaces labelled `mockserver.org/sidecar-injection: enabled`
+2. Pods with the annotation `mockserver.org/inject: "true"` receive:
+   - An iptables init container (with UID-exclusion loop avoidance)
+   - A MockServer sidecar container (with `MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true`)
+   - An idempotency marker annotation (`mockserver.org/injected: "true"`)
+3. Pods without the annotation, or already injected, are allowed through unchanged
+
+**TLS bootstrap:** Two options:
+- **Self-signed (default):** two Helm hook Jobs work together to avoid a deadlock under `helm install --wait` and GitOps tools (ArgoCD, Flux):
+  1. A **pre-install/pre-upgrade** Job (hook-weight -5) generates a self-signed CA + server certificate and creates the TLS Secret. This runs before Helm applies non-hook resources, so the Deployment can mount the Secret and become Ready immediately.
+  2. A **post-install/post-upgrade** Job (hook-weight 0) reads `ca.crt` from the Secret and patches the MutatingWebhookConfiguration's `caBundle`. This runs after non-hook resources exist, so the MWC is available to patch.
+  No external dependencies. Compatible with both `helm install` and `helm install --wait`.
+- **cert-manager:** set `webhook.certManager.enabled=true`. The chart creates an Issuer + Certificate and annotates the MutatingWebhookConfiguration with `cert-manager.io/inject-ca-from`.
+
+**Webhook server:** The `mockserver-k8s-webhook` module includes a runnable HTTPS server (`WebhookServer`) that handles AdmissionReview requests on `POST /inject` and serves a health check on `GET /healthz`. The server is packaged as a fat jar (`mockserver-k8s-webhook-<version>-jar-with-dependencies.jar`) and published as the `mockserver/mockserver-webhook` Docker image. Configuration (TLS cert/key paths, sidecar injection settings) is read from environment variables matching the Helm `webhook-deployment.yaml` template.
+
+**Webhook Docker image:** The `mockserver/mockserver-webhook` image is published to Docker Hub and ECR Public by the release pipeline alongside the main MockServer image. The Helm chart defaults to `mockserver/mockserver-webhook:<appVersion>`, so `helm install --set webhook.enabled=true` works out of the box once a release ships.
+
+**Building locally (optional, for development):**
+
+```bash
+# Build the fat jar
+cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests && cd ..
+
+# Copy the jar into the Docker build context
+cp mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar \
+  docker/webhook/mockserver-webhook.jar
+
+# Build the Docker image
+docker build -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT docker/webhook
+```
+
+| Value | Type | Default | Description |
+|-------|------|---------|-------------|
+| `webhook.enabled` | bool | `false` | Enable the admission webhook |
+| `webhook.failurePolicy` | string | `Ignore` | `Ignore` = pods created even if webhook is down |
+| `webhook.timeoutSeconds` | int | `10` | Webhook call timeout |
+| `webhook.namespaceSelector` | map | `{}` | Override the default namespace selector (default: `mockserver.org/sidecar-injection: enabled`) |
+| `webhook.objectSelector` | map | `{}` | Additional pod-level selector |
+| `webhook.sidecar.serverPort` | int | `1080` | MockServer port in the injected sidecar |
+| `webhook.sidecar.redirectPorts` | string | `"80,443"` | Ports redirected by iptables |
+| `webhook.sidecar.runAsUser` | int | `65534` | UID for the sidecar (must match iptables exclusion) |
+| `webhook.certManager.enabled` | bool | `false` | Use cert-manager for TLS instead of self-signed |
+| `webhook.tls.certValidityDays` | int | `3650` | Self-signed cert validity (days) |
+
+**Backward compatibility:** Disabled by default. When disabled, no webhook-related resources are rendered.
+
 ### Health Checks
 
 - **Readiness probe:** TCP socket check on port 1080
@@ -182,7 +267,7 @@ When `app.persistence.enabled=true`, the chart:
 helm install mockserver oci://ghcr.io/mock-server/charts/mockserver
 
 # Pin a version
-helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 6.1.0
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.0.0
 
 # --- Option B: Legacy HTTP repo ------------------------------------------
 helm repo add mockserver https://www.mock-server.com
@@ -297,11 +382,16 @@ Repository metadata lives in [`helm/artifacthub-repo.yml`](../../helm/artifacthu
 bootstrap (manual — needs an Artifact Hub account):
 
 1. Artifact Hub → Control Panel → Repositories → Add → kind **Helm charts**, OCI based, URL
-   `oci://ghcr.io/mock-server/charts`.
+   `oci://ghcr.io/mock-server/charts/mockserver`.
+   > **The URL must be the full chart path, not the namespace.** Artifact Hub's OCI Helm format
+   > requires `oci://registry/namespace/chart-name`. Pointing it at the namespace
+   > (`oci://ghcr.io/mock-server/charts`) indexes **zero charts** — the namespace holds only the
+   > `artifacthub.io` metadata tag, not the semver chart versions — so the listing silently shows
+   > an empty repository.
 2. Copy the generated **Repository ID** into `repositoryID` in `helm/artifacthub-repo.yml`.
-3. Publish the metadata file to the registry root so Artifact Hub can verify ownership:
+3. Publish the metadata file to the chart path so Artifact Hub can verify ownership:
    ```bash
-   oras push ghcr.io/mock-server/charts:artifacthub.io \
+   oras push ghcr.io/mock-server/charts/mockserver:artifacthub.io \
      helm/artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
    ```
 
@@ -315,6 +405,18 @@ Artifact Hub shows a **Signed** badge when the OCI chart carries a [cosign](http
 signature (it detects them automatically for OCI repositories — no annotation needed). The release
 pipeline has a **guarded, opt-in** signing step in `scripts/release/components/helm.sh`: it is a
 **no-op until a signing key exists**, so it never affects unsigned releases.
+
+The public key is **published at `https://www.mock-server.com/mockserver-cosign.pub`** (and `Chart.yaml`'s
+`artifacthub.io/links` surfaces it on the Artifact Hub page). Users verify with:
+
+```bash
+cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mock-server/charts/mockserver:<version>
+```
+
+> **IAM note:** signing is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`,
+> so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret (not just
+> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.0.0 chart
+> publishing unsigned until the grant was added to `read_release_secrets`.
 
 To enable signing:
 
@@ -442,7 +544,7 @@ sequenceDiagram
     Script->>K3d: Import MockServer image
     Script->>Helm: helm install mockserver
     Helm->>MS: Deploy pod
-    Script->>Helm: helm test (curl /status)
+    Script->>Helm: helm test (curl -f /mockserver/status)
     Helm->>Test: Run test pod
     Script->>MS: Create expectations (curl PUT)
     Script->>MS: Validate responses (curl PUT)

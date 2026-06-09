@@ -58,7 +58,7 @@ function RequestFields({ form, onChange }: { form: RequestForm; onChange: (f: Re
           displayEmpty
           value={form.method}
           onChange={(e) => onChange({ ...form, method: e.target.value })}
-          sx={{ width: 130 }}
+          sx={{ width: 195 }}
           renderValue={(v) => (v ? String(v) : 'Any method')}
         >
           {METHODS.map((m) => <MenuItem key={m || 'any'} value={m}>{m || 'Any method'}</MenuItem>)}

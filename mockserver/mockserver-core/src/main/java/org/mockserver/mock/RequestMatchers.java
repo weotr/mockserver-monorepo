@@ -19,6 +19,7 @@ import org.mockserver.scheduler.Scheduler;
 import org.mockserver.state.ExpectationEntry;
 import org.mockserver.state.KeyValueStore;
 import org.mockserver.state.StateBackend;
+import org.mockserver.state.Versioned;
 import org.mockserver.uuid.UUIDService;
 import org.slf4j.event.Level;
 
@@ -126,6 +127,18 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         } else {
             // Restore original eviction when backend is removed
             httpRequestMatchers.setMaxSize(configuration.maxExpectations());
+        }
+        // Wire scenario states through the backend's replicated KV store
+        // so scenario transitions are shared across cluster nodes. For the
+        // default InMemoryStateBackend this wraps a ConcurrentHashMap —
+        // identical single-node behaviour with no overhead.
+        if (stateBackend != null) {
+            scenarioManager.setScenarioStates(stateBackend.scenarioStates());
+        } else {
+            // Backend removed — reset to a fresh in-memory store so the
+            // ScenarioManager doesn't keep operating on a removed/closed
+            // backend's store.
+            scenarioManager.setScenarioStates(new org.mockserver.state.InMemoryKeyValueStore<>());
         }
     }
 
@@ -398,12 +411,32 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                     continue;
                 }
                 httpRequestMatcher.setResponseInProgress(true);
-                // TODO(phase-2c-times): under clustering, Times consumption must be a
-                // backend CAS so Times.exactly(N) is exactly-once across nodes; currently
-                // node-local (correct only single-node).
-                if (!expectation.consumeMatch()) {
-                    httpRequestMatcher.setResponseInProgress(false);
-                    continue;
+                // Clustered shared-Times CAS: when a clustered backend is active
+                // and the expectation has limited Times, atomically decrement the
+                // SHARED remaining-times counter via backend CAS BEFORE serving.
+                // If the CAS fails (another node exhausted the allotment), this
+                // node falls through to the next expectation. Unlimited Times
+                // always takes the node-local fast path (no grid call).
+                if (isClusteredLimitedTimes(expectation)) {
+                    ConsumeTimesResult casResult = consumeTimesViaBackendCas(expectation);
+                    if (!casResult.success) {
+                        httpRequestMatcher.setResponseInProgress(false);
+                        if (casResult.exhausted) {
+                            // Expectation is exhausted fleet-wide — schedule
+                            // removal so it goes inactive on this node too
+                            scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                        }
+                        continue;
+                    }
+                    // CAS succeeded: record the match locally (without
+                    // decrementing node-local Times — the backend is authoritative)
+                    expectation.consumeMatchLocally();
+                } else {
+                    // Default single-node fast path: identical to pre-clustering
+                    if (!expectation.consumeMatch()) {
+                        httpRequestMatcher.setResponseInProgress(false);
+                        continue;
+                    }
                 }
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() == null && expectation.getNewScenarioState() != null) {
                     scenarioManager.transitionState(expectation.getScenarioName(), isolationKey, expectation.getNewScenarioState());
@@ -477,12 +510,22 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                     continue;
                 }
                 httpRequestMatcher.setResponseInProgress(true);
-                // TODO(phase-2c-times): under clustering, Times consumption must be a
-                // backend CAS so Times.exactly(N) is exactly-once across nodes; currently
-                // node-local (correct only single-node).
-                if (!expectation.consumeMatch()) {
-                    httpRequestMatcher.setResponseInProgress(false);
-                    continue;
+                // Clustered shared-Times CAS (early/respondBeforeBody path)
+                if (isClusteredLimitedTimes(expectation)) {
+                    ConsumeTimesResult casResult = consumeTimesViaBackendCas(expectation);
+                    if (!casResult.success) {
+                        httpRequestMatcher.setResponseInProgress(false);
+                        if (casResult.exhausted) {
+                            scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                        }
+                        continue;
+                    }
+                    expectation.consumeMatchLocally();
+                } else {
+                    if (!expectation.consumeMatch()) {
+                        httpRequestMatcher.setResponseInProgress(false);
+                        continue;
+                    }
                 }
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() == null && expectation.getNewScenarioState() != null) {
                     scenarioManager.transitionState(expectation.getScenarioName(), isolationKey, expectation.getNewScenarioState());
@@ -657,7 +700,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         reconcileFromBackend();
     }
 
-    Expectation postProcess(Expectation expectation) {
+    public Expectation postProcess(Expectation expectation) {
         if (expectation != null) {
             getHttpRequestMatchersCopy()
                 .filter(httpRequestMatcher -> httpRequestMatcher.getExpectation() == expectation)
@@ -967,5 +1010,100 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             return null;
         }
         return value;
+    }
+
+    // --- Clustered shared-Times CAS helpers ---
+
+    /**
+     * Returns {@code true} when the expectation has LIMITED Times AND a
+     * clustered backend is active. Only in this case does the match
+     * consume path need to go through the shared backend CAS.
+     * <p>
+     * Unlimited Times, no-backend (in-memory default), or non-clustered
+     * backends all return {@code false}, keeping the fast path identical
+     * to the pre-clustering single-node behaviour.
+     */
+    private boolean isClusteredLimitedTimes(Expectation expectation) {
+        if (stateBackend == null || !stateBackend.isClustered()) {
+            return false;
+        }
+        return expectation.getTimes() != null && !expectation.getTimes().isUnlimited();
+    }
+
+    /**
+     * Result of a shared-Times CAS attempt on the backend.
+     */
+    static final class ConsumeTimesResult {
+        /** CAS succeeded: this node may serve the response. */
+        final boolean success;
+        /** The shared counter has reached zero: the expectation is exhausted fleet-wide. */
+        final boolean exhausted;
+
+        ConsumeTimesResult(boolean success, boolean exhausted) {
+            this.success = success;
+            this.exhausted = exhausted;
+        }
+    }
+
+    /**
+     * Atomically decrements the shared remaining-times counter in the
+     * backend via compare-and-set (CAS). This is the correctness-critical
+     * distributed path that ensures a {@code Times.exactly(N)} expectation
+     * is served exactly N times across the whole fleet.
+     * <p>
+     * <b>Algorithm:</b>
+     * <ol>
+     *   <li>Read the current {@link ExpectationEntry} and its version
+     *       from the backend.</li>
+     *   <li>If the entry is absent or its {@code remainingTimes} is
+     *       already {@code <= 0}, return failure + exhausted.</li>
+     *   <li>Build a new entry with {@code remainingTimes - 1} and attempt
+     *       {@link KeyValueStore#compareAndSet} with the read version.</li>
+     *   <li>If CAS fails (concurrent write from another node), retry
+     *       from step 1 (bounded to {@code MAX_CAS_RETRIES}).</li>
+     *   <li>If CAS succeeds, return success.</li>
+     * </ol>
+     * <p>
+     * <b>Bounded retries:</b> if the CAS loop exhausts all retries
+     * without succeeding (extreme contention), the method returns failure.
+     * This is a conservative choice: the expectation is not served rather
+     * than risking a double-serve. In practice, CAS contention is rare
+     * because limited-Times expectations are low-count by nature.
+     *
+     * @param expectation the expectation whose shared Times to consume
+     * @return the CAS result indicating success or failure/exhaustion
+     */
+    ConsumeTimesResult consumeTimesViaBackendCas(Expectation expectation) {
+        final int MAX_CAS_RETRIES = 10;
+        final String id = expectation.getId();
+
+        for (int attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+            Optional<Versioned<ExpectationEntry>> current = expectationBackend.get(id);
+            if (!current.isPresent()) {
+                // Entry gone (removed by another node or evicted)
+                return new ConsumeTimesResult(false, true);
+            }
+            Versioned<ExpectationEntry> versioned = current.get();
+            ExpectationEntry entry = versioned.getValue();
+            long version = versioned.getVersion();
+
+            if (entry.getRemainingTimes() <= 0) {
+                // Already exhausted across the fleet
+                return new ConsumeTimesResult(false, true);
+            }
+
+            // Build a decremented copy
+            int newRemaining = entry.getRemainingTimes() - 1;
+            ExpectationEntry decremented = new ExpectationEntry(entry, newRemaining);
+
+            if (expectationBackend.compareAndSet(id, version, decremented)) {
+                // CAS succeeded — this node wins this match slot
+                return new ConsumeTimesResult(true, false);
+            }
+            // CAS failed — another node wrote concurrently; retry with fresh read
+        }
+
+        // Exhausted retries without success — conservative failure
+        return new ConsumeTimesResult(false, false);
     }
 }

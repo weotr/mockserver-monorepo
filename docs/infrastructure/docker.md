@@ -25,12 +25,18 @@ gcr.io/distroless/java17"]
         LOCAL["docker/local/Dockerfile
 Local Build
 gcr.io/distroless/java17:nonroot"]
+        WEBHOOK["docker/webhook/Dockerfile
+Admission Webhook
+gcr.io/distroless/java17:nonroot"]
+        CLUSTERED["docker/clustered/Dockerfile
+Clustered (Infinispan)
+gcr.io/distroless/java17:nonroot"]
     end
 
     subgraph "Build Images"
         MVN["docker_build/maven/Dockerfile
 Maven CI
-Ubuntu 24.04 + JDK 21 + Maven 3.9"]
+Ubuntu 24.04 + JDK 17 + Maven 3.9"]
         PERF["docker_build/performance/Dockerfile
 Performance
 grafana/k6"]
@@ -47,6 +53,8 @@ grafana/k6"]
 | Snapshot | `docker/snapshot/Dockerfile` | `gcr.io/distroless/java17:debug-nonroot` | `nonroot` | Testing pre-release builds |
 | Root Snapshot | `docker/root-snapshot/Dockerfile` | `gcr.io/distroless/java17` | `root` | Testing pre-release (root) |
 | Local | `docker/local/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Building from local JAR |
+| Webhook | `docker/webhook/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Kubernetes admission webhook for sidecar injection |
+| Clustered | `docker/clustered/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Infinispan state backend for multi-node clustering |
 
 ### Docker Registries
 
@@ -54,14 +62,64 @@ Images are published to two registries:
 
 | Registry | Image | Notes |
 |----------|-------|-------|
-| Docker Hub | `mockserver/mockserver` | Primary registry |
+| Docker Hub | `mockserver/mockserver` | Primary registry (main MockServer image) |
+| Docker Hub | `mockserver/mockserver-webhook` | Admission webhook image |
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver` | Avoids Docker Hub rate limits for AWS-based CI/CD |
+| AWS ECR Public | `public.ecr.aws/mockserver/mockserver-webhook` | Webhook image on ECR |
 
-Both registries receive the same tags on every push. On each merge to `master`, the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants are pushed. During releases, `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, and `-graaljs` release variants are pushed. The `:latest` tag always points to the most recent official release, not the development branch.
+Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the legacy Buildkite docker-push-release step. The `:latest` tag always points to the most recent official release, not the development branch.
+
+Release images are cosign-signed by digest after push (see below). Snapshot images are not signed.
+
+The `-clustered` image variant (`clustered-X.Y.Z`, `clustered-mockserver-X.Y.Z`, `clustered-latest`) is published alongside the base and GraalJS images at release time. It bundles the `mockserver-state-infinispan` module and its transitive dependencies (Infinispan, JGroups, etc.) plus `netty-tcnative-boringssl-static` for native TLS. The build is error-isolated: a clustered image push failure does not abort the release since the main images have already been published.
+
+### Verifying Image Signatures
+
+Release images are cosign-signed by digest after push using the project's signing key (stored in AWS Secrets Manager `mockserver-release/cosign-key`). Signing uses the same key infrastructure as the Helm chart signing in `scripts/release/components/helm.sh`. The release Docker step runs on the **release** queue (the only queue granted `read_release_secrets`, which includes the cosign key) and auto-installs the pinned cosign binary into `.tmp/` if it is not already on the agent.
+
+To verify a release image:
+
+```bash
+# Install cosign: https://docs.sigstore.dev/cosign/system_config/installation/
+
+# Verify by digest (most reliable — binds to exact manifest content)
+cosign verify \
+  --key https://www.mock-server.com/mockserver-cosign.pub \
+  mockserver/mockserver@sha256:<digest>
+
+# Or verify the tag (resolves to digest internally)
+cosign verify \
+  --key https://www.mock-server.com/mockserver-cosign.pub \
+  mockserver/mockserver:7.0.0
+```
+
+The public key corresponding to `mockserver-release/cosign-key` is **published at `https://www.mock-server.com/mockserver-cosign.pub`** (source: `jekyll-www.mock-server.com/mockserver-cosign.pub`; an identical copy is at `helm/mockserver/cosign.pub`). It can also be re-derived from the private key with `cosign public-key --key cosign.key`. The same key signs the Helm chart.
+
+Signing is non-fatal in the release pipeline: if the key is absent (or the cosign binary cannot be downloaded), images are published unsigned and the release continues. The cosign binary itself is no longer a prerequisite — the release step downloads and checksum-verifies it on demand.
+
+> **IAM note:** the signing step is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`, so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret in addition to `GetSecretValue` — otherwise the probe fails and signing is silently skipped (this caused the 7.0.0 chart/images to publish unsigned until the grant was added to `read_release_secrets`).
+
+### Base Image CVE Baseline
+
+Image scanners (Trivy, Grype, the ArtifactHub Helm security report) will always show a residual set of CVEs against the **distroless base image**, not against MockServer code or its Maven dependencies. This is expected and is not a release blocker.
+
+**Why these appear:** every production image runs on `gcr.io/distroless/java17` (digest-pinned). That base ships the JRE plus the minimal set of Debian OS libraries the JRE links against — `libc6`, `libexpat1` (XML), `zlib1g`, `libuuid1`, `libpng16` / `liblcms2-2` (AWT imaging), `libbz2-1.0`. Scanners report any open Debian advisory against those packages. They are part of the base layer; MockServer neither installs nor controls them.
+
+**Why a Java/JRE version bump does not clear them:** the CVEs are against the OS packages in the Debian layer, independent of the JRE major version. Changing the *build* toolchain JDK (e.g. building the release on JDK 17 rather than JDK 11) does not alter the runtime base image's OS package set at all.
+
+**Why they often cannot be remediated at build time:** most carry `Fixed in: -` (`Fixable: 0`) in the report, meaning Debian has not yet published a patched package. When no upstream fix exists, there is nothing to pull in — re-pinning to the newest distroless digest removes nothing. Such advisories clear only once Debian ships patched packages **and** the distroless base is rebuilt **and** we adopt the new digest.
+
+**How the digest stays current:** digest re-pinning is automated — Dependabot's `docker` ecosystem (see [`.github/dependabot.yml`](../../.github/dependabot.yml)) opens a bump PR whenever the upstream digest of a pinned base image moves. So when distroless rebuilds with fixed OS packages, the update arrives as a routine dependency PR; no manual re-pin or release-time step is required. Only the Dockerfile directories registered in `dependabot.yml` are auto-bumped — when adding a new Dockerfile directory, register it there too or its base image will not be tracked.
+
+**What to check when triaging a base-image CVE report:**
+
+1. Confirm the flagged package is an OS library from the distroless base (`libc6`, `libexpat1`, `zlib1g`, `libuuid1`, `libpng16`, `liblcms2-2`, `libbz2-1.0`, …) rather than a bundled Maven artifact — only the latter is actionable in our build.
+2. Check the `Fixed in` column. `-` means no upstream fix exists yet → expected baseline, no action. A concrete version means distroless has likely already rebuilt → ensure the Dependabot digest-bump PR has merged (or merge it).
+3. Assess reachability — these libraries are largely inert for MockServer's HTTP/proxy hot paths (e.g. no untrusted-XML-through-expat path), which is why an unpatched base CVE is rarely a practical risk.
 
 ### Docker HEALTHCHECK
 
-All production Dockerfiles include a built-in `HEALTHCHECK` instruction that runs a lightweight Java class (`org.mockserver.cli.HealthCheck`) to verify MockServer is serving requests. The health check calls `PUT /mockserver/status` internally — no shell, curl, or external tools required.
+All production MockServer **server** Dockerfiles include a built-in `HEALTHCHECK` instruction that runs a lightweight Java class (`org.mockserver.cli.HealthCheck`) to verify MockServer is serving requests. The health check calls `PUT /mockserver/status` internally — no shell, curl, or external tools required. The one exception is the admission-webhook image (`docker/webhook/Dockerfile`), which deliberately has no `HEALTHCHECK` — it is a short-lived Kubernetes sidecar-injection webhook rather than a long-running server, and its liveness/readiness is governed by Kubernetes probes against the webhook endpoint.
 
 ```dockerfile
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=3 \
@@ -109,7 +167,7 @@ Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1
 
 | Image | Dockerfile | Base | Purpose |
 |-------|-----------|------|---------|
-| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 21, Maven 3.9.16 |
+| `mockserver/mockserver:maven` | `docker_build/maven/Dockerfile` | Ubuntu 24.04 | CI builds — JDK 17, Maven 3.9.16 |
 | `mockserver/mockserver:performance` | `docker_build/performance/Dockerfile` | `grafana/k6` | Load testing with k6 |
 
 ## Docker Compose Examples
@@ -169,13 +227,13 @@ scripts/local_docker_launch.sh
 
 ## Container Integration Tests
 
-The `container_integration_tests/` directory contains 15 automated tests:
+The `container_integration_tests/` directory contains 24 automated tests (16 Docker Compose + 8 Helm), plus non-blocking smoke tests for image variants:
 
 ```mermaid
 graph TD
     TESTS[integration_tests.sh]
 
-    subgraph "Docker Compose Tests (10)"
+    subgraph "Docker Compose Tests (16)"
         DC1[Without server port]
         DC2[Default properties file]
         DC3[Custom properties file]
@@ -186,14 +244,23 @@ graph TD
         DC8[Persisted expectations]
         DC9[Expectation initialiser]
         DC10[Forward with override]
+        DC11[mTLS]
+        DC12[JVM options]
+        DC13[Libs classpath]
+        DC14[Graceful shutdown]
+        DC15[Metrics]
+        DC16[WAR Tomcat]
     end
 
-    subgraph "Helm Tests (5)"
+    subgraph "Helm Tests (8)"
         H1[Default Helm values]
         H2[Helm with local Docker image]
         H3[Helm with custom port]
         H4[Helm with remote host/port]
         H5[Helm with inline config]
+        H6[Helm ConfigMap injection]
+        H7[Helm MockServer config chart]
+        H8[Clustered state convergence]
     end
 
     TESTS --> DC1
@@ -206,15 +273,24 @@ graph TD
     TESTS --> DC8
     TESTS --> DC9
     TESTS --> DC10
+    TESTS --> DC11
+    TESTS --> DC12
+    TESTS --> DC13
+    TESTS --> DC14
+    TESTS --> DC15
+    TESTS --> DC16
     TESTS --> H1
     TESTS --> H2
     TESTS --> H3
     TESTS --> H4
     TESTS --> H5
+    TESTS --> H6
+    TESTS --> H7
+    TESTS --> H8
 ```
 
 Each test:
-1. Starts MockServer (via Docker Compose or Helm/Kind)
+1. Starts MockServer (via Docker Compose or Helm/k3d)
 2. Creates expectations via the REST API
 3. Validates responses using a curl-based client container
 4. Tears down the environment
@@ -225,7 +301,7 @@ Each test:
 |--------|---------|
 | `integration_tests.sh` | Main orchestrator: builds images, runs all tests, prints summary |
 | `docker-compose.sh` | Docker Compose helpers: `start-up`, `tear-down`, `docker-exec`, `container-logs` |
-| `helm-deploy.sh` | Kind cluster lifecycle: `start-up-k8s`, `tear-down-k8s`, Helm install/uninstall |
+| `helm-deploy.sh` | k3d cluster lifecycle: `start-up-k8s`, `tear-down-k8s`, Helm install/uninstall |
 | `logging.sh` | Coloured terminal output, `runCommand`, `retryCommand`, `logTestResult` |
 
 ### Environment Variable Controls
@@ -237,7 +313,7 @@ Each test:
 | `SKIP_DOCKER_REBUILD_CLIENT` | Skip rebuilding the curl client image |
 | `SKIP_ALL_TESTS` | Skip all tests (build only) |
 | `SKIP_DOCKER_TESTS` | Skip Docker Compose tests |
-| `SKIP_HELM_TESTS` | Skip Helm/Kind tests |
+| `SKIP_HELM_TESTS` | Skip Helm/k3d tests |
 
 See [Testing](../testing.md) for full details on running container integration tests.
 

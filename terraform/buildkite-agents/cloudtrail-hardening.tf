@@ -45,6 +45,16 @@ resource "aws_kms_key" "cloudtrail" {
         Resource  = "*"
       },
       {
+        # AWS Config delivers snapshots to the SSE-KMS Config bucket using this
+        # CMK. Grant the Config role explicitly so encryption keeps working even
+        # if the root kms:* statement is ever tightened.
+        Sid       = "AllowConfigBucketEncryption"
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.config.arn }
+        Action    = ["kms:GenerateDataKey*", "kms:Decrypt", "kms:DescribeKey"]
+        Resource  = "*"
+      },
+      {
         Sid       = "AllowAccountReadWithCloudTrailContext"
         Effect    = "Allow"
         Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
@@ -168,9 +178,46 @@ resource "aws_cloudtrail" "management" {
   enable_log_file_validation    = true
   kms_key_id                    = aws_kms_key.cloudtrail.arn
 
-  event_selector {
-    read_write_type           = "All"
-    include_management_events = true
+  # Advanced event selectors replace the classic event_selector block.
+  # When advanced selectors are used, management events must be explicitly
+  # included (they are not implicit like in classic mode).
+
+  # Management events (replaces the classic event_selector).
+  #
+  # NOTE: Secrets Manager API calls — including GetSecretValue on the build and
+  # release secrets — are MANAGEMENT events and are captured here. Secrets
+  # Manager is not a supported CloudTrail data-event resource type, so there is
+  # no separate data-event selector for it (an "AWS::SecretsManager::Secret"
+  # data selector is rejected with InvalidEventSelectorsException).
+  advanced_event_selector {
+    name = "ManagementEvents"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Management"]
+    }
+  }
+
+  # Data events: audit object-level access on the Terraform state bucket
+  # (state reads/writes/deletes). Scoped to a single bucket ARN to control
+  # CloudTrail data-event cost.
+  advanced_event_selector {
+    name = "TfStateBucketDataEvents"
+
+    field_selector {
+      field  = "eventCategory"
+      equals = ["Data"]
+    }
+
+    field_selector {
+      field  = "resources.type"
+      equals = ["AWS::S3::Object"]
+    }
+
+    field_selector {
+      field       = "resources.ARN"
+      starts_with = ["arn:aws:s3:::mockserver-terraform-state/"]
+    }
   }
 }
 

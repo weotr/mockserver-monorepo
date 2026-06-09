@@ -4,20 +4,19 @@ import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsNot.not;
 import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockserver.model.SseEvent.sseEvent;
 
+import static org.hamcrest.core.IsSame.sameInstance;
 public class SseEventTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(sseEvent(), sseEvent());
-        assertNotSame(sseEvent(), sseEvent());
+        assertThat(sseEvent(), is(sseEvent()));
+        assertThat(sseEvent(), not(sameInstance(sseEvent())));
     }
 
     @Test

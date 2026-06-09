@@ -10,7 +10,7 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async' | 'breakpoints' | 'get-started';
 
 /** Map legacy/removed ViewMode values to their replacement. */
 const VIEW_MIGRATION: Record<string, ViewMode> = {
@@ -109,7 +109,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   recordedRequests: [],
   proxiedRequests: [],
 
-  view: 'dashboard' as ViewMode,
+  view: 'get-started' as ViewMode,
   requestFilter: {},
   filterEnabled: false,
   filterExpanded: false,
@@ -153,12 +153,30 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   }),
 
   applyMessage: (message) =>
-    set({
-      logMessages: message.logMessages ?? [],
-      activeExpectations: message.activeExpectations ?? [],
-      recordedRequests: message.recordedRequests ?? [],
-      proxiedRequests: message.proxiedRequests ?? [],
-      error: message.error ?? null,
+    set((s) => {
+      const expectations = message.activeExpectations ?? [];
+      const recorded = message.recordedRequests ?? [];
+      const proxied = message.proxiedRequests ?? [];
+      // Auto-navigate from the onboarding view to the dashboard only on the
+      // empty→has-data transition (i.e. the PREVIOUS state had zero data and
+      // the incoming message brings some). This preserves the first-run
+      // auto-advance while letting users revisit the onboarding view at will.
+      const previouslyEmpty =
+        s.activeExpectations.length === 0 &&
+        s.recordedRequests.length === 0 &&
+        s.proxiedRequests.length === 0;
+      const hasData =
+        expectations.length > 0 || recorded.length > 0 || proxied.length > 0;
+      const autoSwitch =
+        s.view === 'get-started' && previouslyEmpty && hasData;
+      return {
+        logMessages: message.logMessages ?? [],
+        activeExpectations: expectations,
+        recordedRequests: recorded,
+        proxiedRequests: proxied,
+        error: message.error ?? null,
+        ...(autoSwitch ? { view: 'dashboard' as ViewMode } : {}),
+      };
     }),
 
   clearUI: () =>
@@ -169,6 +187,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       proxiedRequests: [],
       selectedTrafficKey: null,
       error: null,
+      notification: null,
+      view: 'get-started' as ViewMode,
 
       debugMismatchOpen: false,
       debugMismatchLoading: false,

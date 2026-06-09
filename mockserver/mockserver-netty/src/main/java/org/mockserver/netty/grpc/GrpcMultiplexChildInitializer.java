@@ -17,6 +17,7 @@ import org.mockserver.mock.action.http.HttpActionHandler;
 import org.mockserver.netty.HttpRequestHandler;
 import org.mockserver.netty.mcp.McpSessionManager;
 import org.mockserver.netty.mcp.McpStreamableHttpHandler;
+import org.mockserver.netty.unification.AltSvcHeaderHandler;
 import org.mockserver.netty.unification.TraceContextHandler;
 import org.mockserver.netty.websocketregistry.CallbackWebSocketServerHandler;
 
@@ -52,6 +53,7 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
     private final CallbackWebSocketServerHandler callbackWebSocketServerHandler;
     private final DashboardWebSocketHandler dashboardWebSocketHandler;
     private final TraceContextHandler traceContextHandler;
+    private final AltSvcHeaderHandler altSvcHeaderHandler;
     private final GrpcToHttpResponseHandler grpcToHttpResponseHandler;
     private final GrpcToHttpRequestHandler grpcToHttpRequestHandler;
     private final HttpRequestHandler httpRequestHandler;
@@ -83,6 +85,12 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
         this.callbackWebSocketServerHandler = new CallbackWebSocketServerHandler(httpState);
         this.dashboardWebSocketHandler = new DashboardWebSocketHandler(httpState, sslEnabled, false);
         this.traceContextHandler = new TraceContextHandler(configuration);
+        int h3Port = configuration.http3Port();
+        if (h3Port > 0 && configuration.http3AdvertiseAltSvc()) {
+            this.altSvcHeaderHandler = new AltSvcHeaderHandler(h3Port, configuration.http3AltSvcMaxAge());
+        } else {
+            this.altSvcHeaderHandler = null;
+        }
         this.httpRequestHandler = new HttpRequestHandler(configuration, server, httpState, actionHandler);
 
         this.descriptorStore = httpState.getGrpcDescriptorStore();
@@ -125,6 +133,7 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
             dashboardWebSocketHandler,
             mcpStreamableHttpHandler,
             traceContextHandler,
+            altSvcHeaderHandler,
             grpcToHttpResponseHandler,
             grpcToHttpRequestHandler,
             httpRequestHandler,
@@ -152,6 +161,7 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
      * @param dashboardWebSocketHandler     sharable dashboard WebSocket handler
      * @param mcpStreamableHttpHandler      sharable MCP handler (may be null)
      * @param traceContextHandler           sharable trace context handler
+     * @param altSvcHeaderHandler           sharable Alt-Svc header handler (may be null)
      * @param grpcToHttpResponseHandler     sharable gRPC response handler (may be null)
      * @param grpcToHttpRequestHandler      sharable gRPC request handler (may be null)
      * @param httpRequestHandler            sharable HTTP request handler
@@ -167,6 +177,7 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
         DashboardWebSocketHandler dashboardWebSocketHandler,
         McpStreamableHttpHandler mcpStreamableHttpHandler,
         TraceContextHandler traceContextHandler,
+        AltSvcHeaderHandler altSvcHeaderHandler,
         GrpcToHttpResponseHandler grpcToHttpResponseHandler,
         GrpcToHttpRequestHandler grpcToHttpRequestHandler,
         HttpRequestHandler httpRequestHandler
@@ -189,6 +200,9 @@ public class GrpcMultiplexChildInitializer extends ChannelInitializer<Http2Strea
             configuration, mockServerLogger, sslEnabled, clientCertificates, localAddress
         ));
         pipeline.addLast(traceContextHandler);
+        if (altSvcHeaderHandler != null) {
+            pipeline.addLast(altSvcHeaderHandler);
+        }
         if (grpcToHttpResponseHandler != null) {
             pipeline.addLast(grpcToHttpResponseHandler);
             pipeline.addLast(grpcToHttpRequestHandler);

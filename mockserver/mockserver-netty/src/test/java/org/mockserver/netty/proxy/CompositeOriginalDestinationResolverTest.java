@@ -128,13 +128,13 @@ public class CompositeOriginalDestinationResolverTest {
     }
 
     @Test
-    public void defaultChainWithConfigShouldContainFourStrategies() {
-        // when — configuration-aware overload includes TPROXY
+    public void defaultChainWithConfigShouldContainFiveStrategies() {
+        // when — configuration-aware overload includes TPROXY and eBPF
         Configuration config = Configuration.configuration();
         CompositeOriginalDestinationResolver resolver = CompositeOriginalDestinationResolver.defaultChain(config);
 
-        // then — [TPROXY, SO_ORIGINAL_DST, conntrack, dns-intent]
-        assertThat(resolver.strategyCount(), is(4));
+        // then — [TPROXY, eBPF, SO_ORIGINAL_DST, conntrack, dns-intent]
+        assertThat(resolver.strategyCount(), is(5));
     }
 
     @Test

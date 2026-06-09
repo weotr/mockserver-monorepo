@@ -37,3 +37,23 @@ output "ecr_public_repository_uri" {
   description = "ECR Public repository URI for MockServer Docker images"
   value       = aws_ecrpublic_repository.mockserver.repository_uri
 }
+
+output "dependency_cache_bucket" {
+  description = "S3 bucket name for CI dependency caching"
+  value       = aws_s3_bucket.dependency_cache.id
+}
+
+output "perf_auto_scaling_group_name" {
+  description = "Name of the perf agent ASG"
+  value       = module.buildkite_perf_stack.auto_scaling_group_name
+}
+
+output "perf_lambda_scaler_arn" {
+  description = "ARN of the Lambda scaler function (perf queue)"
+  value       = module.buildkite_perf_stack.scaler_lambda_function_arn
+}
+
+output "perf_results_bucket" {
+  description = "S3 bucket name for performance-regression result history"
+  value       = aws_s3_bucket.perf_results.id
+}

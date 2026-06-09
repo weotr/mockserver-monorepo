@@ -124,11 +124,19 @@ else
       -not -name "changelog.md" -not -name "CHANGELOG.md" \
       -not -path "*/mockserver-node/package.json" \
       -not -path "*/mockserver-client-node/package.json" \
+      -not -path "*/mockserver-ui/package.json" \
       -not -name "package-lock.json" -print0 2>/dev/null \
     | while IFS= read -r -d '' file; do
-        sed_i -E "/${HISTORICAL_RE}/!s/${OLD_PAT}/${NEW_REP}/g" "$file" 2>/dev/null || true
+        # Anchor the version so it only matches a COMPLETE version token, never a
+        # substring of a larger version. Without the boundaries, OLD_VERSION 6.1.0
+        # matched inside a third-party dependency range like "^16.1.0" and bumped
+        # it to the non-existent "^17.0.0", breaking `npm ci` for mockserver-ui
+        # (and thus every mvn build of mockserver-netty + CodeQL). The leading
+        # group requires a non-digit/non-dot before the version; the trailing
+        # group a non-digit after it.
+        sed_i -E "/${HISTORICAL_RE}/!s/(^|[^0-9.])${OLD_PAT}([^0-9]|\$)/\1${NEW_REP}\2/g" "$file" 2>/dev/null || true
         if [[ "$OLD_API_VERSION" != "$API_VERSION" ]]; then
-          sed_i -E "/${HISTORICAL_RE}/!s/${OLD_API_PAT}/${NEW_API}/g" "$file" 2>/dev/null || true
+          sed_i -E "/${HISTORICAL_RE}/!s/(^|[^0-9.])${OLD_API_PAT}([^0-9]|\$)/\1${NEW_API}\2/g" "$file" 2>/dev/null || true
         fi
       done
   done
@@ -156,11 +164,28 @@ else
   [[ -f mockserver-client-python/pyproject.toml ]] && UPDATED_PATHS+=(mockserver-client-python/pyproject.toml)
   [[ -f mockserver-client-ruby/lib/mockserver/version.rb ]] && UPDATED_PATHS+=(mockserver-client-ruby/lib/mockserver/version.rb)
   [[ -f mockserver-client-ruby/README.md ]]        && UPDATED_PATHS+=(mockserver-client-ruby/README.md)
-  # General find-and-replace touched docs across the repo. We stage only files
-  # that were already tracked AND have a diff.
-  while IFS= read -r f; do
-    UPDATED_PATHS+=("$f")
-  done < <(git -C "$REPO_ROOT" diff --name-only)
+  # General find-and-replace touched docs across the repo. Stage only the
+  # files that the find/replace loop above actually edited — NEVER a catch-all
+  # `git diff --name-only` which would stage unrelated pre-existing changes
+  # from an earlier step.
+  # Re-run the same find as above and collect only files that have a diff.
+  for ext in "*.html" "*.md" "*.yaml" "*.yml" "*.json" "*.txt"; do
+    while IFS= read -r -d '' file; do
+      # Relativize to repo root for git staging.
+      local_path="${file#"$REPO_ROOT/"}"
+      if ! git -C "$REPO_ROOT" diff --quiet -- "$local_path" 2>/dev/null; then
+        UPDATED_PATHS+=("$local_path")
+      fi
+    done < <(find "$REPO_ROOT" -name "$ext" \
+      -not -path "*/node_modules/*" -not -path "*/.git/*" \
+      -not -path "*/target/*" -not -path "*/helm/charts/*" \
+      -not -path "*/.tmp/*" \
+      -not -name "changelog.md" -not -name "CHANGELOG.md" \
+      -not -path "*/mockserver-node/package.json" \
+      -not -path "*/mockserver-client-node/package.json" \
+      -not -path "*/mockserver-ui/package.json" \
+      -not -name "package-lock.json" -print0 2>/dev/null)
+  done
   # De-duplicate.
   mapfile -t UPDATED_PATHS < <(printf '%s\n' "${UPDATED_PATHS[@]}" | sort -u)
   git_commit_and_push "release: update version references to $RELEASE_VERSION" "${UPDATED_PATHS[@]}"

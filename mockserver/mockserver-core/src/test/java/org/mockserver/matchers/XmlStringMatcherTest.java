@@ -10,10 +10,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import static junit.framework.TestCase.*;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.NotMatcher.notMatcher;
 import static org.mockserver.model.NottableString.string;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -27,12 +28,12 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "<element><key>some_key</key><value>some_value</value></element>").matches(matched));
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "<element><key>some_key</key><value>some_value</value></element>").matches(matched), is(true));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
+            "</element>").matches(matched), is(true));
     }
 
     @Test
@@ -42,12 +43,12 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "<element><value>some_value</value><key>some_key</key></element>").matches(matched));
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "<element><value>some_value</value><key>some_key</key></element>").matches(matched), is(true));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <value>some_value</value>" +
             "   <key>some_key</key>" +
-            "</element>").matches(matched));
+            "</element>").matches(matched), is(true));
     }
 
     @Test
@@ -57,11 +58,11 @@ public class XmlStringMatcherTest {
             "  <id>67890</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
             "</message>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<message>" + NEW_LINE +
             "  <id>${xmlunit.isNumber}</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
-            "</message>").matches(matched));
+            "</message>").matches(matched), is(true));
     }
 
     @Test
@@ -71,11 +72,11 @@ public class XmlStringMatcherTest {
             "  <id>foo</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
             "</message>";
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<message>" + NEW_LINE +
             "  <id>${xmlunit.isNumber}</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
-            "</message>").matches(matched));
+            "</message>").matches(matched), is(false));
     }
 
     @Test
@@ -85,11 +86,11 @@ public class XmlStringMatcherTest {
             "  <id>67890</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
             "</message>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<message>" + NEW_LINE +
             "  <id>${xmlunit.ignore}</id>" + NEW_LINE +
             "  <content>Hello</content>" + NEW_LINE +
-            "</message>").matches(matched));
+            "</message>").matches(matched), is(true));
     }
 
     @Test
@@ -108,7 +109,7 @@ public class XmlStringMatcherTest {
             "</soap:Body>" + NEW_LINE +
             NEW_LINE +
             "</soap:Envelope>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<?xml version=\"1.0\"?>" + NEW_LINE +
             "<soap:Envelope" + NEW_LINE +
             "soap:encodingStyle=\"http://www.w3.org/2003/05/soap-encoding\"" + NEW_LINE +
@@ -119,14 +120,14 @@ public class XmlStringMatcherTest {
             "    <m:Price>34.5</m:Price>" + NEW_LINE +
             "  </m:GetStockPriceResponse>" + NEW_LINE +
             "</soap:Body>" + NEW_LINE +
-            "</soap:Envelope>").matches(matched));
+            "</soap:Envelope>").matches(matched), is(true));
     }
 
     @Test
     public void shouldMatchMatchingXMLWithDifferentNamespacePrefixes() {
         String matcher = "<a:element xmlns:a=\"the_namespace\"><a:key>some_key</a:key><a:value>some_value</a:value></a:element>";
         String matched = "<b:element xmlns:b=\"the_namespace\"><b:key>some_key</b:key><b:value>some_value</b:value></b:element>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), matcher).matches(matched));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), matcher).matches(matched), is(true));
     }
 
     @Test
@@ -136,12 +137,12 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertFalse(notMatcher(new XmlStringMatcher(new MockServerLogger(), "<element><key>some_key</key><value>some_value</value></element>")).matches(matched));
-        assertFalse(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "<element><key>some_key</key><value>some_value</value></element>")).matches(matched), is(false));
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</element>")).matches(matched));
+            "</element>")).matches(matched), is(false));
     }
 
     @Test
@@ -151,28 +152,28 @@ public class XmlStringMatcherTest {
             "   <key attributeOne=\"one\" attributeTwo=\"two\">some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "<element attributeTwo=\"two\" attributeOne=\"one\"><key attributeTwo=\"two\" attributeOne=\"one\">some_key</key><value>some_value</value></element>").matches(matched));
-        assertTrue(new XmlStringMatcher(new MockServerLogger(), "<element attributeTwo=\"two\" attributeOne=\"one\">" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "<element attributeTwo=\"two\" attributeOne=\"one\"><key attributeTwo=\"two\" attributeOne=\"one\">some_key</key><value>some_value</value></element>").matches(matched), is(true));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "<element attributeTwo=\"two\" attributeOne=\"one\">" +
             "   <key attributeTwo=\"two\" attributeOne=\"one\">some_key</key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
+            "</element>").matches(matched), is(true));
     }
 
     @Test
     public void shouldNotMatchInvalidXml() {
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "invalid xml").matches("<element></element>"));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "<element></element>").matches("invalid_xml"));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "invalid xml").matches("<element></element>"), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "<element></element>").matches("invalid_xml"), is(false));
     }
 
     @Test
     public void shouldNotMatchNullExpectation() {
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), string(null)).matches("some_value"));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), (String) null).matches("some_value"));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), string(null)).matches("some_value"), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), (String) null).matches("some_value"), is(false));
     }
 
     @Test
     public void shouldNotMatchEmptyExpectation() {
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "").matches("some_value"));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "").matches("some_value"), is(false));
     }
 
     @Test
@@ -182,26 +183,26 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<another_element>" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</another_element>").matches(matched));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+            "</another_element>").matches(matched), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <another_key>some_key</another_key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+            "</element>").matches(matched), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <key>some_key</key>" +
             "   <another_value>some_value</another_value>" +
-            "</element>").matches(matched));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+            "</element>").matches(matched), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <key>some_other_key</key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
+            "</element>").matches(matched), is(false));
     }
 
     @Test
@@ -211,16 +212,16 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertTrue(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
             "<another_element>" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</another_element>")).matches(matched));
-        assertTrue(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
+            "</another_element>")).matches(matched), is(true));
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element>" +
             "   <another_key>some_key</another_key>" +
             "   <value>some_value</value>" +
-            "</element>")).matches(matched));
+            "</element>")).matches(matched), is(true));
     }
 
     @Test
@@ -230,39 +231,39 @@ public class XmlStringMatcherTest {
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
             "</element>";
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element someOtherAttribute=\"some_value\">" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "" +
+            "</element>").matches(matched), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "" +
             "<element someAttribute=\"some_other_value\">" +
             "   <key>some_key</key>" +
             "   <value>some_value</value>" +
-            "</element>").matches(matched));
+            "</element>").matches(matched), is(false));
     }
 
     @Test
     public void shouldNotMatchNullTest() {
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(null, null));
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(null));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(null, null), is(false));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(null), is(false));
     }
 
     @Test
     public void shouldMatchNullTest() {
-        assertTrue(notMatcher(new XmlStringMatcher(new MockServerLogger(), "some_value")).matches(null, null));
-        assertTrue(notMatcher(new XmlStringMatcher(new MockServerLogger(), "some_value")).matches(null));
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "some_value")).matches(null, null), is(true));
+        assertThat(notMatcher(new XmlStringMatcher(new MockServerLogger(), "some_value")).matches(null), is(true));
     }
 
     @Test
     public void shouldNotMatchEmptyTest() {
-        assertFalse(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(""));
+        assertThat(new XmlStringMatcher(new MockServerLogger(), "some_value").matches(""), is(false));
     }
 
     @Test
     public void showHaveCorrectEqualsBehaviour() {
         MockServerLogger mockServerLogger = new MockServerLogger();
-        assertEquals(new XmlStringMatcher(mockServerLogger, "some_value"), new XmlStringMatcher(mockServerLogger, "some_value"));
+        assertThat(new XmlStringMatcher(mockServerLogger, "some_value"), is(new XmlStringMatcher(mockServerLogger, "some_value")));
     }
 
     @Test
@@ -275,10 +276,10 @@ public class XmlStringMatcherTest {
             List<Future<Boolean>> futures = new ArrayList<>();
             for (int i = 0; i < 200; i++) {
                 futures.add(executor.submit(() -> {
-                    assertTrue("matcherOne should match <a>1</a>", matcherOne.matches("<a>1</a>"));
-                    assertFalse("matcherOne should NOT match <a>2</a>", matcherOne.matches("<a>2</a>"));
-                    assertTrue("matcherTwo should match <a>2</a>", matcherTwo.matches("<a>2</a>"));
-                    assertFalse("matcherTwo should NOT match <a>1</a>", matcherTwo.matches("<a>1</a>"));
+                    assertThat("matcherOne should match <a>1</a>", matcherOne.matches("<a>1</a>"), is(true));
+                    assertThat("matcherOne should NOT match <a>2</a>", matcherOne.matches("<a>2</a>"), is(false));
+                    assertThat("matcherTwo should match <a>2</a>", matcherTwo.matches("<a>2</a>"), is(true));
+                    assertThat("matcherTwo should NOT match <a>1</a>", matcherTwo.matches("<a>1</a>"), is(false));
                     return true;
                 }));
             }

@@ -3,6 +3,7 @@ package org.mockserver.async.subscribe;
 import org.eclipse.paho.client.mqttv3.*;
 import org.mockserver.async.security.MqttSecurity;
 import org.mockserver.async.security.MqttSecurityOptions;
+import org.mockserver.metrics.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,6 +113,7 @@ public class MqttMessageSubscriber implements MessageSubscriber {
                 RecordedMessage msg = new RecordedMessage(topic, null, payload, Collections.emptyMap());
                 recordedMessages.computeIfAbsent(topic,
                     k -> new BoundedMessageStore(maxRecordedMessages)).add(msg);
+                Metrics.incrementAsyncMessageConsumed(topic);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Recorded message from MQTT topic '{}': {}", topic, truncate(payload));
                 }

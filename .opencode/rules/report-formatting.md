@@ -3,6 +3,18 @@
 Some skills return **structured JSON** instead of formatted reports. The parent
 agent (you) is responsible for converting JSON into the final output.
 
+## Outcome-First Structure
+
+Every formatted report follows the **Pyramid Principle with progressive
+disclosure** (`.opencode/rules/documentation-style.md`): lead with the verdict /
+status / root cause, then layer supporting evidence and detail beneath it. A
+reader who stops after the first screen must already know the bottom line.
+
+The mandatory attribution line (below) sits in this top layer — it is the first
+line after the title, above all detail. Report templates put identifying
+metadata and the outcome up front and push exhaustive tables toward the end;
+preserve that ordering when you map JSON to markdown.
+
 ## CRITICAL: Subagent Routing Source Of Truth
 
 Do not infer routing from skill descriptions. Route subagent-required skills using:

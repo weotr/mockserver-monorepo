@@ -13,6 +13,8 @@ regression gates), and Grafana-native dashboards.
 | `load.js` | Primary load test. Closed-loop arrival-rate: `match` (GET /simple) ramps to peak while `create` (PUT expectation) churns the control plane. | p95/p99 latency + error-rate + check-rate (CI pass/fail). |
 | `stress.js` | Ramp the match path past the load peak to find the breaking point. | Aborts only if error rate exceeds the ceiling (latency intentionally ungated). |
 | `soak.js` | Sustained moderate load over a long duration to surface memory/GC/connection leaks. Pair with the Grafana stack to watch JVM heap. | p99 drift + error-rate. |
+| `regression.js` | Daily regression harness. Four `constant-arrival-rate` scenarios (`match`, `forward`, `template`, `large`) each tagged `op:<name>`. A warmup scenario runs first. Run twice per CI job — once `BASE_URL=http://...` and once `BASE_URL=https://... PROTO=https_h2` (HTTPS negotiates HTTP/2 via ALPN). Writes per-behaviour `{p50_ms, p95_ms, p99_ms, throughput_rps, error_rate}` keyed `<op>_<proto>` to `K6_RESULT_PATH`. | Notify-only (no k6 thresholds gate the CI build). |
+| `growth.js` | Resource-growth regression harness. Validates that latency does not climb as the request log fills (see issue #2329: O(n) eviction once the 100k `maxLogEntries` ring is full). Runs a sustained `load` scenario on the match path at a rate that fills `maxLogEntries` early; `window:first` and `window:last` probes measure the latency slope. Writes first/last-window p95 + ratio. | Notify-only. |
 
 ## Running
 
@@ -27,6 +29,19 @@ k6 run -e MOCKSERVER_HOST=host.docker.internal:1080 .../load.js
 
 # shape the load / relax gates on a slow agent
 k6 run -e K6_PEAK_RATE=1000 -e K6_P95_MS=40 .../load.js
+
+# regression script — HTTP then HTTPS+H2 (requires mockserver-upstream for forward behaviour)
+k6 run -e BASE_URL=http://localhost:1080 -e K6_RESULT_PATH=/tmp/result-http.json \
+  mockserver-performance-test/k6/regression.js
+k6 run -e BASE_URL=https://localhost:1080 -e PROTO=https_h2 -e K6_RESULT_PATH=/tmp/result-h2.json \
+  mockserver-performance-test/k6/regression.js
+
+# regression without a dedicated upstream (single-container smoke only)
+k6 run -e K6_FORWARD_SELF=true -e BASE_URL=http://localhost:1080 \
+  mockserver-performance-test/k6/regression.js
+
+# growth script
+k6 run -e BASE_URL=http://localhost:1080 mockserver-performance-test/k6/growth.js
 ```
 
 ## Environment variables
@@ -49,6 +64,22 @@ All tunables are env-driven (see `lib/config.js`). Connection target resolves as
 | `K6_MAX_ERROR_RATE` / `K6_MIN_CHECK_RATE` | `0.01` / `0.99` | error/check-rate thresholds |
 | `K6_PRE_VUS` / `K6_MAX_VUS` | `50` / `600` | VU pool for the arrival-rate executors |
 
+**regression.js / growth.js additional variables** (defined in `lib/config.js` `REGRESSION` and `GROWTH` blocks):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `K6_REG_RATE` | `200` | Constant arrival rate per behaviour scenario (req/s) |
+| `K6_REG_DURATION` | `2m` | Duration of each behaviour scenario |
+| `K6_REG_WARMUP` | `30s` | Warmup scenario duration (runs before measurements) |
+| `PROTO` | `http` | Protocol tag appended to result keys (e.g. `https_h2`) |
+| `K6_HTTP2` | – | When set, enables HTTP/2 in the k6 HTTP client |
+| `K6_RESULT_PATH` | – | File path where `handleSummary()` writes the result JSON |
+| `K6_GROWTH_RATE` | `800` | Sustained load rate for the growth fill scenario (req/s) |
+| `K6_GROWTH_DURATION` | `6m` | Total growth run duration |
+| `K6_GROWTH_PROBE` | `30s` | Duration of the `window:first` and `window:last` probe scenarios |
+| `FORWARD_UPSTREAM_HOST` | `mockserver-upstream:1080` | Host:port of the dedicated upstream MockServer for `forward` expectations |
+| `K6_FORWARD_SELF` | – | When set to `true`, the `forward` expectation loops back to the same instance (`127.0.0.1:1080`) instead of requiring a separate upstream. Use for local single-container smoke only. |
+
 ## Seeded expectations
 
 `setup()` seeds the same 4 expectations as the legacy harness (the request
@@ -62,6 +93,15 @@ the body-decode and regex scenarios.
 > exercises the proxy/override path on a single instance, but requires the
 > instance to be reachable at `127.0.0.1:1080` from inside its own container.
 > The `forward` action is only used by `smoke.js`.
+
+`regression.js` seeds its own expectations via `lib/expectations.js` `seedRegression()`:
+
+- **Static match** (`match`) — simple GET response, matched by path
+- **Forward** (`forward`) — forward action targeting `FORWARD_UPSTREAM_HOST` (a separate upstream MockServer instance). Requires `mockserver-upstream` to be running unless `K6_FORWARD_SELF=true`.
+- **Velocity template** (`template`) — `TEMPLATE_EXPECTATION` using a Velocity response template, seeded via `lib/expectations.js`
+- **Large body** (`large`) — ~4 KB JSON response body
+
+> **Object/class callbacks are deferred to a future v2.** The dynamic-response path (object callback) needs a WebSocket responder or classpath class. The Velocity template expectation covers the dynamic-response path today.
 
 ## Prometheus / Grafana output
 

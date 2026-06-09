@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "testcontainers-mockserver"
+version = "7.0.0"
+description = "Testcontainers module for MockServer"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [
+    { name = "James D Bloom", email = "jamesdbloom@gmail.com" },
+]
+keywords = ["testing", "docker", "mockserver", "testcontainers", "mocking"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "testcontainers>=4.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "requests>=2.20",
+]
+
+[project.urls]
+Homepage = "https://www.mock-server.com"
+Repository = "https://github.com/mock-server/mockserver"
+Documentation = "https://www.mock-server.com/mock_server/mockserver_testcontainers.html"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "docker: marks tests that require a running Docker daemon (deselect with '-m \"not docker\"')",
+]

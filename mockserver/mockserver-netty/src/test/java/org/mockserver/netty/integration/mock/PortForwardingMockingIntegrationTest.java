@@ -15,7 +15,6 @@ import org.slf4j.event.Level;
 
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.endsWith;
@@ -37,6 +36,7 @@ import static org.mockserver.model.Parameter.schemaParam;
 import static org.mockserver.model.RegexBody.regex;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.stop.Stop.stopQuietly;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -81,27 +81,18 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
             // when
             mockServerClient.reset();
             mockServerClient.when(request().withPath(calculatePath("some_path.*")), exactly(4)).respond(response().withBody("some_body"));
-            assertEquals(
-                response("some_body"),
-                makeRequest(
+            assertThat(makeRequest(
                     request().withPath(calculatePath("some_path_one")),
                     getHeadersToRemove()
-                )
-            );
-            assertEquals(
-                notFoundResponse(),
-                makeRequest(
+                ), is(response("some_body")));
+            assertThat(makeRequest(
                     request().withPath(calculatePath("not_found")),
                     getHeadersToRemove()
-                )
-            );
-            assertEquals(
-                response("some_body"),
-                makeRequest(
+                ), is(notFoundResponse()));
+            assertThat(makeRequest(
                     request().withPath(calculatePath("some_path_three")),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response("some_body")));
 
             // then
             String[] actualLogMessages = mockServerClient.retrieveLogMessagesArray(request().withPath(calculatePath(".*")));
@@ -285,7 +276,6 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
     }
 
     @Test
-    @Override
     public void shouldReset() {
         mockServerClient
             .when(
@@ -308,44 +298,32 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
 
         mockServerClient.reset();
 
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path1")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            localNotFoundResponse(),
-            makeRequest(
+            ), is(localNotFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path2")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
-                .withStatusCode(HttpStatusCode.BAD_GATEWAY_502.code())
-                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase()),
-            makeRequest(
+            ), is(localNotFoundResponse()));
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path1")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(HttpStatusCode.BAD_GATEWAY_502.code())
-                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path2")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(HttpStatusCode.BAD_GATEWAY_502.code())
+                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase())));
     }
 
     @Test
@@ -379,73 +357,61 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path?parameterName=parameterValue"))
                     .withHeader("headerName", "headerValue")
                     .withCookie("cookieName", "cookieValue"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())));
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader("headerName", "headerValue")
-                .withHeader("cookie", "cookieName=cookieValue")
-                .withHeader("set-cookie", "cookieName=cookieValue")
-                .withCookie("cookieName", "cookieValue"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path?parameterName=parameterOtherValue"))
                     .withHeader("headerName", "headerValue")
                     .withCookie("cookieName", "cookieValue"),
                 getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader("headerName", "headerOtherValue")
+                .withHeader("headerName", "headerValue")
                 .withHeader("cookie", "cookieName=cookieValue")
                 .withHeader("set-cookie", "cookieName=cookieValue")
-                .withCookie("cookieName", "cookieValue"),
-            makeRequest(
+                .withCookie("cookieName", "cookieValue")));
+
+        // then
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path?parameterName=parameterValue"))
                     .withHeader("headerName", "headerOtherValue")
                     .withCookie("cookieName", "cookieValue"),
                 getHeadersToRemove()
-            )
-        );
-
-        // then
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader("headerName", "headerValue")
-                .withHeader("cookie", "cookieName=cookieOtherValue")
-                .withHeader("set-cookie", "cookieName=cookieOtherValue")
-                .withCookie("cookieName", "cookieOtherValue"),
-            makeRequest(
+                .withHeader("headerName", "headerOtherValue")
+                .withHeader("cookie", "cookieName=cookieValue")
+                .withHeader("set-cookie", "cookieName=cookieValue")
+                .withCookie("cookieName", "cookieValue")));
+
+        // then
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path?parameterName=parameterValue"))
                     .withHeader("headerName", "headerValue")
                     .withCookie("cookieName", "cookieOtherValue")
                 ,
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader("headerName", "headerValue")
+                .withHeader("cookie", "cookieName=cookieOtherValue")
+                .withHeader("set-cookie", "cookieName=cookieOtherValue")
+                .withCookie("cookieName", "cookieOtherValue")));
     }
 
     @Test
@@ -464,31 +430,25 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_response_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath(calculatePath("some_path")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(exact("some_random_body")),
-            makeRequest(
+                .withBody("some_response_body")));
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath(calculatePath("some_path"))
                     .withBody("some_random_body"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody(exact("some_random_body"))));
     }
 
     @Test
@@ -535,49 +495,40 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath("/test")
                     .withHeader("content-type", "application/vnd.api+json")
                     .withBody(json("{}")),
                 getHeadersToRemove()
-            )
-        );
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase()),
-            makeRequest(
+                .withReasonPhrase(OK_200.reasonPhrase())));
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath("/test")
                     .withHeader("content-type", "application/vnd.api+json; charset=utf8")
                     .withBody(json("{}")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())));
 
         // and - dot only matches a dot
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader("content-type", "application/vndXapi+json")
-                .withBody(json("{}", MediaType.parse("application/vndXapi+json"))),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("POST")
                     .withPath("/test")
                     .withHeader("content-type", "application/vndXapi+json")
                     .withBody(json("{}")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader("content-type", "application/vndXapi+json")
+                .withBody(json("{}", MediaType.parse("application/vndXapi+json")))));
     }
 
     @Test
@@ -608,16 +559,7 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(exact("some_other_body"))
-                .withHeader(header("set-cookie", "cookieName=cookieValue"))
-                .withHeader(header("headerName", "headerValue"))
-                .withHeader(header("cookie", "cookieName=cookieValue"))
-                .withCookies(cookie("cookieName", "cookieValue")),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withPath(calculatePath("some_path"))
@@ -629,8 +571,14 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
                     .withHeaders(header("headerName", "headerValue"))
                     .withCookies(cookie("cookieName", "cookieValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody(exact("some_other_body"))
+                .withHeader(header("set-cookie", "cookieName=cookieValue"))
+                .withHeader(header("headerName", "headerValue"))
+                .withHeader(header("cookie", "cookieName=cookieValue"))
+                .withCookies(cookie("cookieName", "cookieValue"))));
     }
 
     @Test
@@ -661,16 +609,7 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody(exact("some_body"))
-                .withHeader(header("set-cookie", "cookieName=cookieValue"))
-                .withHeader(header("headerName", "headerValue"))
-                .withHeader(header("cookie", "cookieName=cookieValue"))
-                .withCookies(cookie("cookieName", "cookieValue")),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withPath(calculatePath("some_other_path"))
@@ -682,8 +621,14 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
                     .withHeaders(header("headerName", "headerValue"))
                     .withCookies(cookie("cookieName", "cookieValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody(exact("some_body"))
+                .withHeader(header("set-cookie", "cookieName=cookieValue"))
+                .withHeader(header("headerName", "headerValue"))
+                .withHeader(header("cookie", "cookieName=cookieValue"))
+                .withCookies(cookie("cookieName", "cookieValue"))));
     }
 
     @Test
@@ -703,32 +648,26 @@ public class PortForwardingMockingIntegrationTest extends AbstractBasicMockingSa
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(header("headerName", "headerValue")),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withHeaders(header("headerName", "headerValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(header("headerName", "headerValue"))));
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(ACCEPTED_202.code())
-                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
-                .withBody("some_body"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withMethod("GET")
                     .withHeaders(header("otherHeaderName", "headerValue")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(ACCEPTED_202.code())
+                .withReasonPhrase(ACCEPTED_202.reasonPhrase())
+                .withBody("some_body")));
     }
 
 }

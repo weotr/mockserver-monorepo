@@ -60,9 +60,13 @@ import {
   removeGrpcChaos,
   clearGrpcChaos,
   summarizeGrpcChaosProfile,
-  type GrpcChaosProfileDTO,
   type GrpcChaosResponse,
 } from '../lib/grpcChaos';
+import {
+  buildGrpcChaosProfile,
+  EMPTY_GRPC_CHAOS_FORM,
+  type GrpcChaosFormState,
+} from '../lib/grpcChaosForm';
 
 interface ServiceChaosPanelProps {
   connectionParams: ConnectionParams;
@@ -80,6 +84,18 @@ interface FormState {
   seed: string;
   succeedFirst: string;
   failRequestCount: string;
+  retryAfter: string;
+  truncateBodyAtFraction: string;
+  malformedBody: boolean;
+  slowResponseChunkSize: string;
+  slowResponseChunkDelayMs: string;
+  quotaName: string;
+  quotaLimit: string;
+  quotaWindowMillis: string;
+  quotaErrorStatus: string;
+  degradationRampMillis: string;
+  outageAfterMillis: string;
+  outageDurationMillis: string;
   graphqlErrors: boolean;
   graphqlErrorMessage: string;
   graphqlErrorCode: string;
@@ -96,6 +112,18 @@ const EMPTY_FORM: FormState = {
   seed: '',
   succeedFirst: '',
   failRequestCount: '',
+  retryAfter: '',
+  truncateBodyAtFraction: '',
+  malformedBody: false,
+  slowResponseChunkSize: '',
+  slowResponseChunkDelayMs: '',
+  quotaName: '',
+  quotaLimit: '',
+  quotaWindowMillis: '',
+  quotaErrorStatus: '',
+  degradationRampMillis: '',
+  outageAfterMillis: '',
+  outageDurationMillis: '',
   graphqlErrors: false,
   graphqlErrorMessage: '',
   graphqlErrorCode: '',
@@ -119,6 +147,8 @@ function buildChaosProfile(form: FormState): HttpChaosProfileDTO {
     // only when a status is present (a stray probability would be a silent no-op).
     const errorProbability = num(form.errorProbability);
     if (errorProbability != null) profile.errorProbability = errorProbability;
+    // retryAfter is meaningful only with an error status (e.g. 429, 503)
+    if (form.retryAfter.trim()) profile.retryAfter = form.retryAfter.trim();
   }
   const dropProbability = num(form.dropProbability);
   if (dropProbability != null) profile.dropConnectionProbability = dropProbability;
@@ -130,6 +160,37 @@ function buildChaosProfile(form: FormState): HttpChaosProfileDTO {
   if (succeedFirst != null) profile.succeedFirst = succeedFirst;
   const failRequestCount = num(form.failRequestCount);
   if (failRequestCount != null) profile.failRequestCount = failRequestCount;
+  // Body corruption
+  const truncateBodyAtFraction = num(form.truncateBodyAtFraction);
+  if (truncateBodyAtFraction != null) profile.truncateBodyAtFraction = truncateBodyAtFraction;
+  if (form.malformedBody) profile.malformedBody = true;
+  // Slow (dribbled) response
+  const slowResponseChunkSize = num(form.slowResponseChunkSize);
+  if (slowResponseChunkSize != null) {
+    profile.slowResponseChunkSize = slowResponseChunkSize;
+    const slowResponseChunkDelayMs = num(form.slowResponseChunkDelayMs);
+    if (slowResponseChunkDelayMs != null) {
+      profile.slowResponseChunkDelay = { timeUnit: 'MILLISECONDS', value: slowResponseChunkDelayMs };
+    }
+  }
+  // Quota (rate limiting)
+  const quotaName = form.quotaName.trim();
+  if (quotaName) profile.quotaName = quotaName;
+  const quotaLimit = num(form.quotaLimit);
+  if (quotaLimit != null) profile.quotaLimit = quotaLimit;
+  const quotaWindowMillis = num(form.quotaWindowMillis);
+  if (quotaWindowMillis != null) profile.quotaWindowMillis = quotaWindowMillis;
+  const quotaErrorStatus = num(form.quotaErrorStatus);
+  if (quotaErrorStatus != null) profile.quotaErrorStatus = quotaErrorStatus;
+  // Degradation ramp
+  const degradationRampMillis = num(form.degradationRampMillis);
+  if (degradationRampMillis != null) profile.degradationRampMillis = degradationRampMillis;
+  // Outage window
+  const outageAfterMillis = num(form.outageAfterMillis);
+  if (outageAfterMillis != null) profile.outageAfterMillis = outageAfterMillis;
+  const outageDurationMillis = num(form.outageDurationMillis);
+  if (outageDurationMillis != null) profile.outageDurationMillis = outageDurationMillis;
+  // GraphQL error envelope
   if (form.graphqlErrors) {
     profile.graphqlErrors = true;
     if (form.graphqlErrorMessage.trim()) profile.graphqlErrorMessage = form.graphqlErrorMessage.trim();
@@ -149,6 +210,9 @@ function validateForm(form: FormState): string | null {
   if (num(form.errorProbability) != null && errorStatus == null) {
     return 'Error probability needs an error status (e.g. 503)';
   }
+  if (form.retryAfter.trim() && errorStatus == null) {
+    return 'Retry-After needs an error status (e.g. 429 or 503)';
+  }
   for (const [field, label] of [['errorProbability', 'Error probability'], ['dropProbability', 'Drop probability']] as const) {
     const value = num(form[field]);
     if (value != null && (value < 0 || value > 1)) return `${label} must be between 0 and 1`;
@@ -161,6 +225,47 @@ function validateForm(form: FormState): string | null {
   if (succeedFirst != null && (!Number.isInteger(succeedFirst) || succeedFirst < 0)) return 'Succeed first must be a whole number >= 0';
   const failRequestCount = num(form.failRequestCount);
   if (failRequestCount != null && (!Number.isInteger(failRequestCount) || failRequestCount < 1)) return 'Fail request count must be a whole number >= 1';
+  // Body corruption
+  const truncateBodyAtFraction = num(form.truncateBodyAtFraction);
+  if (truncateBodyAtFraction != null && (truncateBodyAtFraction < 0 || truncateBodyAtFraction > 1)) {
+    return 'Truncate body fraction must be between 0 and 1';
+  }
+  // Slow response
+  const slowResponseChunkSize = num(form.slowResponseChunkSize);
+  if (slowResponseChunkSize != null && (!Number.isInteger(slowResponseChunkSize) || slowResponseChunkSize < 1)) {
+    return 'Slow response chunk size must be a whole number >= 1';
+  }
+  const slowResponseChunkDelayMs = num(form.slowResponseChunkDelayMs);
+  if (slowResponseChunkDelayMs != null && slowResponseChunkDelayMs < 0) {
+    return 'Slow response chunk delay must be 0 or greater';
+  }
+  // Quota
+  const quotaLimit = num(form.quotaLimit);
+  if (quotaLimit != null && (!Number.isInteger(quotaLimit) || quotaLimit < 1)) {
+    return 'Quota limit must be a whole number >= 1';
+  }
+  const quotaWindowMillis = num(form.quotaWindowMillis);
+  if (quotaWindowMillis != null && (!Number.isInteger(quotaWindowMillis) || quotaWindowMillis < 1)) {
+    return 'Quota window must be a whole number of milliseconds >= 1';
+  }
+  const quotaErrorStatus = num(form.quotaErrorStatus);
+  if (quotaErrorStatus != null && (!Number.isInteger(quotaErrorStatus) || quotaErrorStatus < 100 || quotaErrorStatus > 599)) {
+    return 'Quota error status must be a whole number between 100 and 599';
+  }
+  // Degradation ramp
+  const degradationRampMillis = num(form.degradationRampMillis);
+  if (degradationRampMillis != null && (!Number.isInteger(degradationRampMillis) || degradationRampMillis < 1)) {
+    return 'Degradation ramp must be a whole number of milliseconds >= 1';
+  }
+  // Outage window
+  const outageAfterMillis = num(form.outageAfterMillis);
+  if (outageAfterMillis != null && (!Number.isInteger(outageAfterMillis) || outageAfterMillis < 0)) {
+    return 'Outage after must be a whole number of milliseconds >= 0';
+  }
+  const outageDurationMillis = num(form.outageDurationMillis);
+  if (outageDurationMillis != null && (!Number.isInteger(outageDurationMillis) || outageDurationMillis < 1)) {
+    return 'Outage duration must be a whole number of milliseconds >= 1';
+  }
   // GraphQL-semantic validation: if sub-fields are set, graphqlErrors must be on
   if ((form.graphqlErrorMessage.trim() || form.graphqlErrorCode.trim() || form.graphqlNullifyData) && !form.graphqlErrors) {
     // Only flag if the user actively set message/code — nullifyData defaults to true
@@ -169,7 +274,7 @@ function validateForm(form: FormState): string | null {
     }
   }
   if (summarizeChaosProfile(buildChaosProfile(form)).length === 0) {
-    return 'Set at least one fault (error status, drop, latency, or GraphQL error)';
+    return 'Set at least one fault (error status, drop, latency, body corruption, slow response, quota, or GraphQL error)';
   }
   return null;
 }
@@ -182,6 +287,18 @@ interface EditFormState {
   seed: string;
   succeedFirst: string;
   failRequestCount: string;
+  retryAfter: string;
+  truncateBodyAtFraction: string;
+  malformedBody: boolean;
+  slowResponseChunkSize: string;
+  slowResponseChunkDelayMs: string;
+  quotaName: string;
+  quotaLimit: string;
+  quotaWindowMillis: string;
+  quotaErrorStatus: string;
+  degradationRampMillis: string;
+  outageAfterMillis: string;
+  outageDurationMillis: string;
   graphqlErrors: boolean;
   graphqlErrorMessage: string;
   graphqlErrorCode: string;
@@ -255,94 +372,9 @@ const GRPC_STATUS_CODES = [
   'INTERNAL', 'UNAVAILABLE', 'DATA_LOSS', 'UNAUTHENTICATED',
 ] as const;
 
-export interface GrpcChaosFormState {
-  service: string;
-  errorStatusCode: string;
-  errorProbability: string;
-  errorMessage: string;
-  seed: string;
-  latencyMs: string;
-  succeedFirst: string;
-  failRequestCount: string;
-  quotaName: string;
-  quotaLimit: string;
-  quotaWindowMillis: string;
-  ttlMs: string;
-  omitGrpcStatus: boolean;
-  corruptGrpcStatus: boolean;
-  customTrailers: string;
-  abortAfterMessages: string;
-}
-
-export const EMPTY_GRPC_CHAOS_FORM: GrpcChaosFormState = {
-  service: '',
-  errorStatusCode: 'UNAVAILABLE',
-  errorProbability: '',
-  errorMessage: '',
-  seed: '',
-  latencyMs: '',
-  succeedFirst: '',
-  failRequestCount: '',
-  quotaName: '',
-  quotaLimit: '',
-  quotaWindowMillis: '',
-  ttlMs: '',
-  omitGrpcStatus: false,
-  corruptGrpcStatus: false,
-  customTrailers: '',
-  abortAfterMessages: '',
-};
-
-/** Parse "key=value" per line into a Record, ignoring blank/invalid lines. */
-function parseCustomTrailers(raw: string): Record<string, string> | undefined {
-  const lines = raw.split('\n').filter((l) => l.trim());
-  if (lines.length === 0) return undefined;
-  const result: Record<string, string> = {};
-  for (const line of lines) {
-    const eqIdx = line.indexOf('=');
-    if (eqIdx < 1) continue;
-    const key = line.slice(0, eqIdx).trim();
-    const value = line.slice(eqIdx + 1).trim();
-    if (key) result[key] = value;
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
-export function buildGrpcChaosProfile(form: GrpcChaosFormState): GrpcChaosProfileDTO {
-  const profile: GrpcChaosProfileDTO = {};
-  const errorProbability = num(form.errorProbability);
-  if (form.errorStatusCode) {
-    profile.errorStatusCode = form.errorStatusCode;
-    // gRPC fault injection only fires when errorProbability > 0; default to always-inject when
-    // a status code is chosen but no probability is given, so error-status-only is not a no-op.
-    profile.errorProbability = errorProbability ?? 1;
-  } else if (errorProbability != null) {
-    profile.errorProbability = errorProbability;
-  }
-  const errorMessage = form.errorMessage.trim();
-  if (errorMessage) profile.errorMessage = errorMessage;
-  const seed = num(form.seed);
-  if (seed != null) profile.seed = seed;
-  const latencyMs = num(form.latencyMs);
-  if (latencyMs != null) profile.latencyMs = latencyMs;
-  const succeedFirst = num(form.succeedFirst);
-  if (succeedFirst != null) profile.succeedFirst = succeedFirst;
-  const failRequestCount = num(form.failRequestCount);
-  if (failRequestCount != null) profile.failRequestCount = failRequestCount;
-  const quotaName = form.quotaName.trim();
-  if (quotaName) profile.quotaName = quotaName;
-  const quotaLimit = num(form.quotaLimit);
-  if (quotaLimit != null) profile.quotaLimit = quotaLimit;
-  const quotaWindowMillis = num(form.quotaWindowMillis);
-  if (quotaWindowMillis != null) profile.quotaWindowMillis = quotaWindowMillis;
-  if (form.omitGrpcStatus) profile.omitGrpcStatus = true;
-  if (form.corruptGrpcStatus) profile.corruptGrpcStatus = true;
-  const trailers = parseCustomTrailers(form.customTrailers);
-  if (trailers) profile.customTrailers = trailers;
-  const abortAfterMessages = num(form.abortAfterMessages);
-  if (abortAfterMessages != null) profile.abortAfterMessages = abortAfterMessages;
-  return profile;
-}
+// GrpcChaosFormState, EMPTY_GRPC_CHAOS_FORM, and buildGrpcChaosProfile live in
+// ../lib/grpcChaosForm.ts so this component file only exports React components
+// (satisfies react-refresh/only-export-components).
 
 function validateGrpcChaosForm(form: GrpcChaosFormState): string | null {
   if (form.service.trim() === '') return 'Service is required';
@@ -389,6 +421,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [editForm, setEditForm] = useState<EditFormState>({
     errorStatus: '', errorProbability: '', dropProbability: '', latencyMs: '',
     seed: '', succeedFirst: '', failRequestCount: '',
+    retryAfter: '', truncateBodyAtFraction: '', malformedBody: false,
+    slowResponseChunkSize: '', slowResponseChunkDelayMs: '',
+    quotaName: '', quotaLimit: '', quotaWindowMillis: '', quotaErrorStatus: '',
+    degradationRampMillis: '', outageAfterMillis: '', outageDurationMillis: '',
     graphqlErrors: false, graphqlErrorMessage: '', graphqlErrorCode: '', graphqlNullifyData: true,
   });
 
@@ -588,6 +624,18 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       seed: profile.seed != null ? String(profile.seed) : '',
       succeedFirst: profile.succeedFirst != null ? String(profile.succeedFirst) : '',
       failRequestCount: profile.failRequestCount != null ? String(profile.failRequestCount) : '',
+      retryAfter: profile.retryAfter ?? '',
+      truncateBodyAtFraction: profile.truncateBodyAtFraction != null ? String(profile.truncateBodyAtFraction) : '',
+      malformedBody: profile.malformedBody ?? false,
+      slowResponseChunkSize: profile.slowResponseChunkSize != null ? String(profile.slowResponseChunkSize) : '',
+      slowResponseChunkDelayMs: profile.slowResponseChunkDelay?.value != null ? String(profile.slowResponseChunkDelay.value) : '',
+      quotaName: profile.quotaName ?? '',
+      quotaLimit: profile.quotaLimit != null ? String(profile.quotaLimit) : '',
+      quotaWindowMillis: profile.quotaWindowMillis != null ? String(profile.quotaWindowMillis) : '',
+      quotaErrorStatus: profile.quotaErrorStatus != null ? String(profile.quotaErrorStatus) : '',
+      degradationRampMillis: profile.degradationRampMillis != null ? String(profile.degradationRampMillis) : '',
+      outageAfterMillis: profile.outageAfterMillis != null ? String(profile.outageAfterMillis) : '',
+      outageDurationMillis: profile.outageDurationMillis != null ? String(profile.outageDurationMillis) : '',
       graphqlErrors: profile.graphqlErrors ?? false,
       graphqlErrorMessage: profile.graphqlErrorMessage ?? '',
       graphqlErrorCode: profile.graphqlErrorCode ?? '',
@@ -608,6 +656,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       partial.errorStatus = errorStatus;
       const ep = num(editForm.errorProbability);
       if (ep != null) partial.errorProbability = ep;
+      if (editForm.retryAfter.trim()) partial.retryAfter = editForm.retryAfter.trim();
     }
     const dp = num(editForm.dropProbability);
     if (dp != null) partial.dropConnectionProbability = dp;
@@ -619,6 +668,37 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     if (succeedFirst != null) partial.succeedFirst = succeedFirst;
     const failRequestCount = num(editForm.failRequestCount);
     if (failRequestCount != null) partial.failRequestCount = failRequestCount;
+    // Body corruption
+    const truncateBodyAtFraction = num(editForm.truncateBodyAtFraction);
+    if (truncateBodyAtFraction != null) partial.truncateBodyAtFraction = truncateBodyAtFraction;
+    if (editForm.malformedBody) partial.malformedBody = true;
+    // Slow response
+    const slowResponseChunkSize = num(editForm.slowResponseChunkSize);
+    if (slowResponseChunkSize != null) {
+      partial.slowResponseChunkSize = slowResponseChunkSize;
+      const slowResponseChunkDelayMs = num(editForm.slowResponseChunkDelayMs);
+      if (slowResponseChunkDelayMs != null) {
+        partial.slowResponseChunkDelay = { timeUnit: 'MILLISECONDS', value: slowResponseChunkDelayMs };
+      }
+    }
+    // Quota
+    const quotaName = editForm.quotaName.trim();
+    if (quotaName) partial.quotaName = quotaName;
+    const quotaLimit = num(editForm.quotaLimit);
+    if (quotaLimit != null) partial.quotaLimit = quotaLimit;
+    const quotaWindowMillis = num(editForm.quotaWindowMillis);
+    if (quotaWindowMillis != null) partial.quotaWindowMillis = quotaWindowMillis;
+    const quotaErrorStatus = num(editForm.quotaErrorStatus);
+    if (quotaErrorStatus != null) partial.quotaErrorStatus = quotaErrorStatus;
+    // Degradation ramp
+    const degradationRampMillis = num(editForm.degradationRampMillis);
+    if (degradationRampMillis != null) partial.degradationRampMillis = degradationRampMillis;
+    // Outage window
+    const outageAfterMillis = num(editForm.outageAfterMillis);
+    if (outageAfterMillis != null) partial.outageAfterMillis = outageAfterMillis;
+    const outageDurationMillis = num(editForm.outageDurationMillis);
+    if (outageDurationMillis != null) partial.outageDurationMillis = outageDurationMillis;
+    // GraphQL
     if (editForm.graphqlErrors) {
       partial.graphqlErrors = true;
       if (editForm.graphqlErrorMessage.trim()) partial.graphqlErrorMessage = editForm.graphqlErrorMessage.trim();
@@ -796,19 +876,43 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
             {/* Register form */}
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
               <Typography variant="caption" color="text.secondary">Register chaos for a host</Typography>
+              {/* Row 1: host + core fault fields */}
               <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                 <TextField size="small" label="Host" placeholder="upstream.svc" value={form.host} onChange={setField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegister(); }} sx={{ minWidth: 180 }} />
                 <TextField size="small" label="Error status" placeholder="503" value={form.errorStatus} onChange={setField('errorStatus')} sx={{ width: 110 }} />
                 <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={form.errorProbability} onChange={setField('errorProbability')} sx={{ width: 100 }} />
+                <TextField size="small" label="Retry-After" placeholder="120" value={form.retryAfter} onChange={setField('retryAfter')} sx={{ width: 110 }} />
                 <TextField size="small" label="Drop prob (0–1)" placeholder="0.2" value={form.dropProbability} onChange={setField('dropProbability')} sx={{ width: 100 }} />
                 <TextField size="small" label="Latency ms" placeholder="250" value={form.latencyMs} onChange={setField('latencyMs')} sx={{ width: 100 }} />
                 <TextField size="small" label="TTL ms" placeholder="60000" value={form.ttlMs} onChange={setField('ttlMs')} sx={{ width: 110 }} />
               </Box>
+              {/* Row 2: body corruption + slow response */}
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField size="small" label="Truncate body (0–1)" placeholder="0.5" value={form.truncateBodyAtFraction} onChange={setField('truncateBodyAtFraction')} sx={{ width: 130 }} />
+                <FormControlLabel
+                  control={<Switch size="small" checked={form.malformedBody} onChange={setFormToggle('malformedBody')} />}
+                  label="Malformed body"
+                />
+                <TextField size="small" label="Slow chunk bytes" placeholder="64" value={form.slowResponseChunkSize} onChange={setField('slowResponseChunkSize')} sx={{ width: 120 }} />
+                <TextField size="small" label="Slow chunk delay ms" placeholder="500" value={form.slowResponseChunkDelayMs} onChange={setField('slowResponseChunkDelayMs')} sx={{ width: 140 }} />
+              </Box>
+              {/* Row 3: quota (rate limit) */}
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField size="small" label="Quota name" placeholder="api-quota" value={form.quotaName} onChange={setField('quotaName')} sx={{ width: 140 }} />
+                <TextField size="small" label="Quota limit" placeholder="100" value={form.quotaLimit} onChange={setField('quotaLimit')} sx={{ width: 100 }} />
+                <TextField size="small" label="Quota window ms" placeholder="60000" value={form.quotaWindowMillis} onChange={setField('quotaWindowMillis')} sx={{ width: 130 }} />
+                <TextField size="small" label="Quota error status" placeholder="429" value={form.quotaErrorStatus} onChange={setField('quotaErrorStatus')} sx={{ width: 130 }} />
+              </Box>
+              {/* Row 4: count/time windows + degradation + seed */}
               <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                 <TextField size="small" label="Seed" placeholder="42" value={form.seed} onChange={setField('seed')} sx={{ width: 90 }} />
                 <TextField size="small" label="Succeed first" placeholder="5" value={form.succeedFirst} onChange={setField('succeedFirst')} sx={{ width: 110 }} />
                 <TextField size="small" label="Fail count" placeholder="10" value={form.failRequestCount} onChange={setField('failRequestCount')} sx={{ width: 100 }} />
+                <TextField size="small" label="Outage after ms" placeholder="5000" value={form.outageAfterMillis} onChange={setField('outageAfterMillis')} sx={{ width: 120 }} />
+                <TextField size="small" label="Outage duration ms" placeholder="30000" value={form.outageDurationMillis} onChange={setField('outageDurationMillis')} sx={{ width: 140 }} />
+                <TextField size="small" label="Degradation ramp ms" placeholder="60000" value={form.degradationRampMillis} onChange={setField('degradationRampMillis')} sx={{ width: 150 }} />
               </Box>
+              {/* Row 5: GraphQL + register */}
               <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
                 <FormControlLabel
                   control={<Switch size="small" checked={form.graphqlErrors} onChange={setFormToggle('graphqlErrors')} />}
@@ -879,15 +983,41 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                       </Box>
                       {isEditing && (
                         <Box sx={{ py: 0.75, pl: 2, bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
+                          {/* Edit row 1: core fault fields */}
                           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                             <TextField size="small" label="Error status" value={editForm.errorStatus} onChange={setEditField('errorStatus')} sx={{ width: 110 }} />
                             <TextField size="small" label="Error prob (0–1)" value={editForm.errorProbability} onChange={setEditField('errorProbability')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Retry-After" value={editForm.retryAfter} onChange={setEditField('retryAfter')} sx={{ width: 110 }} />
                             <TextField size="small" label="Drop prob (0–1)" value={editForm.dropProbability} onChange={setEditField('dropProbability')} sx={{ width: 100 }} />
                             <TextField size="small" label="Latency ms" value={editForm.latencyMs} onChange={setEditField('latencyMs')} sx={{ width: 100 }} />
+                          </Box>
+                          {/* Edit row 2: body corruption + slow response */}
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <TextField size="small" label="Truncate body (0–1)" value={editForm.truncateBodyAtFraction} onChange={setEditField('truncateBodyAtFraction')} sx={{ width: 130 }} />
+                            <FormControlLabel
+                              control={<Switch size="small" checked={editForm.malformedBody} onChange={setEditToggle('malformedBody')} />}
+                              label="Malformed body"
+                            />
+                            <TextField size="small" label="Slow chunk bytes" value={editForm.slowResponseChunkSize} onChange={setEditField('slowResponseChunkSize')} sx={{ width: 120 }} />
+                            <TextField size="small" label="Slow chunk delay ms" value={editForm.slowResponseChunkDelayMs} onChange={setEditField('slowResponseChunkDelayMs')} sx={{ width: 140 }} />
+                          </Box>
+                          {/* Edit row 3: quota */}
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                            <TextField size="small" label="Quota name" value={editForm.quotaName} onChange={setEditField('quotaName')} sx={{ width: 140 }} />
+                            <TextField size="small" label="Quota limit" value={editForm.quotaLimit} onChange={setEditField('quotaLimit')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Quota window ms" value={editForm.quotaWindowMillis} onChange={setEditField('quotaWindowMillis')} sx={{ width: 130 }} />
+                            <TextField size="small" label="Quota error status" value={editForm.quotaErrorStatus} onChange={setEditField('quotaErrorStatus')} sx={{ width: 130 }} />
+                          </Box>
+                          {/* Edit row 4: count/time windows + degradation + seed */}
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                             <TextField size="small" label="Seed" value={editForm.seed} onChange={setEditField('seed')} sx={{ width: 90 }} />
                             <TextField size="small" label="Succeed first" value={editForm.succeedFirst} onChange={setEditField('succeedFirst')} sx={{ width: 110 }} />
                             <TextField size="small" label="Fail count" value={editForm.failRequestCount} onChange={setEditField('failRequestCount')} sx={{ width: 100 }} />
+                            <TextField size="small" label="Outage after ms" value={editForm.outageAfterMillis} onChange={setEditField('outageAfterMillis')} sx={{ width: 120 }} />
+                            <TextField size="small" label="Outage duration ms" value={editForm.outageDurationMillis} onChange={setEditField('outageDurationMillis')} sx={{ width: 140 }} />
+                            <TextField size="small" label="Degradation ramp ms" value={editForm.degradationRampMillis} onChange={setEditField('degradationRampMillis')} sx={{ width: 150 }} />
                           </Box>
+                          {/* Edit row 5: GraphQL + apply/cancel */}
                           <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
                             <FormControlLabel
                               control={<Switch size="small" checked={editForm.graphqlErrors} onChange={setEditToggle('graphqlErrors')} />}

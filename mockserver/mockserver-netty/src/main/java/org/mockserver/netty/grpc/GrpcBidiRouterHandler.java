@@ -20,6 +20,7 @@ import org.mockserver.model.GrpcBidiResponse;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.netty.HttpRequestHandler;
 import org.mockserver.netty.mcp.McpStreamableHttpHandler;
+import org.mockserver.netty.unification.AltSvcHeaderHandler;
 import org.mockserver.netty.unification.TraceContextHandler;
 import org.mockserver.netty.websocketregistry.CallbackWebSocketServerHandler;
 import org.mockserver.uuid.UUIDService;
@@ -61,6 +62,7 @@ public class GrpcBidiRouterHandler extends ChannelInboundHandlerAdapter {
     private final DashboardWebSocketHandler dashboardWebSocketHandler;
     private final McpStreamableHttpHandler mcpStreamableHttpHandler;
     private final TraceContextHandler traceContextHandler;
+    private final AltSvcHeaderHandler altSvcHeaderHandler;
     private final GrpcToHttpResponseHandler grpcToHttpResponseHandler;
     private final GrpcToHttpRequestHandler grpcToHttpRequestHandler;
     private final HttpRequestHandler httpRequestHandler;
@@ -78,13 +80,14 @@ public class GrpcBidiRouterHandler extends ChannelInboundHandlerAdapter {
         DashboardWebSocketHandler dashboardWebSocketHandler,
         McpStreamableHttpHandler mcpStreamableHttpHandler,
         TraceContextHandler traceContextHandler,
+        AltSvcHeaderHandler altSvcHeaderHandler,
         GrpcToHttpResponseHandler grpcToHttpResponseHandler,
         GrpcToHttpRequestHandler grpcToHttpRequestHandler,
         HttpRequestHandler httpRequestHandler
     ) {
         this(configuration, descriptorStore, mockServerLogger, sslEnabled, clientCertificates,
             callbackWebSocketServerHandler, dashboardWebSocketHandler, mcpStreamableHttpHandler,
-            traceContextHandler, grpcToHttpResponseHandler, grpcToHttpRequestHandler,
+            traceContextHandler, altSvcHeaderHandler, grpcToHttpResponseHandler, grpcToHttpRequestHandler,
             httpRequestHandler, null);
     }
 
@@ -98,6 +101,7 @@ public class GrpcBidiRouterHandler extends ChannelInboundHandlerAdapter {
         DashboardWebSocketHandler dashboardWebSocketHandler,
         McpStreamableHttpHandler mcpStreamableHttpHandler,
         TraceContextHandler traceContextHandler,
+        AltSvcHeaderHandler altSvcHeaderHandler,
         GrpcToHttpResponseHandler grpcToHttpResponseHandler,
         GrpcToHttpRequestHandler grpcToHttpRequestHandler,
         HttpRequestHandler httpRequestHandler,
@@ -113,6 +117,7 @@ public class GrpcBidiRouterHandler extends ChannelInboundHandlerAdapter {
         this.dashboardWebSocketHandler = dashboardWebSocketHandler;
         this.mcpStreamableHttpHandler = mcpStreamableHttpHandler;
         this.traceContextHandler = traceContextHandler;
+        this.altSvcHeaderHandler = altSvcHeaderHandler;
         this.grpcToHttpResponseHandler = grpcToHttpResponseHandler;
         this.grpcToHttpRequestHandler = grpcToHttpRequestHandler;
         this.httpRequestHandler = httpRequestHandler;
@@ -199,6 +204,7 @@ public class GrpcBidiRouterHandler extends ChannelInboundHandlerAdapter {
             dashboardWebSocketHandler,
             mcpStreamableHttpHandler,
             traceContextHandler,
+            altSvcHeaderHandler,
             grpcToHttpResponseHandler,
             grpcToHttpRequestHandler,
             httpRequestHandler

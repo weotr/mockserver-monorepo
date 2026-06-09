@@ -6,4 +6,5 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -i node:22 \
   -w /build/mockserver-ui \
+  --cache npm \
   -- bash -c 'npm ci && npm test'

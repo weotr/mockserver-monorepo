@@ -78,3 +78,26 @@ function logTestResult() {
     printPlainPassMessage "  - ${TEST_CASE}" >>${PASS_LOG_FILE} 2>&1
   fi
 }
+
+# Non-blocking variant: records pass to PASS_LOG but failure to WARN_LOG
+# instead of FAIL_LOG. Does NOT set EXIT_CODE — the check is advisory.
+function logTestResultNonBlocking() {
+  local exit_code="${1}"
+  local test_case="${2}"
+  if [[ "${exit_code}" != "0" ]]; then
+    printMessageWithColourAndBorders >&2 "Warning (non-blocking): ${test_case}" "\e[0;33m"
+    printMessageWithColour >&2 "  - ${test_case}" "\e[0;33m" >>"${WARN_LOG_FILE}" 2>&1
+  else
+    printPassMessage "Passed: ${test_case}"
+    printPlainPassMessage "  - ${test_case}" >>"${PASS_LOG_FILE}" 2>&1
+  fi
+}
+
+# Skip: records the test as skipped in the SKIP_LOG without recording
+# a pass or a failure. Mirrors the variant-skip pattern.
+function logTestSkip() {
+  local test_case="${1}"
+  local reason="${2:-skipped}"
+  printMessageWithColourAndBorders >&2 "Skipped: ${test_case} (${reason})" "\e[0;36m"
+  printMessageWithColour >&2 "  - ${test_case}: ${reason}" "\e[0;36m" >>"${SKIP_LOG_FILE}" 2>&1
+}

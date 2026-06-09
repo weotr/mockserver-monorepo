@@ -3,8 +3,8 @@ title: AsyncAPI Broker Mocking
 description: Mock Kafka and MQTT brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, validate against JSON Schema, all via REST or Java API.
 shortTitle: AsyncAPI Messaging
 layout: page
-pageOrder: 11.5
-section: 'Mock Server'
+pageOrder: 2
+section: 'Protocols & Advanced'
 subsection: true
 sitemap:
   priority: 0.7
@@ -78,6 +78,8 @@ sitemap:
         <tr><td><span class="inline_code">publishOnLoad</span></td><td>boolean</td><td>true</td><td>Publish example messages immediately when spec is loaded</td></tr>
         <tr><td><span class="inline_code">publishIntervalMillis</span></td><td>long</td><td>0 (disabled)</td><td>Publish examples periodically at this interval</td></tr>
         <tr><td><span class="inline_code">consume</span></td><td>boolean</td><td>false</td><td>Subscribe to channels and record incoming messages</td></tr>
+        <tr><td><span class="inline_code">kafkaSecurity</span></td><td>object</td><td>null</td><td>Security settings applied to Kafka broker connections: <span class="inline_code">securityProtocol</span>, <span class="inline_code">saslMechanism</span>, <span class="inline_code">saslJaasConfig</span>, and SSL truststore/keystore location and password</td></tr>
+        <tr><td><span class="inline_code">mqttSecurity</span></td><td>object</td><td>null</td><td>Security settings applied to MQTT broker connections: <span class="inline_code">username</span>, <span class="inline_code">password</span>, and an <span class="inline_code">sslProperties</span> map for TLS</td></tr>
     </tbody>
 </table>
 
@@ -340,12 +342,20 @@ client.verifyAsyncMessage("{\"channel\":\"orders\", \"payloadJsonPath\":\"user.n
 
 <a id="asyncapi_deferred" class="anchor" href="#asyncapi_deferred">&nbsp;</a>
 
+<p>The AsyncAPI broker state is now visible in the MockServer dashboard's AsyncAPI (<strong>Async</strong>) view, reachable from the dashboard's top toolbar. It shows the loaded spec's channels, a publisher/subscriber summary, and messages recorded from broker subscriptions.</p>
+
 <h2>Not yet supported</h2>
 
 <ul>
-    <li><strong>Dashboard UI</strong> &mdash; async messaging state is not yet visible in the MockServer dashboard</li>
     <li><strong>Advanced AsyncAPI bindings</strong> &mdash; channel-specific binding configurations (e.g. Kafka partition assignment, MQTT retain flag) are not parsed or applied</li>
-    <li><strong>Security schemes</strong> &mdash; AsyncAPI security scheme definitions (SASL, TLS client certs) are not applied to broker connections; configure broker security via standard client properties</li>
-    <li><strong>Correlation IDs</strong> &mdash; AsyncAPI correlation ID definitions are not tracked</li>
-    <li><strong>Multi-message channels</strong> &mdash; only the first message definition per channel is used</li>
+    <li><strong>Security schemes</strong> &mdash; security scheme definitions declared in the AsyncAPI spec document are not auto-applied to broker connections. Broker security itself <em>is</em> supported: configure it explicitly via the <span class="inline_code">kafkaSecurity</span> and <span class="inline_code">mqttSecurity</span> broker-configuration options above (SASL, TLS truststore/keystore, username/password)</li>
+</ul>
+
+<a id="asyncapi_also_supported" class="anchor" href="#asyncapi_also_supported">&nbsp;</a>
+
+<h2>Also supported</h2>
+
+<ul>
+    <li><strong>Multi-message channels</strong> &mdash; <em>all</em> message definitions in a channel are published, not just the first. AsyncAPI 3.x channels with multiple <span class="inline_code">messages</span> and AsyncAPI 2.x <span class="inline_code">oneOf</span> message variants each result in one publish call per message.</li>
+    <li><strong>Correlation IDs</strong> &mdash; AsyncAPI <span class="inline_code">correlationId</span> definitions (inline or via <span class="inline_code">$ref</span> to <span class="inline_code">#/components/correlationIds/&lt;name&gt;</span>) are parsed. At publish time MockServer generates a unique correlation ID and injects it at the message's <span class="inline_code">location</span> &mdash; either as a message header (<span class="inline_code">$message.header#/&hellip;</span>) or into the payload at the given JSON Pointer (<span class="inline_code">$message.payload#/&hellip;</span>). Note: header-location correlation IDs are delivered over Kafka headers but not over MQTT (which has no per-message headers); payload-location correlation IDs are injected for both brokers.</li>
 </ul>

@@ -1,2 +1,4 @@
 Contact: mailto:jamesdbloom+mockserver@gmail.com
 Contact: https://twitter.com/jamesdbloom
+Expires: 2027-06-04T00:00:00.000Z
+Canonical: https://www.mock-server.com/.well-known/security.txt

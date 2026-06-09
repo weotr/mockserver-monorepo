@@ -2,8 +2,8 @@
 title: Creating Expectations
 description: Define request matchers and response actions in MockServer using the Java, JavaScript, Python, or Ruby client, REST API, or JSON files.
 layout: page
-pageOrder: 2
-section: 'Mock Server'
+pageOrder: 1
+section: 'Creating Mocks'
 subsection: true
 sitemap:
   priority: 0.8
@@ -12,3 +12,16 @@ sitemap:
 ---
 
 {% include_subpage _includes/creating_expectations.html %}
+
+<a id="next_steps" class="anchor" href="#next_steps">&nbsp;</a>
+
+<h2>Next Steps</h2>
+
+<ul>
+    <li><a href="/mock_server/verification.html">Verify Requests</a> &mdash; assert that your code under test sent the requests you expected, with the right headers, body, and call count</li>
+    <li><a href="/mock_server/troubleshooting_matching.html">Troubleshoot Matching</a> &mdash; work out why a request did not match the expectation you configured</li>
+    <li><a href="/mock_server/response_templates.html">Response Templates</a> &mdash; build dynamic responses from the incoming request using Velocity, Mustache, or JavaScript templates</li>
+    <li><a href="/mock_server/before_and_after_actions.html">Before &amp; After Actions</a> &mdash; fire extra HTTP webhooks or callbacks before or after an expectation's response to mirror, shadow, fan-out, or gate live traffic</li>
+    <li><a href="/mock_server/clearing_and_resetting.html">Clearing &amp; Resetting</a> &mdash; remove expectations and recorded requests between tests to keep state isolated</li>
+    <li><a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> &mdash; save and reload expectations so they survive restarts</li>
+</ul>

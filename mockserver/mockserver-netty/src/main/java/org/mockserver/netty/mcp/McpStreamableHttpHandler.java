@@ -1,10 +1,5 @@
 package org.mockserver.netty.mcp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -19,12 +14,9 @@ import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mappers.JDKCertificateToMockServerX509Certificate;
-import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.HttpState;
 import org.mockserver.model.HttpRequest;
-import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.socket.tls.SniHandler;
-import org.mockserver.version.Version;
 import org.slf4j.event.Level;
 
 import java.nio.charset.StandardCharsets;
@@ -34,56 +26,33 @@ import java.util.concurrent.RejectedExecutionException;
 
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
 
+/**
+ * Netty channel handler that intercepts MCP (Model Context Protocol) requests
+ * on the TCP (HTTP/1.1 and HTTP/2) path.
+ * <p>
+ * All MCP protocol logic (JSON-RPC parsing, session management, tool/resource
+ * dispatch) is delegated to the transport-neutral {@link McpRequestProcessor}.
+ * This handler is responsible only for the Netty HTTP/1.1 framing: reading
+ * {@link FullHttpRequest}, writing {@link FullHttpResponse}, CORS, and
+ * control-plane authentication.
+ */
 @ChannelHandler.Sharable
 public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
 
-    private static final String MCP_PATH = "/mockserver/mcp";
     // Per-request CORS context, captured at request entry so responses written
     // deeper in the handler can echo the requesting origin / requested headers.
     private static final AttributeKey<String> CORS_ORIGIN = AttributeKey.valueOf("mockserver.mcp.cors.origin");
     private static final AttributeKey<String> CORS_REQUEST_HEADERS = AttributeKey.valueOf("mockserver.mcp.cors.requestHeaders");
-    private static final String PROTOCOL_VERSION = "2025-03-26";
-    private static final String SERVER_NAME = "MockServer";
-    private static final String SERVER_VERSION = Version.getVersion();
-
-    /**
-     * Sent in the 'initialize' result so an AI agent knows, up front, which MockServer tools to reach for.
-     * The MCP spec defines this 'instructions' field as guidance the client may pass to the language model.
-     */
-    private static final String SERVER_INSTRUCTIONS =
-        "MockServer is an HTTP(S) mock server and proxy for testing. Use these tools to mock APIs, " +
-            "debug failing requests, and verify implementations:\n" +
-            "- Mock APIs: 'create_expectation', 'create_expectation_from_openapi', and " +
-            "'create_expectations_from_recorded_traffic' (turn traffic already recorded via the proxy into mocks).\n" +
-            "- Debug a request that did not match: call 'explain_unmatched_requests' after a failed test run to see, " +
-            "for each request that hit the server, the closest expectations ranked by similarity with field-level " +
-            "diffs and a remediation hint — no need to reconstruct the request. 'debug_request_mismatch' does the " +
-            "same for a request you supply.\n" +
-            "- Verify an implementation: 'verify_request' / 'verify_request_sequence' check requests were made; " +
-            "'verify_traffic_against_openapi' checks recorded traffic conforms to an OpenAPI contract; " +
-            "'run_contract_test' sends spec-derived example requests to a running service and checks the responses; " +
-            "'run_resiliency_test' sends malformed and boundary-case requests and reports which inputs the service " +
-            "failed to handle gracefully.\n" +
-            "- Deterministic LLM testing: 'record_llm_fixtures' snapshots LLM/MCP traffic recorded through the proxy " +
-            "into a committable, secret-free fixture file; 'load_expectations_from_file' replays it.\n" +
-            "Readable resources expose live state: mockserver://expectations, mockserver://requests, " +
-            "mockserver://logs, mockserver://unmatched, mockserver://configuration.";
 
     private final HttpState httpState;
-    private final LifeCycle server;
     private final McpSessionManager sessionManager;
-    private final McpToolRegistry toolRegistry;
-    private final McpResourceRegistry resourceRegistry;
-    private final ObjectMapper objectMapper;
+    private final McpRequestProcessor processor;
     private final MockServerLogger mockServerLogger;
 
     public McpStreamableHttpHandler(HttpState httpState, LifeCycle server, McpSessionManager sessionManager) {
         this.httpState = httpState;
-        this.server = server;
         this.sessionManager = sessionManager;
-        this.toolRegistry = new McpToolRegistry(httpState, server);
-        this.resourceRegistry = new McpResourceRegistry(httpState);
-        this.objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
+        this.processor = new McpRequestProcessor(httpState, server, sessionManager);
         this.mockServerLogger = httpState.getMockServerLogger();
     }
 
@@ -94,7 +63,7 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest request = (FullHttpRequest) msg;
                 String uri = request.uri();
-                if (uri.equals(MCP_PATH) || uri.startsWith(MCP_PATH + "?") || uri.startsWith(MCP_PATH + "/")) {
+                if (McpRequestProcessor.isMcpPath(uri)) {
                     handleMcpRequest(ctx, request);
                     return;
                 }
@@ -134,24 +103,32 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
         ctx.channel().attr(CORS_REQUEST_HEADERS).set(request.headers().get(HttpHeaderNames.ACCESS_CONTROL_REQUEST_HEADERS));
         HttpMethod method = request.method();
         if (method.equals(HttpMethod.OPTIONS) && origin != null && !origin.isEmpty()) {
-            // CORS preflight from a browser — answer with the allow headers (added by writeEmptyResponse).
-            writeEmptyResponse(ctx, HttpResponseStatus.OK);
+            // CORS preflight from a browser
+            McpRequestProcessor.McpResult result = processor.handleOptions(true);
+            writeMcpResult(ctx, result);
         } else if (method.equals(HttpMethod.POST)) {
             handlePost(ctx, request);
         } else if (method.equals(HttpMethod.GET)) {
-            handleGet(ctx, request);
+            if (!authenticateRequest(ctx, request)) {
+                return;
+            }
+            McpRequestProcessor.McpResult result = processor.handleGet();
+            writeMcpResult(ctx, result);
         } else if (method.equals(HttpMethod.DELETE)) {
-            handleDelete(ctx, request);
+            if (!authenticateRequest(ctx, request)) {
+                return;
+            }
+            String sessionId = request.headers().get("Mcp-Session-Id");
+            McpRequestProcessor.McpResult result = processor.handleDelete(sessionId);
+            writeMcpResult(ctx, result);
         } else {
-            writeJsonResponse(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Method not allowed"), null);
+            McpRequestProcessor.McpResult result = processor.handleOptions(false);
+            writeMcpResult(ctx, result);
         }
     }
 
     /**
      * Echo CORS headers onto an MCP response so the dashboard works cross-origin.
-     * Reflects the request Origin (captured per request) and advertises the
-     * standard allow-methods / allow-headers, mirroring the control-plane API.
      */
     private void addCorsHeaders(ChannelHandlerContext ctx, io.netty.handler.codec.http.HttpResponse response) {
         String origin = ctx.channel().attr(CORS_ORIGIN).get();
@@ -164,8 +141,6 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
         String allowHeaders = (requestedHeaders != null && !requestedHeaders.isEmpty())
             ? requestedHeaders : CORSHeaders.DEFAULT_ALLOW_HEADERS;
         response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_HEADERS, allowHeaders);
-        // Expose Mcp-Session-Id so a cross-origin dashboard can read the session id
-        // returned by initialize (browsers hide non-exposed response headers).
         response.headers().set(HttpHeaderNames.ACCESS_CONTROL_EXPOSE_HEADERS, "Mcp-Session-Id, " + CORSHeaders.DEFAULT_ALLOW_HEADERS);
         response.headers().set(HttpHeaderNames.ACCESS_CONTROL_MAX_AGE, "300");
     }
@@ -187,8 +162,7 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
                         .setClientCertificates(mockRequest, clientCertificates);
                 }
                 if (!authHandler.controlPlaneRequestAuthenticated(mockRequest)) {
-                    writeJsonResponse(ctx, HttpResponseStatus.UNAUTHORIZED,
-                        JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Unauthorized for control plane"), null);
+                    writeUnauthorized(ctx);
                     return false;
                 }
             } catch (AuthenticationException e) {
@@ -199,8 +173,7 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
                         .setArguments(e.getMessage())
                         .setThrowable(e)
                 );
-                writeJsonResponse(ctx, HttpResponseStatus.UNAUTHORIZED,
-                    JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Unauthorized for control plane"), null);
+                writeUnauthorized(ctx);
                 return false;
             }
         }
@@ -217,457 +190,58 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
         try {
             sessionManager.getExecutor().execute(() -> {
                 try {
-                    handlePostInternal(ctx, request);
+                    String body = request.content().toString(StandardCharsets.UTF_8);
+                    String mcpSessionId = request.headers().get("Mcp-Session-Id");
+                    McpRequestProcessor.McpResult result = processor.handlePost(body, mcpSessionId);
+                    writeMcpResult(ctx, result);
                 } finally {
                     request.release();
                 }
             });
         } catch (RejectedExecutionException e) {
             request.release();
-            writeJsonResponse(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INTERNAL_ERROR, "Server is busy, try again later"), null);
+            McpRequestProcessor.McpResult busy = new McpRequestProcessor.McpResult(503,
+                "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Server is busy, try again later\"},\"id\":null}".getBytes(StandardCharsets.UTF_8),
+                null);
+            writeMcpResult(ctx, busy);
         }
     }
 
-    private void handlePostInternal(ChannelHandlerContext ctx, FullHttpRequest request) {
-        String body = request.content().toString(StandardCharsets.UTF_8);
-        if (body.isEmpty()) {
-            writeJsonResponse(ctx, HttpResponseStatus.BAD_REQUEST,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Empty request body"), null);
-            return;
-        }
-
+    private void writeUnauthorized(ChannelHandlerContext ctx) {
+        byte[] body;
         try {
-            JsonNode jsonNode = objectMapper.readTree(body);
-
-            if (jsonNode.isArray()) {
-                handleBatchRequest(ctx, request, jsonNode);
-            } else if (jsonNode.isObject()) {
-                handleSingleRequest(ctx, request, jsonNode);
-            } else {
-                writeJsonResponse(ctx, HttpResponseStatus.BAD_REQUEST,
-                    JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Invalid JSON-RPC message"), null);
-            }
-        } catch (JsonProcessingException e) {
-            writeJsonResponse(ctx, HttpResponseStatus.BAD_REQUEST,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Parse error"), null);
+            body = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(
+                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Unauthorized for control plane"));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            body = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"Unauthorized for control plane\"},\"id\":null}".getBytes(StandardCharsets.UTF_8);
         }
+        McpRequestProcessor.McpResult result = new McpRequestProcessor.McpResult(401, body, null);
+        writeMcpResult(ctx, result);
     }
 
-    private boolean isSessionValid(FullHttpRequest httpRequest, String method) {
-        if ("initialize".equals(method)) {
-            return true;
-        }
-        String sessionId = httpRequest.headers().get("Mcp-Session-Id");
-        if (!sessionManager.isValidSession(sessionId)) {
-            return false;
-        }
-        if ("notifications/initialized".equals(method)) {
-            return true;
-        }
-        McpSession session = sessionManager.getSession(sessionId);
-        return session != null && session.isInitialized();
-    }
-
-    private void handleBatchRequest(ChannelHandlerContext ctx, FullHttpRequest request, JsonNode batchNode) {
-        if (batchNode.size() == 0) {
-            writeJsonResponse(ctx, HttpResponseStatus.BAD_REQUEST,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid Request: batch must not be empty"), null);
-            return;
-        }
-
-        ArrayNode responses = objectMapper.createArrayNode();
-        boolean allNotifications = true;
-
-        for (JsonNode element : batchNode) {
-            JsonRpcMessage.JsonRpcRequest rpcRequest = parseJsonRpcRequest(element);
-            if (rpcRequest == null) {
-                responses.add(objectMapper.valueToTree(
-                    JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid JSON-RPC request")));
-                allNotifications = false;
-                continue;
-            }
-
-            if ("initialize".equals(rpcRequest.getMethod())) {
-                responses.add(objectMapper.valueToTree(
-                    JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
-                        "The 'initialize' method must be sent as a single request, not inside a batch.")));
-                allNotifications = false;
-                continue;
-            }
-
-            if (rpcRequest.isNotification()) {
-                String sessionId = request.headers().get("Mcp-Session-Id");
-                boolean sessionValid = sessionId != null && sessionManager.isValidSession(sessionId);
-                if ("notifications/initialized".equals(rpcRequest.getMethod())) {
-                    if (sessionValid) {
-                        processNotification(rpcRequest, request);
-                    }
-                } else {
-                    if (sessionValid) {
-                        McpSession session = sessionManager.getSession(sessionId);
-                        if (session != null && session.isInitialized()) {
-                            processNotification(rpcRequest, request);
-                        }
-                    }
-                }
-            } else {
-                allNotifications = false;
-                if (!isSessionValid(request, rpcRequest.getMethod())) {
-                    responses.add(objectMapper.valueToTree(
-                        JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
-                            "Missing or invalid Mcp-Session-Id header. Call 'initialize' first.")));
-                    continue;
-                }
-                JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest, request);
-                responses.add(objectMapper.valueToTree(response));
-            }
-        }
-
-        if (allNotifications) {
-            writeEmptyResponse(ctx, HttpResponseStatus.ACCEPTED);
-        } else {
-            writeRawJsonResponse(ctx, HttpResponseStatus.OK, responses, null);
-        }
-    }
-
-    private void handleSingleRequest(ChannelHandlerContext ctx, FullHttpRequest request, JsonNode jsonNode) {
-        JsonRpcMessage.JsonRpcRequest rpcRequest = parseJsonRpcRequest(jsonNode);
-        if (rpcRequest == null) {
-            writeJsonResponse(ctx, HttpResponseStatus.BAD_REQUEST,
-                JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid JSON-RPC request"), null);
-            return;
-        }
-
-        if (rpcRequest.isNotification()) {
-            String sessionId = request.headers().get("Mcp-Session-Id");
-            if ("notifications/initialized".equals(rpcRequest.getMethod())) {
-                if (sessionId == null || !sessionManager.isValidSession(sessionId)) {
-                    writeEmptyResponse(ctx, HttpResponseStatus.BAD_REQUEST);
-                    return;
-                }
-            } else {
-                if (sessionId == null || !sessionManager.isValidSession(sessionId)) {
-                    writeEmptyResponse(ctx, HttpResponseStatus.BAD_REQUEST);
-                    return;
-                }
-                McpSession session = sessionManager.getSession(sessionId);
-                if (session == null || !session.isInitialized()) {
-                    writeEmptyResponse(ctx, HttpResponseStatus.BAD_REQUEST);
-                    return;
-                }
-            }
-            processNotification(rpcRequest, request);
-            writeEmptyResponse(ctx, HttpResponseStatus.ACCEPTED);
-            return;
-        }
-
-        if ("initialize".equals(rpcRequest.getMethod())) {
-            InitializeResult initResult = handleInitialize(rpcRequest);
-            writeJsonResponse(ctx, HttpResponseStatus.OK, initResult.response, initResult.sessionId);
-            return;
-        }
-
-        if (!isSessionValid(request, rpcRequest.getMethod())) {
-            writeJsonResponse(ctx, HttpResponseStatus.OK,
-                JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
-                    "Missing or invalid Mcp-Session-Id header. Call 'initialize' first."), null);
-            return;
-        }
-
-        JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest, request);
-        writeJsonResponse(ctx, HttpResponseStatus.OK, response, null);
-    }
-
-    private JsonRpcMessage.JsonRpcRequest parseJsonRpcRequest(JsonNode node) {
-        try {
-            JsonRpcMessage.JsonRpcRequest request = objectMapper.treeToValue(node, JsonRpcMessage.JsonRpcRequest.class);
-            if (request == null) {
-                return null;
-            }
-            request.setIdPresent(node.has("id"));
-            if (!"2.0".equals(request.getJsonrpc())) {
-                return null;
-            }
-            if (request.getMethod() == null || request.getMethod().isEmpty()) {
-                return null;
-            }
-            Object id = request.getId();
-            if (id != null && !(id instanceof String) && !(id instanceof Integer) && !(id instanceof Long)) {
-                return null;
-            }
-            return request;
-        } catch (JsonProcessingException e) {
-            return null;
-        }
-    }
-
-    private void processNotification(JsonRpcMessage.JsonRpcRequest rpcRequest, FullHttpRequest httpRequest) {
-        if ("notifications/initialized".equals(rpcRequest.getMethod())) {
-            String sessionId = httpRequest.headers().get("Mcp-Session-Id");
-            if (sessionId != null) {
-                McpSession session = sessionManager.getSession(sessionId);
-                if (session != null) {
-                    session.markInitialized();
-                }
-            }
-        }
-    }
-
-    private JsonRpcMessage.JsonRpcResponse processRequest(JsonRpcMessage.JsonRpcRequest rpcRequest, FullHttpRequest httpRequest) {
-        String method = rpcRequest.getMethod();
-        if (method == null) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST, "Missing method");
-        }
-
-        switch (method) {
-            case "initialize":
-                return handleInitialize(rpcRequest).response;
-            case "tools/list":
-                return handleToolsList(rpcRequest);
-            case "tools/call":
-                return handleToolsCall(rpcRequest);
-            case "resources/list":
-                return handleResourcesList(rpcRequest);
-            case "resources/read":
-                return handleResourcesRead(rpcRequest);
-            case "ping":
-                return handlePing(rpcRequest);
-            default:
-                return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.METHOD_NOT_FOUND,
-                    "Method not found: " + method);
-        }
-    }
-
-    private static class InitializeResult {
-        final JsonRpcMessage.JsonRpcResponse response;
-        final String sessionId;
-
-        InitializeResult(JsonRpcMessage.JsonRpcResponse response, String sessionId) {
-            this.response = response;
-            this.sessionId = sessionId;
-        }
-    }
-
-    private InitializeResult handleInitialize(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        McpSession session = sessionManager.createSession();
-        String sessionId = session.getSessionId();
-
-        ObjectNode result = objectMapper.createObjectNode();
-        result.put("protocolVersion", PROTOCOL_VERSION);
-
-        ObjectNode capabilities = result.putObject("capabilities");
-        ObjectNode toolsCap = capabilities.putObject("tools");
-        toolsCap.put("listChanged", false);
-        ObjectNode resourcesCap = capabilities.putObject("resources");
-        resourcesCap.put("subscribe", false);
-        resourcesCap.put("listChanged", false);
-
-        ObjectNode serverInfo = result.putObject("serverInfo");
-        serverInfo.put("name", SERVER_NAME);
-        serverInfo.put("version", SERVER_VERSION);
-
-        result.put("instructions", SERVER_INSTRUCTIONS);
-
-        return new InitializeResult(JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result), sessionId);
-    }
-
-    private JsonRpcMessage.JsonRpcResponse handleToolsList(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        ObjectNode result = objectMapper.createObjectNode();
-        ArrayNode toolsArray = result.putArray("tools");
-
-        for (McpToolRegistry.ToolDefinition tool : toolRegistry.getTools().values()) {
-            ObjectNode toolNode = objectMapper.createObjectNode();
-            toolNode.put("name", tool.getName());
-            toolNode.put("description", tool.getDescription());
-            toolNode.set("inputSchema", tool.getInputSchema());
-            toolsArray.add(toolNode);
-        }
-
-        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
-    }
-
-    private JsonRpcMessage.JsonRpcResponse handleToolsCall(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        JsonNode params = rpcRequest.getParams();
-        if (params == null) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
-        }
-
-        String toolName = params.path("name").asText(null);
-        if (toolName == null) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing tool name");
-        }
-
-        if (!toolRegistry.getTools().containsKey(toolName)) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.METHOD_NOT_FOUND,
-                "Unknown tool: " + toolName);
-        }
-
-        JsonNode arguments = params.path("arguments");
-        JsonNode toolResult = toolRegistry.callTool(toolName, arguments.isMissingNode() ? null : arguments);
-        Metrics.incrementMcpToolCall(toolName);
-
-        ObjectNode result = objectMapper.createObjectNode();
-        ArrayNode content = result.putArray("content");
-        ObjectNode textContent = objectMapper.createObjectNode();
-        textContent.put("type", "text");
-        try {
-            textContent.put("text", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(toolResult));
-        } catch (JsonProcessingException e) {
-            textContent.put("text", toolResult.toString());
-        }
-        content.add(textContent);
-
-        boolean isError = toolResult != null && toolResult.has("error") && toolResult.path("error").asBoolean(false);
-        result.put("isError", isError);
-
-        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
-    }
-
-    private JsonRpcMessage.JsonRpcResponse handleResourcesList(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        ObjectNode result = objectMapper.createObjectNode();
-        ArrayNode resourcesArray = result.putArray("resources");
-
-        for (McpResourceRegistry.ResourceDefinition resource : resourceRegistry.getResources().values()) {
-            ObjectNode resourceNode = objectMapper.createObjectNode();
-            resourceNode.put("uri", resource.getUri());
-            resourceNode.put("name", resource.getName());
-            resourceNode.put("description", resource.getDescription());
-            resourceNode.put("mimeType", resource.getMimeType());
-            resourcesArray.add(resourceNode);
-        }
-
-        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
-    }
-
-    private JsonRpcMessage.JsonRpcResponse handleResourcesRead(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        JsonNode params = rpcRequest.getParams();
-        if (params == null) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
-        }
-
-        String uri = params.path("uri").asText(null);
-        if (uri == null) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing resource URI");
-        }
-
-        if (!resourceRegistry.getResources().containsKey(uri)) {
-            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS,
-                "Unknown resource: " + uri);
-        }
-
-        McpResourceRegistry.ResourceDefinition resourceDef = resourceRegistry.getResources().get(uri);
-        JsonNode resourceContent = resourceRegistry.readResource(uri);
-
-        ObjectNode result = objectMapper.createObjectNode();
-        ArrayNode contents = result.putArray("contents");
-        ObjectNode contentEntry = objectMapper.createObjectNode();
-        contentEntry.put("uri", uri);
-        contentEntry.put("mimeType", resourceDef.getMimeType());
-
-        try {
-            contentEntry.put("text", objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resourceContent));
-        } catch (JsonProcessingException e) {
-            contentEntry.put("text", resourceContent.toString());
-        }
-
-        contents.add(contentEntry);
-
-        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
-    }
-
-    private JsonRpcMessage.JsonRpcResponse handlePing(JsonRpcMessage.JsonRpcRequest rpcRequest) {
-        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), objectMapper.createObjectNode());
-    }
-
-    private void handleGet(ChannelHandlerContext ctx, FullHttpRequest request) {
-        if (!authenticateRequest(ctx, request)) {
-            return;
-        }
-
-        writeEmptyResponse(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED);
-    }
-
-    private void handleDelete(ChannelHandlerContext ctx, FullHttpRequest request) {
-        if (!authenticateRequest(ctx, request)) {
-            return;
-        }
-
-        String sessionId = request.headers().get("Mcp-Session-Id");
-        if (sessionId == null || sessionManager.removeSession(sessionId) == null) {
-            writeEmptyResponse(ctx, HttpResponseStatus.NOT_FOUND);
-        } else {
-            writeEmptyResponse(ctx, HttpResponseStatus.OK);
-        }
-    }
-
-    private void writeJsonResponse(ChannelHandlerContext ctx, HttpResponseStatus status,
-                                   JsonRpcMessage.JsonRpcResponse rpcResponse, String sessionId) {
-        try {
-            byte[] jsonBytes = objectMapper.writeValueAsBytes(rpcResponse);
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                status,
-                Unpooled.wrappedBuffer(jsonBytes)
+    /**
+     * Translate a transport-neutral {@link McpRequestProcessor.McpResult} into a
+     * Netty HTTP/1.1 response and write it to the channel.
+     */
+    private void writeMcpResult(ChannelHandlerContext ctx, McpRequestProcessor.McpResult result) {
+        HttpResponseStatus status = HttpResponseStatus.valueOf(result.getStatusCode());
+        DefaultFullHttpResponse response;
+        if (result.hasBody()) {
+            response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, status,
+                Unpooled.wrappedBuffer(result.getBody())
             );
             response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-            HttpUtil.setContentLength(response, jsonBytes.length);
-            if (sessionId != null) {
-                response.headers().set("Mcp-Session-Id", sessionId);
-            }
-            addCorsHeaders(ctx, response);
-            ctx.writeAndFlush(response);
-        } catch (JsonProcessingException e) {
-            byte[] fallback = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal error\"},\"id\":null}".getBytes(StandardCharsets.UTF_8);
-            DefaultFullHttpResponse fallbackResponse = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                HttpResponseStatus.OK,
-                Unpooled.wrappedBuffer(fallback)
+            HttpUtil.setContentLength(response, result.getBody().length);
+        } else {
+            response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, status, Unpooled.EMPTY_BUFFER
             );
-            fallbackResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-            HttpUtil.setContentLength(fallbackResponse, fallback.length);
-            addCorsHeaders(ctx, fallbackResponse);
-            ctx.writeAndFlush(fallbackResponse);
+            HttpUtil.setContentLength(response, 0);
         }
-    }
-
-    private void writeRawJsonResponse(ChannelHandlerContext ctx, HttpResponseStatus status,
-                                      JsonNode jsonNode, String sessionId) {
-        try {
-            byte[] jsonBytes = objectMapper.writeValueAsBytes(jsonNode);
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                status,
-                Unpooled.wrappedBuffer(jsonBytes)
-            );
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-            HttpUtil.setContentLength(response, jsonBytes.length);
-            if (sessionId != null) {
-                response.headers().set("Mcp-Session-Id", sessionId);
-            }
-            addCorsHeaders(ctx, response);
-            ctx.writeAndFlush(response);
-        } catch (JsonProcessingException e) {
-            byte[] fallback = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal error\"},\"id\":null}".getBytes(StandardCharsets.UTF_8);
-            DefaultFullHttpResponse fallbackResponse = new DefaultFullHttpResponse(
-                HttpVersion.HTTP_1_1,
-                HttpResponseStatus.OK,
-                Unpooled.wrappedBuffer(fallback)
-            );
-            fallbackResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-            HttpUtil.setContentLength(fallbackResponse, fallback.length);
-            addCorsHeaders(ctx, fallbackResponse);
-            ctx.writeAndFlush(fallbackResponse);
+        if (result.getSessionId() != null) {
+            response.headers().set("Mcp-Session-Id", result.getSessionId());
         }
-    }
-
-    private void writeEmptyResponse(ChannelHandlerContext ctx, HttpResponseStatus status) {
-        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            status,
-            Unpooled.EMPTY_BUFFER
-        );
-        HttpUtil.setContentLength(response, 0);
         addCorsHeaders(ctx, response);
         ctx.writeAndFlush(response);
     }

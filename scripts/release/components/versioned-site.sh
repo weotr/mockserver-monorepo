@@ -57,6 +57,7 @@ tf() {
   # The provider assumes the website-account role; the backend stays on the
   # build-account creds materialised above.
   env_args+=(-e "TF_VAR_website_role_arn=${WEBSITE_ROLE_ARN:-}")
+  env_args+=(-e "TF_VAR_role_external_id=${ROLE_EXTERNAL_ID:-}")
   in_docker "$TERRAFORM_IMAGE" -w /build "${env_args[@]}" -- "$@"
 }
 
@@ -89,6 +90,7 @@ fi
 # through TF_VAR_website_role_arn (see the tf() helper).
 WEBSITE_ROLE_ARN=$(load_secret "mockserver-release/website-role" "role_arn") \
   || { log_error "Failed to load mockserver-release/website-role ARN from Secrets Manager"; exit 1; }
+ROLE_EXTERNAL_ID=$(load_secret "mockserver-release/website-role" "external_id" 2>/dev/null || true)
 
 # backend.tf hard-codes `profile = "mockserver-build"` for human use. The
 # container has no AWS profile configured (it uses env-var creds the

@@ -1,6 +1,14 @@
 # Pre-Commit Workflow
 
-When the user asks to commit changes, you MUST follow this workflow before creating the commit. Each step is mandatory unless explicitly skipped by the user.
+Run this workflow whenever a unit of work is complete — or when the user asks to
+commit — and you MUST complete it before creating the commit. Under the
+[[operating-model]] (DVRR), this gate chain (classify → validate → changelog →
+adversarial review with a PASS verdict, re-verifying after any fix → commit) is
+**the authority that replaces human pre-approval**: once every non-skipped step
+passes, commit and push autonomously without waiting to be asked. Each step is mandatory unless
+explicitly skipped by the user, and the chain is **fail-closed** — if any
+non-skipped step fails (tests red, review BLOCK, review subagent unavailable),
+do NOT commit; surface the failure and leave the work for inspection.
 
 ## Parallel Session Safety
 
@@ -21,7 +29,7 @@ Multiple opencode sessions may be running concurrently on the same repository. T
 4. **Re-read before editing.** Always re-read a file immediately before editing it. Another session may have modified it since you last read it.
 5. **Check for conflicts before committing.** Run `git status` right before `git commit`. If files you intend to commit show unexpected changes (modified by another session between your edit and the commit), stop and ask the user.
 6. **Never run `git add .` or `git add -A`.** Always stage files individually by explicit path. Blanket staging will pick up changes from other sessions.
-7. **Pull before push.** If the user asks to push, run `git pull --rebase` first. Another session may have pushed commits since your last check.
+7. **Pull before push.** Push happens autonomously once the gate chain passes (or when the user asks). Always run `git pull --rebase` first — another session may have pushed commits since your last check.
 8. **Lock-sensitive operations.** Terraform state is locked via DynamoDB. If `terraform plan` or `terraform apply` fails with a lock error, another session is running Terraform — do not retry, inform the user.
 9. **Branch awareness.** If working on a feature branch, verify you are on the correct branch before committing. Another session may have switched branches.
 
@@ -203,7 +211,8 @@ The `OPENCODE_SESSION_PID` environment variable tracks the parent shell PID to h
 
 ```mermaid
 flowchart TD
-    A["User asks to commit"] --> B{Only MY files?}
+    A["Unit of work complete
+    (or user asks to commit)"] --> B{Only MY files?}
     B -->|Yes| C["Classify files
     java/tf/bash/docs/docker/helm/config"]
     B -->|No / unsure| STOP["Stop — ask user"]

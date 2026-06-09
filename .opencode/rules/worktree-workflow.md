@@ -36,7 +36,7 @@ and watching IDE tool windows live remains the primary feedback loop.
 3. Agent runs tests           (verification gate 1)
 4. Agent runs lint/checkstyle (verification gate 2)
 5. Agent spawns review-final  (verification gate 3)
-6. Agent shows diff to user   (verification gate 4 — synchronous confirm)
+6. Agent shows diff summary    (verification gate 4 — summarise & proceed)
 7. flock + rebase + cleanup   (atomic merge to master)
 ```
 
@@ -122,12 +122,14 @@ Agent(
 )
 ```
 
-**Gate 4 — User approval.** Show the diff summary (`git diff
---stat origin/master...`, list of changed files, gate-1/2/3 results)
-to the user and ask for confirmation. Required even on PASS for all
-prior gates — the user is the final authority. For autonomous loops
-where there's no interactive user, fail closed and leave the worktree
-unmerged for review in the next interactive session.
+**Gate 4 — Summary & proceed.** Under the [[operating-model]] (DVRR),
+gates 1–3 (tests, lint, adversarial review PASS) are the authority to
+merge — they replace human pre-approval. Show the diff summary (`git
+diff --stat origin/master...`, list of changed files, gate-1/2/3
+results), then **proceed automatically** to the merge. A user can
+interject at any point to halt or amend. This gate is **fail-closed**:
+if any of gates 1–3 did not return a clean PASS, do NOT merge — leave
+the worktree unmerged for inspection.
 
 ### Step 7 — Atomic merge via flock
 
@@ -196,7 +198,7 @@ rm -f .tmp/active-worktree
 | Gate 1 (tests) fails | Worktree preserved; agent shows test failures; rebase blocked |
 | Gate 2 (lint) fails | Same — fix lint and re-run merge |
 | Gate 3 (review-final) returns BLOCK | Worktree preserved; agent shows review verdict; user decides |
-| Gate 4 (user disapproves) | Worktree preserved; user keeps the diff to iterate |
+| Gate 4 (a gate 1–3 not a clean PASS, or user interjects) | Worktree preserved; merge halted; user keeps the diff to iterate |
 | flock timeout | Worktree preserved; agent reports lock holder; retry later |
 | Rebase conflict | Worktree preserved; agent attempts resolution or hands back to user |
 
@@ -225,8 +227,8 @@ The first three remain good hygiene.
   merge.sh`. Today the agent inlines them; later they become reusable.
 - **Per-module test selection in Gate 1.** Currently runs core + touched
   modules. Could be smarter by parsing the dependency graph.
-- **Diff size cap on Gate 4.** For very large diffs the synchronous
-  user-approval step is awkward. Consider a "diff summary + risk score"
+- **Diff size cap on Gate 4.** For very large diffs the summary
+  presentation is awkward. Consider a "diff summary + risk score"
   presentation rather than raw diff dump.
 - **IntelliJ MCP visibility inside a worktree.** Currently lost.
   Possible future: have the agent open the worktree in a second IntelliJ

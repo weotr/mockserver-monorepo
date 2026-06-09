@@ -12,7 +12,7 @@
 
 MockServer is an open-source HTTP(S) mock server and proxy for testing, written in Java. It uses Netty as the HTTP server framework, Maven for builds, and is deployed as Docker containers, JARs, and WARs.
 
-**Tech stack:** Java 17+ (minimum supported), Netty 4.1, Jackson 2.14, Maven (multi-module), Node.js/TypeScript (UI + client), Python 3.9+ (client), Ruby 3.0+ (client), Docker, Helm, Jekyll (documentation site)
+**Tech stack:** Java 17+ (minimum supported), Netty 4.2, Jackson 2.22, Maven (multi-module), Node.js/TypeScript (UI + client), Python 3.9+ (client), Ruby 3.0+ (client), Docker, Helm, Jekyll (documentation site)
 **CI/CD:** Buildkite (primary CI), GitHub Actions (Docker image builds, CodeQL)
 **Infrastructure:** AWS (Buildkite build agents, documentation site hosting), Docker Hub (container images)
 **Repository:** GitHub (github.com)
@@ -42,15 +42,22 @@ Comprehensive internal documentation is maintained in `docs/`. **Always consult 
 | [docs/code/domain-model.md](docs/code/domain-model.md) | Before modifying domain model, matchers, codecs, or configuration |
 | [docs/code/tls-and-security.md](docs/code/tls-and-security.md) | Before modifying TLS, mTLS, certificates, or authentication |
 | [docs/code/client-and-integrations.md](docs/code/client-and-integrations.md) | Before modifying client library, JUnit rules, or Spring integration |
+| [docs/code/breakpoints.md](docs/code/breakpoints.md) | Before modifying request breakpoints, BreakpointRegistry, PausedExchange, or the /breakpoint endpoints |
 | [docs/code/drift-detection.md](docs/code/drift-detection.md) | Before modifying mock drift detection, DriftAnalyzer, DriftStore, or the /drift endpoint |
 | [docs/code/wasm-rules.md](docs/code/wasm-rules.md) | Before modifying WASM custom rule engine, chicory integration, or WASM REST endpoints |
 | [docs/code/telemetry.md](docs/code/telemetry.md) | Before modifying OpenTelemetry integration, OTLP export, GenAI spans, or W3C trace context propagation |
 | [docs/code/async-messaging.md](docs/code/async-messaging.md) | Before modifying the AsyncAPI broker mocking module, AsyncApiParser, MessagePublisher adapters, or AsyncApiMockOrchestrator |
 | [docs/code/http3.md](docs/code/http3.md) | Before modifying experimental HTTP/3 (QUIC) support, Http3Server, or QUIC native dependencies |
+| [docs/code/clustered-state.md](docs/code/clustered-state.md) | Before modifying the StateBackend SPI, InMemoryStateBackend, InfinispanStateBackend, cross-node invalidation, or cluster configuration properties |
+| [docs/code/llm-mocking.md](docs/code/llm-mocking.md) | Before modifying the LLM response builder, provider codecs, streaming physics, conversation matchers, isolation, MCP tools, or LLM dashboard |
+| [docs/code/metrics.md](docs/code/metrics.md) | Before modifying Prometheus metrics, memory monitoring, or CSV metric export |
+| [docs/code/cli.md](docs/code/cli.md) | Before modifying the command-line interface or `org.mockserver.cli.Main` |
+| [docs/code/configuration-reference.md](docs/code/configuration-reference.md) | Before adding a configuration property or changing property resolution order or the equivalent property forms |
 | [docs/operations/build-system.md](docs/operations/build-system.md) | Before changing Maven config, plugins, or build scripts |
 | [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md) | Before modifying Buildkite or GitHub Actions pipelines |
 | [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) | Before investigating AWS, Terraform, or Buildkite agent issues |
 | [docs/infrastructure/docker.md](docs/infrastructure/docker.md) | Before modifying Dockerfiles, images, or Compose configs |
+| [docs/infrastructure/service-mesh.md](docs/infrastructure/service-mesh.md) | Before modifying transparent HTTP interception or Kubernetes sidecar deployment |
 | [docs/infrastructure/aws-ses-email-forwarding.md](docs/infrastructure/aws-ses-email-forwarding.md) | Before modifying SES email forwarding, DNS mail records, or the Lambda forwarder |
 | [docs/infrastructure/helm.md](docs/infrastructure/helm.md) | Before modifying Helm charts or Kubernetes deployment |
 | [docs/operations/website.md](docs/operations/website.md) | Before modifying the Jekyll documentation site |
@@ -95,6 +102,19 @@ To investigate or manage AWS infrastructure:
 4. **Corporate TLS proxy**: if behind a TLS inspection proxy, set `AWS_CA_BUNDLE` to a **combined bundle** containing both the system root CAs AND your corporate root CA. Pointing it at the corporate root alone (e.g. `tesco_root_ca.pem`) is **not enough** — AWS endpoints whose certificates don't chain through the corporate proxy (e.g. SNS in us-east-1) will fail TLS validation and the AWS SDK / Terraform's AWS provider will retry silently, appearing to hang. Typical fix: build a combined `ca-bundle-with-tesco.pem` (system roots + corporate CA), then `export AWS_CA_BUNDLE=/path/to/ca-bundle-with-tesco.pem` (the same file commonly used for `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE`).
 5. **macOS + Python 3.14 + Homebrew**: if you get `pyexpat` symbol errors, set `export DYLD_LIBRARY_PATH=/opt/homebrew/opt/expat/lib`
 
+### Reading Buildkite Builds and Logs
+
+**To read a Buildkite build log, use the local `bk` CLI — NOT the API tokens in Secrets Manager.** The tokens at `mockserver-build/buildkite-api-token` (write) and `-readonly` work for build **state**, **triggering**, and **retrying** jobs, but they intentionally lack the `read_build_logs` scope, so fetching `/jobs/<id>/log` with them returns `"doesn't have the read_build_logs scope"`. The developer's locally-authenticated `bk` CLI (`~/.config/bk.yaml`) has full scope.
+
+```bash
+# Job log (bk api prepends the org path — pass a RELATIVE endpoint):
+bk api "pipelines/mockserver-release/builds/<N>/jobs/<JOB_ID>/log" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('content',''))" \
+  | sed 's/\x1b\[[0-9;]*m//g; s/_bk;t=[0-9]*//g; s/\r//g'
+```
+
+Use the API token (via `aws secretsmanager get-secret-value` + `curl`) only for build state, creating builds, and retrying jobs. Driving the Buildkite UI through the `chrome-devtools` MCP does **not** work for logs: that automation browser is a separate, logged-out profile from the developer's own browser. See [docs/infrastructure/ci-cd.md](docs/infrastructure/ci-cd.md).
+
 ### Buildkite Agent Infrastructure
 
 Build agents run on EC2 instances in AutoScaling Groups, managed by Lambda-based autoscalers. Infrastructure is managed by Terraform in `terraform/buildkite-agents/`. See [docs/infrastructure/aws-infrastructure.md](docs/infrastructure/aws-infrastructure.md) for full details.
@@ -118,12 +138,44 @@ Capacity, instance types, and agents-per-instance are defined in `terraform/buil
 
 **NEVER** change `min_size` to a non-zero value. Pre-created agents are expensive and unnecessary. The Lambda autoscaler handles all scaling based on real-time demand.
 
+## Agent Operating Model
+
+The default way of working for every non-trivial task is the **Decompose ·
+Verify · Review · Reintegrate (DVRR)** model: autonomous, parallel-first.
+**Decompose** work into the smallest independent units, **delegate** them to
+subagents and run them in parallel, **verify** each as fully as can be done
+safely, subject each to **adversarial review until no major findings remain**,
+**re-verify** after any review-driven change, then **commit each unit separately
+and reintegrate it onto `master`**.
+
+- **The gate chain is the authority to ship, not a human prompt.** Once a unit
+  passes the full chain (classify → validate → changelog → adversarial review
+  with a PASS verdict → re-verify), commit and push autonomously. Gates are **mandatory and
+  fail-closed** — if any gate cannot run or does not return a clean PASS, do not
+  commit; surface the failure and leave the work for inspection.
+- **Scale the ceremony to the task** — full DVRR for substantial/risky work; a
+  lightweight path (inline edit + one adversarial review + targeted verify) for
+  small changes; a direct edit for trivial ones. Don't manufacture ceremony that
+  adds no safety.
+- **Isolate independent agents, not every task** — the primary interactive
+  session stays in the main checkout (IntelliJ MCP visible); independent/long
+  autonomous sessions use `/worktree`; subagents share the primary's filesystem.
+- **Clarify well, rarely** — proceed on the strongest safe assumptions; escalate
+  only when ambiguity materially affects correctness, safety, or intent, and use
+  a structured `AskUserQuestion` (what's unclear, why it matters, recommended
+  option first, alternatives, impact).
+- **Summarise after each batch** of parallel work — what's done, what remains,
+  blockers — leading with the bottom line.
+
+This is the spine that ties the rules below together; the full model, including
+how each phase maps to an owning rule, is in `.opencode/rules/operating-model.md`.
+
 ## Git Policy
 
 - This repository uses **trunk-based development**: commit directly to the default branch (`master`). Do NOT create feature/topic branches — there is no "branch first" step.
-- NEVER commit or push without explicit user request
-- NEVER run `git commit` without first completing the full pre-commit workflow in `.opencode/rules/commit-workflow.md` (classify → validate → adversarial review → commit). Use the `/commit` command to ensure the workflow is followed.
-- NEVER run destructive git commands without confirmation (see `.opencode/rules/git-safety.md`)
+- Commit and push **autonomously once the full pre-commit gate chain passes** — the gates replace human pre-approval (Agent Operating Model above). A user instruction always overrides this default.
+- NEVER run `git commit` without first completing the full pre-commit workflow in `.opencode/rules/commit-workflow.md` (classify → validate → changelog → adversarial review (PASS) → re-verify → commit). Use the `/commit` command to ensure the workflow is followed. If any gate fails, do NOT commit.
+- NEVER run destructive git commands without confirmation (see `.opencode/rules/git-safety.md`) — auto-commit/push of new commits is authorized; `reset --hard`, `push --force`, history rewrites, and discarding uncommitted work are NOT.
 - NEVER add Co-Authored-By, Signed-off-by, or any other trailers to commit messages
 - NEVER amend commits that have been pushed to remote
 
@@ -137,7 +189,29 @@ Multiple opencode sessions may run concurrently on the same repository. Follow `
 
 ## Pre-Commit Workflow
 
-Use `/commit` for commits so the full workflow in `.opencode/rules/commit-workflow.md` is enforced (classify -> validate -> adversarial review -> commit). Skip steps only when the user explicitly requests it.
+The full workflow in `.opencode/rules/commit-workflow.md` (classify -> validate -> changelog -> adversarial review (PASS) -> re-verify -> commit) is the gate chain that authorizes an autonomous commit — run it whenever a unit of work is complete, not only when asked. `/commit` enforces it. Skip steps only when the user explicitly requests it; if any non-skipped gate fails, do NOT commit.
+
+## Documentation Style
+
+All documentation — `docs/` architecture pages, ADRs, READMEs, design specs,
+investigation reports, and prose summaries to the user — follows the **Pyramid
+Principle with progressive disclosure**: lead with the outcome, then layer
+supporting detail beneath it so a reader can stop at any depth and still leave
+correct.
+
+Default skeleton (collapse layers for short docs; never reorder so detail
+precedes its conclusion):
+
+1. **Outcome / Decision (TL;DR)** — the bottom line in 2–5 lines
+2. **High-level flow / model** — one Mermaid diagram of the shape
+3. **Key options or components** — a table or tight bullet list
+4. **Rationale / trade-offs** — why it is this way; what was rejected
+5. **Detailed behaviour** — implementation-level prose
+6. **Appendix / deep reference** — exhaustive tables, edge cases, config
+
+This is a strong default, not a rigid form — see `.opencode/rules/documentation-style.md`
+for the full rule, the judgement guidance for short/reference docs, and how it
+relates to diagrams, reports, and specs.
 
 ## Diagrams and Formatting
 

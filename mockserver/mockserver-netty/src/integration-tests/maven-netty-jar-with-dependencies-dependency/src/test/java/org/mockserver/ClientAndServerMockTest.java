@@ -6,12 +6,12 @@ import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.mockserver.integration.ClientAndServer;
-import org.mockserver.testing.integration.mock.AbstractBasicMockingIntegrationTest;
+import org.mockserver.testing.integration.mock.AbstractPackagingSmokeTest;
 
 /**
  * @author jamesdbloom
  */
-public class ClientAndServerMockTest extends AbstractBasicMockingIntegrationTest {
+public class ClientAndServerMockTest extends AbstractPackagingSmokeTest {
 
     protected boolean supportsHTTP2() {
         // TODO(jamesdbloom) support copying native content into the no-dependencies jar

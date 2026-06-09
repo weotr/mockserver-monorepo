@@ -454,8 +454,8 @@ public class ExampleSpringTestListenerTestWithPortInjection {
 <p>MockServer can be run from the command line in the following ways:</p>
 
 <ul>
-	<li><a href="#running_from_command_line_using_homebrew">using homebrew</a> i.e. <strong>brew install mockserver && mockserver</strong></li>
-	<li><a href="#running_from_command_line_using_java">using java directly</a> i.e. <strong>java -jar mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar</strong></li>
+	<li><a href="#running_from_command_line_using_homebrew">using homebrew</a> i.e. <strong>brew install mockserver && mockserver run -p 1080</strong></li>
+	<li><a href="#running_from_command_line_using_java">using java directly</a> i.e. <strong>java -jar mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar run -p 1080</strong></li>
 	<li><a href="#running_from_command_line_using_maven_plugin">using maven plugin</a> i.e. <strong>mvn org.mock-server:mockserver-maven-plugin:{{ site.mockserver_version }}:runForked</strong></li>
 	<li><a href="#docker_container">using docker</a> i.e. <strong>docker run -d --rm -p 1080:1080 mockserver/mockserver</strong></li>
 </ul>
@@ -471,107 +471,299 @@ public class ExampleSpringTestListenerTestWithPortInjection {
 <p>The MockServer formula in Homebrew performs the following actions:</p>
 
 <ol>
-	<li>installed the binaries and scripts</li>
+	<li>installs the binaries and scripts</li>
 	<li>creates the log directory</li>
-	<li>add the scripts to the PATH variable</li>
+	<li>adds the scripts to the PATH variable</li>
 </ol>
 
-<p>Once the MockServer has been installed by Homebrew it is available from any command shell as the <strong>mockserver</strong> command</p>
+<p>Once MockServer has been installed by Homebrew it is available from any command shell as the <strong>mockserver</strong> command.</p>
 
-<p>The <strong>mockserver</strong> command supports the following options:</p>
-
-<pre><code class="code">mockserver -serverPort <span class="command_line_argument_placeholder">&lt;port&gt;</span> [-proxyRemotePort <span class="command_line_argument_placeholder">&lt;port&gt;</span>]  [-proxyRemoteHost <span class="command_line_argument_placeholder">&lt;hostname&gt;</span>] [-logLevel <span class="command_line_argument_placeholder">&lt;level&gt;</span>] [-jvmOptions <span class="command_line_argument_placeholder">&lt;system parameters&gt;</span>]
-
- valid options are:
-    -serverPort <span class="command_line_argument_placeholder">&lt;port&gt;</span>           The HTTP, HTTPS, SOCKS and HTTP CONNECT
-                                 port(s) for both mocking and proxying
-                                 requests.  Port unification is used to
-                                 support all protocols for proxying and
-                                 mocking on the same port(s). Supports
-                                 comma separated list for binding to
-                                 multiple ports.
-
-    -proxyRemotePort <span class="command_line_argument_placeholder">&lt;port&gt;</span>      Optionally enables port forwarding mode.
-                                 When specified all requests received will
-                                 be forwarded to the specified port, unless
-                                 they match an expectation.
-
-    -proxyRemoteHost <span class="command_line_argument_placeholder">&lt;hostname&gt;</span>  Specified the host to forward all proxy
-                                 requests to when port forwarding mode has
-                                 been enabled using the proxyRemotePort
-                                 option.  This setting is ignored unless
-                                 proxyRemotePort has been specified. If no
-                                 value is provided for proxyRemoteHost when
-                                 proxyRemotePort has been specified,
-                                 proxyRemoteHost will default to \"localhost\".
-
-    -logLevel <span class="command_line_argument_placeholder">&lt;level&gt;</span>            Optionally specify log level using SLF4J levels:
-                                 TRACE, DEBUG, INFO, WARN, ERROR, OFF or Java
-                                 Logger levels: FINEST, FINE, INFO, WARNING,
-                                 SEVERE or OFF. If not specified default is INFO
-
-    -jvmOptions <span class="command_line_argument_placeholder">&lt;level&gt;</span>          Specified generic JVM options or system properties.
-
-i.e. mockserver -logLevel INFO -serverPort <span class="numeric_literal">1080,1081</span> -proxyRemotePort <span class="numeric_literal">80</span> -proxyRemoteHost www.mock-server.com</code></pre>
-
-<p>For example run the MockServer, as follows:</p>
-
-<pre><code class="code">mockserver -logLevel INFO -serverPort <span class="numeric_literal">1080</span></code></pre>
+<pre><code class="code">mockserver run -p <span class="numeric_literal">1080</span></code></pre>
 
 <a id="running_from_command_line_using_java" class="anchor" href="#running_from_command_line_using_java">&nbsp;</a>
 
 <h3>Running From Command Line - Using Java</h3>
 
-<p>MockServer can be run directly from the command line using java directly as follow:</p>
+<p>MockServer can be run directly from the command line using java as follows:</p>
 
 <ol>
 	<li><p>download <a target="_blank" href="https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-netty-no-dependencies/{{ site.mockserver_version }}/mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar" rel="noopener noreferrer">mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar</a> from Maven Central</p></li>
 	<li>
-		<code class="code inline">java -jar <span class="command_line_argument_placeholder">&lt;path to mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar&gt;</span> -serverPort <span class="command_line_argument_placeholder">&lt;port&gt;</span></code>
+		<code class="code inline">java -jar <span class="command_line_argument_placeholder">&lt;path to mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar&gt;</span> run -p <span class="command_line_argument_placeholder">&lt;port&gt;</span></code>
 	</li>
 </ol>
 
-<p>The command line supports the following options:</p>
+<a id="command_line_subcommands" class="anchor" href="#command_line_subcommands">&nbsp;</a>
 
-<pre><code class="code">java -jar <span class="command_line_argument_placeholder">&lt;path to mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar&gt;</span> -serverPort <span class="command_line_argument_placeholder">&lt;port&gt;</span> [-proxyRemotePort <span class="command_line_argument_placeholder">&lt;port&gt;</span>] [-proxyRemoteHost <span class="command_line_argument_placeholder">&lt;hostname&gt;</span>] [-logLevel <span class="command_line_argument_placeholder">&lt;level&gt;</span>]
+<h4>Subcommands</h4>
 
- valid options are:
-    -serverPort <span class="command_line_argument_placeholder">&lt;port&gt;</span>           The HTTP, HTTPS, SOCKS and HTTP CONNECT
-                                 port(s) for both mocking and proxying
-                                 requests.  Port unification is used to
-                                 support all protocols for proxying and
-                                 mocking on the same port(s). Supports
-                                 comma separated list for binding to
-                                 multiple ports.
+<p>The MockServer CLI uses subcommands. The most common is <span class="inline_code">run</span>, which starts MockServer and accepts expectations and proxied traffic on the specified port. You can omit the subcommand name entirely — bare flags like <span class="inline_code">-p 1080</span> are treated as <span class="inline_code">run</span> automatically.</p>
 
-    -proxyRemotePort <span class="command_line_argument_placeholder">&lt;port&gt;</span>      Optionally enables port forwarding mode.
-                                 When specified all requests received will
-                                 be forwarded to the specified port, unless
-                                 they match an expectation.
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Subcommand</th>
+			<th>What it does</th>
+			<th>Example</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">run</span></td>
+			<td>Start MockServer in mock and/or proxy mode (default subcommand)</td>
+			<td><code class="code inline">mockserver run -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">proxy</span></td>
+			<td>Start MockServer as a pure forwarding proxy — shorthand for <span class="inline_code">run --proxy-to</span></td>
+			<td><code class="code inline">mockserver proxy --to api.example.com:8080 -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">openapi</span></td>
+			<td>Start MockServer and automatically create expectations from an OpenAPI spec</td>
+			<td><code class="code inline">mockserver openapi ./petstore.yaml -p 1080</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">version</span></td>
+			<td>Print MockServer version and exit</td>
+			<td><code class="code inline">mockserver version</code></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">help</span></td>
+			<td>Print usage for the top command or any subcommand</td>
+			<td><code class="code inline">mockserver help run</code></td>
+		</tr>
+	</tbody>
+</table>
 
-    -proxyRemoteHost <span class="command_line_argument_placeholder">&lt;hostname&gt;</span>  Specified the host to forward all proxy
-                                 requests to when port forwarding mode has
-                                 been enabled using the proxyRemotePort
-                                 option.  This setting is ignored unless
-                                 proxyRemotePort has been specified. If no
-                                 value is provided for proxyRemoteHost when
-                                 proxyRemotePort has been specified,
-                                 proxyRemoteHost will default to \"localhost\".
+<a id="command_line_run_options" class="anchor" href="#command_line_run_options">&nbsp;</a>
 
-    -logLevel <span class="command_line_argument_placeholder">&lt;level&gt;</span>            Optionally specify log level using SLF4J levels:
-                                 TRACE, DEBUG, INFO, WARN, ERROR, OFF or Java
-                                 Logger levels: FINEST, FINE, INFO, WARNING,
-                                 SEVERE or OFF. If not specified default is INFO
+<h4>Options for <span class="inline_code">run</span></h4>
 
-i.e. java -jar ./mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort <span class="numeric_literal">1080</span> -proxyRemotePort <span class="numeric_literal">80</span> -proxyRemoteHost www.mock-server.com</code></pre>
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Option</th>
+			<th>Description</th>
+			<th>Configuration property</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">-p, --port &lt;port&gt;</span></td>
+			<td>Port(s) to listen on. Comma-separated list to bind multiple ports, e.g. <span class="inline_code">1080,1081</span>. Port unification means HTTP, HTTPS, and all proxy protocols share the same port.</td>
+			<td><span class="inline_code">mockserver.serverPort</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--proxy-to &lt;target&gt;</span></td>
+			<td>Forward unmatched requests to the given target. Enables port-forwarding (proxy) mode. Accepts <span class="inline_code">host:port</span>, <span class="inline_code">https://host[:port]</span> (port 443 inferred from scheme), or <span class="inline_code">http://host[:port]</span> (port 80 inferred). A bare hostname with no port and no <span class="inline_code">http(s)://</span> scheme is rejected with an error.</td>
+			<td><span class="inline_code">mockserver.proxyRemoteHost</span> + <span class="inline_code">mockserver.proxyRemotePort</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--openapi &lt;specUrlOrPath&gt;</span></td>
+			<td>Initialize expectations from an OpenAPI spec on startup. Accepts a file path or URL.</td>
+			<td><a href="/mock_server/configuration_properties.html"><span class="inline_code">mockserver.initializationOpenAPIPath</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--init &lt;fileOrGlob&gt;</span></td>
+			<td>Initialize expectations from a JSON file or glob pattern on startup.</td>
+			<td><a href="/mock_server/configuration_properties.html"><span class="inline_code">mockserver.initializationJsonPath</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--persist &lt;file&gt;</span></td>
+			<td>Enable expectation persistence and write expectations to the given file. MockServer reloads the file on restart.</td>
+			<td><a href="/mock_server/configuration_properties.html"><span class="inline_code">mockserver.persistExpectations</span></a> + <span class="inline_code">mockserver.persistedExpectationsPath</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-l, --log-level &lt;level&gt;</span></td>
+			<td>Set the <a href="/mock_server/debugging_issues.html#logging-levels">log level</a>. Accepts SLF4J levels: <span class="inline_code">TRACE</span>, <span class="inline_code">DEBUG</span>, <span class="inline_code">INFO</span>, <span class="inline_code">WARN</span>, <span class="inline_code">ERROR</span>, <span class="inline_code">OFF</span>, or Java Logger levels: <span class="inline_code">FINEST</span>, <span class="inline_code">FINE</span>, <span class="inline_code">INFO</span>, <span class="inline_code">WARNING</span>, <span class="inline_code">SEVERE</span>, <span class="inline_code">OFF</span>. Default: <span class="inline_code">INFO</span>.</td>
+			<td><span class="inline_code">mockserver.logLevel</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--dev</span></td>
+			<td>Enable developer-friendly defaults for laptop and test-suite workloads. Sets <span class="inline_code">maxLogEntries=1000</span> and <span class="inline_code">maxExpectations=1000</span> (reducing memory usage). Any explicit configuration (system property, environment variable, or properties file) overrides the dev-mode defaults. Also available as <span class="inline_code">MOCKSERVER_DEV_MODE=true</span> or <span class="inline_code">-Dmockserver.devMode=true</span>.</td>
+			<td><a href="/mock_server/configuration_properties.html"><span class="inline_code">mockserver.devMode</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-openapi &lt;spec&gt;</span></td>
+			<td>Validate every forwarded/proxied request and its upstream response against the given OpenAPI spec. Accepts a URL, file path, or inline JSON/YAML payload. Violations are logged as <span class="inline_code">OPENAPI_REQUEST_VALIDATION_FAILED</span> and <span class="inline_code">OPENAPI_RESPONSE_VALIDATION_FAILED</span> events. By default, traffic is not blocked — combine with <span class="inline_code">--validate-enforce</span> to reject non-conformant traffic.</td>
+			<td><a href="/mock_server/configuration_properties.html#button_configuration_validate_proxy_openapi_spec"><span class="inline_code">mockserver.validateProxyOpenAPISpec</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-enforce</span></td>
+			<td>When combined with <span class="inline_code">--validate-openapi</span>, reject requests that violate the spec with a <span class="inline_code">400</span> status code, and replace non-conformant upstream responses with a <span class="inline_code">502</span>. Without this flag, violations are report-only (logged but traffic flows unmodified).</td>
+			<td><a href="/mock_server/configuration_properties.html#button_configuration_validate_proxy_enforce"><span class="inline_code">mockserver.validateProxyEnforce</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-h, --help</span></td>
+			<td>Print usage and exit.</td>
+			<td>—</td>
+		</tr>
+	</tbody>
+</table>
 
-<p>For example:</p>
+<h4>Options for <span class="inline_code">proxy</span></h4>
 
-<pre><code class="code">java -jar ~/Downloads/mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort <span class="numeric_literal">1080,1081</span> -logLevel INFO</code></pre>
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Option</th>
+			<th>Required</th>
+			<th>Description</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">--to &lt;target&gt;</span></td>
+			<td>Yes</td>
+			<td>Forward all unmatched requests to this target. Accepts <span class="inline_code">host:port</span> or a full URL such as <span class="inline_code">https://api.example.com</span> (port 443 inferred) or <span class="inline_code">http://api.example.com</span> (port 80 inferred). A bare hostname with no port and no <span class="inline_code">http(s)://</span> scheme is rejected with an error.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-p, --port &lt;port&gt;</span></td>
+			<td>No</td>
+			<td>Port(s) to listen on.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-l, --log-level &lt;level&gt;</span></td>
+			<td>No</td>
+			<td>Log level (see above).</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-openapi &lt;spec&gt;</span></td>
+			<td>No</td>
+			<td>Validate forwarded/proxied traffic against the given OpenAPI spec (URL, file path, or inline payload). Violations are logged; combine with <span class="inline_code">--validate-enforce</span> to block non-conformant traffic.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-enforce</span></td>
+			<td>No</td>
+			<td>When combined with <span class="inline_code">--validate-openapi</span>, block non-conformant traffic (400 for requests, 502 for responses).</td>
+		</tr>
+	</tbody>
+</table>
 
-<p>All interactions with the MockServer are logged including setting up expectations, matching expectations, clearing expectations and verifying requests.  This log information can be particularly helpful when trying to debug why a test is failing or expectations are not being matched.</p>
+<h4>Options for <span class="inline_code">openapi</span></h4>
 
-<p>The argument <span class="inline_code">logLevel</span> can be used to set the <a href="/mock_server/debugging_issues.html#logging-levels">log level</a>, as shown above. It is also possible to further customise where loggers send log events by overriding the default <a href="/mock_server/debugging_issues.html#configure_java_logger">logging configuration</a>.</p>
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Argument / Option</th>
+			<th>Required</th>
+			<th>Description</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">&lt;specUrlOrPath&gt;</span></td>
+			<td>Yes (positional)</td>
+			<td>OpenAPI spec file path or URL.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-p, --port &lt;port&gt;</span></td>
+			<td>No</td>
+			<td>Port(s) to listen on.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-l, --log-level &lt;level&gt;</span></td>
+			<td>No</td>
+			<td>Log level (see above).</td>
+		</tr>
+	</tbody>
+</table>
+
+<h4>Common examples</h4>
+
+<p>Start MockServer on port 1080:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>Start MockServer on two ports:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080,1081</span></code></pre>
+
+<p>Start MockServer and forward unmatched requests to an upstream API:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> --proxy-to api.example.com:<span class="numeric_literal">8080</span></code></pre>
+
+<p>Start MockServer, load expectations from an OpenAPI spec, and persist any additional expectations set via the API:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> \
+    --openapi ./petstore.yaml \
+    --persist ./expectations.json</code></pre>
+
+<p>Start MockServer as a plain forwarding proxy (shorthand form, explicit port):</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to api.example.com:<span class="numeric_literal">8080</span> -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>Start MockServer as a plain forwarding proxy using a scheme URL — port 443 is inferred from <span class="inline_code">https://</span>:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to https://api.example.com -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>The same with <span class="inline_code">run --proxy-to</span>:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> --proxy-to https://api.example.com</code></pre>
+
+<p><strong>Note:</strong> a bare hostname such as <span class="inline_code">--proxy-to api.example.com</span> (no port, no scheme) is rejected. Use <span class="inline_code">api.example.com:8080</span> or a scheme URL such as <span class="inline_code">https://api.example.com</span>.</p>
+
+<p>Start MockServer as a validating proxy — log OpenAPI violations without blocking traffic:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to https://api.example.com -p <span class="numeric_literal">1080</span> \
+    --validate-openapi ./openapi-spec.yaml</code></pre>
+
+<p>Start MockServer as an enforcing validation proxy — reject non-conformant requests (400) and responses (502):</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to https://api.example.com -p <span class="numeric_literal">1080</span> \
+    --validate-openapi ./openapi-spec.yaml \
+    --validate-enforce</code></pre>
+
+<p>Start MockServer and pre-load expectations from a JSON file:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> --init ./expectations.json</code></pre>
+
+<p>All interactions with the MockServer are logged, including setting up expectations, matching expectations, clearing expectations, and verifying requests. This log information can be particularly helpful when trying to debug why a test is failing or expectations are not being matched.</p>
+
+<p>The <span class="inline_code">--log-level</span> flag can be used to set the <a href="/mock_server/debugging_issues.html#logging-levels">log level</a>, as shown in the options table above. It is also possible to further customise where loggers send log events by overriding the default <a href="/mock_server/debugging_issues.html#logging_with_api">logging configuration</a>.</p>
+
+<a id="command_line_legacy_flags" class="anchor" href="#command_line_legacy_flags">&nbsp;</a>
+
+<h4>Legacy flags (still fully supported)</h4>
+
+<p>All command-line flags from earlier versions of MockServer continue to work. You do not need to update existing scripts or Docker commands.</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Legacy flag</th>
+			<th>New equivalent</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td><span class="inline_code">-serverPort &lt;port&gt;</span></td>
+			<td><span class="inline_code">run -p &lt;port&gt;</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-proxyRemotePort &lt;port&gt;</span></td>
+			<td><span class="inline_code">run --proxy-to host:&lt;port&gt;</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-proxyRemoteHost &lt;hostname&gt;</span></td>
+			<td><span class="inline_code">run --proxy-to &lt;hostname&gt;:port</span></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">-logLevel &lt;level&gt;</span></td>
+			<td><span class="inline_code">run -l &lt;level&gt;</span></td>
+		</tr>
+	</tbody>
+</table>
+
+<p>For example, this legacy command continues to work unchanged:</p>
+
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort <span class="numeric_literal">1080</span> -proxyRemotePort <span class="numeric_literal">80</span> -proxyRemoteHost www.mock-server.com -logLevel WARN</code></pre>
+
+<a id="command_line_configuration_precedence" class="anchor" href="#command_line_configuration_precedence">&nbsp;</a>
+
+<h4>Configuration precedence</h4>
+
+<p>MockServer resolves configuration from multiple sources. The order of precedence, from highest to lowest, is:</p>
+
+<ol>
+	<li><strong>Command-line flag</strong> — e.g. <span class="inline_code">-p 1080</span></li>
+	<li><strong>JVM system property</strong> — e.g. <span class="inline_code">-Dmockserver.serverPort=1080</span></li>
+	<li><strong>Environment variable</strong> — long form <span class="inline_code">MOCKSERVER_SERVER_PORT</span> checked before short form <span class="inline_code">SERVER_PORT</span></li>
+	<li><strong>mockserver.properties file</strong> — a <span class="inline_code">mockserver.properties</span> file on the classpath or working directory</li>
+</ol>
+
+<p>This means that a flag passed on the command line always overrides the same setting from an environment variable or properties file. For a full list of configuration properties and their environment variable names, see the <a href="/mock_server/configuration_properties.html">configuration properties</a> page.</p>
 
 <a id="running_from_command_line_using_maven_plugin" class="anchor" href="#running_from_command_line_using_maven_plugin">&nbsp;</a>
 
@@ -637,7 +829,7 @@ i.e. java -jar ./mockserver-netty-no-dependencies-{{ site.mockserver_version }}.
 
 <h2>Build & Run From Source</h2>
 
-<p>MockServer is written in Java and built using maven.  The maven wrapper is used so maven does not need to be installed but Java JDK 11 or higher must be installed.</p>
+<p>MockServer is written in Java and built using maven.  The maven wrapper is used so maven does not need to be installed but Java JDK 17 or higher must be installed.</p>
 
 <p>First clone the repository as follows:</p>
 

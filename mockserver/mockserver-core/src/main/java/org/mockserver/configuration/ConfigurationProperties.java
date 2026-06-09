@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
@@ -56,9 +57,21 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_METRICS_ENABLED = "mockserver.metricsEnabled";
     private static final String MOCKSERVER_SLOW_REQUEST_THRESHOLD_MILLIS = "mockserver.slowRequestThresholdMillis";
     private static final String MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS = "mockserver.metricsRequestDurationRouteLabels";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_ENABLED = "mockserver.chaosAutoHaltEnabled";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD = "mockserver.chaosAutoHaltErrorThreshold";
+    private static final String MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS = "mockserver.chaosAutoHaltWindowMillis";
     private static final String MOCKSERVER_MCP_ENABLED = "mockserver.mcpEnabled";
+    private static final String MOCKSERVER_BREAKPOINT_ENABLED = "mockserver.breakpointEnabled";
+    private static final String MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED = "mockserver.breakpointResponseEnabled";
+    private static final String MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS = "mockserver.breakpointTimeoutMillis";
+    private static final String MOCKSERVER_BREAKPOINT_MAX_HELD = "mockserver.breakpointMaxHeld";
     private static final String MOCKSERVER_LOG_LEVEL_OVERRIDES = "mockserver.logLevelOverrides";
     private static final String MOCKSERVER_COMPACT_LOG_FORMAT = "mockserver.compactLogFormat";
+
+    // dev mode
+    private static final String MOCKSERVER_DEV_MODE = "mockserver.devMode";
+    static final int DEV_MODE_MAX_LOG_ENTRIES = 1000;
+    static final int DEV_MODE_MAX_EXPECTATIONS = 1000;
 
     // memory usage
     private static final String MOCKSERVER_MAX_EXPECTATIONS = "mockserver.maxExpectations";
@@ -131,6 +144,14 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_DNS_ENABLED = "mockserver.dnsEnabled";
     private static final String MOCKSERVER_DNS_PORT = "mockserver.dnsPort";
     private static final String MOCKSERVER_HTTP3_PORT = "mockserver.http3Port";
+    private static final String MOCKSERVER_HTTP3_MAX_IDLE_TIMEOUT = "mockserver.http3MaxIdleTimeout";
+    private static final String MOCKSERVER_HTTP3_INITIAL_MAX_DATA = "mockserver.http3InitialMaxData";
+    private static final String MOCKSERVER_HTTP3_INITIAL_MAX_STREAM_DATA_BIDIRECTIONAL = "mockserver.http3InitialMaxStreamDataBidirectional";
+    private static final String MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL = "mockserver.http3InitialMaxStreamsBidirectional";
+    private static final String MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY = "mockserver.http3QpackMaxTableCapacity";
+    private static final String MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED = "mockserver.http3ConnectUdpEnabled";
+    private static final String MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE = "mockserver.http3AltSvcMaxAge";
+    private static final String MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC = "mockserver.http3AdvertiseAltSvc";
 
     // non http proxying
     private static final String MOCKSERVER_FORWARD_BINARY_REQUESTS_WITHOUT_WAITING_FOR_RESPONSE = "mockserver.forwardBinaryRequestsWithoutWaitingForResponse";
@@ -162,6 +183,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_INITIALIZATION_OPENAPI_PATH = "mockserver.initializationOpenAPIPath";
     private static final String MOCKSERVER_OPENAPI_CONTEXT_PATH_PREFIX = "mockserver.openAPIContextPathPrefix";
     private static final String MOCKSERVER_OPENAPI_RESPONSE_VALIDATION = "mockserver.openAPIResponseValidation";
+    private static final String MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC = "mockserver.validateProxyOpenAPISpec";
+    private static final String MOCKSERVER_VALIDATE_PROXY_ENFORCE = "mockserver.validateProxyEnforce";
+    private static final String MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES = "mockserver.generateRealisticExampleValues";
     private static final String MOCKSERVER_WATCH_INITIALIZATION_JSON = "mockserver.watchInitializationJson";
 
     // mock persistence
@@ -176,6 +200,17 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_STATE_BACKEND = "mockserver.stateBackend";
     private static final String MOCKSERVER_BLOB_STORE_TYPE = "mockserver.blobStoreType";
 
+    // cloud blob store configuration
+    private static final String MOCKSERVER_BLOB_STORE_BUCKET = "mockserver.blobStoreBucket";
+    private static final String MOCKSERVER_BLOB_STORE_REGION = "mockserver.blobStoreRegion";
+    private static final String MOCKSERVER_BLOB_STORE_ENDPOINT = "mockserver.blobStoreEndpoint";
+    private static final String MOCKSERVER_BLOB_STORE_KEY_PREFIX = "mockserver.blobStoreKeyPrefix";
+    private static final String MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID = "mockserver.blobStoreAccessKeyId";
+    private static final String MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY = "mockserver.blobStoreSecretAccessKey";
+    private static final String MOCKSERVER_BLOB_STORE_CONTAINER = "mockserver.blobStoreContainer";
+    private static final String MOCKSERVER_BLOB_STORE_CONNECTION_STRING = "mockserver.blobStoreConnectionString";
+    private static final String MOCKSERVER_BLOB_STORE_PROJECT_ID = "mockserver.blobStoreProjectId";
+
     // clustering (G10 phase 2c)
     private static final String MOCKSERVER_CLUSTER_ENABLED = "mockserver.clusterEnabled";
     private static final String MOCKSERVER_CLUSTER_NAME = "mockserver.clusterName";
@@ -184,6 +219,7 @@ public class ConfigurationProperties {
     // verification
     private static final String MOCKSERVER_MAXIMUM_NUMBER_OF_REQUESTS_TO_RETURN_IN_VERIFICATION_FAILURE = "mockserver.maximumNumberOfRequestToReturnInVerificationFailure";
     private static final String MOCKSERVER_DETAILED_VERIFICATION_FAILURES = "mockserver.detailedVerificationFailures";
+    private static final String MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE = "mockserver.attachMismatchDiagnosticToResponse";
 
     // proxy
     private static final String MOCKSERVER_ATTEMPT_TO_PROXY_IF_NO_MATCHING_EXPECTATION = "mockserver.attemptToProxyIfNoMatchingExpectation";
@@ -263,6 +299,8 @@ public class ConfigurationProperties {
     // service mesh / sidecar
     private static final String MOCKSERVER_TRANSPARENT_PROXY_ENABLED = "mockserver.transparentProxyEnabled";
     private static final String MOCKSERVER_TRANSPARENT_PROXY_TPROXY = "mockserver.transparentProxyTproxy";
+    private static final String MOCKSERVER_TRANSPARENT_PROXY_EBPF = "mockserver.transparentProxyEbpf";
+    private static final String MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH = "mockserver.transparentProxyEbpfMapPath";
 
     // async messaging defaults
     private static final String MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS = "mockserver.asyncKafkaBootstrapServers";
@@ -271,6 +309,30 @@ public class ConfigurationProperties {
 
     // properties file
     private static final String MOCKSERVER_PROPERTY_FILE = "mockserver.propertyFile";
+
+    // Declared BEFORE PROPERTIES on purpose: the PROPERTIES initialiser runs readPropertyFile() during
+    // <clinit>, which redacts sensitive values via isSensitivePropertyName() — and that reads these two
+    // fields. Java initialises static fields in textual order, so moving these below PROPERTIES leaves
+    // them null when readPropertyFile() runs and throws NoClassDefFoundError at startup whenever a
+    // property file has entries (regression #2338). Keep them above PROPERTIES.
+    static final String REDACTED_VALUE = "***REDACTED***";
+
+    private static final Set<String> SENSITIVE_SUBSTRINGS = Stream.of(
+        "password",
+        "secret",
+        "accesskey",
+        "access_key",
+        "apikey",
+        "api_key",
+        "connectionstring",
+        "connection_string",
+        "token",
+        "privatekey",
+        "private_key",
+        "credential",
+        "passphrase"
+    ).collect(Collectors.toCollection(LinkedHashSet::new));
+
     public static final Properties PROPERTIES = readPropertyFile();
 
     static {
@@ -492,6 +554,49 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS, "" + enable);
     }
 
+    public static boolean chaosAutoHaltEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CHAOS_AUTO_HALT_ENABLED, "MOCKSERVER_CHAOS_AUTO_HALT_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable the chaos auto-halt circuit-breaker. When enabled, if the number of chaos-injected
+     * errors within a sliding window exceeds the configured threshold, all active service-scoped
+     * chaos profiles are automatically disabled. Default is false (feature off).
+     *
+     * @param enable enable chaos auto-halt
+     */
+    public static void chaosAutoHaltEnabled(boolean enable) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_ENABLED, "" + enable);
+    }
+
+    public static long chaosAutoHaltErrorThreshold() {
+        return readLongProperty(MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD, "MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD", 50L);
+    }
+
+    /**
+     * The number of chaos-injected errors within the sliding window that triggers an
+     * automatic halt of all active service-scoped chaos profiles. Default is 50.
+     *
+     * @param threshold error count threshold
+     */
+    public static void chaosAutoHaltErrorThreshold(long threshold) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD, "" + threshold);
+    }
+
+    public static long chaosAutoHaltWindowMillis() {
+        return readLongProperty(MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS, "MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS", 60_000L);
+    }
+
+    /**
+     * The sliding window duration in milliseconds over which chaos-injected errors are
+     * counted for the auto-halt circuit-breaker. Default is 60000 (60 seconds).
+     *
+     * @param millis window duration in milliseconds
+     */
+    public static void chaosAutoHaltWindowMillis(long millis) {
+        setProperty(MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS, "" + millis);
+    }
+
     public static boolean mcpEnabled() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_MCP_ENABLED, "MOCKSERVER_MCP_ENABLED", "" + true));
     }
@@ -503,6 +608,67 @@ public class ConfigurationProperties {
      */
     public static void mcpEnabled(boolean enable) {
         setProperty(MOCKSERVER_MCP_ENABLED, "" + enable);
+    }
+
+    public static boolean breakpointEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_BREAKPOINT_ENABLED, "MOCKSERVER_BREAKPOINT_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable interactive request breakpoints for proxied/forwarded requests. When enabled,
+     * forwarded requests are paused (held) and can be inspected, modified, or aborted via
+     * the control-plane REST API before being sent to the upstream. Default is false (off).
+     *
+     * @param enable enable breakpoints
+     */
+    public static void breakpointEnabled(boolean enable) {
+        setProperty(MOCKSERVER_BREAKPOINT_ENABLED, "" + enable);
+    }
+
+    public static boolean breakpointResponseEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED, "MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable interactive response breakpoints for proxied/forwarded requests. When enabled,
+     * the upstream response is held before being written to the client, and can be inspected,
+     * modified, or replaced via the control-plane REST API. Independent of
+     * {@link #breakpointEnabled()} (request breakpoints). Default is false (off).
+     *
+     * @param enable enable response breakpoints
+     */
+    public static void breakpointResponseEnabled(boolean enable) {
+        setProperty(MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED, "" + enable);
+    }
+
+    public static long breakpointTimeoutMillis() {
+        return readLongProperty(MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS, "MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS", 30_000L);
+    }
+
+    /**
+     * Maximum time in milliseconds a request may be held at a breakpoint before it is
+     * automatically continued (forwarded with the original request). Prevents forgotten
+     * breakpoints from hanging indefinitely. Default is 30000 (30 seconds).
+     *
+     * @param millis timeout in milliseconds
+     */
+    public static void breakpointTimeoutMillis(long millis) {
+        setProperty(MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS, "" + millis);
+    }
+
+    public static int breakpointMaxHeld() {
+        return readIntegerProperty(MOCKSERVER_BREAKPOINT_MAX_HELD, "MOCKSERVER_BREAKPOINT_MAX_HELD", 50);
+    }
+
+    /**
+     * Maximum number of requests that can be simultaneously held at breakpoints. When
+     * this cap is reached, new breakpoint intercepts are skipped and requests are forwarded
+     * normally. This is a DoS prevention rail. Default is 50.
+     *
+     * @param maxHeld maximum concurrent held requests
+     */
+    public static void breakpointMaxHeld(int maxHeld) {
+        setProperty(MOCKSERVER_BREAKPOINT_MAX_HELD, "" + maxHeld);
     }
 
     public static boolean wasmEnabled() {
@@ -601,6 +767,121 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_HTTP3_PORT, "" + port);
     }
 
+    /**
+     * Max idle timeout in milliseconds for QUIC connections.
+     * Default: 5000 (5 seconds).
+     */
+    public static long http3MaxIdleTimeout() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_MAX_IDLE_TIMEOUT, "MOCKSERVER_HTTP3_MAX_IDLE_TIMEOUT", 5000L));
+    }
+
+    public static void http3MaxIdleTimeout(long millis) {
+        setProperty(MOCKSERVER_HTTP3_MAX_IDLE_TIMEOUT, "" + millis);
+    }
+
+    /**
+     * Initial maximum data (connection-level flow control) in bytes.
+     * Default: 10000000 (10 MB).
+     */
+    public static long http3InitialMaxData() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_INITIAL_MAX_DATA, "MOCKSERVER_HTTP3_INITIAL_MAX_DATA", 10000000L));
+    }
+
+    public static void http3InitialMaxData(long bytes) {
+        setProperty(MOCKSERVER_HTTP3_INITIAL_MAX_DATA, "" + bytes);
+    }
+
+    /**
+     * Initial maximum stream data for bidirectional streams (per-stream flow control)
+     * in bytes. Applied to both local and remote bidirectional streams.
+     * Default: 1000000 (1 MB).
+     */
+    public static long http3InitialMaxStreamDataBidirectional() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_INITIAL_MAX_STREAM_DATA_BIDIRECTIONAL, "MOCKSERVER_HTTP3_INITIAL_MAX_STREAM_DATA_BIDIRECTIONAL", 1000000L));
+    }
+
+    public static void http3InitialMaxStreamDataBidirectional(long bytes) {
+        setProperty(MOCKSERVER_HTTP3_INITIAL_MAX_STREAM_DATA_BIDIRECTIONAL, "" + bytes);
+    }
+
+    /**
+     * Initial maximum number of concurrent bidirectional streams.
+     * Default: 100.
+     */
+    public static long http3InitialMaxStreamsBidirectional() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL, "MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL", 100L));
+    }
+
+    public static void http3InitialMaxStreamsBidirectional(long maxStreams) {
+        setProperty(MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL, "" + maxStreams);
+    }
+
+    /**
+     * QPACK dynamic table maximum capacity in bytes. Controls the amount of
+     * memory allocated for QPACK header compression on the HTTP/3 control stream.
+     * Set to 0 to disable the dynamic table entirely.
+     * Default: 0 (dynamic table disabled — only static table used).
+     */
+    public static long http3QpackMaxTableCapacity() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY, "MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY", 0L));
+    }
+
+    public static void http3QpackMaxTableCapacity(long bytes) {
+        setProperty(MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY, "" + bytes);
+    }
+
+    /**
+     * Enable the CONNECT-UDP (MASQUE, RFC 9298) forward proxy on the HTTP/3 server.
+     * When enabled, the server advertises {@code SETTINGS_ENABLE_CONNECT_PROTOCOL}
+     * (RFC 9220) and extended-CONNECT requests with {@code :protocol=connect-udp} are
+     * relayed: a UDP socket is opened to the target authority and datagrams are forwarded
+     * in both directions (one HTTP/3 DATA frame per datagram). This is supported by the
+     * mainline {@code io.netty:netty-codec-http3} codec (Netty 4.2). Normal (non-CONNECT)
+     * HTTP/3 requests are unaffected.
+     * <p>
+     * Experimental and <strong>off by default</strong>. When enabled this is an open UDP
+     * relay with no target restriction (a client can reach any UDP host:port reachable
+     * from the server, including private/loopback/cloud-metadata addresses) — intended
+     * for controlled test environments only; do not expose to untrusted clients.
+     * Default: false (disabled).
+     */
+    public static boolean http3ConnectUdpEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED, "MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED", "" + false));
+    }
+
+    public static void http3ConnectUdpEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED, "" + enabled);
+    }
+
+    /**
+     * Max-age in seconds for the Alt-Svc header advertising HTTP/3 on the TCP
+     * response path. Only relevant when {@code http3Port > 0} and
+     * {@code http3AdvertiseAltSvc} is {@code true}.
+     * Default: 86400 (24 hours).
+     */
+    public static long http3AltSvcMaxAge() {
+        return Math.max(0, readLongProperty(MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE, "MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE", 86400L));
+    }
+
+    public static void http3AltSvcMaxAge(long seconds) {
+        setProperty(MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE, "" + seconds);
+    }
+
+    /**
+     * Whether to add an {@code Alt-Svc: h3=":<http3Port>"; ma=<maxAge>} header
+     * to every response served over the TCP (HTTP/1.1 and HTTP/2) paths when
+     * {@code http3Port > 0}. When {@code false}, no Alt-Svc header is added
+     * even when HTTP/3 is enabled (useful for testing without client auto-upgrade).
+     * Default: true.
+     */
+    public static boolean http3AdvertiseAltSvc() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC, "MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC", "" + true));
+    }
+
+    public static void http3AdvertiseAltSvc(boolean advertise) {
+        setProperty(MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC, "" + advertise);
+    }
+
     // service mesh / sidecar
 
     public static boolean transparentProxyEnabled() {
@@ -624,6 +905,34 @@ public class ConfigurationProperties {
 
     public static void transparentProxyTproxy(boolean enable) {
         setProperty(MOCKSERVER_TRANSPARENT_PROXY_TPROXY, "" + enable);
+    }
+
+    /**
+     * Enable eBPF-based original destination resolution. When enabled, the resolver
+     * reads from a pinned BPF hash map (populated by an external cgroup/connect4
+     * BPF program) keyed by socket cookie. Requires Linux, CAP_BPF, a BTF-enabled
+     * kernel, and the external BPF program. Default: false.
+     */
+    public static boolean transparentProxyEbpf() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TRANSPARENT_PROXY_EBPF, "MOCKSERVER_TRANSPARENT_PROXY_EBPF", "" + false));
+    }
+
+    public static void transparentProxyEbpf(boolean enable) {
+        setProperty(MOCKSERVER_TRANSPARENT_PROXY_EBPF, "" + enable);
+    }
+
+    /**
+     * Path to the pinned BPF map used by the eBPF original destination resolver.
+     * The map must be a BPF hash map with u64 key (socket cookie) and 6-byte value
+     * (4-byte IPv4 address + 2-byte port in network byte order).
+     * Default: /sys/fs/bpf/mockserver_orig_dst.
+     */
+    public static String transparentProxyEbpfMapPath() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH, "MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH", "/sys/fs/bpf/mockserver_orig_dst");
+    }
+
+    public static void transparentProxyEbpfMapPath(String path) {
+        setProperty(MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH, path);
     }
 
     // async messaging defaults
@@ -731,6 +1040,70 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_COMPACT_LOG_FORMAT, "" + enable);
     }
 
+    // dev mode
+
+    /**
+     * <p>When true, applies a developer-friendly configuration profile that reduces memory
+     * usage for laptop/test-suite workloads. The following defaults are overridden
+     * (only for properties the user has not explicitly set via system property,
+     * environment variable, or properties file):</p>
+     * <ul>
+     *     <li>{@code maxLogEntries} &rarr; 1,000 (instead of the heap-based default up to 100,000)</li>
+     *     <li>{@code maxExpectations} &rarr; 1,000 (instead of the heap-based default up to 15,000)</li>
+     * </ul>
+     * <p>Default: {@code false}. Enable via {@code --dev} CLI flag, {@code -Dmockserver.devMode=true},
+     * or {@code MOCKSERVER_DEV_MODE=true}.</p>
+     */
+    public static boolean devMode() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DEV_MODE, "MOCKSERVER_DEV_MODE", "" + false));
+    }
+
+    /**
+     * Enable or disable dev mode. Dev-mode defaults for {@code maxLogEntries} and
+     * {@code maxExpectations} are applied lazily by the getters via
+     * {@link #devModeDefaultOrHeapBased} — no eager global-state mutation here.
+     *
+     * @param enable enable dev mode
+     */
+    public static void devMode(boolean enable) {
+        setProperty(MOCKSERVER_DEV_MODE, "" + enable);
+    }
+
+    /**
+     * Returns {@code true} when a property has been explicitly configured by the user
+     * (as a JVM system property, an environment variable, or in the properties file),
+     * as opposed to being at its built-in default.
+     */
+    static boolean isPropertyExplicitlySet(String systemPropertyKey, String environmentVariableKey) {
+        // Check JVM system property (directly, bypassing cache)
+        if (isNotBlank(System.getProperty(systemPropertyKey))) {
+            return true;
+        }
+        // Check environment variable
+        if (isNotBlank(System.getenv(environmentVariableKey))) {
+            return true;
+        }
+        // Check properties file
+        if (PROPERTIES != null && isNotBlank(PROPERTIES.getProperty(systemPropertyKey))) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns the dev-mode default when {@code devMode()} is {@code true} and the user has NOT
+     * explicitly set the given property via system property, environment variable, or properties
+     * file. Otherwise returns the normal heap-based default. This lazy approach ensures ALL
+     * activation paths (env var, system property, properties file, programmatic setter) work
+     * without mutating global state.
+     */
+    private static int devModeDefaultOrHeapBased(int devDefault, String systemPropertyKey, String envVarKey, int heapBasedDefault) {
+        if (devMode() && !isPropertyExplicitlySet(systemPropertyKey, envVarKey)) {
+            return devDefault;
+        }
+        return heapBasedDefault;
+    }
+
     // memory usage
 
     public static long heapAvailableInKB() {
@@ -740,7 +1113,10 @@ public class ConfigurationProperties {
     }
 
     public static int maxExpectations() {
-        return readIntegerProperty(MOCKSERVER_MAX_EXPECTATIONS, "MOCKSERVER_MAX_EXPECTATIONS", Math.min((int) (heapAvailableInKB() / 10), 15000));
+        return readIntegerProperty(MOCKSERVER_MAX_EXPECTATIONS, "MOCKSERVER_MAX_EXPECTATIONS", devModeDefaultOrHeapBased(
+            DEV_MODE_MAX_EXPECTATIONS, MOCKSERVER_MAX_EXPECTATIONS, "MOCKSERVER_MAX_EXPECTATIONS",
+            Math.min((int) (heapAvailableInKB() / 10), 15000)
+        ));
     }
 
     /**
@@ -758,7 +1134,10 @@ public class ConfigurationProperties {
     }
 
     public static int maxLogEntries() {
-        return readIntegerProperty(MOCKSERVER_MAX_LOG_ENTRIES, "MOCKSERVER_MAX_LOG_ENTRIES", Math.min((int) (heapAvailableInKB() / 8), 100000));
+        return readIntegerProperty(MOCKSERVER_MAX_LOG_ENTRIES, "MOCKSERVER_MAX_LOG_ENTRIES", devModeDefaultOrHeapBased(
+            DEV_MODE_MAX_LOG_ENTRIES, MOCKSERVER_MAX_LOG_ENTRIES, "MOCKSERVER_MAX_LOG_ENTRIES",
+            Math.min((int) (heapAvailableInKB() / 8), 100000)
+        ));
     }
 
     /**
@@ -1612,7 +1991,7 @@ public class ConfigurationProperties {
     /**
      * The value used for CORS in the access-control-allow-credentials header.
      * <p>
-     * The default is true
+     * The default is false
      *
      * @param allow the value used for CORS in the access-control-allow-credentials header
      */
@@ -1627,7 +2006,7 @@ public class ConfigurationProperties {
     /**
      * The value used for CORS in the access-control-max-age header.
      * <p>
-     * The default is 300
+     * The default is 0
      *
      * @param ageInSeconds the value used for CORS in the access-control-max-age header.
      */
@@ -1790,6 +2169,56 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_OPENAPI_RESPONSE_VALIDATION, "" + enable);
     }
 
+    public static String validateProxyOpenAPISpec() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC, "MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC", "");
+    }
+
+    /**
+     * <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML, MockServer validates every forwarded/proxied
+     * request and its upstream response against the spec and records violations as log events of type
+     * {@code OPENAPI_RESPONSE_VALIDATION_FAILED}. By default, validation is report-only (traffic is not blocked).</p>
+     *
+     * <p>The default is empty (disabled)</p>
+     *
+     * @param specUrlOrPayload the OpenAPI spec URL, file path, or inline payload to validate against
+     */
+    public static void validateProxyOpenAPISpec(String specUrlOrPayload) {
+        setProperty(MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC, specUrlOrPayload);
+    }
+
+    public static boolean validateProxyEnforce() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_VALIDATE_PROXY_ENFORCE, "MOCKSERVER_VALIDATE_PROXY_ENFORCE", "" + false));
+    }
+
+    /**
+     * <p>When enabled (and {@code validateProxyOpenAPISpec} is set), forwarded requests that violate the OpenAPI spec
+     * are rejected with a 400 status code, and upstream responses that violate the spec are replaced with a 502.
+     * When disabled (the default), violations are logged but traffic flows unmodified.</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param enable if enabled, non-conformant forwarded traffic is blocked
+     */
+    public static void validateProxyEnforce(boolean enable) {
+        setProperty(MOCKSERVER_VALIDATE_PROXY_ENFORCE, "" + enable);
+    }
+
+    public static boolean generateRealisticExampleValues() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES, "MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES", "" + false));
+    }
+
+    /**
+     * <p>If enabled, OpenAPI example generation uses realistic, schema/format-aware values (via Datafaker) instead of static placeholder strings.</p>
+     * <p>When disabled (the default), the existing static example values are used (e.g. "some_string_value", "some_email@mockserver.com").</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param enable if enabled OpenAPI examples will use realistic generated values
+     */
+    public static void generateRealisticExampleValues(boolean enable) {
+        setProperty(MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES, "" + enable);
+    }
+
     public static boolean watchInitializationJson() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_WATCH_INITIALIZATION_JSON, "MOCKSERVER_WATCH_INITIALIZATION_JSON", "" + false));
     }
@@ -1908,6 +2337,107 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_BLOB_STORE_TYPE, blobStoreType);
     }
 
+    // cloud blob store configuration
+
+    /**
+     * Returns the cloud blob store bucket name (S3 or GCS bucket).
+     */
+    public static String blobStoreBucket() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_BUCKET, "MOCKSERVER_BLOB_STORE_BUCKET", "");
+    }
+
+    public static void blobStoreBucket(String blobStoreBucket) {
+        setProperty(MOCKSERVER_BLOB_STORE_BUCKET, blobStoreBucket);
+    }
+
+    /**
+     * Returns the cloud blob store region (e.g. "us-east-1" for S3).
+     */
+    public static String blobStoreRegion() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_REGION, "MOCKSERVER_BLOB_STORE_REGION", "");
+    }
+
+    public static void blobStoreRegion(String blobStoreRegion) {
+        setProperty(MOCKSERVER_BLOB_STORE_REGION, blobStoreRegion);
+    }
+
+    /**
+     * Returns the cloud blob store endpoint override URL.
+     */
+    public static String blobStoreEndpoint() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_ENDPOINT, "MOCKSERVER_BLOB_STORE_ENDPOINT", "");
+    }
+
+    public static void blobStoreEndpoint(String blobStoreEndpoint) {
+        setProperty(MOCKSERVER_BLOB_STORE_ENDPOINT, blobStoreEndpoint);
+    }
+
+    /**
+     * Returns the key prefix for cloud blob store objects.
+     */
+    public static String blobStoreKeyPrefix() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_KEY_PREFIX, "MOCKSERVER_BLOB_STORE_KEY_PREFIX", "");
+    }
+
+    public static void blobStoreKeyPrefix(String blobStoreKeyPrefix) {
+        setProperty(MOCKSERVER_BLOB_STORE_KEY_PREFIX, blobStoreKeyPrefix);
+    }
+
+    /**
+     * Returns the explicit access key ID for cloud blob store authentication.
+     */
+    public static String blobStoreAccessKeyId() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID, "MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID", "");
+    }
+
+    public static void blobStoreAccessKeyId(String blobStoreAccessKeyId) {
+        setProperty(MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID, blobStoreAccessKeyId);
+    }
+
+    /**
+     * Returns the explicit secret access key for cloud blob store authentication.
+     */
+    public static String blobStoreSecretAccessKey() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY, "MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY", "");
+    }
+
+    public static void blobStoreSecretAccessKey(String blobStoreSecretAccessKey) {
+        setProperty(MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY, blobStoreSecretAccessKey);
+    }
+
+    /**
+     * Returns the Azure Blob Storage container name.
+     */
+    public static String blobStoreContainer() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_CONTAINER, "MOCKSERVER_BLOB_STORE_CONTAINER", "");
+    }
+
+    public static void blobStoreContainer(String blobStoreContainer) {
+        setProperty(MOCKSERVER_BLOB_STORE_CONTAINER, blobStoreContainer);
+    }
+
+    /**
+     * Returns the Azure Blob Storage connection string.
+     */
+    public static String blobStoreConnectionString() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_CONNECTION_STRING, "MOCKSERVER_BLOB_STORE_CONNECTION_STRING", "");
+    }
+
+    public static void blobStoreConnectionString(String blobStoreConnectionString) {
+        setProperty(MOCKSERVER_BLOB_STORE_CONNECTION_STRING, blobStoreConnectionString);
+    }
+
+    /**
+     * Returns the GCS project ID.
+     */
+    public static String blobStoreProjectId() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_BLOB_STORE_PROJECT_ID, "MOCKSERVER_BLOB_STORE_PROJECT_ID", "");
+    }
+
+    public static void blobStoreProjectId(String blobStoreProjectId) {
+        setProperty(MOCKSERVER_BLOB_STORE_PROJECT_ID, blobStoreProjectId);
+    }
+
     // --- clustering (G10 phase 2c) ---
 
     /**
@@ -1991,6 +2521,20 @@ public class ConfigurationProperties {
      */
     public static void detailedVerificationFailures(boolean enable) {
         setProperty(MOCKSERVER_DETAILED_VERIFICATION_FAILURES, "" + enable);
+    }
+
+    public static boolean attachMismatchDiagnosticToResponse() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE, "MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE", "" + false));
+    }
+
+    /**
+     * If true, when no expectation matches an incoming request the 404 response will include a diagnostic header (x-mockserver-closest-match)
+     * and a JSON body describing which expectation was closest to matching and which fields differed. Defaults to false.
+     *
+     * @param enable enable mismatch diagnostic in unmatched responses
+     */
+    public static void attachMismatchDiagnosticToResponse(boolean enable) {
+        setProperty(MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE, "" + enable);
     }
 
     // proxy
@@ -2778,11 +3322,11 @@ public class ConfigurationProperties {
      * MockServer will only be able to establish a TLS connection to endpoints that have a trusted X509 certificate according to the trust manager type, as follows:
      * <p>
      * <p>
-     * ALL - Insecure will trust all X509 certificates and not perform host name verification.
+     * ANY - Insecure will trust all X509 certificates and not perform host name verification.
      * JVM - Will trust all X509 certificates trust by the JVM.
      * CUSTOM - Will trust all X509 certificates specified in forwardProxyTLSCustomTrustX509Certificates configuration value.
      *
-     * @param trustManagerType trusted set of certificates for forwarded or proxied requests, allowed values: ALL, JVM, CUSTOM.
+     * @param trustManagerType trusted set of certificates for forwarded or proxied requests, allowed values: ANY, JVM, CUSTOM.
      */
     public static void forwardProxyTLSX509CertificatesTrustManagerType(ForwardProxyTLSX509CertificatesTrustManager trustManagerType) {
         setProperty(MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATES_TRUST_MANAGER_TYPE, trustManagerType.name());
@@ -2944,6 +3488,28 @@ public class ConfigurationProperties {
         }
     }
 
+    /**
+     * Returns {@code true} when the property name (with or without the
+     * {@code mockserver.} prefix) contains a substring that indicates the
+     * value is a secret and must not be logged verbatim.
+     */
+    static boolean isSensitivePropertyName(String name) {
+        if (name == null) {
+            return false;
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        // Strip prefix so "mockserver.llmApiKey" matches "apikey"
+        if (lower.startsWith("mockserver.")) {
+            lower = lower.substring("mockserver.".length());
+        }
+        for (String sensitive : SENSITIVE_SUBSTRINGS) {
+            if (lower.contains(sensitive)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @SuppressWarnings("ConstantConditions")
     private static Properties readPropertyFile() {
 
@@ -3013,7 +3579,8 @@ public class ConfigurationProperties {
             propertiesLogDump.append("Reading properties from property file [").append(propertyFile()).append("]:").append(NEW_LINE);
             while (propertyNames.hasMoreElements()) {
                 String propertyName = String.valueOf(propertyNames.nextElement());
-                propertiesLogDump.append("  ").append(propertyName).append(" = ").append(properties.getProperty(propertyName)).append(NEW_LINE);
+                String displayValue = isSensitivePropertyName(propertyName) ? REDACTED_VALUE : properties.getProperty(propertyName);
+                propertiesLogDump.append("  ").append(propertyName).append(" = ").append(displayValue).append(NEW_LINE);
             }
 
             Level logLevel = Level.valueOf(getSLF4JOrJavaLoggerToSLF4JLevelMapping().get(readPropertyHierarchically(properties, MOCKSERVER_LOG_LEVEL, "MOCKSERVER_LOG_LEVEL", DEFAULT_LOG_LEVEL).toUpperCase()));

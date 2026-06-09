@@ -20,8 +20,6 @@ import javax.net.ssl.SSLContext;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.notNullValue;
@@ -37,6 +35,7 @@ import static org.mockserver.model.HttpStatusCode.OK_200;
 import static org.mockserver.socket.tls.PEMToFile.privateKeyFromPEMFile;
 import static org.mockserver.socket.tls.PEMToFile.x509FromPEMFile;
 import static org.mockserver.stop.Stop.stopQuietly;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -89,18 +88,15 @@ public class ClientAuthenticationAdditionalCertificateChainMockingIntegrationTes
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(426)
-                .withReasonPhrase("Upgrade Required")
-                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(426)
+                .withReasonPhrase("Upgrade Required")
+                .withHeader("Upgrade", "TLS/1.2, HTTP/1.1")));
     }
 
     @Test
@@ -184,7 +180,8 @@ public class ClientAuthenticationAdditionalCertificateChainMockingIntegrationTes
                     containsString("Received fatal alert: internal_error"),
                     containsString("readHandshakeRecord"),
                     containsString("Broken pipe"),
-                    containsString("wrong type for socket")
+                    containsString("wrong type for socket"),
+                    containsString("Connection reset")
                 )
             );
         }

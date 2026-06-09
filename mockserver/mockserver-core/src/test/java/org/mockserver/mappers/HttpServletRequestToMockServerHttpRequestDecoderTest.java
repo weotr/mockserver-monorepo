@@ -13,7 +13,6 @@ import java.util.Enumeration;
 import java.util.HashSet;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.mockito.Mockito.mock;
@@ -21,6 +20,7 @@ import static org.mockito.Mockito.when;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.model.NottableString.string;
 
+import static org.hamcrest.core.Is.is;
 /**
  * @author jamesdbloom
  */
@@ -47,26 +47,26 @@ public class HttpServletRequestToMockServerHttpRequestDecoderTest {
         HttpRequest httpRequest = new HttpServletRequestToMockServerHttpRequestDecoder(configuration(), new MockServerLogger()).mapHttpServletRequestToMockServerRequest(httpServletRequest);
 
         // then
-        assertEquals(string("/requestURI"), httpRequest.getPath());
-        assertEquals(new ParameterBody(
+        assertThat(httpRequest.getPath(), is(string("/requestURI")));
+        assertThat(httpRequest.getBody().toString(), is(new ParameterBody(
             new Parameter("bodyParameterNameOne", "bodyParameterValueOne_One"),
             new Parameter("bodyParameterNameOne", "bodyParameterValueOne_Two"),
             new Parameter("bodyParameterNameTwo", "bodyParameterValueTwo_One")
-        ).toString(), httpRequest.getBody().toString());
-        assertEquals(new HashSet<>(Arrays.asList(
+        ).toString()));
+        assertThat(new HashSet<>(httpRequest.getQueryStringParameterList()), is(new HashSet<>(Arrays.asList(
             new Parameter("queryStringParameterNameOne", "queryStringParameterValueOne_One", "queryStringParameterValueOne_Two"),
             new Parameter("queryStringParameterNameTwo", "queryStringParameterValueTwo_One")
-        )), new HashSet<>(httpRequest.getQueryStringParameterList()));
-        assertEquals(Lists.newArrayList(
+        ))));
+        assertThat(httpRequest.getHeaderList(), is(Lists.newArrayList(
             new Header("headerName1", "headerValue1_1", "headerValue1_2"),
             new Header("headerName2", "headerValue2"),
             new Header("Content-Type", "multipart/form-data"),
             new Header("Cookie", "cookieName1=cookieValue1; cookieName2=cookieValue2")
-        ), httpRequest.getHeaderList());
-        assertEquals(Lists.newArrayList(
+        )));
+        assertThat(httpRequest.getCookieList(), is(Lists.newArrayList(
             new Cookie("cookieName1", "cookieValue1"),
             new Cookie("cookieName2", "cookieValue2")
-        ), httpRequest.getCookieList());
+        )));
         assertThat(httpRequest.getLocalAddress(), equalTo("local_addr:1234"));
         assertThat(httpRequest.getRemoteAddress(), equalTo("remote_addr:80"));
         assertThat(httpRequest.getProtocol(), equalTo(Protocol.HTTP_1_1));
@@ -84,7 +84,7 @@ public class HttpServletRequestToMockServerHttpRequestDecoderTest {
         HttpRequest httpRequest = new HttpServletRequestToMockServerHttpRequestDecoder(configuration(), new MockServerLogger()).mapHttpServletRequestToMockServerRequest(httpServletRequest);
 
         // then
-        assertEquals(string("/pathInfo"), httpRequest.getPath());
+        assertThat(httpRequest.getPath(), is(string("/pathInfo")));
     }
 
     @Test(expected = RuntimeException.class)

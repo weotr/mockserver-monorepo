@@ -40,9 +40,16 @@ public class Configuration {
     private Boolean metricsEnabled;
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
+    private Boolean chaosAutoHaltEnabled;
+    private Long chaosAutoHaltErrorThreshold;
+    private Long chaosAutoHaltWindowMillis;
     private Boolean otelPropagateTraceContext;
     private Boolean otelGenerateTraceId;
     private Boolean mcpEnabled;
+    private Boolean breakpointEnabled;
+    private Boolean breakpointResponseEnabled;
+    private Long breakpointTimeoutMillis;
+    private Integer breakpointMaxHeld;
     private Boolean wasmEnabled;
     private Integer wasmMaxMemoryPages;
     private String grpcDescriptorDirectory;
@@ -53,8 +60,19 @@ public class Configuration {
     private Boolean dnsEnabled;
     private Integer dnsPort;
     private Integer http3Port;
+    private Long http3MaxIdleTimeout;
+    private Long http3InitialMaxData;
+    private Long http3InitialMaxStreamDataBidirectional;
+    private Long http3InitialMaxStreamsBidirectional;
+    private Long http3QpackMaxTableCapacity;
+    private Boolean http3ConnectUdpEnabled;
+    private Long http3AltSvcMaxAge;
+    private Boolean http3AdvertiseAltSvc;
     private Map<String, String> logLevelOverrides;
     private Boolean compactLogFormat;
+
+    // dev mode
+    private Boolean devMode;
 
     // memory usage
     private Integer maxExpectations;
@@ -127,6 +145,9 @@ public class Configuration {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private String validateProxyOpenAPISpec;
+    private Boolean validateProxyEnforce;
+    private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
     // mock persistence
@@ -141,6 +162,17 @@ public class Configuration {
     private String stateBackend;
     private String blobStoreType;
 
+    // cloud blob store configuration
+    private String blobStoreBucket;
+    private String blobStoreRegion;
+    private String blobStoreEndpoint;
+    private String blobStoreKeyPrefix;
+    private String blobStoreAccessKeyId;
+    private String blobStoreSecretAccessKey;
+    private String blobStoreContainer;
+    private String blobStoreConnectionString;
+    private String blobStoreProjectId;
+
     // clustering (G10 phase 2c) — opt-in, default OFF
     private Boolean clusterEnabled;
     private String clusterName;
@@ -149,6 +181,7 @@ public class Configuration {
     // verification
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Boolean detailedVerificationFailures;
+    private Boolean attachMismatchDiagnosticToResponse;
 
     // proxy
     // volatile: mutated at runtime via PUT /mockserver/mode (control-plane thread) and read on the
@@ -231,6 +264,8 @@ public class Configuration {
     // service mesh / sidecar
     private Boolean transparentProxyEnabled;
     private Boolean transparentProxyTproxy;
+    private Boolean transparentProxyEbpf;
+    private String transparentProxyEbpfMapPath;
 
     // async messaging defaults
     private String asyncKafkaBootstrapServers;
@@ -399,6 +434,61 @@ public class Configuration {
         return this;
     }
 
+    public Boolean chaosAutoHaltEnabled() {
+        if (chaosAutoHaltEnabled == null) {
+            return ConfigurationProperties.chaosAutoHaltEnabled();
+        }
+        return chaosAutoHaltEnabled;
+    }
+
+    /**
+     * Enable the chaos auto-halt circuit-breaker. When enabled, if the number of chaos-injected
+     * errors within a sliding window exceeds the configured threshold, all active service-scoped
+     * chaos profiles are automatically disabled. Default is false (feature off).
+     *
+     * @param chaosAutoHaltEnabled enable chaos auto-halt
+     */
+    public Configuration chaosAutoHaltEnabled(Boolean chaosAutoHaltEnabled) {
+        this.chaosAutoHaltEnabled = chaosAutoHaltEnabled;
+        return this;
+    }
+
+    public Long chaosAutoHaltErrorThreshold() {
+        if (chaosAutoHaltErrorThreshold == null) {
+            return ConfigurationProperties.chaosAutoHaltErrorThreshold();
+        }
+        return chaosAutoHaltErrorThreshold;
+    }
+
+    /**
+     * The number of chaos-injected errors within the sliding window that triggers an
+     * automatic halt of all active service-scoped chaos profiles. Default is 50.
+     *
+     * @param chaosAutoHaltErrorThreshold error count threshold
+     */
+    public Configuration chaosAutoHaltErrorThreshold(Long chaosAutoHaltErrorThreshold) {
+        this.chaosAutoHaltErrorThreshold = chaosAutoHaltErrorThreshold;
+        return this;
+    }
+
+    public Long chaosAutoHaltWindowMillis() {
+        if (chaosAutoHaltWindowMillis == null) {
+            return ConfigurationProperties.chaosAutoHaltWindowMillis();
+        }
+        return chaosAutoHaltWindowMillis;
+    }
+
+    /**
+     * The sliding window duration in milliseconds over which chaos-injected errors are
+     * counted for the auto-halt circuit-breaker. Default is 60000 (60 seconds).
+     *
+     * @param chaosAutoHaltWindowMillis window duration in milliseconds
+     */
+    public Configuration chaosAutoHaltWindowMillis(Long chaosAutoHaltWindowMillis) {
+        this.chaosAutoHaltWindowMillis = chaosAutoHaltWindowMillis;
+        return this;
+    }
+
     public Boolean otelPropagateTraceContext() {
         if (otelPropagateTraceContext == null) {
             return ConfigurationProperties.otelPropagateTraceContext();
@@ -444,6 +534,71 @@ public class Configuration {
 
     public Configuration mcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
+        return this;
+    }
+
+    public Boolean breakpointEnabled() {
+        if (breakpointEnabled == null) {
+            return ConfigurationProperties.breakpointEnabled();
+        }
+        return breakpointEnabled;
+    }
+
+    /**
+     * Enable interactive request breakpoints for proxied/forwarded requests.
+     * Default is false (off).
+     */
+    public Configuration breakpointEnabled(Boolean breakpointEnabled) {
+        this.breakpointEnabled = breakpointEnabled;
+        return this;
+    }
+
+    public Boolean breakpointResponseEnabled() {
+        if (breakpointResponseEnabled == null) {
+            return ConfigurationProperties.breakpointResponseEnabled();
+        }
+        return breakpointResponseEnabled;
+    }
+
+    /**
+     * Enable interactive response breakpoints for proxied/forwarded requests.
+     * Holds the upstream response before writing it to the client. Independent
+     * of {@link #breakpointEnabled()} (request breakpoints). Default is false (off).
+     */
+    public Configuration breakpointResponseEnabled(Boolean breakpointResponseEnabled) {
+        this.breakpointResponseEnabled = breakpointResponseEnabled;
+        return this;
+    }
+
+    public Long breakpointTimeoutMillis() {
+        if (breakpointTimeoutMillis == null) {
+            return ConfigurationProperties.breakpointTimeoutMillis();
+        }
+        return breakpointTimeoutMillis;
+    }
+
+    /**
+     * Maximum time in milliseconds a request may be held at a breakpoint before auto-continue.
+     * Default is 30000 (30 seconds).
+     */
+    public Configuration breakpointTimeoutMillis(Long breakpointTimeoutMillis) {
+        this.breakpointTimeoutMillis = breakpointTimeoutMillis;
+        return this;
+    }
+
+    public Integer breakpointMaxHeld() {
+        if (breakpointMaxHeld == null) {
+            return ConfigurationProperties.breakpointMaxHeld();
+        }
+        return breakpointMaxHeld;
+    }
+
+    /**
+     * Maximum number of requests that can be simultaneously held at breakpoints (DoS rail).
+     * Default is 50.
+     */
+    public Configuration breakpointMaxHeld(Integer breakpointMaxHeld) {
+        this.breakpointMaxHeld = breakpointMaxHeld;
         return this;
     }
 
@@ -578,6 +733,102 @@ public class Configuration {
         return this;
     }
 
+    public Long http3MaxIdleTimeout() {
+        if (http3MaxIdleTimeout == null) {
+            return ConfigurationProperties.http3MaxIdleTimeout();
+        }
+        return Math.max(0, http3MaxIdleTimeout);
+    }
+
+    public Configuration http3MaxIdleTimeout(Long http3MaxIdleTimeout) {
+        this.http3MaxIdleTimeout = http3MaxIdleTimeout;
+        return this;
+    }
+
+    public Long http3InitialMaxData() {
+        if (http3InitialMaxData == null) {
+            return ConfigurationProperties.http3InitialMaxData();
+        }
+        return Math.max(0, http3InitialMaxData);
+    }
+
+    public Configuration http3InitialMaxData(Long http3InitialMaxData) {
+        this.http3InitialMaxData = http3InitialMaxData;
+        return this;
+    }
+
+    public Long http3InitialMaxStreamDataBidirectional() {
+        if (http3InitialMaxStreamDataBidirectional == null) {
+            return ConfigurationProperties.http3InitialMaxStreamDataBidirectional();
+        }
+        return Math.max(0, http3InitialMaxStreamDataBidirectional);
+    }
+
+    public Configuration http3InitialMaxStreamDataBidirectional(Long http3InitialMaxStreamDataBidirectional) {
+        this.http3InitialMaxStreamDataBidirectional = http3InitialMaxStreamDataBidirectional;
+        return this;
+    }
+
+    public Long http3InitialMaxStreamsBidirectional() {
+        if (http3InitialMaxStreamsBidirectional == null) {
+            return ConfigurationProperties.http3InitialMaxStreamsBidirectional();
+        }
+        return Math.max(0, http3InitialMaxStreamsBidirectional);
+    }
+
+    public Configuration http3InitialMaxStreamsBidirectional(Long http3InitialMaxStreamsBidirectional) {
+        this.http3InitialMaxStreamsBidirectional = http3InitialMaxStreamsBidirectional;
+        return this;
+    }
+
+    public Long http3QpackMaxTableCapacity() {
+        if (http3QpackMaxTableCapacity == null) {
+            return ConfigurationProperties.http3QpackMaxTableCapacity();
+        }
+        return Math.max(0, http3QpackMaxTableCapacity);
+    }
+
+    public Configuration http3QpackMaxTableCapacity(Long http3QpackMaxTableCapacity) {
+        this.http3QpackMaxTableCapacity = http3QpackMaxTableCapacity;
+        return this;
+    }
+
+    public Boolean http3ConnectUdpEnabled() {
+        if (http3ConnectUdpEnabled == null) {
+            return ConfigurationProperties.http3ConnectUdpEnabled();
+        }
+        return http3ConnectUdpEnabled;
+    }
+
+    public Configuration http3ConnectUdpEnabled(Boolean http3ConnectUdpEnabled) {
+        this.http3ConnectUdpEnabled = http3ConnectUdpEnabled;
+        return this;
+    }
+
+    public Long http3AltSvcMaxAge() {
+        if (http3AltSvcMaxAge == null) {
+            return ConfigurationProperties.http3AltSvcMaxAge();
+        }
+        return Math.max(0, http3AltSvcMaxAge);
+    }
+
+    public Configuration http3AltSvcMaxAge(Long http3AltSvcMaxAge) {
+        this.http3AltSvcMaxAge = http3AltSvcMaxAge;
+        return this;
+    }
+
+    public Boolean http3AdvertiseAltSvc() {
+        if (http3AdvertiseAltSvc == null) {
+            return ConfigurationProperties.http3AdvertiseAltSvc();
+        }
+        return http3AdvertiseAltSvc;
+    }
+
+    public Configuration http3AdvertiseAltSvc(Boolean http3AdvertiseAltSvc) {
+        this.http3AdvertiseAltSvc = http3AdvertiseAltSvc;
+        return this;
+    }
+
     public Map<String, String> logLevelOverrides() {
         if (logLevelOverrides == null) {
             return ConfigurationProperties.logLevelOverrides();
@@ -602,8 +853,26 @@ public class Configuration {
         return this;
     }
 
+    public Boolean devMode() {
+        if (devMode == null) {
+            return ConfigurationProperties.devMode();
+        }
+        return devMode;
+    }
+
+    public Configuration devMode(Boolean devMode) {
+        this.devMode = devMode;
+        return this;
+    }
+
     public Integer maxExpectations() {
         if (maxExpectations == null) {
+            // Honour the instance devMode field so that
+            // configuration.devMode(true) applies the dev default without
+            // needing to set the global ConfigurationProperties.devMode.
+            if (Boolean.TRUE.equals(devMode)) {
+                return ConfigurationProperties.DEV_MODE_MAX_EXPECTATIONS;
+            }
             return ConfigurationProperties.maxExpectations();
         }
         return maxExpectations;
@@ -626,6 +895,12 @@ public class Configuration {
 
     public Integer maxLogEntries() {
         if (maxLogEntries == null) {
+            // Honour the instance devMode field so that
+            // configuration.devMode(true) applies the dev default without
+            // needing to set the global ConfigurationProperties.devMode.
+            if (Boolean.TRUE.equals(devMode)) {
+                return ConfigurationProperties.DEV_MODE_MAX_LOG_ENTRIES;
+            }
             return ConfigurationProperties.maxLogEntries();
         }
         return maxLogEntries;
@@ -1565,6 +1840,66 @@ public class Configuration {
         return this;
     }
 
+    public String validateProxyOpenAPISpec() {
+        if (validateProxyOpenAPISpec == null) {
+            return ConfigurationProperties.validateProxyOpenAPISpec();
+        }
+        return validateProxyOpenAPISpec;
+    }
+
+    /**
+     * <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML, MockServer validates every forwarded/proxied
+     * request and its upstream response against the spec and records violations as log events.</p>
+     *
+     * <p>The default is empty (disabled)</p>
+     *
+     * @param validateProxyOpenAPISpec the OpenAPI spec URL, file path, or inline payload to validate against
+     */
+    public Configuration validateProxyOpenAPISpec(String validateProxyOpenAPISpec) {
+        this.validateProxyOpenAPISpec = validateProxyOpenAPISpec;
+        return this;
+    }
+
+    public Boolean validateProxyEnforce() {
+        if (validateProxyEnforce == null) {
+            return ConfigurationProperties.validateProxyEnforce();
+        }
+        return validateProxyEnforce;
+    }
+
+    /**
+     * <p>When enabled (and {@code validateProxyOpenAPISpec} is set), forwarded requests that violate the OpenAPI spec
+     * are rejected with a 400 status code, and upstream responses that violate the spec are replaced with a 502.</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param validateProxyEnforce if enabled, non-conformant forwarded traffic is blocked
+     */
+    public Configuration validateProxyEnforce(Boolean validateProxyEnforce) {
+        this.validateProxyEnforce = validateProxyEnforce;
+        return this;
+    }
+
+    public Boolean generateRealisticExampleValues() {
+        if (generateRealisticExampleValues == null) {
+            return ConfigurationProperties.generateRealisticExampleValues();
+        }
+        return generateRealisticExampleValues;
+    }
+
+    /**
+     * <p>If enabled, OpenAPI example generation uses realistic, schema/format-aware values (via Datafaker) instead of static placeholder strings.</p>
+     * <p>When disabled (the default), the existing static example values are used (e.g. "some_string_value", "some_email@mockserver.com").</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param generateRealisticExampleValues if enabled OpenAPI examples will use realistic generated values
+     */
+    public Configuration generateRealisticExampleValues(Boolean generateRealisticExampleValues) {
+        this.generateRealisticExampleValues = generateRealisticExampleValues;
+        return this;
+    }
+
     public Boolean watchInitializationJson() {
         if (watchInitializationJson == null) {
             return ConfigurationProperties.watchInitializationJson();
@@ -1705,6 +2040,149 @@ public class Configuration {
         return this;
     }
 
+    // --- cloud blob store configuration ---
+
+    /**
+     * Returns the cloud blob store bucket name (S3 bucket or GCS bucket).
+     */
+    public String blobStoreBucket() {
+        if (blobStoreBucket == null) {
+            return ConfigurationProperties.blobStoreBucket();
+        }
+        return blobStoreBucket;
+    }
+
+    public Configuration blobStoreBucket(String blobStoreBucket) {
+        this.blobStoreBucket = blobStoreBucket;
+        return this;
+    }
+
+    /**
+     * Returns the cloud blob store region (e.g. "us-east-1" for S3).
+     */
+    public String blobStoreRegion() {
+        if (blobStoreRegion == null) {
+            return ConfigurationProperties.blobStoreRegion();
+        }
+        return blobStoreRegion;
+    }
+
+    public Configuration blobStoreRegion(String blobStoreRegion) {
+        this.blobStoreRegion = blobStoreRegion;
+        return this;
+    }
+
+    /**
+     * Returns the cloud blob store endpoint override URL (e.g. MinIO
+     * endpoint for S3-compatible stores, or fake-gcs-server URL).
+     */
+    public String blobStoreEndpoint() {
+        if (blobStoreEndpoint == null) {
+            return ConfigurationProperties.blobStoreEndpoint();
+        }
+        return blobStoreEndpoint;
+    }
+
+    public Configuration blobStoreEndpoint(String blobStoreEndpoint) {
+        this.blobStoreEndpoint = blobStoreEndpoint;
+        return this;
+    }
+
+    /**
+     * Returns the key prefix for cloud blob store objects. All blob keys
+     * are prefixed with this value (e.g. "mockserver/" to namespace
+     * objects within a shared bucket).
+     */
+    public String blobStoreKeyPrefix() {
+        if (blobStoreKeyPrefix == null) {
+            return ConfigurationProperties.blobStoreKeyPrefix();
+        }
+        return blobStoreKeyPrefix;
+    }
+
+    public Configuration blobStoreKeyPrefix(String blobStoreKeyPrefix) {
+        this.blobStoreKeyPrefix = blobStoreKeyPrefix;
+        return this;
+    }
+
+    /**
+     * Returns the explicit access key ID for cloud blob store
+     * authentication (optional -- falls back to default credential chain).
+     */
+    public String blobStoreAccessKeyId() {
+        if (blobStoreAccessKeyId == null) {
+            return ConfigurationProperties.blobStoreAccessKeyId();
+        }
+        return blobStoreAccessKeyId;
+    }
+
+    public Configuration blobStoreAccessKeyId(String blobStoreAccessKeyId) {
+        this.blobStoreAccessKeyId = blobStoreAccessKeyId;
+        return this;
+    }
+
+    /**
+     * Returns the explicit secret access key for cloud blob store
+     * authentication (optional -- falls back to default credential chain).
+     */
+    public String blobStoreSecretAccessKey() {
+        if (blobStoreSecretAccessKey == null) {
+            return ConfigurationProperties.blobStoreSecretAccessKey();
+        }
+        return blobStoreSecretAccessKey;
+    }
+
+    public Configuration blobStoreSecretAccessKey(String blobStoreSecretAccessKey) {
+        this.blobStoreSecretAccessKey = blobStoreSecretAccessKey;
+        return this;
+    }
+
+    /**
+     * Returns the Azure Blob Storage container name.
+     */
+    public String blobStoreContainer() {
+        if (blobStoreContainer == null) {
+            return ConfigurationProperties.blobStoreContainer();
+        }
+        return blobStoreContainer;
+    }
+
+    public Configuration blobStoreContainer(String blobStoreContainer) {
+        this.blobStoreContainer = blobStoreContainer;
+        return this;
+    }
+
+    /**
+     * Returns the Azure Blob Storage connection string.
+     */
+    public String blobStoreConnectionString() {
+        if (blobStoreConnectionString == null) {
+            return ConfigurationProperties.blobStoreConnectionString();
+        }
+        return blobStoreConnectionString;
+    }
+
+    public Configuration blobStoreConnectionString(String blobStoreConnectionString) {
+        this.blobStoreConnectionString = blobStoreConnectionString;
+        return this;
+    }
+
+    /**
+     * Returns the GCS project ID (optional -- falls back to default
+     * project from application default credentials).
+     */
+    public String blobStoreProjectId() {
+        if (blobStoreProjectId == null) {
+            return ConfigurationProperties.blobStoreProjectId();
+        }
+        return blobStoreProjectId;
+    }
+
+    public Configuration blobStoreProjectId(String blobStoreProjectId) {
+        this.blobStoreProjectId = blobStoreProjectId;
+        return this;
+    }
+
     // --- clustering (G10 phase 2c) ---
 
     /**
@@ -1806,6 +2284,24 @@ public class Configuration {
      */
     public Configuration detailedVerificationFailures(Boolean detailedVerificationFailures) {
         this.detailedVerificationFailures = detailedVerificationFailures;
+        return this;
+    }
+
+    public Boolean attachMismatchDiagnosticToResponse() {
+        if (attachMismatchDiagnosticToResponse == null) {
+            return ConfigurationProperties.attachMismatchDiagnosticToResponse();
+        }
+        return attachMismatchDiagnosticToResponse;
+    }
+
+    /**
+     * If true, when no expectation matches an incoming request the 404 response will include a diagnostic header (x-mockserver-closest-match)
+     * and a JSON body describing which expectation was closest to matching and which fields differed. Defaults to false.
+     *
+     * @param attachMismatchDiagnosticToResponse enable mismatch diagnostic in unmatched responses
+     */
+    public Configuration attachMismatchDiagnosticToResponse(Boolean attachMismatchDiagnosticToResponse) {
+        this.attachMismatchDiagnosticToResponse = attachMismatchDiagnosticToResponse;
         return this;
     }
 
@@ -2821,6 +3317,47 @@ public class Configuration {
      */
     public Configuration transparentProxyTproxy(Boolean transparentProxyTproxy) {
         this.transparentProxyTproxy = transparentProxyTproxy;
+        return this;
+    }
+
+    public Boolean transparentProxyEbpf() {
+        if (transparentProxyEbpf == null) {
+            return ConfigurationProperties.transparentProxyEbpf();
+        }
+        return transparentProxyEbpf;
+    }
+
+    /**
+     * Enable eBPF-based original destination resolution for transparent proxy mode.
+     * When enabled, the resolver reads from a pinned BPF hash map (populated by an
+     * external cgroup/connect4 BPF program) keyed by socket cookie. Requires Linux,
+     * CAP_BPF (or root), a BTF-enabled kernel, and an external BPF program that
+     * populates the map. Default: false.
+     *
+     * @param transparentProxyEbpf enable eBPF original destination resolution
+     */
+    public Configuration transparentProxyEbpf(Boolean transparentProxyEbpf) {
+        this.transparentProxyEbpf = transparentProxyEbpf;
+        return this;
+    }
+
+    public String transparentProxyEbpfMapPath() {
+        if (transparentProxyEbpfMapPath == null) {
+            return ConfigurationProperties.transparentProxyEbpfMapPath();
+        }
+        return transparentProxyEbpfMapPath;
+    }
+
+    /**
+     * Path to the pinned BPF map used by the eBPF original destination resolver.
+     * The map must be a BPF hash map keyed by u64 (socket cookie) with a 6-byte
+     * value (4-byte IPv4 address + 2-byte port, both in network byte order).
+     * Default: {@code /sys/fs/bpf/mockserver_orig_dst}.
+     *
+     * @param transparentProxyEbpfMapPath path to the pinned BPF map
+     */
+    public Configuration transparentProxyEbpfMapPath(String transparentProxyEbpfMapPath) {
+        this.transparentProxyEbpfMapPath = transparentProxyEbpfMapPath;
         return this;
     }
 

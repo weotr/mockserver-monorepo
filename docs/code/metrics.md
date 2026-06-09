@@ -54,6 +54,13 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 | `response_template_actions_count` | Response template actions executed |
 | `response_class_callback_actions_count` | Response class callback actions executed |
 | `response_object_callback_actions_count` | Response object callback actions executed |
+| `sse_response_actions_count` | SSE (server-sent events) response actions executed |
+| `llm_response_actions_count` | LLM response actions executed |
+| `llm_chaos_injected_count` | LLM chaos faults injected |
+| `websocket_response_actions_count` | WebSocket response actions executed |
+| `grpc_stream_response_actions_count` | gRPC stream response actions executed |
+| `binary_response_actions_count` | Binary response actions executed |
+| `dns_response_actions_count` | DNS response actions executed |
 | `error_actions_count` | Error actions executed |
 
 #### WebSocket Callbacks
@@ -70,8 +77,8 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 
 | Label | Description |
 |-------|-------------|
-| `version` | Full version (e.g. `6.1.0`) |
-| `major_minor_version` | Major.minor version (e.g. `5.15`) |
+| `version` | Full version (e.g. `7.0.0`) |
+| `major_minor_version` | Major.minor version (e.g. `6.1`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
 | `git_hash` | Abbreviated git commit hash the build was produced from, or `unknown` when no git metadata is available |
@@ -92,6 +99,8 @@ The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Promethe
 
 These let Grafana and the dashboard Metrics view chart heap/GC/thread behaviour alongside the request and action counters.
 
+> **Perf-regression sampler dependency:** `perf-test-run.sh` (the performance regression pipeline's run step) scrapes `/mockserver/metrics` every 5 seconds during a growth run and reads exactly these three series by name: `jvm_memory_used_bytes{area="heap"}`, `jvm_gc_collection_seconds_sum`, and `jvm_threads_current`. If these metric names change, `perf-test-run.sh` must be updated in the same commit.
+
 ### Request Latency Histogram
 
 `mock_server_request_duration_seconds` is a Prometheus classic histogram of request handling duration (receipt → response), with buckets from 0.5 ms to 10 s. It exposes the usual `_bucket{le="…"}`, `_sum`, and `_count` series, so Grafana/PromQL can derive latency percentiles, e.g.:
@@ -104,13 +113,18 @@ It is registered (once) when `metricsEnabled`. Timing is captured per `NettyResp
 
 ### HTTP Chaos Fault Counter
 
-`mock_server_http_chaos_injected_total` is a Prometheus `Counter` with a `fault_type` label (values: `"drop"`, `"error"`, or `"latency"`) that tracks every HTTP chaos fault injected by the chaos profile subsystem. It is registered once when `metricsEnabled` is `true`.
+`mock_server_http_chaos_injected_total` is a Prometheus `Counter` with a `fault_type` label (values: `"drop"`, `"error"`, `"latency"`, `"truncate"`, `"malformed"`, `"slow"`, `"quota"`, `"graphql"`) that tracks every HTTP chaos fault injected by the chaos profile subsystem. It is registered once when `metricsEnabled` is `true`.
 
 | Label Value | Incremented When |
 |-------------|------------------|
 | `drop` | A chaos profile drops the TCP connection without sending any response |
 | `error` | A chaos profile injects an HTTP error status instead of the normal response |
 | `latency` | A chaos profile injects artificial latency into a response |
+| `truncate` | A chaos profile truncates the response body |
+| `malformed` | A chaos profile emits a malformed/corrupted response |
+| `slow` | A chaos profile drip-feeds the response slowly (chunk delay) |
+| `quota` | A chaos profile returns a quota/rate-limit fault once the limit in a window is exceeded |
+| `graphql` | A chaos profile injects a GraphQL-shaped error response |
 
 `Metrics.incrementHttpChaosInjected(faultType)` is a static no-op when metrics are disabled (the counter is `null`). This counter is surfaced on the dashboard Metrics view as an "HTTP Chaos Faults" section (visible only when the metric is present and has non-zero data).
 
@@ -122,9 +136,52 @@ rate(mock_server_http_chaos_injected_total{fault_type="error"}[5m])
 
 ### Active Service-Scoped Chaos Gauge
 
-`mock_server_active_service_chaos` is a Prometheus `GaugeWithCallback` with a `fault_type` label (values: `drop`, `error`, `latency`, `truncate`, `malformed`, `slow`, `quota`) reporting, per fault type, the number of currently-active service-scoped chaos profiles (`ServiceChaosRegistry`) configured with that fault. A profile carrying several faults counts under each, so the per-type series can be charted by type. (`slow` and `quota` require their companion fields — chunk-delay, and limit + window — to be counted, matching when they actually fire.) It is a *callback* gauge — the callback reads `Metrics.getActiveServiceChaosCountByFaultType()` → `ServiceChaosRegistry.getInstance().activeCountByFaultType()` at scrape time rather than tracking the value imperatively, so TTL auto-revert (which removes a profile without any `put`/`remove` call) is reflected without extra plumbing. Every fault type is always present (0 when none), giving a stable, complete set of series. It is registered once when `metricsEnabled` is `true`; the counts drop to 0 as profiles are cleared or their TTLs lapse, which makes `sum(mock_server_active_service_chaos) > 0` a natural "chaos still live" alert.
+`mock_server_active_service_chaos` is a Prometheus `GaugeWithCallback` with a `fault_type` label (values: `drop`, `error`, `latency`, `truncate`, `malformed`, `slow`, `quota`, `graphql`) reporting, per fault type, the number of currently-active service-scoped chaos profiles (`ServiceChaosRegistry`) configured with that fault. A profile carrying several faults counts under each, so the per-type series can be charted by type. (`slow` and `quota` require their companion fields — chunk-delay, and limit + window — to be counted, matching when they actually fire.) It is a *callback* gauge — the callback reads `Metrics.getActiveServiceChaosCountByFaultType()` → `ServiceChaosRegistry.getInstance().activeCountByFaultType()` at scrape time rather than tracking the value imperatively, so TTL auto-revert (which removes a profile without any `put`/`remove` call) is reflected without extra plumbing. Every fault type is always present (0 when none), giving a stable, complete set of series. It is registered once when `metricsEnabled` is `true`; the counts drop to 0 as profiles are cleared or their TTLs lapse, which makes `sum(mock_server_active_service_chaos) > 0` a natural "chaos still live" alert.
 
 Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`registerChaosCounter` / `registerActiveServiceChaosGauge`) so OTLP-only consumers can observe them without a Prometheus scrape.
+
+### Chaos Auto-Halt Counter
+
+`mock_server_chaos_auto_halt` is a Prometheus `Counter` that increments each time the chaos auto-halt circuit-breaker triggers. The circuit-breaker is a safety mechanism that automatically disables all active service-scoped chaos profiles when the number of **error-class** chaos faults within a sliding window exceeds a configured threshold. This prevents chaos experiments from driving cascading outages.
+
+Only **destructive** fault types contribute to the window: `"error"` (synthetic 5xx), `"drop"` (connection kill), and `"quota"` (429/503). Benign fault types (`"latency"`, `"slow"`, `"truncate"`, `"malformed"`, `"graphql"`) are excluded -- a latency-only experiment will never auto-halt.
+
+The auto-halt feature is controlled by three configuration properties (all off/inert by default):
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `chaosAutoHaltEnabled` | `false` | Master switch for the circuit-breaker |
+| `chaosAutoHaltErrorThreshold` | `50` | Number of error-class faults (5xx/dropped/quota) in the window that triggers halt |
+| `chaosAutoHaltWindowMillis` | `60000` | Sliding window duration in milliseconds |
+
+When the circuit-breaker fires:
+1. All active service-scoped chaos profiles are removed via `ServiceChaosRegistry.reset()` (the same path used by TTL expiry)
+2. The `mock_server_chaos_auto_halt` counter is incremented
+3. The `mock_server_active_service_chaos` gauge drops to 0 for all fault types
+4. A WARN-level log event is emitted with the error count, window, and threshold
+5. The sliding window is cleared so the breaker does not immediately re-trigger
+
+The monitor is also reset by `HttpState.reset()` (alongside `ServiceChaosRegistry.reset()`), so a server reset clears stale errors from the window and prevents them from halting freshly-registered chaos.
+
+The auto-halt is evaluated per chaos fault injection (called from `Metrics.incrementHttpChaosInjected`). It uses a lock-free `ConcurrentLinkedDeque` of timestamps with an `AtomicInteger` window counter (O(1) size check) and an `AtomicBoolean` guard to prevent concurrent double-trigger. When the feature is disabled (`chaosAutoHaltEnabled=false`), the evaluation is a no-op with zero overhead.
+
+Example PromQL alert rule:
+```promql
+increase(mock_server_chaos_auto_halt[5m]) > 0
+```
+
+### Async Message Counters
+
+Two Prometheus `Counter`s track broker message flow for the optional `mockserver-async` (AsyncAPI broker-mocking) module, each labelled by `channel` (the broker topic/channel). Both are registered once when `metricsEnabled` is `true`.
+
+| Metric Name | Incremented When |
+|-------------|------------------|
+| `mock_server_async_messages_published_total` | MockServer publishes an example message to a broker — one increment per message in `AsyncApiMockOrchestrator.publishAll()` (covers both publish-on-load and scheduled publishing) |
+| `mock_server_async_messages_consumed_total` | MockServer records a message consumed from a broker subscription — one increment per message in the `KafkaMessageSubscriber` / `MqttMessageSubscriber` record path |
+
+`mockserver-async` depends on `mockserver-core` (optional scope) and calls the static `Metrics.incrementAsyncMessagePublished(channel)` / `Metrics.incrementAsyncMessageConsumed(channel)` methods directly; both are null-safe no-ops when metrics are disabled, so the async hot paths pay nothing when metrics are off. These counters only move when a real broker is connected (`brokerConfig` with `kafkaBootstrapServers`/`mqttBrokerUrl`); a broker-less spec load leaves them at zero.
+
+The dashboard **Metrics** view renders these on a dedicated **"Async message activity (cumulative)"** chart — kept separate from the HTTP **"HTTP request activity"** chart because broker message counts and HTTP request counts have different semantics. The two series (Published, Consumed) are summed across all channels client-side via `gaugeSeriesSum`; the panel is hidden until at least one async counter has data.
 
 ### How Metrics Are Incremented
 
@@ -179,6 +236,7 @@ Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`regist
 | `MetricsHandler` | mockserver-core | `org.mockserver.metrics.MetricsHandler` |
 | `BuildInfoCollector` | mockserver-core | `org.mockserver.metrics.BuildInfoCollector` |
 | `JvmMetricsCollector` | mockserver-core | `org.mockserver.metrics.JvmMetricsCollector` |
+| `ChaosAutoHaltMonitor` | mockserver-core | `org.mockserver.mock.action.http.ChaosAutoHaltMonitor` |
 | `MemoryMonitoring` | mockserver-core | `org.mockserver.memory.MemoryMonitoring` |
 | `Summary` | mockserver-core | `org.mockserver.memory.Summary` |
 | `Detail` | mockserver-core | `org.mockserver.memory.Detail` |
@@ -187,6 +245,6 @@ Both chaos metrics are also mirrored over OTLP by `OtelMetricsExporter` (`regist
 
 | GroupId | ArtifactId | Version | Purpose |
 |---------|-----------|---------|---------|
-| `io.prometheus` | `prometheus-metrics-core` | 1.3.6 | Prometheus client library (Gauge, MultiCollector, PrometheusRegistry) |
-| `io.prometheus` | `prometheus-metrics-exposition-formats` | 1.3.6 | Prometheus exposition format writers |
-| `io.prometheus` | `prometheus-metrics-model` | 1.3.6 | Prometheus metric snapshots and labels |
+| `io.prometheus` | `prometheus-metrics-core` | 1.7.0 | Prometheus client library (Gauge, MultiCollector, PrometheusRegistry) |
+| `io.prometheus` | `prometheus-metrics-exposition-formats` | 1.7.0 | Prometheus exposition format writers |
+| `io.prometheus` | `prometheus-metrics-model` | 1.7.0 | Prometheus metric snapshots and labels |

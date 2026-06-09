@@ -10,12 +10,23 @@ import Tab from '@mui/material/Tab';
 import Divider from '@mui/material/Divider';
 import Button from '@mui/material/Button';
 import Tooltip from '@mui/material/Tooltip';
+import Checkbox from '@mui/material/Checkbox';
+import ToggleButton from '@mui/material/ToggleButton';
+import Alert from '@mui/material/Alert';
+import CircularProgress from '@mui/material/CircularProgress';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
 import SearchIcon from '@mui/icons-material/Search';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
+import ReplayIcon from '@mui/icons-material/Replay';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { useDashboardStore } from '../store';
 import { useConnectionParams } from '../hooks/useConnectionParams';
 import JsonViewer from './JsonViewer';
 import CaptureAsMockDialog from './CaptureAsMockDialog';
+import DiffRequestsDialog from './DiffRequestsDialog';
 import LlmUsageDetail from './LlmUsageDetail';
 import {
   AnthropicConversationView,
@@ -27,7 +38,9 @@ import {
 } from './ConversationView';
 import type { ScriptedTurn } from './ConversationView';
 import type { JsonListItem } from '../types';
-import { isLlmTraffic } from '../lib/expectationFromCapture';
+import { isCapturableTraffic } from '../lib/expectationFromCapture';
+import { buildBaseUrl } from '../lib/mcpClient';
+import type { ConnectionParams } from '../hooks/useConnectionParams';
 import {
   summarizeTraffic,
   getModelLabel,
@@ -195,9 +208,23 @@ interface TrafficRowProps {
   index: number;
   selected: boolean;
   onClick: () => void;
+  /** When set, a comparison checkbox is rendered and reflects this checked state. */
+  compareMode?: boolean;
+  compareChecked?: boolean;
+  compareDisabled?: boolean;
+  onCompareToggle?: () => void;
 }
 
-function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
+function TrafficRow({
+  summary,
+  index,
+  selected,
+  onClick,
+  compareMode,
+  compareChecked,
+  compareDisabled,
+  onCompareToggle,
+}: TrafficRowProps) {
   const model = getModelLabel(summary.parsed);
   const tokens = getTokenSummary(summary.parsed);
   const timingLabel = getTimingLabel(summary.timing);
@@ -220,6 +247,17 @@ function TrafficRow({ summary, index, selected, onClick }: TrafficRowProps) {
         flexWrap: 'wrap',
       }}
     >
+      {compareMode && (
+        <Checkbox
+          size="small"
+          checked={!!compareChecked}
+          disabled={!compareChecked && compareDisabled}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onCompareToggle?.()}
+          slotProps={{ input: { 'aria-label': `Select request ${index} to compare` } }}
+          sx={{ p: 0.25, flexShrink: 0 }}
+        />
+      )}
       <Typography
         variant="caption"
         sx={{ fontFamily: 'monospace', color: 'text.secondary', minWidth: 24, flexShrink: 0 }}
@@ -700,6 +738,92 @@ function TimingWaterfall({ timing }: { timing: RequestTiming }) {
 }
 
 // ---------------------------------------------------------------------------
+// ReplayDialog — replays a request via PUT /mockserver/replay and shows result
+// ---------------------------------------------------------------------------
+
+interface ReplayDialogProps {
+  open: boolean;
+  onClose: () => void;
+  item: JsonListItem;
+  connectionParams: ConnectionParams;
+}
+
+function ReplayDialog({ open, onClose, item, connectionParams }: ReplayDialogProps) {
+  const [loading, setLoading] = useState(false);
+  const [replayResponse, setReplayResponse] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleReplay = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setReplayResponse(null);
+    try {
+      const baseUrl = buildBaseUrl(connectionParams);
+      const httpRequest = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
+      const res = await fetch(`${baseUrl}/mockserver/replay`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(httpRequest),
+      });
+      const text = await res.text();
+      if (res.ok) {
+        try {
+          setReplayResponse(JSON.parse(text));
+        } catch {
+          setReplayResponse({ body: text });
+        }
+      } else {
+        setError(`Replay failed (${res.status}): ${text}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [connectionParams, item]);
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ fontSize: '0.95rem' }}>Replay Request</DialogTitle>
+      <DialogContent dividers>
+        {!replayResponse && !error && !loading && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Re-issue this request to its original target and view the response.
+          </Typography>
+        )}
+        {loading && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
+            <CircularProgress size={20} />
+            <Typography variant="body2">Sending request...</Typography>
+          </Box>
+        )}
+        {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+        {replayResponse && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600, fontSize: '0.8rem' }}>
+              Upstream Response
+            </Typography>
+            <JsonViewer data={replayResponse} collapsed={3} />
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} size="small">Close</Button>
+        <Button
+          onClick={handleReplay}
+          disabled={loading}
+          variant="contained"
+          size="small"
+          startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+        >
+          {replayResponse ? 'Replay Again' : 'Replay'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Detail pane wrapper — single-level, adaptive tab row
 // ---------------------------------------------------------------------------
 
@@ -708,6 +832,7 @@ interface DetailPaneProps {
   summary: TrafficSummary;
   scriptedTurns: ScriptedTurn[];
   onCaptureAsMock?: () => void;
+  onReplay?: () => void;
 }
 
 /** Build the tab list dynamically from the traffic kind. */
@@ -731,10 +856,10 @@ function buildTabs(parsed: ParsedTraffic, hasScriptedTurns: boolean): string[] {
   }
 }
 
-function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPaneProps) {
+function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock, onReplay }: DetailPaneProps) {
   const tabs = buildTabs(summary.parsed, scriptedTurns.length > 0);
   const [detailTab, setDetailTab] = useState(0);
-  const canCapture = isLlmTraffic(summary.parsed);
+  const canCapture = isCapturableTraffic(summary.parsed);
 
   // For generic traffic, render Raw JSON directly — no tab bar needed
   if (tabs.length === 0) {
@@ -742,10 +867,30 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         <LlmUsageDetail parsed={summary.parsed} />
         {summary.timing && <TimingWaterfall timing={summary.timing} />}
-        <Box sx={{ px: 1, py: 0.5, flexShrink: 0 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, flexShrink: 0 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem', flexGrow: 1 }}>
             Raw JSON
           </Typography>
+          {onReplay && (
+            <Button
+              size="small"
+              startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+              onClick={onReplay}
+              sx={{ fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0, mr: 0.5 }}
+            >
+              Replay
+            </Button>
+          )}
+          {canCapture && onCaptureAsMock && (
+            <Button
+              size="small"
+              startIcon={<SaveAltIcon sx={{ fontSize: '0.875rem' }} />}
+              onClick={onCaptureAsMock}
+              sx={{ fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              Capture as mock
+            </Button>
+          )}
         </Box>
         <Divider />
         <Box sx={{ flex: 1, overflowY: 'auto', p: 1 }}>
@@ -775,6 +920,16 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
             <Tab key={label} label={label} />
           ))}
         </Tabs>
+        {onReplay && (
+          <Button
+            size="small"
+            startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+            onClick={onReplay}
+            sx={{ mr: 0.5, fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            Replay
+          </Button>
+        )}
         {canCapture && onCaptureAsMock && (
           <Button
             size="small"
@@ -853,6 +1008,29 @@ export default function TrafficInspector() {
   const setSelectedKey = useDashboardStore((s) => s.setSelectedTrafficKey);
   const connectionParams = useConnectionParams();
   const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
+  const [replayDialogOpen, setReplayDialogOpen] = useState(false);
+
+  // Compare mode: pick two requests from the list and diff them field-by-field via the shared
+  // DiffRequestsDialog (PUT /mockserver/diff). compareKeys holds the (max two) selected item keys.
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareKeys, setCompareKeys] = useState<string[]>([]);
+  const [diffDialogOpen, setDiffDialogOpen] = useState(false);
+
+  const toggleCompareMode = useCallback(() => {
+    setCompareMode((prev) => {
+      // Leaving compare mode clears any pending selection.
+      if (prev) setCompareKeys([]);
+      return !prev;
+    });
+  }, []);
+
+  const toggleCompareKey = useCallback((key: string) => {
+    setCompareKeys((prev) => {
+      if (prev.includes(key)) return prev.filter((k) => k !== key);
+      if (prev.length >= 2) return prev; // cap at two; row checkbox is disabled past this
+      return [...prev, key];
+    });
+  }, []);
 
   // Gather scripted turns from active expectations
   const scriptedTurns = useMemo(
@@ -894,6 +1072,29 @@ export default function TrafficInspector() {
     [selectedKey, setSelectedKey],
   );
 
+  // Resolve the two selected requests to the JSON the diff endpoint expects (the request
+  // definition — `httpRequest` if present, otherwise the whole captured value). Preserve the
+  // user's pick order: the first selected is "expected", the second "actual".
+  // Selected keys whose request still exists (a WebSocket refresh can remove one),
+  // so a stale selection can't produce an empty/invalid diff payload.
+  const validCompareKeys = useMemo(
+    () => compareKeys.filter((key) => allRequests.some((item) => item.key === key)),
+    [compareKeys, allRequests],
+  );
+
+  const compareJson = useMemo(() => {
+    const toRequestJson = (item: JsonListItem): string => {
+      const request = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? item.value;
+      return JSON.stringify(request, null, 2);
+    };
+    return validCompareKeys.map((key) => {
+      const entry = allRequests.find((item) => item.key === key);
+      return entry ? toRequestJson(entry) : '';
+    });
+  }, [validCompareKeys, allRequests]);
+
+  const canDiff = validCompareKeys.length === 2;
+
   return (
     <Box
       sx={{
@@ -911,7 +1112,7 @@ export default function TrafficInspector() {
         sx={{
           display: 'flex',
           flexDirection: 'column',
-          width: selectedEntry ? '40%' : '100%',
+          width: selectedEntry && !compareMode ? '40%' : '100%',
           minWidth: 300,
           overflow: 'hidden',
           transition: 'width 0.2s ease',
@@ -962,6 +1163,30 @@ export default function TrafficInspector() {
               '& .MuiSvgIcon-root': { fontSize: '0.875rem' },
             }}
           />
+          <Tooltip title="Pick two requests to diff field-by-field">
+            <ToggleButton
+              value="compare"
+              size="small"
+              selected={compareMode}
+              onChange={toggleCompareMode}
+              aria-label="Compare requests"
+              sx={{ height: 28, px: 1, fontSize: '0.7rem', textTransform: 'none', flexShrink: 0 }}
+            >
+              <CompareArrowsIcon sx={{ fontSize: '0.95rem', mr: 0.5 }} />
+              Compare
+            </ToggleButton>
+          </Tooltip>
+          {compareMode && (
+            <Button
+              size="small"
+              variant="contained"
+              disabled={!canDiff}
+              onClick={() => setDiffDialogOpen(true)}
+              sx={{ height: 28, px: 1, fontSize: '0.7rem', textTransform: 'none', flexShrink: 0 }}
+            >
+              Diff ({compareKeys.length}/2)
+            </Button>
+          )}
         </Box>
         <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: 'background.default' }}>
           {filtered.length === 0 ? (
@@ -974,16 +1199,22 @@ export default function TrafficInspector() {
                 key={item.key}
                 summary={summary}
                 index={filtered.length - index}
-                selected={selectedKey === item.key}
-                onClick={() => handleRowClick(item.key)}
+                selected={compareMode ? compareKeys.includes(item.key) : selectedKey === item.key}
+                onClick={() =>
+                  compareMode ? toggleCompareKey(item.key) : handleRowClick(item.key)
+                }
+                compareMode={compareMode}
+                compareChecked={compareKeys.includes(item.key)}
+                compareDisabled={compareKeys.length >= 2}
+                onCompareToggle={() => toggleCompareKey(item.key)}
               />
             ))
           )}
         </Box>
       </Paper>
 
-      {/* Detail pane */}
-      {selectedEntry && (
+      {/* Detail pane (hidden while picking requests to compare) */}
+      {selectedEntry && !compareMode && (
         <Paper
           variant="outlined"
           sx={{
@@ -1000,18 +1231,43 @@ export default function TrafficInspector() {
             summary={selectedEntry.summary}
             scriptedTurns={scriptedTurns}
             onCaptureAsMock={() => setCaptureDialogOpen(true)}
+            onReplay={() => setReplayDialogOpen(true)}
           />
         </Paper>
       )}
 
       {/* Capture as mock dialog */}
-      {selectedEntry && isLlmTraffic(selectedEntry.summary.parsed) && (
+      {selectedEntry && isCapturableTraffic(selectedEntry.summary.parsed) && (
         <CaptureAsMockDialog
           open={captureDialogOpen}
           onClose={() => setCaptureDialogOpen(false)}
           parsed={selectedEntry.summary.parsed}
           path={selectedEntry.summary.path ?? ''}
           connectionParams={connectionParams}
+          itemValue={selectedEntry.item.value}
+        />
+      )}
+
+      {/* Replay dialog — re-issue a captured request to its original target */}
+      {selectedEntry && (
+        <ReplayDialog
+          open={replayDialogOpen}
+          onClose={() => setReplayDialogOpen(false)}
+          item={selectedEntry.item}
+          connectionParams={connectionParams}
+        />
+      )}
+
+      {/* Diff two picked requests, reusing the shared dialog + PUT /mockserver/diff endpoint.
+          Mount only while open and key on the selection so the dialog seeds fresh inputs each time. */}
+      {diffDialogOpen && (
+        <DiffRequestsDialog
+          key={compareKeys.join('|')}
+          open
+          onClose={() => setDiffDialogOpen(false)}
+          connectionParams={connectionParams}
+          initialExpected={compareJson[0] ?? ''}
+          initialActual={compareJson[1] ?? ''}
         />
       )}
 

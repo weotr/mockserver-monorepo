@@ -1,0 +1,21 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "release.name" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+    chart: {{ template "chart.name_version" . }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+  selector:
+    app: {{ template "chart.name" . }}-webhook
+    release: {{ .Release.Name }}
+{{- end }}

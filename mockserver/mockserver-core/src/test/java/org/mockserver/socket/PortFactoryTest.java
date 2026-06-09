@@ -5,8 +5,8 @@ import org.junit.Test;
 import java.io.IOException;
 import java.net.ServerSocket;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertTrue;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -20,7 +20,7 @@ public class PortFactoryTest {
 
         // then
         ServerSocket serverSocket = new ServerSocket(freePort);
-        assertTrue(serverSocket.isBound());
+        assertThat(serverSocket.isBound(), is(true));
         serverSocket.close();
     }
 
@@ -30,10 +30,10 @@ public class PortFactoryTest {
         int[] freePorts = PortFactory.findFreePorts(3);
 
         // then
-        assertEquals(3, freePorts.length);
+        assertThat(freePorts.length, is(3));
         for (int freePort : freePorts) {
             ServerSocket serverSocket = new ServerSocket(freePort);
-            assertTrue(serverSocket.isBound());
+            assertThat(serverSocket.isBound(), is(true));
             serverSocket.close();
         }
     }
@@ -59,12 +59,12 @@ public class PortFactoryTest {
         int[] freePorts = PortFactory.findFreePorts(5);
 
         // then
-        assertEquals(5, freePorts.length);
+        assertThat(freePorts.length, is(5));
         java.util.Set<Integer> unique = new java.util.HashSet<>();
         for (int port : freePorts) {
             unique.add(port);
         }
-        assertEquals(5, unique.size());
+        assertThat(unique.size(), is(5));
     }
 
 }

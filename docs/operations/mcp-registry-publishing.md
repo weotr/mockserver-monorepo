@@ -12,48 +12,56 @@ discover it.
 - **`llms.txt`** — enumerates the MCP endpoint + tools for AI crawlers.
 - **`server.json`** (repo root) — the registry manifest (this guide publishes it).
 
-## 1. Official MCP registry (`registry.modelcontextprotocol.io`)
+## 1. Official MCP registry (`registry.modelcontextprotocol.io`) — automated in the release pipeline
 
-Uses the [`mcp-publisher`](https://github.com/modelcontextprotocol/registry) CLI and the repo-root
-`server.json`. The server name `io.github.mock-server/mockserver` is verified by GitHub auth as a
-member of the `mock-server` org.
+**TL;DR:** publishing is wired into the release pipeline (`scripts/release/components/mcp.sh`, the
+`:robot_face: MCP Registry` Buildkite step). It runs **non-interactively** because the namespace is
+`com.mock-server/mockserver` — a **DNS-verified** namespace derived from the `mock-server.com`
+domain we own — authenticated with an ed25519 key in Secrets Manager. No human/browser step.
 
-```bash
-# 1. Install the CLI (Homebrew or from the registry repo releases)
-brew install mcp-publisher        # or: go install .../cmd/mcp-publisher@latest
+> **Why DNS, not GitHub?** The old namespace `io.github.mock-server/*` authenticates via interactive
+> GitHub OAuth (`mcp-publisher login github` opens a browser) and can't run headless in Buildkite
+> (which, unlike GitHub Actions, has no GitHub OIDC). A DNS-verified namespace authenticates with a
+> stored private key, so the release publishes hands-off.
 
-# 2. Validate the manifest against the live schema (authoritative — fix any drift it reports)
-mcp-publisher validate ./server.json
+### One-time setup — ✅ DONE (2026-06-07), recorded here for reference/rotation
 
-# 3. Authenticate (opens GitHub OAuth; must be a mock-server org member to claim io.github.mock-server/*)
-mcp-publisher login github
+The ed25519 keypair was generated and the namespace verified end-to-end
+(`mcp-publisher login dns --domain mock-server.com` → "✓ Successfully logged in"). What was done:
 
-# 4. Publish
-mcp-publisher publish
-```
+1. **Keypair** generated with `openssl genpkey -algorithm ed25519`; the 32-byte seed (hex) is the
+   `-private-key`, the 32-byte public key (base64) goes in the TXT record. The exact proof record is
+   what `mcp-publisher login dns` prints: `v=MCPv1; k=ed25519; p=<base64-public-key>`.
+2. **DNS TXT record** — managed in Terraform: `terraform/website/mcp-dns.tf` manages the
+   `mock-server.com` apex TXT record set with BOTH the existing Google Search Console value AND the
+   MCP proof (`allow_overwrite = true` adopts the previously-unmanaged record). The public key is set
+   in `terraform/website/terraform.tfvars` as `mcp_dns_public_key`. Applied to Route 53.
+   Verify: `dig +short TXT mock-server.com | grep MCPv1`.
+3. **Private key** stored in Secrets Manager: `mockserver-release/mcp-dns-key` (key `private_key`,
+   build account, eu-west-2). The release-queue agent is granted `GetSecretValue` + `DescribeSecret`
+   on it via `terraform/buildkite-agents/build-secrets.tf` (applied).
+4. **CLI**: `mcp.sh` downloads `mcp-publisher` if absent (soft-fails on failure); set
+   `MCP_PUBLISHER_VERSION` / `MCP_PUBLISHER_SHA256` on the agent to pin+verify.
 
-Keep `server.json` in sync with each MockServer release — the OCI `identifier` tag
-(`docker.io/mockserver/mockserver:<version>`) must point at a released image.
+The next release publishes automatically. **To rotate the key:** regenerate, update
+`mcp_dns_public_key` in tfvars + `terraform apply` (website), and overwrite the secret value.
 
-### Prerequisites the registry enforces at publish time (learned the hard way)
+### What `mcp.sh` does each release
+1. Rewrites `server.json` → `version`, `packages[0].identifier`
+   (`docker.io/mockserver/mockserver:<version>`), and `name` (`com.mock-server/mockserver`).
+2. `mcp-publisher validate ./server.json` (schema check).
+3. `mcp-publisher login dns --domain mock-server.com --private-key <secret>`.
+4. `mcp-publisher publish`, then commits the synced `server.json`.
 
-`mcp-publisher validate` only checks the JSON schema; the registry applies extra rules on
-`mcp-publisher publish`:
+### Registry preconditions it satisfies (enforced server-side)
+1. **OCI package shape.** For `registryType: oci`: **no** `registryBaseUrl`, **no** package
+   `version` field — the full canonical reference goes in `identifier`.
+2. **OCI image ownership label.** The referenced image must carry
+   `LABEL io.modelcontextprotocol.server.name="com.mock-server/mockserver"` (set in
+   `docker/Dockerfile`). The Docker Image step pushes that label before the MCP step runs, so on a
+   full release the label is live on Docker Hub when publish fires.
 
-1. **Public org membership.** To publish under `io.github.mock-server/*`, the publishing GitHub
-   account must be a *public* member of the `mock-server` org. Re-run `mcp-publisher login github`
-   after changing membership visibility (the token caches namespaces at login time).
-2. **OCI package shape.** For `registryType: oci`: **no** `registryBaseUrl`, **no** package
-   `version` field — put the full canonical reference in `identifier`, e.g.
-   `docker.io/mockserver/mockserver:6.1.0`.
-3. **OCI image ownership label.** The referenced image **must** carry
-   `LABEL io.modelcontextprotocol.server.name="io.github.mock-server/mockserver"`. This is set in
-   `docker/Dockerfile`, so it ships on images built from that change onward — **but the publish only
-   succeeds once a release carrying the label is on Docker Hub** and `server.json`'s `identifier`
-   points at that tag. (Images built before the label — e.g. 6.1.0 — are rejected.)
-
-So to finish publishing: ship a labelled image (the next release, or a one-off labelled
-rebuild+push of the referenced tag), point `identifier` at it, then `mcp-publisher publish`.
+`verify.sh` does a soft post-release check that the registry lists the new version.
 
 ## 2. Other registries
 

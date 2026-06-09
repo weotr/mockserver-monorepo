@@ -74,6 +74,20 @@ public class InMemoryExpectationKeyValueStore implements KeyValueStore<Expectati
     }
 
     @Override
+    public Optional<Versioned<ExpectationEntry>> putIfAbsent(String key, ExpectationEntry value) {
+        Optional<Versioned<ExpectationEntry>> existing = get(key);
+        if (existing.isPresent()) {
+            return existing;
+        }
+        // Key does not exist — add it
+        queue.add(value);
+        AtomicLong ver = versions.computeIfAbsent(key, k -> new AtomicLong(0));
+        ver.incrementAndGet();
+        fireChanged(key);
+        return Optional.empty();
+    }
+
+    @Override
     public boolean compareAndSet(String key, long expectedVersion, ExpectationEntry value) {
         AtomicLong ver = versions.get(key);
         if (ver == null) {

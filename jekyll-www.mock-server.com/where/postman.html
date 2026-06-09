@@ -1,0 +1,57 @@
+---
+title: Postman
+description: Import the MockServer Postman collection to drive the REST control plane from Postman — create expectations, verify requests, and inspect recorded traffic.
+layout: page
+pageOrder: 10
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-08T08:00:00+01:00
+---
+
+<h2>Postman</h2>
+
+<p>MockServer provides an official <a target="_blank" href="https://www.postman.com/" rel="noopener noreferrer">Postman</a> collection for its REST control plane. Import it to create expectations, verify requests, inspect recorded traffic, and manage server state — all from the Postman client.</p>
+
+<h2>Import the Collection</h2>
+
+<p>The collection is available directly from the MockServer public workspace on the Postman API Network:</p>
+
+<ul>
+    <li>In Postman, click <strong>Import</strong> and paste the public workspace URL, or download <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/blob/master/examples/postman/MockServer.postman_collection.json" rel="noopener noreferrer"><code>examples/postman/MockServer.postman_collection.json</code></a> from the repository and import the file.</li>
+    <li>The <span class="keyword">baseUrl</span> collection variable defaults to <span class="keyword">http://localhost:1080</span>. Change it to point at any MockServer instance.</li>
+</ul>
+
+<h2>Quick Start</h2>
+
+<p>Start MockServer with Docker:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -d --rm -p 1080:1080 mockserver/mockserver</code></pre>
+
+<p>Then run the collection requests top to bottom:</p>
+
+<ol>
+    <li><strong>Expectations → Create expectation</strong> — registers <span class="keyword">GET /hello → 200 Hello World</span>.</li>
+    <li><strong>Expectations → Call the mocked endpoint</strong> — confirms the mock responds.</li>
+    <li><strong>Verify → Verify request received</strong> — asserts MockServer saw the request.</li>
+    <li><strong>Traffic → Retrieve recorded requests</strong> — inspects what was received.</li>
+    <li><strong>Manage → Reset</strong> — clears all expectations and recorded traffic.</li>
+</ol>
+
+<h2>What the Collection Covers</h2>
+
+<table>
+    <thead>
+        <tr><th>Folder</th><th>Requests</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Expectations</td><td>Create expectation, call the mocked endpoint, retrieve active expectations</td></tr>
+        <tr><td>Verify</td><td>Verify a request was received, verify a sequence</td></tr>
+        <tr><td>Traffic</td><td>Retrieve recorded requests, retrieve logs</td></tr>
+        <tr><td>Manage</td><td>Status, clear (by matcher), reset (everything)</td></tr>
+    </tbody>
+</table>
+
+<p>The full control-plane API is documented at <a href="../mock_server/mockserver_api.html">MockServer REST API</a> and as an <a target="_blank" href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" rel="noopener noreferrer">OpenAPI spec on SwaggerHub</a>.</p>

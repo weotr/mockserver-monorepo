@@ -3,9 +3,9 @@ package org.mockserver.netty.proxy.socks;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.junit.Test;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 
 public class SocksDetectorTest {
 
@@ -18,7 +18,7 @@ public class SocksDetectorTest {
             0x06, 0x06, 0x06, 0x06,  // ip
             'f', 'o', 'o', 0x00 // username
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -30,7 +30,7 @@ public class SocksDetectorTest {
             0x06, 0x06, 0x06, 0x06,  // ip
             'f', 'o', 'o', 0x00 // username
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -42,7 +42,7 @@ public class SocksDetectorTest {
             0x06, 0x06, 0x06, 0x06,  // ip
             0x00 // username
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -79,7 +79,7 @@ public class SocksDetectorTest {
             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
             '1', '2', '3', '4', '5', 0x00
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -91,7 +91,7 @@ public class SocksDetectorTest {
             0x06, 0x06, 0x06, 0x06,  // ip
             'f', 'o', 'o', 0x00 // username
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -103,7 +103,7 @@ public class SocksDetectorTest {
             0x06, 0x06, 0x06, 0x06,  // ip
             'f', 'o', 'o', 0x00 // username
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -140,7 +140,7 @@ public class SocksDetectorTest {
             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
             '1', '2', '3', '4', '5', '6', 0x00
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -153,7 +153,7 @@ public class SocksDetectorTest {
             'f', 'o', 'o', 0x00, // username
             0x00 // additional byte
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -166,7 +166,7 @@ public class SocksDetectorTest {
             'f', 'o', 'o', 0x00, // username
             'f', 'o', 'o', 0x00 // hostname
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -179,7 +179,7 @@ public class SocksDetectorTest {
             0x00, // username
             'f', 'o', 'o', 0x00 // hostname
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -217,7 +217,7 @@ public class SocksDetectorTest {
             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
             '1', '2', '3', '4', '5', 0x00
         });
-        assertTrue(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -255,7 +255,7 @@ public class SocksDetectorTest {
             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
             '1', '2', '3', '4', '5', '6', 0x00
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -268,7 +268,7 @@ public class SocksDetectorTest {
             'f', 'o', 'o', 0x00, // username
             0x00 // hostname
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -282,7 +282,7 @@ public class SocksDetectorTest {
             'f', 'o', 'o', 0x00, // hostname
             0x00 // additional byte
         });
-        assertFalse(SocksDetector.isSocks4(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks4(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -292,7 +292,7 @@ public class SocksDetectorTest {
             0x02, // amount of authentication methods
             0x00, 0x02 // authentication methods
         });
-        assertTrue(SocksDetector.isSocks5(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks5(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -302,7 +302,7 @@ public class SocksDetectorTest {
             0x05, // amount of authentication methods
             0x00, 0x01, 0x02, 0x00, 0x01 // authentication methods
         });
-        assertTrue(SocksDetector.isSocks5(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks5(msg, msg.readableBytes()), is(true));
     }
 
     @Test
@@ -312,7 +312,7 @@ public class SocksDetectorTest {
             0x05, // amount of authentication methods
             0x00, 0x01, 0x02, 0x00, 0x01 // authentication methods
         });
-        assertFalse(SocksDetector.isSocks5(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks5(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -322,7 +322,7 @@ public class SocksDetectorTest {
             0x01, // amount of authentication methods
             0x05 // authentication methods
         });
-        assertFalse(SocksDetector.isSocks5(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks5(msg, msg.readableBytes()), is(false));
     }
 
     @Test
@@ -333,6 +333,6 @@ public class SocksDetectorTest {
             0x00, // authentication methods
             0x00  // additional byte
         });
-        assertFalse(SocksDetector.isSocks5(msg, msg.readableBytes()));
+        assertThat(SocksDetector.isSocks5(msg, msg.readableBytes()), is(false));
     }
 }

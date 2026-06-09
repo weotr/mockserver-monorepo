@@ -10,6 +10,7 @@ import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import org.mockserver.grpc.GrpcException;
+import org.mockserver.grpc.GrpcBidiRuleMatcher;
 import org.mockserver.grpc.GrpcFrameCodec;
 import org.mockserver.grpc.GrpcJsonMessageConverter;
 import org.mockserver.grpc.GrpcStatusMapper;
@@ -26,8 +27,6 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
-import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 
 /**
  * Per-stream handler for true bidirectional gRPC streaming. NOT {@code @Sharable} --
@@ -324,40 +323,15 @@ public class GrpcBidiStreamHandler extends ChannelInboundHandlerAdapter {
 
     /**
      * Matches the inbound message JSON against the rule's matchJson pattern.
-     * Semantics mirror {@code BidirectionalWebSocketFrameHandler.matches}: exact string
-     * match first, then regex (no substring/contains step). Uses {@link Pattern#DOTALL}
-     * for regex matching because gRPC JSON from protobuf's {@code JsonFormat.printer()}
-     * contains newlines, so {@code '.'} must match line terminators for patterns like
-     * {@code ".*Alice.*"} to work as expected.
-     * <p>
-     * If the rule's {@link NottableString#isNot()} flag is {@code true}, the match result
-     * is inverted: a negated matchJson matches when the value does NOT match the pattern.
+     * Delegates to {@link GrpcBidiRuleMatcher#matches(GrpcBidiRule, String)}: exact string
+     * match first, then a DOTALL regex match (so {@code '.'} matches the newlines that
+     * protobuf's {@code JsonFormat.printer()} emits), with {@code NottableString} negation.
+     * Retained as a package-private method so existing unit tests keep exercising it.
      */
     boolean matchesRule(GrpcBidiRule rule, String inboundJson) {
-        if (rule.getMatchJson() == null) {
-            return true; // null matcher matches everything
-        }
-        String pattern = rule.getMatchJson().getValue();
-        if (pattern == null || pattern.isEmpty()) {
-            return true;
-        }
-        boolean matched;
-        // Exact match first
-        if (inboundJson.equals(pattern)) {
-            matched = true;
-        } else {
-            // Regex match with DOTALL (so '.' matches newlines in multiline JSON)
-            try {
-                matched = Pattern.compile(pattern, Pattern.DOTALL).matcher(inboundJson).matches();
-            } catch (PatternSyntaxException e) {
-                matched = false;
-            }
-        }
-        // Honour NottableString negation: if isNot() is true, invert the result
-        if (rule.getMatchJson().isNot()) {
-            matched = !matched;
-        }
-        return matched;
+        // Delegate to the transport-neutral matcher so HTTP/2 and HTTP/3 bidi share
+        // identical rule-matching semantics (exact, then DOTALL regex, with negation).
+        return GrpcBidiRuleMatcher.matches(rule, inboundJson);
     }
 
     /**

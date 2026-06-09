@@ -1,0 +1,35 @@
+services:
+  # The upstream service whose traffic we want to record. In a real setup this
+  # would be your actual dependency; here a second MockServer stands in for it.
+  upstream:
+    image: mockserver/mockserver:latest
+    ports:
+      - "1090:1090"
+    environment:
+      MOCKSERVER_LOG_LEVEL: INFO
+      MOCKSERVER_SERVER_PORT: 1090
+      # Seed the upstream so the proxy has something real to record.
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/upstream.json
+    volumes:
+      - ./config:/config
+
+  # The recording proxy: forwards unmatched requests to the upstream and writes
+  # every recorded interaction out as a replayable expectation file.
+  mockserver:
+    image: mockserver/mockserver:latest
+    depends_on:
+      - upstream
+    ports:
+      - "1080:1080"
+    environment:
+      MOCKSERVER_LOG_LEVEL: INFO
+      MOCKSERVER_SERVER_PORT: 1080
+      # Proxy mode: forward unmatched requests to the upstream host:port.
+      MOCKSERVER_PROXY_REMOTE_HOST: upstream
+      MOCKSERVER_PROXY_REMOTE_PORT: 1090
+      # Record every proxied interaction to a host-mounted file for later replay.
+      MOCKSERVER_PERSIST_RECORDED_EXPECTATIONS: "true"
+      MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH: /recorded/recorded.json
+    volumes:
+      - ./config:/config
+      - ./recorded:/recorded

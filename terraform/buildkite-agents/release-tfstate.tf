@@ -4,6 +4,10 @@
 # state object (and its S3-native lock) so `terraform init`/`plan`/`apply` can
 # read and write it. Scoped to the website/ prefix so the agent cannot read
 # other stacks' state (e.g. buildkite-agents/terraform.tfstate).
+#
+# The S3-native locking backend (use_lockfile = true) writes a .tflock file
+# next to the state file. DeleteObject is needed ONLY on the lock file (to
+# release the lock after apply), not on the state file itself.
 resource "aws_iam_policy" "release_website_tfstate" {
   name        = "buildkite-release-website-tfstate"
   description = "Allow the release Buildkite agent to read/write the terraform/website state in mockserver-terraform-state"
@@ -12,9 +16,16 @@ resource "aws_iam_policy" "release_website_tfstate" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid      = "ReadWriteStateFile"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
+        Resource = "arn:aws:s3:::mockserver-terraform-state/website/terraform.tfstate"
+      },
+      {
+        Sid      = "ReadWriteDeleteLockFile"
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-        Resource = "arn:aws:s3:::mockserver-terraform-state/website/*"
+        Resource = "arn:aws:s3:::mockserver-terraform-state/website/terraform.tfstate.tflock"
       },
       {
         Effect   = "Allow"

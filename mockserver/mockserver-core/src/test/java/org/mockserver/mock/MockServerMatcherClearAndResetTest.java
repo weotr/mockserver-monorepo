@@ -17,8 +17,6 @@ import org.mockserver.scheduler.Scheduler;
 
 import java.util.List;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
@@ -64,12 +62,12 @@ public class MockServerMatcherClearAndResetTest {
         requestMatchers.add(expectation, API);
 
         // and
-        assertEquals(expectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(request().withPath("somepath"))));
-        assertEquals(expectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(request().withPath("somepath"))));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(request().withPath("somepath"))), is(expectation));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(request().withPath("somepath"))), is(expectation));
 
         // then
         assertThat(requestMatchers.httpRequestMatchers.toSortedList(), is(empty()));
-        assertNull(requestMatchers.firstMatchingExpectation(request().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(request().withPath("somepath")), nullValue());
     }
 
     @Test

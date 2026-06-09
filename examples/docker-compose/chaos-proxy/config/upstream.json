@@ -1,0 +1,13 @@
+[ {
+  "httpRequest" : {
+    "method" : "GET",
+    "path" : "/api/orders"
+  },
+  "httpResponse" : {
+    "statusCode" : 200,
+    "headers" : {
+      "content-type" : [ "application/json" ]
+    },
+    "body" : "{\"orders\": [\"order-1\", \"order-2\"]}"
+  }
+} ]

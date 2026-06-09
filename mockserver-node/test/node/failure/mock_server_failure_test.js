@@ -1,104 +1,68 @@
-(function () {
+/*
+ * mockserver
+ * http://mock-server.com
+ *
+ * Copyright (c) 2014 James Bloom
+ * Licensed under the Apache License, Version 2.0
+ */
 
-    'use strict';
+'use strict';
 
-    var testCase = require('nodeunit').testCase;
-    var mockserver = require(__dirname + '/../../..');
+var test = require('node:test');
+var assert = require('node:assert');
+var mockserver = require(__dirname + '/../../..');
 
-    exports.mock_server_start_failure = {
-        'mock server fails to start': testCase({
-            'if configuration missing': function (test) {
+test('mock server fails to start - if configuration missing', async function () {
+    await assert.rejects(
+        mockserver.start_mockserver(),
+        function (error) {
+            assert.strictEqual(error, 'Please specify "serverPort", for example: "start_mockserver({ serverPort: 1080 })"');
+            return true;
+        }
+    );
+});
 
-                test.expect(1);
-                mockserver
-                    .start_mockserver()
-                    .then(
-                        function () {
-                            test.ok(false, "should fail to start");
-                            test.done();
-                        },
-                        function (error) {
-                            test.equal(error, 'Please specify "serverPort", for example: "start_mockserver({ serverPort: 1080 })"');
-                            test.done();
-                        }
-                    );
-            },
-            'if port is missing': function (test) {
+test('mock server fails to start - if port is missing', async function () {
+    var options = {};
+    await assert.rejects(
+        mockserver.start_mockserver(options),
+        function (error) {
+            assert.strictEqual(error, 'Please specify "serverPort", for example: "start_mockserver({ serverPort: 1080 })"');
+            return true;
+        }
+    );
+});
 
-                test.expect(1);
-                var options = {};
-                mockserver
-                    .start_mockserver(options)
-                    .then(
-                        function () {
-                            test.ok(false, "should fail to start");
-                            test.done();
-                        },
-                        function (error) {
-                            test.equal(error, 'Please specify "serverPort", for example: "start_mockserver({ serverPort: 1080 })"');
-                            test.done();
-                        }
-                    );
-            },
-            'if deprecated option "systemProperties" is given': function (test) {
+test('mock server fails to start - if deprecated option "systemProperties" is given', async function () {
+    await assert.rejects(
+        mockserver.start_mockserver({
+            serverPort: 1080,
+            systemProperties: '--foo'
+        }),
+        function (error) {
+            assert.strictEqual(error, 'The option "systemProperties" was renamed to "jvmOptions" in 5.4.1. Please migrate to the new option name');
+            return true;
+        }
+    );
+});
 
-                test.expect(1);
-                mockserver
-                    .start_mockserver({
-                        serverPort: 1080,
-                        systemProperties: '--foo'
-                    })
-                    .then(
-                        function () {
-                            test.ok(false, "should fail to start");
-                            test.done();
-                        },
-                        function (error) {
-                            test.equal(error, 'The option "systemProperties" was renamed to "jvmOptions" in 5.4.1. Please migrate to the new option name');
-                            test.done();
-                        }
-                    );
-            }
-        })
-    };
+test('mock server fails to stop - if configuration is missing', async function () {
+    await assert.rejects(
+        mockserver.stop_mockserver(),
+        function (error) {
+            assert.strictEqual(error, 'Please specify "serverPort", for example: "stop_mockserver({ serverPort: 1080 })"');
+            return true;
+        }
+    );
+});
 
-    exports.mock_server_stop_failure = {
-        'mock server fails to stop': testCase({
-            'if configuration is missing': function (test) {
-
-                test.expect(1);
-                mockserver
-                    .stop_mockserver()
-                    .then(
-                        function () {
-                            test.ok(false, "should fail to stop");
-                            test.done();
-                        },
-                        function (error) {
-                            test.equal(error, 'Please specify "serverPort", for example: "stop_mockserver({ serverPort: 1080 })"');
-                            test.done();
-                        }
-                    );
-            },
-            'if port is missing': function (test) {
-
-                test.expect(1);
-                var options = {};
-
-                mockserver
-                    .stop_mockserver(options)
-                    .then(
-                        function () {
-                            test.ok(false, "should fail to stop");
-                            test.done();
-                        },
-                        function (error) {
-                            test.equal(error, 'Please specify "serverPort", for example: "stop_mockserver({ serverPort: 1080 })"');
-                            test.done();
-                        }
-                    );
-            }
-        })
-    };
-
-})();
+test('mock server fails to stop - if port is missing', async function () {
+    var options = {};
+    await assert.rejects(
+        mockserver.stop_mockserver(options),
+        function (error) {
+            assert.strictEqual(error, 'Please specify "serverPort", for example: "stop_mockserver({ serverPort: 1080 })"');
+            return true;
+        }
+    );
+});

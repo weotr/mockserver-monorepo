@@ -3,8 +3,9 @@ package org.mockserver.serialization.model;
 import org.junit.Test;
 import org.mockserver.model.Body;
 import org.mockserver.model.JsonRpcBody;
-
-import static junit.framework.TestCase.*;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 
 public class JsonRpcBodyDTOTest {
 
@@ -13,9 +14,9 @@ public class JsonRpcBodyDTOTest {
         JsonRpcBody jsonRpcBody = new JsonRpcBody("tools/list");
         JsonRpcBodyDTO dto = new JsonRpcBodyDTO(jsonRpcBody);
 
-        assertEquals("tools/list", dto.getMethod());
-        assertNull(dto.getParamsSchema());
-        assertEquals(Body.Type.JSON_RPC, dto.getType());
+        assertThat( dto.getMethod(), is("tools/list"));
+        assertThat(dto.getParamsSchema(), nullValue());
+        assertThat( dto.getType(), is(Body.Type.JSON_RPC));
     }
 
     @Test
@@ -24,9 +25,9 @@ public class JsonRpcBodyDTOTest {
         JsonRpcBody jsonRpcBody = new JsonRpcBody("tools/call", schema);
         JsonRpcBodyDTO dto = new JsonRpcBodyDTO(jsonRpcBody);
 
-        assertEquals("tools/call", dto.getMethod());
-        assertEquals(schema, dto.getParamsSchema());
-        assertEquals(Body.Type.JSON_RPC, dto.getType());
+        assertThat( dto.getMethod(), is("tools/call"));
+        assertThat( dto.getParamsSchema(), is(schema));
+        assertThat( dto.getType(), is(Body.Type.JSON_RPC));
     }
 
     @Test
@@ -35,9 +36,9 @@ public class JsonRpcBodyDTOTest {
         JsonRpcBodyDTO dto = new JsonRpcBodyDTO(original);
         JsonRpcBody rebuilt = dto.buildObject();
 
-        assertEquals(original.getMethod(), rebuilt.getMethod());
-        assertEquals(original.getParamsSchema(), rebuilt.getParamsSchema());
-        assertEquals(Body.Type.JSON_RPC, rebuilt.getType());
+        assertThat( rebuilt.getMethod(), is(original.getMethod()));
+        assertThat( rebuilt.getParamsSchema(), is(original.getParamsSchema()));
+        assertThat( rebuilt.getType(), is(Body.Type.JSON_RPC));
     }
 
     @Test
@@ -45,7 +46,7 @@ public class JsonRpcBodyDTOTest {
         JsonRpcBody jsonRpcBody = new JsonRpcBody("tools/list");
         JsonRpcBodyDTO dto = new JsonRpcBodyDTO(jsonRpcBody, true);
 
-        assertTrue(dto.getNot());
+        assertThat(dto.getNot(), is(true));
     }
 
     @Test
@@ -53,7 +54,7 @@ public class JsonRpcBodyDTOTest {
         JsonRpcBody jsonRpcBody = (JsonRpcBody) new JsonRpcBody("tools/list").withOptional(true);
         JsonRpcBodyDTO dto = new JsonRpcBodyDTO(jsonRpcBody);
 
-        assertTrue(dto.getOptional());
-        assertTrue(dto.buildObject().getOptional());
+        assertThat(dto.getOptional(), is(true));
+        assertThat(dto.buildObject().getOptional(), is(true));
     }
 }

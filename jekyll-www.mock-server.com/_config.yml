@@ -11,9 +11,9 @@ tagline: Mock any HTTP service. Record traffic. Now with MCP for AI assistants.
 baseurl: "" # the subpath of your site, e.g. /blog/
 url: "https://www.mock-server.com"
 github_repo: https://github.com/mock-server/mockserver-monorepo
-mockserver_version: 6.1.0
-mockserver_api_version: 6.1.x
-mockserver_snapshot_version: 6.1.1-SNAPSHOT
+mockserver_version: 7.0.0
+mockserver_api_version: 7.0.x
+mockserver_snapshot_version: 7.0.1-SNAPSHOT
 
 # Analytics — Google Analytics 4 (GA4)
 # Measurement ID from GA4 admin → Data Streams → Web stream. Leave empty to disable analytics entirely.
@@ -22,6 +22,22 @@ ga4_measurement_id: G-20BB7EJG4E
 # Social / brand assets
 social_card: /images/social-card.png
 twitter_handle: ""
+
+# Slack community — the current Slack "shared invite link".
+# The /slack.html page redirects visitors here, so external references can always
+# point at /slack.html and never break. Leave empty to show the GitHub Discussions
+# fallback instead of redirecting. (This comment lives only in the config — it is
+# never rendered into any HTML.)
+#
+# ⚠️ EXPIRES — Slack shared-invite links are valid for only 30 days.
+#   Current link: generated 2026-06-04  →  expires ~2026-07-04.
+#   When it expires (the /slack.html redirect will start 404-ing at Slack), regenerate:
+#     1. Slack → Invite people → "Share invite link" → Copy link.
+#        (Ignore the email boxes — the link is open self-serve join and works on its own.)
+#     2. Replace the slack_invite_url value below with the new link.
+#     3. Update the "generated / expires" dates in this comment.
+#     4. Rebuild and redeploy the site.
+slack_invite_url: "https://join.slack.com/t/mock-server/shared_invite/zt-3zvvp22s3-krOtdL12EyE1s4jOptG8jQ"
 
 sitemap:
     exclude:

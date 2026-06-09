@@ -1,7 +1,23 @@
 steps:
+  - label: ":s3: restore npm cache"
+    command: ".buildkite/scripts/cache-restore.sh npm"
+    timeout_in_minutes: 10
+    soft_fail: true
+
+  - wait
+
   - label: ":node: client-node lint and typecheck"
     command: ".buildkite/scripts/steps/node-client-lint.sh"
     timeout_in_minutes: 10
+
+  - label: ":node: :docker: client-node functional tests"
+    command: ".buildkite/scripts/steps/node-client-test.sh"
+    timeout_in_minutes: 15
+
+  # Browser integration tests via Playwright (headless Chromium). Hard gate.
+  - label: ":node: :chrome: client-node browser tests"
+    command: ".buildkite/scripts/steps/node-client-browser-test.sh"
+    timeout_in_minutes: 15
 
   - label: ":node: node launcher lint"
     command: ".buildkite/scripts/steps/node-launcher-lint.sh"
@@ -10,3 +26,15 @@ steps:
   - label: ":node: :java: node launcher integration tests"
     command: ".buildkite/scripts/steps/node-launcher-test.sh"
     timeout_in_minutes: 15
+
+  - label: ":node: testcontainers-node build + unit tests"
+    command: ".buildkite/scripts/steps/node-testcontainers-test.sh"
+    timeout_in_minutes: 10
+
+  - wait: ~
+    continue_on_failure: true
+
+  - label: ":s3: save npm cache"
+    command: ".buildkite/scripts/cache-save.sh npm"
+    timeout_in_minutes: 10
+    soft_fail: true

@@ -7,8 +7,9 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
 import org.mockserver.scheduler.Scheduler;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.mock;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.mock.listeners.MockServerMatcherNotifier.Cause.API;
@@ -36,7 +37,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(expectation));
     }
 
     @Test
@@ -46,7 +47,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(expectation));
     }
 
     @Test
@@ -55,7 +56,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withPath("somePath")).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath")), nullValue());
     }
 
     @Test
@@ -64,7 +65,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withPath("[a-z]*")).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath123")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath123")), nullValue());
     }
 
     @Test
@@ -74,7 +75,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withHeaders(new Header("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withHeaders(new Header("name", "value"))), is(expectation));
     }
 
     @Test
@@ -84,7 +85,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withQueryStringParameter(new Parameter("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withQueryStringParameter(new Parameter("name", "value"))), is(expectation));
     }
 
     @Test
@@ -94,7 +95,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withBody(new ParameterBody(new Parameter("name", "value")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withBody(new ParameterBody(new Parameter("name", "value")))), is(expectation));
     }
 
     @Test
@@ -104,7 +105,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody"))), is(expectation));
     }
 
     @Test
@@ -114,7 +115,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody"))), is(expectation));
     }
 
     @Test
@@ -123,7 +124,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withBody(new StringBody("someBody"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someOtherBody"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someOtherBody"))), nullValue());
     }
 
     @Test
@@ -132,7 +133,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withBody(new RegexBody("[a-z]*"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someOtherBody123"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someOtherBody123"))), nullValue());
     }
 
     @Test
@@ -142,7 +143,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody")).withHeaders(new Header("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody")).withHeaders(new Header("name", "value"))), is(expectation));
     }
 
     @Test
@@ -152,7 +153,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody")).withQueryStringParameter(new Parameter("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new StringBody("someBody")).withQueryStringParameter(new Parameter("name", "value"))), is(expectation));
     }
 
     @Test
@@ -162,7 +163,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value"), new Parameter("additionalName", "additionalValue")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value"), new Parameter("additionalName", "additionalValue")))), is(expectation));
     }
 
     @Test
@@ -172,7 +173,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value"))), is(expectation));
     }
 
     @Test
@@ -181,7 +182,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withHeaders(new Header("name", "value1", "value2"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value1", "value3"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value1", "value3"))), nullValue());
     }
 
     @Test
@@ -190,7 +191,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withHeaders(new Header("name", "value1", "value2"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value1"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("name", "value1"))), nullValue());
     }
 
     @Test
@@ -200,7 +201,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("nameExtra", "valueExtra"), new Header("name", "value"), new Header("nameExtraExtra", "valueExtraExtra"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withHeaders(new Header("nameExtra", "valueExtra"), new Header("name", "value"), new Header("nameExtraExtra", "valueExtraExtra"))), is(expectation));
     }
 
     @Test
@@ -210,7 +211,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withHeaders(new Header("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withHeaders(new Header("name", "value"))), is(expectation));
     }
 
     @Test
@@ -220,7 +221,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value"))), is(expectation));
     }
 
     @Test
@@ -230,7 +231,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value")))), is(expectation));
     }
 
     @Test
@@ -240,7 +241,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1", "value2"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1", "value2"))), is(expectation));
     }
 
     @Test
@@ -250,7 +251,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1", "value2")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1", "value2")))), is(expectation));
     }
 
     @Test
@@ -259,7 +260,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameter(new Parameter("name", "value1", "value2"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1", "value3"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1", "value3"))), nullValue());
     }
 
     @Test
@@ -268,7 +269,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withBody(new ParameterBody(new Parameter("name", "value1", "value2")))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1", "value3")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1", "value3")))), nullValue());
     }
 
     @Test
@@ -277,7 +278,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameter(new Parameter("name", "value1", "value2"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameter(new Parameter("name", "value1"))), nullValue());
     }
 
     @Test
@@ -286,7 +287,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withBody(new ParameterBody(new Parameter("name", "value1", "value2")))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(new Parameter("name", "value1")))), nullValue());
     }
 
     @Test
@@ -296,11 +297,11 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
             new Parameter("nameExtra", "valueExtra"),
             new Parameter("name", "value"),
             new Parameter("nameExtraExtra", "valueExtraExtra")
-        )));
+        )), is(expectation));
     }
 
     @Test
@@ -310,11 +311,11 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
             new Parameter("nameExtra", "valueExtra"),
             new Parameter("name", "value"),
             new Parameter("nameExtraExtra", "valueExtraExtra")
-        ))));
+        ))), is(expectation));
     }
 
     @Test
@@ -324,7 +325,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "value"))), is(expectation));
     }
 
     @Test
@@ -334,7 +335,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne", "valueTwo"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne", "valueTwo"))), is(expectation));
     }
 
     @Test
@@ -343,7 +344,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameters(new Parameter("name", "valueOne", "valueTwo"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne", "valueThree"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne", "valueThree"))), nullValue());
     }
 
     @Test
@@ -352,7 +353,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameters(new Parameter("name", "valueOne", "valueTwo"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(new Parameter("name", "valueOne"))), nullValue());
     }
 
     @Test
@@ -362,11 +363,11 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
             new Parameter("nameExtra", "valueExtra"),
             new Parameter("name", "value"),
             new Parameter("nameExtraExtra", "valueExtraExtra")
-        )));
+        )), is(expectation));
     }
 
     @Test
@@ -376,11 +377,11 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
             new Parameter("nameExtra", "valueExtra"),
             new Parameter("name", "value"),
             new Parameter("nameExtraExtra", "valueExtraExtra")
-        ))));
+        ))), is(expectation));
     }
 
     @Test
@@ -390,10 +391,10 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
             new Parameter("nameOne", "valueOne"),
             new Parameter("nameTwo", "valueTwo")
-        )));
+        )), is(expectation));
     }
 
     @Test
@@ -403,10 +404,10 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
             new Parameter("nameOne", "valueOne"),
             new Parameter("nameTwo", "valueTwo")
-        ))));
+        ))), is(expectation));
     }
 
     @Test
@@ -415,10 +416,10 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameters(new Parameter("nameOne", "valueTwo", "valueTwo"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
             new Parameter("nameOne", "valueOne"),
             new Parameter("nameTwo", "valueTwo")
-        )));
+        )), nullValue());
     }
 
     @Test
@@ -427,10 +428,10 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withQueryStringParameters(new Parameter("nameOne", "valueTwo"), new Parameter("nameTwo", "valueOne"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withQueryStringParameters(
             new Parameter("nameOne", "valueOne"),
             new Parameter("nameTwo", "valueTwo")
-        )));
+        )), nullValue());
     }
 
     @Test
@@ -439,10 +440,10 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withBody(new ParameterBody(new Parameter("nameOne", "valueOne"), new Parameter("nameTwo", "valueTwo")))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withBody(new ParameterBody(
             new Parameter("nameOne", "valueTwo"),
             new Parameter("nameTwo", "valueOne")
-        ))));
+        ))), nullValue());
     }
 
     @Test
@@ -452,7 +453,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withQueryStringParameters(new Parameter("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withQueryStringParameters(new Parameter("name", "value"))), is(expectation));
     }
 
     @Test
@@ -462,7 +463,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withBody(new ParameterBody(new Parameter("name", "value")))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withBody(new ParameterBody(new Parameter("name", "value")))), is(expectation));
     }
 
     @Test
@@ -472,7 +473,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name", "value"))), is(expectation));
     }
 
     @Test
@@ -481,7 +482,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withCookies(new Cookie("name", "value1"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name", "value2"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name", "value2"))), nullValue());
     }
 
     @Test
@@ -490,7 +491,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(new Expectation(request().withCookies(new Cookie("name1", "value"))).thenRespond(response().withBody("someBody")), API);
 
         // then
-        assertNull(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name2", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("name2", "value"))), nullValue());
     }
 
     @Test
@@ -500,7 +501,7 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("nameExtra", "valueExtra"), new Cookie("name", "value"), new Cookie("nameExtraExtra", "valueExtraExtra"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withCookies(new Cookie("nameExtra", "valueExtra"), new Cookie("name", "value"), new Cookie("nameExtraExtra", "valueExtraExtra"))), is(expectation));
     }
 
     @Test
@@ -510,6 +511,6 @@ public class MockServerMatcherBasicResponsesTest {
         requestMatchers.add(expectation, API);
 
         // then
-        assertEquals(expectation, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withCookies(new Cookie("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath").withCookies(new Cookie("name", "value"))), is(expectation));
     }
 }

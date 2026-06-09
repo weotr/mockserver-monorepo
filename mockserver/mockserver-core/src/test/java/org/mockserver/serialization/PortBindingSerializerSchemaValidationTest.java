@@ -7,18 +7,17 @@ import org.mockserver.version.Version;
 
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.PortBinding.portBinding;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
  */
 public class PortBindingSerializerSchemaValidationTest {
-
 
     @Test
     public void shouldIgnoreExtraFields() {
@@ -36,7 +35,7 @@ public class PortBindingSerializerSchemaValidationTest {
         PortBinding portBinding = new PortBindingSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(portBinding(0, 1090, 0), portBinding);
+        assertThat( portBinding, is(portBinding(0, 1090, 0)));
     }
 
     @Test
@@ -54,7 +53,7 @@ public class PortBindingSerializerSchemaValidationTest {
         PortBinding portBinding = new PortBindingSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(portBinding(0, 1090, 0), portBinding);
+        assertThat( portBinding, is(portBinding(0, 1090, 0)));
     }
 
     @Test
@@ -66,7 +65,7 @@ public class PortBindingSerializerSchemaValidationTest {
         PortBinding portBinding = new PortBindingSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(portBinding(), portBinding);
+        assertThat( portBinding, is(portBinding()));
     }
 
     @Test

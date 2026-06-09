@@ -12,7 +12,10 @@ these rules when filling in the template:
    who stops after the summary should understand the problem, scope, and
    desired outcome.
 
-2. **Progressive disclosure.** The document is structured in three layers:
+2. **Progressive disclosure.** This template is the canonical worked example of
+   the **Pyramid Principle with progressive disclosure**
+   (`.opencode/rules/documentation-style.md`). The document is structured in
+   three layers:
    - **Layer 1 — Summary** (30 seconds): Executive Summary alone.
    - **Layer 2 — Context** (2 minutes): Problem Statement through Scope.
    - **Layer 3 — Detail** (5+ minutes): Requirements, edge cases, and

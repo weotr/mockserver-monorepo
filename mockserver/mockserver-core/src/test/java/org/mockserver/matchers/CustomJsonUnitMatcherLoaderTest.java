@@ -12,10 +12,9 @@ import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsSame.sameInstance;
 
 public class CustomJsonUnitMatcherLoaderTest {
 
@@ -39,7 +38,7 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertTrue(matchers.isEmpty());
+        assertThat(matchers.isEmpty(), is(true));
     }
 
     @Test
@@ -48,8 +47,8 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertEquals(1, matchers.size());
-        assertSame(SingleMatcherProvider.LARGER_THAN, matchers.get("largerThan"));
+        assertThat(matchers.size(), is(1));
+        assertThat(matchers.get("largerThan"), sameInstance(SingleMatcherProvider.LARGER_THAN));
     }
 
     @Test
@@ -61,20 +60,20 @@ public class CustomJsonUnitMatcherLoaderTest {
         CustomJsonUnitMatcherLoader.load();
         CustomJsonUnitMatcherLoader.load();
 
-        assertEquals(1, CountingProvider.callCount);
+        assertThat(CountingProvider.callCount, is(1));
     }
 
     @Test
     public void reloadsWhenPropertyChanges() {
         ConfigurationProperties.customJsonUnitMatchersClass(SingleMatcherProvider.class.getName());
         Map<String, Matcher<?>> first = CustomJsonUnitMatcherLoader.load();
-        assertSame(SingleMatcherProvider.LARGER_THAN, first.get("largerThan"));
+        assertThat(first.get("largerThan"), sameInstance(SingleMatcherProvider.LARGER_THAN));
 
         ConfigurationProperties.customJsonUnitMatchersClass(AlternativeProvider.class.getName());
         Map<String, Matcher<?>> second = CustomJsonUnitMatcherLoader.load();
 
-        assertSame(AlternativeProvider.IS_POSITIVE, second.get("isPositive"));
-        assertEquals(1, second.size());
+        assertThat(second.get("isPositive"), sameInstance(AlternativeProvider.IS_POSITIVE));
+        assertThat(second.size(), is(1));
     }
 
     @Test
@@ -83,7 +82,7 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertTrue(matchers.isEmpty());
+        assertThat(matchers.isEmpty(), is(true));
     }
 
     @Test
@@ -92,7 +91,7 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertTrue(matchers.isEmpty());
+        assertThat(matchers.isEmpty(), is(true));
     }
 
     @Test
@@ -101,7 +100,7 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertTrue(matchers.isEmpty());
+        assertThat(matchers.isEmpty(), is(true));
     }
 
     @Test
@@ -110,7 +109,7 @@ public class CustomJsonUnitMatcherLoaderTest {
 
         Map<String, Matcher<?>> matchers = CustomJsonUnitMatcherLoader.load();
 
-        assertTrue(matchers.isEmpty());
+        assertThat(matchers.isEmpty(), is(true));
     }
 
     @Test
@@ -120,7 +119,7 @@ public class CustomJsonUnitMatcherLoaderTest {
         Map<String, Matcher<?>> first = CustomJsonUnitMatcherLoader.load();
         Map<String, Matcher<?>> second = CustomJsonUnitMatcherLoader.load();
 
-        assertSame(first, second);
+        assertThat(second, sameInstance(first));
     }
 
     public static class SingleMatcherProvider implements CustomJsonUnitMatcherProvider {

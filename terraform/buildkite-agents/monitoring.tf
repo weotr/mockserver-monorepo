@@ -1,21 +1,22 @@
 locals {
   stacks = {
     default = {
-      asg_name            = module.buildkite_stack.auto_scaling_group_name
+      asg_name             = module.buildkite_stack.auto_scaling_group_name
       lambda_function_name = module.buildkite_stack.scaler_lambda_function_name
-      scaler_log_group    = module.buildkite_stack.scaler_log_group
+      scaler_log_group     = module.buildkite_stack.scaler_log_group
     }
     release = {
-      asg_name            = module.buildkite_release_stack.auto_scaling_group_name
+      asg_name             = module.buildkite_release_stack.auto_scaling_group_name
       lambda_function_name = module.buildkite_release_stack.scaler_lambda_function_name
-      scaler_log_group    = module.buildkite_release_stack.scaler_log_group
+      scaler_log_group     = module.buildkite_release_stack.scaler_log_group
     }
   }
 }
 
 resource "aws_sns_topic" "buildkite_alerts" {
-  name         = "buildkite-mockserver-alerts"
-  display_name = "Buildkite Agent Infrastructure Alerts"
+  name              = "buildkite-mockserver-alerts"
+  display_name      = "Buildkite Agent Infrastructure Alerts"
+  kms_master_key_id = "alias/aws/sns"
 }
 
 resource "aws_sns_topic_subscription" "buildkite_alerts_email" {
@@ -197,6 +198,39 @@ resource "aws_cloudwatch_event_target" "asg_launch_failures_to_sns" {
   }
 }
 
+# --- GuardDuty HIGH/CRITICAL findings -> SNS -----------------------------------
+# EventBridge natively receives GuardDuty findings. Filter to severity >= 7
+# (HIGH and CRITICAL) and forward to the existing alerts topic.
+resource "aws_cloudwatch_event_rule" "guardduty_high_severity" {
+  name        = "buildkite-mockserver-guardduty-high-severity"
+  description = "Alert on GuardDuty findings with severity >= 7 (HIGH/CRITICAL)"
+
+  event_pattern = jsonencode({
+    source      = ["aws.guardduty"]
+    detail-type = ["GuardDuty Finding"]
+    detail = {
+      severity = [{ numeric = [">=", 7] }]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "guardduty_to_sns" {
+  rule      = aws_cloudwatch_event_rule.guardduty_high_severity.name
+  target_id = "SendToSNS"
+  arn       = aws_sns_topic.buildkite_alerts.arn
+
+  input_transformer {
+    input_paths = {
+      severity = "$.detail.severity"
+      title    = "$.detail.title"
+      account  = "$.detail.accountId"
+      region   = "$.detail.region"
+      type     = "$.detail.type"
+    }
+    input_template = "\"GuardDuty HIGH/CRITICAL Finding (severity <severity>): <title> [type=<type>, account=<account>, region=<region>]\""
+  }
+}
+
 resource "aws_cloudwatch_dashboard" "buildkite_infrastructure" {
   dashboard_name = "buildkite-mockserver-infrastructure"
 
@@ -207,8 +241,8 @@ resource "aws_cloudwatch_dashboard" "buildkite_infrastructure" {
         width  = 12
         height = 6
         properties = {
-          title   = "${title(key)} Agent Capacity"
-          region  = var.region
+          title  = "${title(key)} Agent Capacity"
+          region = var.region
           metrics = [
             ["AWS/AutoScaling", "GroupDesiredCapacity", "AutoScalingGroupName", stack.asg_name, { stat = "Average", label = "Desired" }],
             [".", "GroupInServiceInstances", ".", ".", { stat = "Average", label = "Running" }],
@@ -227,8 +261,8 @@ resource "aws_cloudwatch_dashboard" "buildkite_infrastructure" {
         width  = 12
         height = 6
         properties = {
-          title   = "${title(key)} Lambda Scaler Health"
-          region  = var.region
+          title  = "${title(key)} Lambda Scaler Health"
+          region = var.region
           metrics = [
             ["AWS/Lambda", "Invocations", "FunctionName", stack.lambda_function_name, { stat = "Sum", label = "Invocations" }],
             [".", "Errors", ".", ".", { stat = "Sum", label = "Errors" }],

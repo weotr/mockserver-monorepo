@@ -11,6 +11,7 @@ import org.slf4j.event.Level;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 public class McpSessionManager {
 
@@ -18,6 +19,7 @@ public class McpSessionManager {
     private static final long SESSION_TTL_MILLIS = 60 * 60 * 1000L; // 60 minutes
     private final ConcurrentHashMap<String, McpSession> sessions = new ConcurrentHashMap<>();
     private final MockServerLogger mockServerLogger;
+    private final LongSupplier clock;
 
     /**
      * Dedicated thread pool for MCP request processing to avoid blocking Netty event loop threads.
@@ -28,7 +30,12 @@ public class McpSessionManager {
     private final EventExecutorGroup executor;
 
     public McpSessionManager(MockServerLogger mockServerLogger) {
+        this(mockServerLogger, System::currentTimeMillis);
+    }
+
+    McpSessionManager(MockServerLogger mockServerLogger, LongSupplier clock) {
         this.mockServerLogger = mockServerLogger;
+        this.clock = clock;
         this.executor = new DefaultEventExecutorGroup(2,
             new Scheduler.SchedulerThreadFactory("MockServer-mcp-worker"));
     }
@@ -52,7 +59,7 @@ public class McpSessionManager {
             evictOldest();
         }
         String sessionId = UUIDService.getUUID();
-        McpSession session = new McpSession(sessionId);
+        McpSession session = new McpSession(sessionId, clock);
         sessions.put(sessionId, session);
         return session;
     }
@@ -60,7 +67,7 @@ public class McpSessionManager {
     public McpSession getSession(String sessionId) {
         McpSession session = sessions.get(sessionId);
         if (session != null) {
-            if (System.currentTimeMillis() - session.getLastAccessedAt() > SESSION_TTL_MILLIS) {
+            if (clock.getAsLong() - session.getLastAccessedAt() > SESSION_TTL_MILLIS) {
                 sessions.remove(sessionId);
                 return null;
             }

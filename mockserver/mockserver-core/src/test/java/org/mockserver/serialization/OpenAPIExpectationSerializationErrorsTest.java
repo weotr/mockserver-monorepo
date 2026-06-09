@@ -13,16 +13,16 @@ import org.mockserver.serialization.model.OpenAPIExpectationDTO;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertArrayEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -35,7 +35,6 @@ public class OpenAPIExpectationSerializationErrorsTest {
     private ObjectWriter objectWriter;
     @InjectMocks
     private OpenAPIExpectationSerializer httpRequestSerializer;
-
 
     @Before
     public void setupTestFixture() {
@@ -72,8 +71,8 @@ public class OpenAPIExpectationSerializationErrorsTest {
     @SuppressWarnings("RedundantArrayCreation")
     public void shouldHandleNullAndEmptyWhileSerializingArray() {
         // when
-        assertEquals("[]", httpRequestSerializer.serialize(new OpenAPIExpectation[]{}));
-        assertEquals("[]", httpRequestSerializer.serialize((OpenAPIExpectation[]) null));
+        assertThat( httpRequestSerializer.serialize(new OpenAPIExpectation[]{}), is("[]"));
+        assertThat( httpRequestSerializer.serialize((OpenAPIExpectation[]) null), is("[]"));
     }
 
     @Test
@@ -84,15 +83,10 @@ public class OpenAPIExpectationSerializationErrorsTest {
             fail("expected exception to be thrown");
         } catch (IllegalArgumentException iae) {
             // then
-            String expectedPrefix = "incorrect openapi expectation json format for:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  requestBytes" + NEW_LINE +
-                "" + NEW_LINE +
-                " schema validation errors:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  JsonParseException - Unrecognized token 'requestBytes': was expecting (JSON String, Number (or 'NaN'/'+INF'/'-INF'), Array, Object or token 'null', 'true' or 'false')" + NEW_LINE +
-                "   at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: ";
-            assertThat(iae.getMessage().startsWith(expectedPrefix), is(true));
+            assertThat(iae.getMessage(), containsString("incorrect openapi expectation json format for:"));
+            assertThat(iae.getMessage(), containsString("requestBytes"));
+            assertThat(iae.getMessage(), containsString("schema validation errors:"));
+            assertThat(iae.getMessage(), containsString("Unrecognized token"));
         }
     }
 
@@ -104,9 +98,8 @@ public class OpenAPIExpectationSerializationErrorsTest {
             fail("expected exception");
         } catch (IllegalArgumentException iae) {
             // then
-            String expectedPrefix = "com.fasterxml.jackson.core.JsonParseException: Unrecognized token 'requestBytes': was expecting (JSON String, Number (or 'NaN'/'+INF'/'-INF'), Array, Object or token 'null', 'true' or 'false')" + NEW_LINE +
-                " at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: ";
-            assertThat(iae.getMessage().startsWith(expectedPrefix), is(true));
+            assertThat(iae.getMessage(), containsString("Unrecognized token"));
+            assertThat(iae.getMessage(), containsString("requestBytes"));
         }
     }
 

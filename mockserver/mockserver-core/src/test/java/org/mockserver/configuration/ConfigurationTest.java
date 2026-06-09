@@ -229,6 +229,84 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetChaosAutoHaltEnabled() {
+        boolean original = ConfigurationProperties.chaosAutoHaltEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltEnabled(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltEnabled"), equalTo("true"));
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(true));
+            ConfigurationProperties.chaosAutoHaltEnabled(original);
+
+            // when - setter
+            configuration.chaosAutoHaltEnabled(true);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltEnabled(), equalTo(true));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetChaosAutoHaltErrorThreshold() {
+        long original = ConfigurationProperties.chaosAutoHaltErrorThreshold();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(50L));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(100);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltErrorThreshold(), equalTo(100L));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltErrorThreshold"), equalTo("100"));
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(100L));
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(original);
+
+            // when - setter
+            configuration.chaosAutoHaltErrorThreshold(200L);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltErrorThreshold(), equalTo(200L));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltErrorThreshold(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetChaosAutoHaltWindowMillis() {
+        long original = ConfigurationProperties.chaosAutoHaltWindowMillis();
+        try {
+            // then - default value
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(60_000L));
+
+            // when - system property setter
+            ConfigurationProperties.chaosAutoHaltWindowMillis(30_000);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.chaosAutoHaltWindowMillis(), equalTo(30_000L));
+            assertThat(System.getProperty("mockserver.chaosAutoHaltWindowMillis"), equalTo("30000"));
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(30_000L));
+            ConfigurationProperties.chaosAutoHaltWindowMillis(original);
+
+            // when - setter
+            configuration.chaosAutoHaltWindowMillis(120_000L);
+
+            // then - getter
+            assertThat(configuration.chaosAutoHaltWindowMillis(), equalTo(120_000L));
+        } finally {
+            ConfigurationProperties.chaosAutoHaltWindowMillis(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetMaxExpectations() {
         int original = ConfigurationProperties.maxExpectations();
         try {
@@ -1279,6 +1357,110 @@ public class ConfigurationTest {
             assertThat(configuration.maximumNumberOfRequestToReturnInVerificationFailure(), equalTo(20));
         } finally {
             ConfigurationProperties.maximumNumberOfRequestToReturnInVerificationFailure(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetGenerateRealisticExampleValues() {
+        boolean original = ConfigurationProperties.generateRealisticExampleValues();
+        try {
+            // then - default value
+            assertThat(configuration.generateRealisticExampleValues(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.generateRealisticExampleValues(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.generateRealisticExampleValues(), equalTo(true));
+            assertThat(System.getProperty("mockserver.generateRealisticExampleValues"), equalTo("true"));
+            assertThat(configuration.generateRealisticExampleValues(), equalTo(true));
+            ConfigurationProperties.generateRealisticExampleValues(original);
+
+            // when - setter
+            configuration.generateRealisticExampleValues(true);
+
+            // then - getter
+            assertThat(configuration.generateRealisticExampleValues(), equalTo(true));
+        } finally {
+            ConfigurationProperties.generateRealisticExampleValues(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetValidateProxyOpenAPISpec() {
+        String original = ConfigurationProperties.validateProxyOpenAPISpec();
+        try {
+            // then - default value
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.validateProxyOpenAPISpec("https://example.com/spec.json");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.validateProxyOpenAPISpec(), equalTo("https://example.com/spec.json"));
+            assertThat(System.getProperty("mockserver.validateProxyOpenAPISpec"), equalTo("https://example.com/spec.json"));
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo("https://example.com/spec.json"));
+            ConfigurationProperties.validateProxyOpenAPISpec(original);
+
+            // when - setter
+            configuration.validateProxyOpenAPISpec("inline-spec");
+
+            // then - getter
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo("inline-spec"));
+        } finally {
+            ConfigurationProperties.validateProxyOpenAPISpec(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetValidateProxyEnforce() {
+        boolean original = ConfigurationProperties.validateProxyEnforce();
+        try {
+            // then - default value
+            assertThat(configuration.validateProxyEnforce(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.validateProxyEnforce(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.validateProxyEnforce(), equalTo(true));
+            assertThat(System.getProperty("mockserver.validateProxyEnforce"), equalTo("true"));
+            assertThat(configuration.validateProxyEnforce(), equalTo(true));
+            ConfigurationProperties.validateProxyEnforce(original);
+
+            // when - setter
+            configuration.validateProxyEnforce(true);
+
+            // then - getter
+            assertThat(configuration.validateProxyEnforce(), equalTo(true));
+        } finally {
+            ConfigurationProperties.validateProxyEnforce(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetAttachMismatchDiagnosticToResponse() {
+        boolean original = ConfigurationProperties.attachMismatchDiagnosticToResponse();
+        try {
+            // then - default value (false)
+            assertThat(configuration.attachMismatchDiagnosticToResponse(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.attachMismatchDiagnosticToResponse(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.attachMismatchDiagnosticToResponse(), equalTo(true));
+            assertThat(System.getProperty("mockserver.attachMismatchDiagnosticToResponse"), equalTo("true"));
+            assertThat(configuration.attachMismatchDiagnosticToResponse(), equalTo(true));
+            ConfigurationProperties.attachMismatchDiagnosticToResponse(original);
+
+            // when - setter
+            configuration.attachMismatchDiagnosticToResponse(true);
+
+            // then - getter
+            assertThat(configuration.attachMismatchDiagnosticToResponse(), equalTo(true));
+        } finally {
+            ConfigurationProperties.attachMismatchDiagnosticToResponse(original);
         }
     }
 
@@ -2705,6 +2887,300 @@ public class ConfigurationTest {
             assertThat(configuration.asyncRecordedMessageMaxEntries(), equalTo(2000));
         } finally {
             ConfigurationProperties.asyncRecordedMessageMaxEntries(original);
+        }
+    }
+
+    // -- HTTP/3 QUIC transport parameters --
+
+    @Test
+    public void shouldSetAndGetHttp3MaxIdleTimeout() {
+        // default value
+        assertThat(configuration.http3MaxIdleTimeout(), equalTo(5000L));
+
+        // when - instance setter
+        configuration.http3MaxIdleTimeout(10000L);
+
+        // then
+        assertThat(configuration.http3MaxIdleTimeout(), equalTo(10000L));
+    }
+
+    @Test
+    public void shouldSetAndGetHttp3InitialMaxData() {
+        // default value
+        assertThat(configuration.http3InitialMaxData(), equalTo(10000000L));
+
+        // when - instance setter
+        configuration.http3InitialMaxData(5000000L);
+
+        // then
+        assertThat(configuration.http3InitialMaxData(), equalTo(5000000L));
+    }
+
+    @Test
+    public void shouldSetAndGetHttp3InitialMaxStreamDataBidirectional() {
+        // default value
+        assertThat(configuration.http3InitialMaxStreamDataBidirectional(), equalTo(1000000L));
+
+        // when - instance setter
+        configuration.http3InitialMaxStreamDataBidirectional(500000L);
+
+        // then
+        assertThat(configuration.http3InitialMaxStreamDataBidirectional(), equalTo(500000L));
+    }
+
+    @Test
+    public void shouldSetAndGetHttp3InitialMaxStreamsBidirectional() {
+        // default value
+        assertThat(configuration.http3InitialMaxStreamsBidirectional(), equalTo(100L));
+
+        // when - instance setter
+        configuration.http3InitialMaxStreamsBidirectional(50L);
+
+        // then
+        assertThat(configuration.http3InitialMaxStreamsBidirectional(), equalTo(50L));
+    }
+
+    @Test
+    public void shouldSetAndGetHttp3QpackMaxTableCapacity() {
+        // default value (0 = dynamic table disabled)
+        assertThat(configuration.http3QpackMaxTableCapacity(), equalTo(0L));
+
+        // when - instance setter
+        configuration.http3QpackMaxTableCapacity(4096L);
+
+        // then
+        assertThat(configuration.http3QpackMaxTableCapacity(), equalTo(4096L));
+    }
+
+    @Test
+    public void shouldDelegateHttp3ConfigToConfigurationPropertiesWhenNull() {
+        long originalTimeout = ConfigurationProperties.http3MaxIdleTimeout();
+        long originalMaxData = ConfigurationProperties.http3InitialMaxData();
+        long originalStreamData = ConfigurationProperties.http3InitialMaxStreamDataBidirectional();
+        long originalMaxStreams = ConfigurationProperties.http3InitialMaxStreamsBidirectional();
+        long originalQpack = ConfigurationProperties.http3QpackMaxTableCapacity();
+        try {
+            // when - set via system properties
+            ConfigurationProperties.http3MaxIdleTimeout(15000L);
+            ConfigurationProperties.http3InitialMaxData(20000000L);
+            ConfigurationProperties.http3InitialMaxStreamDataBidirectional(2000000L);
+            ConfigurationProperties.http3InitialMaxStreamsBidirectional(200L);
+            ConfigurationProperties.http3QpackMaxTableCapacity(8192L);
+
+            // then - Configuration delegates to ConfigurationProperties when field is null
+            Configuration fresh = new Configuration();
+            assertThat(fresh.http3MaxIdleTimeout(), equalTo(15000L));
+            assertThat(fresh.http3InitialMaxData(), equalTo(20000000L));
+            assertThat(fresh.http3InitialMaxStreamDataBidirectional(), equalTo(2000000L));
+            assertThat(fresh.http3InitialMaxStreamsBidirectional(), equalTo(200L));
+            assertThat(fresh.http3QpackMaxTableCapacity(), equalTo(8192L));
+        } finally {
+            ConfigurationProperties.http3MaxIdleTimeout(originalTimeout);
+            ConfigurationProperties.http3InitialMaxData(originalMaxData);
+            ConfigurationProperties.http3InitialMaxStreamDataBidirectional(originalStreamData);
+            ConfigurationProperties.http3InitialMaxStreamsBidirectional(originalMaxStreams);
+            ConfigurationProperties.http3QpackMaxTableCapacity(originalQpack);
+        }
+    }
+
+    @Test
+    public void shouldClampHttp3NumericPropertiesToNonNegative() {
+        // when - set negative values via instance setters
+        configuration.http3MaxIdleTimeout(-100L);
+        configuration.http3InitialMaxData(-500L);
+        configuration.http3InitialMaxStreamDataBidirectional(-200L);
+        configuration.http3InitialMaxStreamsBidirectional(-10L);
+        configuration.http3QpackMaxTableCapacity(-4096L);
+
+        // then - all getters should clamp to 0
+        assertThat("http3MaxIdleTimeout should be clamped to 0", configuration.http3MaxIdleTimeout(), equalTo(0L));
+        assertThat("http3InitialMaxData should be clamped to 0", configuration.http3InitialMaxData(), equalTo(0L));
+        assertThat("http3InitialMaxStreamDataBidirectional should be clamped to 0", configuration.http3InitialMaxStreamDataBidirectional(), equalTo(0L));
+        assertThat("http3InitialMaxStreamsBidirectional should be clamped to 0", configuration.http3InitialMaxStreamsBidirectional(), equalTo(0L));
+        assertThat("http3QpackMaxTableCapacity should be clamped to 0", configuration.http3QpackMaxTableCapacity(), equalTo(0L));
+    }
+
+    @Test
+    public void shouldSetAndGetDevMode() {
+        boolean original = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            // then - default value
+            assertThat(configuration.devMode(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.devMode(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.devMode(), equalTo(true));
+            assertThat(System.getProperty("mockserver.devMode"), equalTo("true"));
+            assertThat(configuration.devMode(), equalTo(true));
+            ConfigurationProperties.devMode(false);
+
+            // when - setter
+            configuration.devMode(true);
+
+            // then - getter
+            assertThat(configuration.devMode(), equalTo(true));
+        } finally {
+            ConfigurationProperties.devMode(original);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
+        }
+    }
+
+    @Test
+    public void shouldApplyDevModeDefaultsWhenEnabled() throws Exception {
+        boolean originalDevMode = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            // given - clear any explicitly-set maxLogEntries/maxExpectations (cache + system property) that
+            // a prior or parallel test may have leaked into the shared static ConfigurationProperties state.
+            // Dev mode only applies its defaults to properties the user has NOT explicitly set, so a leaked
+            // value would otherwise make this assertion non-deterministic.
+            java.lang.reflect.Field cacheField = ConfigurationProperties.class.getDeclaredField("propertyCache");
+            cacheField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> cache = (java.util.Map<String, String>) cacheField.get(null);
+            cache.remove("mockserver.maxLogEntries");
+            System.clearProperty("mockserver.maxLogEntries");
+            cache.remove("mockserver.maxExpectations");
+            System.clearProperty("mockserver.maxExpectations");
+
+            // when
+            ConfigurationProperties.devMode(true);
+
+            // then
+            assertThat("maxLogEntries should be dev default",
+                ConfigurationProperties.maxLogEntries(), equalTo(ConfigurationProperties.DEV_MODE_MAX_LOG_ENTRIES));
+            assertThat("maxExpectations should be dev default",
+                ConfigurationProperties.maxExpectations(), equalTo(ConfigurationProperties.DEV_MODE_MAX_EXPECTATIONS));
+        } finally {
+            ConfigurationProperties.devMode(originalDevMode);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
+        }
+    }
+
+    @Test
+    public void shouldNotOverrideExplicitMaxLogEntriesInDevMode() {
+        boolean originalDevMode = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            // given - user explicitly sets maxLogEntries (updates both cache and system property)
+            ConfigurationProperties.maxLogEntries(5000);
+
+            // when - dev mode is enabled
+            ConfigurationProperties.devMode(true);
+
+            // then - maxLogEntries should NOT be overridden (user's explicit value wins)
+            assertThat("maxLogEntries should be the user's explicit value, not dev default",
+                ConfigurationProperties.maxLogEntries(), equalTo(5000));
+        } finally {
+            ConfigurationProperties.devMode(originalDevMode);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
+        }
+    }
+
+    @Test
+    public void shouldApplyDevModeDefaultsViaSystemPropertyActivation() throws Exception {
+        // This test verifies that setting devMode via system property (simulating
+        // -Dmockserver.devMode=true or MOCKSERVER_DEV_MODE=true) applies the dev
+        // defaults lazily in the getters, without requiring the devMode(boolean) setter.
+        boolean originalDevMode = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            // Access the private property cache via reflection to simulate a fresh JVM state
+            java.lang.reflect.Field cacheField = ConfigurationProperties.class.getDeclaredField("propertyCache");
+            cacheField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> cache = (java.util.Map<String, String>) cacheField.get(null);
+
+            // 1. Set devMode=true directly via system property (NOT via the setter)
+            //    to simulate -Dmockserver.devMode=true on the command line
+            System.setProperty("mockserver.devMode", "true");
+            cache.put("mockserver.devMode", "true");
+
+            // 2. Clear maxLogEntries and maxExpectations from cache AND system property
+            //    to simulate a fresh read (user has NOT set these explicitly)
+            cache.remove("mockserver.maxLogEntries");
+            System.clearProperty("mockserver.maxLogEntries");
+            cache.remove("mockserver.maxExpectations");
+            System.clearProperty("mockserver.maxExpectations");
+
+            // 3. The lazy devModeDefaultOrHeapBased in the getters should apply dev defaults
+            assertThat("maxLogEntries should be dev default when devMode set via system property",
+                ConfigurationProperties.maxLogEntries(), equalTo(ConfigurationProperties.DEV_MODE_MAX_LOG_ENTRIES));
+            assertThat("maxExpectations should be dev default when devMode set via system property",
+                ConfigurationProperties.maxExpectations(), equalTo(ConfigurationProperties.DEV_MODE_MAX_EXPECTATIONS));
+        } finally {
+            // Restore original values through the public setters (which update cache + system property)
+            ConfigurationProperties.devMode(originalDevMode);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
+        }
+    }
+
+    @Test
+    public void shouldApplyDevModeDefaultsViaInstanceDevMode() {
+        // Verify that setting devMode on a Configuration INSTANCE (not the global
+        // ConfigurationProperties.devMode) makes maxExpectations/maxLogEntries
+        // return the dev-mode defaults, without affecting the global state.
+        boolean originalDevMode = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            // Ensure global devMode is OFF
+            ConfigurationProperties.devMode(false);
+
+            // when - set devMode on the instance only
+            Configuration cfg = new Configuration();
+            cfg.devMode(true);
+
+            // then - instance getters return dev defaults
+            assertThat("instance maxExpectations should be dev default",
+                cfg.maxExpectations(), equalTo(ConfigurationProperties.DEV_MODE_MAX_EXPECTATIONS));
+            assertThat("instance maxLogEntries should be dev default",
+                cfg.maxLogEntries(), equalTo(ConfigurationProperties.DEV_MODE_MAX_LOG_ENTRIES));
+
+            // and - global getters are unaffected
+            assertThat("global devMode should still be false",
+                ConfigurationProperties.devMode(), equalTo(false));
+        } finally {
+            ConfigurationProperties.devMode(originalDevMode);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
+        }
+    }
+
+    @Test
+    public void shouldNotOverrideExplicitInstanceMaxInDevMode() {
+        // Verify that an explicit maxExpectations/maxLogEntries set on the instance
+        // takes priority over the instance devMode default.
+        boolean originalDevMode = ConfigurationProperties.devMode();
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        int originalMaxExpectations = ConfigurationProperties.maxExpectations();
+        try {
+            ConfigurationProperties.devMode(false);
+
+            Configuration cfg = new Configuration();
+            cfg.devMode(true);
+            cfg.maxExpectations(42);
+            cfg.maxLogEntries(99);
+
+            assertThat("explicit instance maxExpectations wins over devMode default",
+                cfg.maxExpectations(), equalTo(42));
+            assertThat("explicit instance maxLogEntries wins over devMode default",
+                cfg.maxLogEntries(), equalTo(99));
+        } finally {
+            ConfigurationProperties.devMode(originalDevMode);
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            ConfigurationProperties.maxExpectations(originalMaxExpectations);
         }
     }
 

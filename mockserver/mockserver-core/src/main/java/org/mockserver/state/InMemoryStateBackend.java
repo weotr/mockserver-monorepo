@@ -84,6 +84,15 @@ public class InMemoryStateBackend implements StateBackend {
 
     @Override
     public void close() {
-        // no-op for in-memory
+        // Close the blob store to release any cloud SDK resources
+        // (connection pools, threads). No-op for InMemoryBlobStore
+        // and FilesystemBlobStore.
+        if (blobStore != null) {
+            try {
+                blobStore.close();
+            } catch (Exception e) {
+                // best-effort: log and continue shutdown
+            }
+        }
     }
 }

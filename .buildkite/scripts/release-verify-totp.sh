@@ -47,14 +47,29 @@ print(totp(sys.argv[1], int(sys.argv[2])))
 PYEOF
 }
 
-# The Verify TOTP step runs on a release-queue agent that scales to zero.
-# A cold-start agent takes ~1-3 minutes to provision (Lambda scaler runs
-# every 60s + EC2 spot acquisition + agent registration + checkout). The
-# operator entered the TOTP minutes before this script actually runs, so we
-# accept any code from the last ~5 minutes (±10 × 30s windows). The
-# `allowed_teams` GitHub gate on the block step is the primary access
-# control; TOTP is the second factor and a wider verification window is a
-# routine accommodation for clock drift / network latency.
+# TOTP_TOLERANCE_WINDOWS=10 is BY DESIGN (reviewed and accepted by security
+# audit, 2026-06).
+#
+# The wide +-5-minute window (10 windows x 30s) is an intentional
+# accommodation for the release infrastructure's cold-start latency:
+# release-queue agents scale to zero (mandatory cost control — see
+# AGENTS.md), so when the operator enters the code in the Buildkite block
+# step, a fresh EC2 VM must cold-start before this script runs:
+#   - Lambda autoscaler poll:    up to 60s
+#   - EC2 spot acquisition:      10-60s (p95)
+#   - Buildkite agent bootstrap: 10-30s (git checkout, plugin setup)
+# Total worst-case: ~2.5 minutes AFTER the operator submits the code.
+#
+# The `allowed_teams: ["release-managers"]` GitHub-backed gate on the
+# Buildkite block step is the PRIMARY access control. TOTP is a second
+# factor that confirms the authenticated operator intended to release;
+# the wider window does not weaken that intent signal. A standard +-1
+# window would cause false rejections on every cold-start, forcing
+# operators to retry — defeating the purpose without adding security.
+#
+# DO NOT reduce this value without first either (a) pre-warming the
+# release queue, or (b) moving TOTP validation into the block step itself
+# (which runs in the Buildkite control plane, not on an agent).
 TOTP_TOLERANCE_WINDOWS=10
 
 matched=false

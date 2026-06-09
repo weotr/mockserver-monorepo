@@ -14,7 +14,6 @@ import javax.net.ssl.SSLContext;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -88,18 +87,15 @@ public class CustomTLSProtocolsMockingIntegrationTest extends AbstractMockingInt
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -122,19 +118,16 @@ public class CustomTLSProtocolsMockingIntegrationTest extends AbstractMockingInt
 
         // then
         // - in https
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("some_path"))
                     .withMethod("POST"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     @Test
@@ -171,15 +164,7 @@ public class CustomTLSProtocolsMockingIntegrationTest extends AbstractMockingInt
 
         // then
         // - in http
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("echo"))
                     .withMethod("POST")
@@ -188,18 +173,15 @@ public class CustomTLSProtocolsMockingIntegrationTest extends AbstractMockingInt
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-        // - in https
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-test", "test_headers_and_body")
                 )
-                .withBody("an_example_body_https"),
-            makeRequest(
+                .withBody("an_example_body_http")));
+        // - in https
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -209,8 +191,13 @@ public class CustomTLSProtocolsMockingIntegrationTest extends AbstractMockingInt
                     )
                     .withBody("an_example_body_https"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_https")));
     }
 
 

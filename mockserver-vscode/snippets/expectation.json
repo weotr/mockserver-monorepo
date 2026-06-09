@@ -1,0 +1,57 @@
+{
+  "MockServer Expectation": {
+    "prefix": "mockserver-expectation",
+    "description": "Create a MockServer expectation with request matcher and response action",
+    "body": [
+      "{",
+      "  \"httpRequest\": {",
+      "    \"method\": \"${1:GET}\",",
+      "    \"path\": \"${2:/api/resource}\"",
+      "  },",
+      "  \"httpResponse\": {",
+      "    \"statusCode\": ${3:200},",
+      "    \"headers\": {",
+      "      \"Content-Type\": [\"${4:application/json}\"]",
+      "    },",
+      "    \"body\": \"${5:{}}\"",
+      "  },",
+      "  \"times\": {",
+      "    \"unlimited\": ${6:true}",
+      "  }",
+      "}"
+    ]
+  },
+  "MockServer Expectation with Forward": {
+    "prefix": "mockserver-forward",
+    "description": "Create a MockServer expectation with request matcher and forward action",
+    "body": [
+      "{",
+      "  \"httpRequest\": {",
+      "    \"method\": \"${1:GET}\",",
+      "    \"path\": \"${2:/api/resource}\"",
+      "  },",
+      "  \"httpForward\": {",
+      "    \"host\": \"${3:localhost}\",",
+      "    \"port\": ${4:8080},",
+      "    \"scheme\": \"${5:HTTP}\"",
+      "  }",
+      "}"
+    ]
+  },
+  "MockServer Verify": {
+    "prefix": "mockserver-verify",
+    "description": "Create a MockServer verification request",
+    "body": [
+      "{",
+      "  \"httpRequest\": {",
+      "    \"method\": \"${1:GET}\",",
+      "    \"path\": \"${2:/api/resource}\"",
+      "  },",
+      "  \"times\": {",
+      "    \"atLeast\": ${3:1},",
+      "    \"atMost\": ${4:1}",
+      "  }",
+      "}"
+    ]
+  }
+}

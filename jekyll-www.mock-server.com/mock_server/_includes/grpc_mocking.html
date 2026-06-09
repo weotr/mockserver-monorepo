@@ -70,7 +70,7 @@
   -e MOCKSERVER_GRPC_PROTO_DIRECTORY=/protos \
   mockserver/mockserver:latest</code></pre>
 
-<p>Replace <span class="inline_code">latest</span> with a specific version tag (e.g. <span class="inline_code">mockserver/mockserver:6.1.0</span>) to pin a known working version.</p>
+<p>Replace <span class="inline_code">latest</span> with a specific version tag (e.g. <span class="inline_code">mockserver/mockserver:7.0.0</span>) to pin a known working version.</p>
 
 <a id="creating_grpc_expectations" class="anchor" href="#creating_grpc_expectations">&nbsp;</a>
 
@@ -522,7 +522,7 @@ client.when(
 
 <p>Kubernetes readiness and liveness probes commonly use the <a href="https://github.com/grpc/grpc/blob/master/doc/health-checking.md">gRPC Health Checking Protocol</a> (<code class="inline code">grpc.health.v1.Health/Check</code>) to verify that a service is ready to receive traffic. MockServer auto-responds to this well-known method <strong>without requiring a proto descriptor</strong> — protobuf encoding and decoding is handled manually so health checks work out of the box even when no descriptors have been loaded.</p>
 
-<p>Health checks are enabled by default (<code class="inline code">grpcHealthCheckEnabled=true</code>). The default serving status for all services is <code class="inline code">SERVING</code>. You can override the status for individual services or for the global default via a REST endpoint.</p>
+<p>Health checking is always available — it is built in and cannot be disabled via a configuration property; MockServer answers any gRPC request whose content-type is gRPC and whose path matches the well-known health-check method. The default serving status for all services is <code class="inline code">SERVING</code>. You can override the status for individual services or for the global default via a REST endpoint.</p>
 
 <h3>ServingStatus values</h3>
 
@@ -647,6 +647,14 @@ grpcurl -plaintext localhost:1080 describe com.example.grpc.HelloRequest</code><
 <h3>Connect Protocol (connectrpc)</h3>
 
 <p>The <a href="https://connectrpc.com/docs/protocol/">Connect protocol</a> (used by <span class="inline_code">connectrpc</span>) is not currently supported. Connect uses a different framing format (JSON or proto over standard HTTP POST with <span class="inline_code">application/connect+proto</span> content type and trailers in a JSON envelope) that is distinct from gRPC-Web. If you need Connect support, please open a feature request.</p>
+
+<a id="grpc_over_http3" class="anchor" href="#grpc_over_http3">&nbsp;</a>
+
+<h2>gRPC over HTTP/3</h2>
+
+<p>gRPC works over HTTP/3 (QUIC) as well as HTTP/2 &mdash; set the <span class="inline_code">http3Port</span> configuration property to start the HTTP/3 listener and clients can make gRPC calls over QUIC. <strong>Unary</strong>, <strong>server-streaming</strong>, and <strong>bidirectional-streaming</strong> gRPC all work over HTTP/3 with the correct trailing-HEADERS <span class="inline_code">grpc-status</span> framing. As on the TCP path, bidirectional streaming requires the <span class="inline_code">grpcBidiStreamingEnabled=true</span> flag. Expectations are matched identically regardless of whether the call arrives over HTTP/2 or HTTP/3 &mdash; no separate or HTTP/3-specific expectations are needed.</p>
+
+<p>See the <a href="/mock_server/http3.html">HTTP/3 (QUIC) Support</a> page for details on enabling and tuning the HTTP/3 listener.</p>
 
 <a id="grpc_configuration_link" class="anchor" href="#grpc_configuration_link">&nbsp;</a>
 

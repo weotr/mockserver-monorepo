@@ -2,11 +2,21 @@ resource "aws_iam_role" "release_website" {
   name = "mockserver-release-website"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { AWS = var.build_account_agent_role_arn }
-      Action    = "sts:AssumeRole"
-    }]
+    Statement = [merge(
+      {
+        Effect    = "Allow"
+        Principal = { AWS = var.build_account_agent_role_arn }
+        Action    = "sts:AssumeRole"
+      },
+      # Only emit the Condition key when an external id is supplied. Emitting
+      # `Condition = null` produces `"Condition": null` in the policy JSON,
+      # which the IAM API normalises away — causing perpetual plan drift. When
+      # role_external_id is "" (the default) the trust policy stays as-is so the
+      # current cross-account apply keeps working until the external id is wired.
+      var.role_external_id != "" ? {
+        Condition = { StringEquals = { "sts:ExternalId" = var.role_external_id } }
+      } : {}
+    )]
   })
 }
 
@@ -31,21 +41,30 @@ resource "aws_iam_role_policy" "release_website" {
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
-          "s3:GetObjectAcl",
-          "s3:PutObjectAcl",
           "s3:ListBucket",
           "s3:GetBucketLocation",
           "s3:GetBucketVersioning",
           "s3:GetBucketTagging",
-          "s3:GetBucketAcl",
           "s3:GetBucketPolicy",
-          "s3:GetBucketWebsite",
           "s3:GetBucketPublicAccessBlock",
           "s3:GetBucketOwnershipControls",
+          # Bucket-level reads Terraform performs when REFRESHING the existing
+          # aws_s3_bucket resources in this state (every plan/apply refreshes
+          # all managed buckets). Without these, `terraform plan` aborts during
+          # refresh with AccessDenied (GetBucketAcl etc.) before it can apply.
+          "s3:GetBucketAcl",
+          "s3:GetBucketCORS",
+          "s3:GetBucketWebsite",
+          "s3:GetBucketLogging",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetReplicationConfiguration",
+          "s3:GetEncryptionConfiguration",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetBucketRequestPayment",
+          "s3:GetAccelerateConfiguration",
           # Bucket-level (versioned-site.sh creates new buckets)
           "s3:CreateBucket",
           "s3:PutBucketPolicy",
-          "s3:PutBucketWebsite",
           "s3:PutPublicAccessBlock",
           "s3:PutBucketPublicAccessBlock",
           "s3:PutBucketOwnershipControls",
@@ -87,6 +106,44 @@ resource "aws_iam_role_policy" "release_website" {
           "cloudfront:TagResource",
           "cloudfront:UntagResource",
           "cloudfront:ListTagsForResource",
+          # Read-only gets Terraform performs when refreshing the security-
+          # hardening CloudFront resources (OAC + response-headers policy) that
+          # live in this state. Required for `terraform plan` refresh to succeed.
+          "cloudfront:GetOriginAccessControl",
+          "cloudfront:GetResponseHeadersPolicy",
+        ]
+        Resource = "*"
+      },
+      {
+        # Read-only describes Terraform performs when REFRESHING the security-
+        # hardening resources added to this state (security-hardening.tf,
+        # dnssec.tf): WAFv2 web ACL, GuardDuty detectors, IAM Access Analyzer,
+        # EBS encryption-by-default, and the DNSSEC KMS key. The release role
+        # never creates or modifies these (an admin apply manages them); it only
+        # needs to read them so `terraform plan` refresh does not abort with
+        # AccessDenied. All actions are read-only.
+        Sid    = "SecurityHardeningRefreshReadOnly"
+        Effect = "Allow"
+        Action = [
+          "kms:DescribeKey",
+          "kms:GetKeyPolicy",
+          "kms:GetKeyRotationStatus",
+          "kms:ListResourceTags",
+          # kms:ListAliases has no resource-level scoping; needed to refresh
+          # aws_kms_alias.dnssec.
+          "kms:ListAliases",
+          "wafv2:GetWebACL",
+          "wafv2:ListTagsForResource",
+          "wafv2:GetLoggingConfiguration",
+          "guardduty:GetDetector",
+          "guardduty:ListTagsForResource",
+          "access-analyzer:GetAnalyzer",
+          "access-analyzer:ListTagsForResource",
+          "ec2:GetEbsEncryptionByDefault",
+          # route53domains:GetDomainDetail refreshes the registrar-side DNSSEC
+          # delegation signer record (aws_route53domains_delegation_signer_record);
+          # route53domains is global and not resource-scopable.
+          "route53domains:GetDomainDetail",
         ]
         Resource = "*"
       },
@@ -100,6 +157,9 @@ resource "aws_iam_role_policy" "release_website" {
           "route53:GetHostedZone",
           "route53:ListResourceRecordSets",
           "route53:ListTagsForResource",
+          # Refresh of the DNSSEC resources (aws_route53_key_signing_key,
+          # aws_route53_hosted_zone_dnssec) reads the zone's DNSSEC status.
+          "route53:GetDNSSEC",
         ]
         Resource = "arn:aws:route53:::hostedzone/${var.zone_id}"
       },

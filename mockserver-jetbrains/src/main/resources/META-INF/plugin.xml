@@ -1,0 +1,42 @@
+<idea-plugin>
+    <id>com.mock-server.mockserver</id>
+    <name>MockServer</name>
+    <vendor email="jamesdbloom@gmail.com" url="https://www.mock-server.com">MockServer</vendor>
+
+    <description><![CDATA[
+    MockServer integration for IntelliJ-based IDEs.
+    <ul>
+      <li>Open the MockServer Dashboard in your browser</li>
+      <li>Start a MockServer Docker container from the IDE</li>
+      <li>Tool window for quick access to MockServer controls</li>
+    </ul>
+    <p>This is an initial scaffold — more features coming soon.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <actions>
+        <group id="MockServer.ActionGroup" text="MockServer" description="MockServer actions" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="MockServer.OpenDashboard"
+                    class="com.mockserver.jetbrains.OpenDashboardAction"
+                    text="Open MockServer Dashboard"
+                    description="Opens the MockServer dashboard in your default browser"/>
+            <action id="MockServer.StartDocker"
+                    class="com.mockserver.jetbrains.StartDockerAction"
+                    text="Start MockServer (Docker)"
+                    description="Starts a MockServer container via Docker"/>
+        </group>
+    </actions>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="MockServer"
+                    factoryClass="com.mockserver.jetbrains.MockServerToolWindowFactory"
+                    anchor="bottom"
+                    secondary="true"
+                    icon="AllIcons.Nodes.Plugin"/>
+        <notificationGroup id="MockServer Notifications"
+                           displayType="BALLOON"
+                           isLogByDefault="true"/>
+    </extensions>
+</idea-plugin>

@@ -137,6 +137,11 @@ The retrieve and clear endpoints accept type parameters:
 | `JSON` | Standard JSON serialization |
 | `JAVA` | Generated Java client API code (via `ExpectationToJavaSerializer`) |
 | `LOG_ENTRIES` | Raw log entry format |
+| `HAR` | HTTP Archive (HAR) export |
+| `OPENAPI` | OpenAPI spec export (applies to `ACTIVE_EXPECTATIONS`) |
+| `POSTMAN` | Postman collection export (applies to `ACTIVE_EXPECTATIONS`) |
+| `BRUNO` | Bruno request collection export (applies to `ACTIVE_EXPECTATIONS`) |
+| `CURL` | cURL command(s) reproducing recorded requests (applies to `REQUESTS` / `REQUEST_RESPONSES`) |
 
 **`ClearType`** (query parameter `?type=`):
 
@@ -192,7 +197,7 @@ Expectations are stored in a `CircularPriorityQueue` sorted by priority (highest
 
 When no expectation matches, the method logs a **closest match summary** identifying the expectation with the fewest field differences, along with a match score (e.g., "matched 8/12 fields"). This helps users quickly identify which expectation was closest to matching.
 
-`HttpState` obtains its `RequestMatchers` through `ExpectationStoreFactory` (a small SPI/registry) rather than constructing it directly. By default the factory returns the standard in-memory `RequestMatchers` (zero behaviour change). This is the **clustered-state seam (G10 phase 1)**: an optional backend can register a factory returning a clustering-aware `RequestMatchers` so a fleet of MockServer instances shares expectations. Phase 2 (deferred) adds the chosen embedded **Infinispan** data-grid backend and makes the `CircularPriorityQueue` storage overridable so a distributed map can back it.
+`HttpState` obtains its `RequestMatchers` through `ExpectationStoreFactory` (a small SPI/registry) rather than constructing it directly. By default the factory returns the standard in-memory `RequestMatchers` (zero behaviour change). This is the **clustered-state seam**: an optional backend can register a factory returning a clustering-aware `RequestMatchers` so a fleet of MockServer instances shares expectations. The optional `mockserver-state-infinispan` module implements this with an embedded Infinispan data-grid backend; activate it by setting `stateBackend=infinispan`. See [Clustered State](clustered-state.md) for full details.
 
 A `MatchDifference` context is always created for each comparison (regardless of log level), so detailed field-level difference information is always available in the `EXPECTATION_NOT_MATCHED` log entries. The `MatchFailureHints` utility adds actionable suggestions for common mistakes (trailing slashes, Content-Type charset mismatches, unescaped regex metacharacters).
 
@@ -256,7 +261,7 @@ flowchart LR
 
 ### Correlation ID Retrieval
 
-All log entries for a single incoming HTTP request share the same `correlationId` (a UUID assigned in `HttpState.handle()`). The `PUT /mockserver/retrieve?type=LOGS&correlationId=<id>` endpoint retrieves all log entries for a specific correlation ID, enabling request-to-match-attempts correlation. The Java client exposes this via `MockServerClient.retrieveLogsByCorrelationId(String)`, and the MCP `raw_retrieve` tool supports a `correlationId` parameter.
+All log entries for a single incoming HTTP request share the same `correlationId` (a UUID assigned in `HttpState.handle()`). The `PUT /mockserver/retrieve?type=LOGS&correlationId=<id>` endpoint retrieves all log entries for a specific correlation ID, enabling request-to-match-attempts correlation. The Java client exposes this via `MockServerClient.retrieveLogsByCorrelationId(String)`, and the dedicated MCP `retrieve_logs` tool (as well as the generic `raw_retrieve` tool) supports a `correlationId` parameter.
 
 ### Typed Log Entry Retrieval
 
@@ -302,7 +307,7 @@ After a match, `postProcess()`:
 
 ## Action Types
 
-Each `Expectation` binds a request matcher to exactly one action. There are 14 action types across two categories:
+Each `Expectation` binds a request matcher to exactly one action. There are 19 action types across two categories:
 
 ### Response Actions
 
@@ -315,6 +320,7 @@ Each `Expectation` binds a request matcher to exactly one action. There are 14 a
 | `SSE_RESPONSE` | `HttpSseResponseActionHandler` | Streams Server-Sent Events with per-event delays, optional `closeConnection` flag |
 | `WEBSOCKET_RESPONSE` | `HttpWebSocketResponseActionHandler` | Upgrades to WebSocket and sends a sequence of `WebSocketMessage` frames with per-message delays. When subprotocol is `graphql-transport-ws`/`graphql-ws` with a `graphqlSubscriptionFilter`, installs `GraphQLSubscriptionHandler` for the graphql-transport-ws protocol state machine |
 | `GRPC_STREAM_RESPONSE` | `GrpcStreamResponseActionHandler` | Streams gRPC-framed protobuf messages with per-message delays and grpc-status trailers (Netty only; returns 501 in WAR) |
+| `GRPC_BIDI_RESPONSE` | `GrpcBidiRouterHandler` / `GrpcBidiStreamHandler` | Bidirectional gRPC streaming via the multiplex pipeline (requires `grpcBidiStreamingEnabled=true`; returns 501 otherwise or in WAR) |
 | `BINARY_RESPONSE` | (inline in `BinaryRequestProxyingHandler`) | Returns raw binary bytes when a `BinaryRequestDefinition` matches |
 | `DNS_RESPONSE` | (inline in `DnsRequestHandler`) | Returns DNS response records when a `DnsRequestDefinition` matches a UDP DNS query |
 ### Forward Actions
@@ -568,6 +574,40 @@ The `noProxyHosts` configuration property (comma-separated list) controls which 
 
 Patterns support exact hostnames (`example.com`), wildcard prefixes (`*.internal.corp`), and IP addresses (`192.168.1.1`). Matching is case-insensitive. The shared utility `NoProxyHostsUtils.isHostOnNoProxyList()` is used by both `HttpActionHandler` and `NettyHttpClient`.
 
+### Validation Proxy (OpenAPI Contract Validation on Forwarded Traffic)
+
+When `validateProxyOpenAPISpec` is set (to an OpenAPI spec URL, file path, or inline JSON/YAML), MockServer validates every forwarded/proxied request and its upstream response against the spec. This applies to both the unmatched proxy forward path and the ProxyPass reverse-proxy path. Request violations are logged as `OPENAPI_REQUEST_VALIDATION_FAILED` and response violations as `OPENAPI_RESPONSE_VALIDATION_FAILED` log entries.
+
+By default, validation is **report-only**: traffic flows unmodified and violations are only logged. When `validateProxyEnforce` is set to `true`, non-conformant requests are rejected with a **400** status code before they reach the upstream, and non-conformant **buffered** (non-streaming) upstream responses are replaced with a **502**.
+
+**Streaming response limitation:** For streaming responses the body is written to the client as it arrives, before validation can inspect the complete body. In enforce mode, streaming responses are therefore validated in **report-only** fashion (violations logged but not blocked) even when `validateProxyEnforce=true`. Non-streaming responses are fully enforced.
+
+The validation uses `OpenAPIRequestValidator` for requests and `OpenAPIResponseValidator` for responses (response-only, avoiding the double request validation that `OpenApiTrafficValidator` would perform). Both validation phases run off the Netty event loop (inside the scheduler thread pool) to avoid blocking I/O threads on cold-cache OpenAPI spec parsing or JSON-schema validation.
+
+```mermaid
+flowchart TD
+    REQ([Forwarded Request]) --> SPEC_CHECK{"validateProxyOpenAPISpec\nset?"}
+    SPEC_CHECK -->|No| FWD["Forward normally"]
+    SPEC_CHECK -->|Yes| REQ_VAL["Validate request\nagainst spec\n(off event loop)"]
+    REQ_VAL -->|Valid| FWD
+    REQ_VAL -->|Invalid + enforce=false| LOG_REQ["Log OPENAPI_REQUEST_VALIDATION_FAILED"] --> FWD
+    REQ_VAL -->|Invalid + enforce=true| R400["Return 400"]
+    FWD --> UPSTREAM["Upstream response"]
+    UPSTREAM --> STREAMING{"Streaming\nresponse?"}
+    STREAMING -->|No| RESP_VAL["Validate response\nagainst spec"]
+    RESP_VAL -->|Valid| RETURN["Return response"]
+    RESP_VAL -->|Invalid + enforce=false| LOG_RESP["Log OPENAPI_RESPONSE_VALIDATION_FAILED"] --> RETURN
+    RESP_VAL -->|Invalid + enforce=true| R502["Return 502"]
+    STREAMING -->|Yes| WRITE_STREAM["Write streaming response\nto client"]
+    WRITE_STREAM --> STREAM_VAL["Validate on stream\ncompletion (report-only)"]
+    STREAM_VAL -->|Invalid| LOG_STREAM["Log OPENAPI_RESPONSE_VALIDATION_FAILED"]
+```
+
+| Configuration Property | Type | Default | Description |
+|----------------------|------|---------|-------------|
+| `validateProxyOpenAPISpec` | String | `""` (disabled) | OpenAPI spec URL, file path, or inline payload to validate forwarded traffic against |
+| `validateProxyEnforce` | Boolean | `false` | When true, block non-conformant traffic (400 for bad requests, 502 for bad non-streaming responses). Streaming responses are validated report-only. |
+
 ### Loop Prevention
 
 To prevent infinite forwarding loops (where MockServer forwards to itself), an `x-forwarded-by` header with a unique per-instance value (`MockServer_<UUID>`) is added to forwarded requests. If an incoming request already has this header with the matching value, it is identified as a loop and returned with a 404.
@@ -734,7 +774,16 @@ In `MockServerEventLog.verify()`, after determining verification failed:
 
 ### 404 Closest Match Logging
 
-When no expectation matches and a 404 is returned, `HttpActionHandler.returnNotFound()` calls `HttpState.findClosestMatchDiff()` to find the closest matching expectation's diff details and logs them at INFO level. The 404 response body is not modified to avoid breaking client assertions.
+When no expectation matches and a 404 is returned, `HttpActionHandler.returnNotFound()` calls `HttpState.findClosestMatchDiff()` to find the closest matching expectation's diff details and logs them at DEBUG level. By default the 404 response body is not modified to avoid breaking client assertions.
+
+### Client-Visible Match Feedback (Opt-In)
+
+When `attachMismatchDiagnosticToResponse` is enabled (default: `false`), unmatched 404 responses include diagnostic information to help test authors understand why their mock didn't match:
+
+- **Header** `x-mockserver-closest-match`: lists the fields that differed (e.g., `fields differ: method, path`) or `no expectations configured` when no expectations exist.
+- **Body**: a JSON object with `matchedFieldCount`, `totalFieldCount`, and a `differences` map keyed by field name, each containing an array of diff descriptions.
+
+This reuses the existing `findClosestMatchDiff()` and `MatchDifferenceFormatter` infrastructure -- no new matcher logic is introduced. The diagnostic is only attached when the property is explicitly set to `true`; when off (the default), the response is byte-for-byte identical to previous behaviour.
 
 ### Key Classes
 

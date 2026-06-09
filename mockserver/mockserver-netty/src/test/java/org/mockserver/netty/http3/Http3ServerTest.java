@@ -7,17 +7,17 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
-import io.netty.incubator.codec.http3.DefaultHttp3DataFrame;
-import io.netty.incubator.codec.http3.DefaultHttp3HeadersFrame;
-import io.netty.incubator.codec.http3.Http3;
-import io.netty.incubator.codec.http3.Http3ClientConnectionHandler;
-import io.netty.incubator.codec.http3.Http3DataFrame;
-import io.netty.incubator.codec.http3.Http3HeadersFrame;
-import io.netty.incubator.codec.http3.Http3RequestStreamInboundHandler;
-import io.netty.incubator.codec.quic.QuicChannel;
-import io.netty.incubator.codec.quic.QuicSslContext;
-import io.netty.incubator.codec.quic.QuicSslContextBuilder;
-import io.netty.incubator.codec.quic.QuicStreamChannel;
+import io.netty.handler.codec.http3.DefaultHttp3DataFrame;
+import io.netty.handler.codec.http3.DefaultHttp3HeadersFrame;
+import io.netty.handler.codec.http3.Http3;
+import io.netty.handler.codec.http3.Http3ClientConnectionHandler;
+import io.netty.handler.codec.http3.Http3DataFrame;
+import io.netty.handler.codec.http3.Http3HeadersFrame;
+import io.netty.handler.codec.http3.Http3RequestStreamInboundHandler;
+import io.netty.handler.codec.quic.QuicChannel;
+import io.netty.handler.codec.quic.QuicSslContext;
+import io.netty.handler.codec.quic.QuicSslContextBuilder;
+import io.netty.handler.codec.quic.QuicStreamChannel;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
@@ -165,6 +165,214 @@ public class Http3ServerTest {
         assertThat("body should be 'created'", result[1], is("created"));
     }
 
+    @Test
+    public void shouldApplyConfiguredTransportParameters() throws Exception {
+        // verify that custom QUIC transport parameters are applied and requests still work
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration()
+            .http3Port(udpPort)
+            .http3MaxIdleTimeout(10000L)          // 10 seconds (non-default)
+            .http3InitialMaxData(5000000L)         // 5 MB (non-default)
+            .http3InitialMaxStreamDataBidirectional(500000L) // 500 KB (non-default)
+            .http3InitialMaxStreamsBidirectional(50L)        // 50 streams (non-default)
+            .http3QpackMaxTableCapacity(4096L);    // 4 KB QPACK dynamic table
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        MockServerClient client = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
+        client.when(
+            request().withMethod("GET").withPath("/config-test")
+        ).respond(
+            response()
+                .withStatusCode(200)
+                .withBody("config-applied")
+        );
+
+        // verify requests still round-trip with the custom transport parameters
+        String[] result = sendHttp3Request(http3Port, "GET", "/config-test", null);
+        assertThat("status should be 200 with custom transport params", result[0], is("200"));
+        assertThat("body should be 'config-applied'", result[1], is("config-applied"));
+    }
+
+    @Test
+    public void shouldTrackActiveConnectionCount() throws Exception {
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration().http3Port(udpPort);
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        // before any connection, count should be 0
+        assertThat("initial active connections should be 0",
+            mockServer.getHttp3ActiveConnectionCount(), is(0));
+
+        // send a request (which creates a QUIC connection)
+        MockServerClient client = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
+        client.when(
+            request().withMethod("GET").withPath("/count-test")
+        ).respond(
+            response().withStatusCode(200).withBody("ok")
+        );
+
+        String[] result = sendHttp3Request(http3Port, "GET", "/count-test", null);
+        assertThat("request should succeed", result[0], is("200"));
+
+        // connection count should return to 0 after client closes
+        // (the client group shutdown in sendHttp3Request forces close)
+        // allow a brief moment for the close event to propagate
+        Thread.sleep(200);
+        assertThat("active connections should return to 0 after client disconnect",
+            mockServer.getHttp3ActiveConnectionCount(), is(0));
+    }
+
+    @Test
+    public void shouldPreserveDefaultBehaviourWhenNoTransportParamsConfigured() throws Exception {
+        // verify that the server starts and works with default config (no transport param overrides)
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration().http3Port(udpPort);
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        MockServerClient client = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
+        client.when(
+            request().withMethod("GET").withPath("/defaults")
+        ).respond(
+            response().withStatusCode(200).withBody("default-config")
+        );
+
+        String[] result = sendHttp3Request(http3Port, "GET", "/defaults", null);
+        assertThat("status should be 200", result[0], is("200"));
+        assertThat("body should be 'default-config'", result[1], is("default-config"));
+    }
+
+    @Test
+    public void shouldDisableQpackDynamicTableByDefault() throws Exception {
+        // when QPACK max table capacity is 0 (the default), the QPACK dynamic table
+        // should be disabled — matching the old 1-arg Http3ServerConnectionHandler
+        // constructor behaviour. Verify the server starts and serves requests without
+        // creating QPACK encoder/decoder streams.
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration().http3Port(udpPort);
+
+        // assert the default is 0
+        assertThat("default QPACK max table capacity should be 0", config.http3QpackMaxTableCapacity(), equalTo(0L));
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        MockServerClient client = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
+        client.when(
+            request().withMethod("GET").withPath("/qpack-default")
+        ).respond(
+            response().withStatusCode(200).withBody("qpack-disabled")
+        );
+
+        // verify the request completes successfully with default (disabled) QPACK dynamic table
+        String[] result = sendHttp3Request(http3Port, "GET", "/qpack-default", null);
+        assertThat("status should be 200 with QPACK dynamic table disabled", result[0], is("200"));
+        assertThat("body should be 'qpack-disabled'", result[1], is("qpack-disabled"));
+    }
+
+    @Test
+    public void shouldEnableQpackDynamicTableWithNonZeroCapacity() throws Exception {
+        // when QPACK max table capacity is set to a non-zero value, the QPACK dynamic
+        // table should be enabled. Verify the server starts and serves requests.
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration()
+            .http3Port(udpPort)
+            .http3QpackMaxTableCapacity(4096L);
+
+        // assert the capacity is non-zero
+        assertThat("QPACK max table capacity should be 4096", config.http3QpackMaxTableCapacity(), equalTo(4096L));
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        MockServerClient client = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
+        client.when(
+            request().withMethod("GET").withPath("/qpack-enabled")
+        ).respond(
+            response().withStatusCode(200).withBody("qpack-enabled")
+        );
+
+        // verify the request completes successfully with QPACK dynamic table enabled
+        String[] result = sendHttp3Request(http3Port, "GET", "/qpack-enabled", null);
+        assertThat("status should be 200 with QPACK dynamic table enabled", result[0], is("200"));
+        assertThat("body should be 'qpack-enabled'", result[1], is("qpack-enabled"));
+    }
+
+    @Test
+    public void shouldReturnHttp3StatusEndpoint() throws Exception {
+        // start MockServer with HTTP/3 enabled
+        int udpPort = findAvailableUdpPort();
+        Configuration config = configuration().http3Port(udpPort);
+
+        mockServer = new MockServer(config, 0);
+
+        int http3Port = mockServer.getHttp3Port();
+        Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
+
+        // issue GET /mockserver/http3status via HTTP/1.1 on the control plane port
+        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+            .sslContext(trustAllSslContext())
+            .build();
+        java.net.http.HttpRequest httpRequest = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create("http://127.0.0.1:" + mockServer.getLocalPort() + "/mockserver/http3status"))
+            .GET()
+            .build();
+        java.net.http.HttpResponse<String> httpResponse = httpClient.send(httpRequest,
+            java.net.http.HttpResponse.BodyHandlers.ofString());
+
+        assertThat("HTTP status should be 200", httpResponse.statusCode(), is(200));
+
+        String body = httpResponse.body();
+        // parse the JSON contract: {"enabled":true,"port":<N>,"activeConnections":<N>}
+        assertThat("response should contain 'enabled' field", body, containsString("\"enabled\""));
+        assertThat("response should contain 'port' field", body, containsString("\"port\""));
+        assertThat("response should contain 'activeConnections' field", body, containsString("\"activeConnections\""));
+        assertThat("enabled should be true when H3 is running", body, containsString("\"enabled\":true"));
+        assertThat("port should match getHttp3Port()", body, containsString("\"port\":" + http3Port));
+        assertThat("activeConnections should be a non-negative integer", body, containsString("\"activeConnections\":0"));
+    }
+
+    @Test
+    public void shouldReturnHttp3StatusDisabledWhenNotRunning() throws Exception {
+        // start MockServer WITHOUT HTTP/3 (http3Port=0, the default)
+        Configuration config = configuration();
+
+        mockServer = new MockServer(config, 0);
+
+        // issue GET /mockserver/http3status via HTTP/1.1 on the control plane port
+        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+            .sslContext(trustAllSslContext())
+            .build();
+        java.net.http.HttpRequest httpRequest = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create("http://127.0.0.1:" + mockServer.getLocalPort() + "/mockserver/http3status"))
+            .GET()
+            .build();
+        java.net.http.HttpResponse<String> httpResponse = httpClient.send(httpRequest,
+            java.net.http.HttpResponse.BodyHandlers.ofString());
+
+        assertThat("HTTP status should be 200", httpResponse.statusCode(), is(200));
+
+        String body = httpResponse.body();
+        assertThat("enabled should be false when H3 is not running", body, containsString("\"enabled\":false"));
+        assertThat("port should be -1 when H3 is not running", body, containsString("\"port\":-1"));
+        assertThat("activeConnections should be 0", body, containsString("\"activeConnections\":0"));
+    }
+
     // ---- helper methods ----
 
     /**
@@ -279,7 +487,7 @@ public class Http3ServerTest {
      */
     private static void assumeQuicAvailable() {
         try {
-            boolean available = io.netty.incubator.codec.quic.Quic.isAvailable();
+            boolean available = io.netty.handler.codec.quic.Quic.isAvailable();
             Assume.assumeTrue(
                 "native QUIC transport not available on this platform -- skipping HTTP/3 test",
                 available
@@ -293,7 +501,28 @@ public class Http3ServerTest {
     }
 
     /**
+     * Creates a trust-all SSLContext for the java.net.http.HttpClient used in
+     * http3status endpoint tests.
+     */
+    private static javax.net.ssl.SSLContext trustAllSslContext() {
+        try {
+            javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[]{(TrustManager) trustAllManager()}, new java.security.SecureRandom());
+            return sslContext;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create trust-all SSLContext", e);
+        }
+    }
+
+    /**
      * Creates a trust-all TrustManager for the self-signed certificate.
+     * <p>
+     * TEST-ONLY: this trust-all TrustManager is used solely by the in-JVM test HTTP client
+     * to call the test server's {@code /mockserver/http3status} endpoint over the server's
+     * ephemeral self-signed certificate on loopback. It is not production code and has no
+     * effect on MockServer's runtime TLS trust, which is governed by configuration (e.g.
+     * {@code forwardProxyTLSX509CertificatesTrustManagerType}). The corresponding CodeQL
+     * alert (java/insecure-trustmanager) is dismissed as "used in tests".
      */
     @SuppressWarnings("TrustAllX509TrustManager")
     private static TrustManager trustAllManager() {

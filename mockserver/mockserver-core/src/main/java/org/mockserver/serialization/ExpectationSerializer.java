@@ -3,7 +3,6 @@ package org.mockserver.serialization;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
-import com.github.fge.jackson.JacksonUtils;
 import com.google.common.base.Joiner;
 import org.apache.commons.lang3.Strings;
 import org.mockserver.log.model.LogEntry;
@@ -164,7 +163,7 @@ public class ExpectationSerializer implements Serializer<Expectation> {
             List<JsonNode> jsonExpectationList = jsonArraySerializer.splitJSONArrayToJSONNodes(jsonExpectations);
             if (!jsonExpectationList.isEmpty()) {
                 for (int i = 0; i < jsonExpectationList.size(); i++) {
-                    String jsonExpectation = JacksonUtils.prettyPrint(jsonExpectationList.get(i));
+                    String jsonExpectation = JsonPrettyPrinter.prettyPrint(jsonExpectationList.get(i));
                     if (jsonExpectationList.size() > 100) {
                         if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
                             mockServerLogger.logEvent(

@@ -74,7 +74,24 @@ log_info "Updating pom.xml versions from $CURRENT_VERSION to $RELEASE_VERSION"
 if is_dry_run; then
   log_dry "would: update Maven pom.xml files"
 else
-  update_pom_versions "$REPO_ROOT/mockserver" "$CURRENT_VERSION" "$RELEASE_VERSION"
+  # Scan the whole repo, not just mockserver/, because the reactor includes
+  # sibling modules that live outside mockserver/ (e.g. examples/java, wired in
+  # via <module>../examples/java</module>). update_pom_versions only rewrites
+  # poms containing the exact <version>$CURRENT_VERSION</version> literal, so
+  # integration-test fixture poms pinned to released versions are left alone.
+  update_pom_versions "$REPO_ROOT" "$CURRENT_VERSION" "$RELEASE_VERSION"
+
+  # Guard: fail before we commit, tag, and push if any reactor pom was missed.
+  # A leftover <version>$CURRENT_VERSION</version> means a module lives outside
+  # the scanned tree (the original examples/java bug) and the Maven Central
+  # build would fail at "Scanning for projects" — after the tag already exists,
+  # forcing a manual rollback. Catching it here keeps prepare atomic.
+  leftover=$(grep -rl --include=pom.xml --exclude-dir=target "<version>$CURRENT_VERSION</version>" "$REPO_ROOT" || true)
+  if [[ -n "$leftover" ]]; then
+    log_error "pom.xml files still reference $CURRENT_VERSION after the version bump:"
+    printf '  %s\n' $leftover >&2
+    exit 1
+  fi
 fi
 
 # Non-Maven version manifests. The npm/pypi/rubygems component scripts read
@@ -141,6 +158,7 @@ fi
 
 git_commit_and_push "release: set version $RELEASE_VERSION" \
   mockserver/ \
+  examples/java/pom.xml \
   "${NON_MAVEN_VERSION_PATHS[@]}"
 git_tag_and_push "mockserver-$RELEASE_VERSION"
 

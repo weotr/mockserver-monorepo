@@ -2,9 +2,9 @@ package org.mockserver.netty.http3;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.incubator.codec.http3.DefaultHttp3DataFrame;
-import io.netty.incubator.codec.http3.DefaultHttp3HeadersFrame;
-import io.netty.incubator.codec.quic.QuicStreamChannel;
+import io.netty.handler.codec.http3.DefaultHttp3DataFrame;
+import io.netty.handler.codec.http3.DefaultHttp3HeadersFrame;
+import io.netty.handler.codec.quic.QuicStreamChannel;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -12,6 +12,8 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.StreamingBody;
 import org.mockserver.responsewriter.ResponseWriter;
+import org.mockserver.telemetry.TraceContextAttributes;
+import org.mockserver.telemetry.W3CTraceContext;
 import org.slf4j.event.Level;
 
 /**
@@ -44,10 +46,33 @@ public class Http3ResponseWriter extends ResponseWriter {
             response = HttpResponse.notFoundResponse();
         }
 
+        // W3C trace-context propagation on outbound HTTP/3 responses, gated by
+        // otelPropagateTraceContext -- mirrors the outbound logic of
+        // TraceContextHandler on the TCP path.
+        propagateTraceContext(response);
+
         if (response.getStreamingBody() != null) {
             writeStreamingResponse(request, response);
         } else {
             writeStaticResponse(response);
+        }
+    }
+
+    /**
+     * When {@code otelPropagateTraceContext} is enabled, copy the trace context
+     * headers (traceparent and optionally tracestate) from the channel attribute
+     * onto the response. This mirrors the outbound write() logic of
+     * {@code TraceContextHandler} on the TCP path.
+     */
+    private void propagateTraceContext(HttpResponse response) {
+        if (configuration.otelPropagateTraceContext()) {
+            W3CTraceContext context = ctx.channel().attr(TraceContextAttributes.TRACE_CONTEXT).get();
+            if (context != null && context.isValid()) {
+                response.withHeader("traceparent", context.toTraceparent());
+                if (context.getTraceState() != null && !context.getTraceState().isEmpty()) {
+                    response.withHeader("tracestate", context.getTraceState());
+                }
+            }
         }
     }
 

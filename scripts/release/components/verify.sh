@@ -45,6 +45,13 @@ fi
 
 V="$RELEASE_VERSION"
 
+# SwaggerHub registers specs under the major.minor ".x" label (e.g. 7.0.x), not
+# the full patch version — see swaggerhub.sh. Verify against that label.
+V_MINOR_REST="${V#*.}"
+API_V="${V%%.*}.${V_MINOR_REST%%.*}.x"
+# Dot-escaped form for grep -E containment checks of the website's spec links.
+API_V_RE="${API_V//./\\.}"
+
 # Failure accumulators — collect ALL failures rather than abort on the first,
 # so the operator sees the full picture in one pass. Hard failures fail the
 # build; soft failures emit a warning summary.
@@ -102,7 +109,7 @@ check_json() {
 }
 
 # check_body_contains <label> <url> <grep-pattern>
-# Plain-text containment check, for non-JSON endpoints (e.g. Helm index.yaml).
+# Plain-text containment check, for non-JSON endpoints (e.g. Helm index.yaml, HTML pages).
 check_body_contains() {
   local label="$1" url="$2" pattern="$3"
   local response
@@ -156,6 +163,37 @@ check_http "mockserver/mockserver:$V tag" \
   "https://hub.docker.com/v2/repositories/mockserver/mockserver/tags/$V/"
 
 log_info ""
+log_info "== Binary bundles (GitHub Release, soft — convenience channel, not a gate) =="
+check_http_soft "mockserver $V linux-x86_64 bundle" \
+  "https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-$V/mockserver-$V-linux-x86_64.tar.gz"
+check_http_soft "mockserver $V windows-x86_64 bundle" \
+  "https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-$V/mockserver-$V-windows-x86_64.zip"
+
+log_info ""
+log_info "== GHCR mirror (soft — convenience mirror, not a release gate) =="
+# GHCR requires a bearer token even to read a public package, so fetch an
+# anonymous pull token first, then HEAD the manifest. Soft: the mirror is a
+# best-effort convenience surface (see docker.sh MIRROR_GHCR), never a gate.
+ghcr_token=$(curl -sS --max-time 20 \
+  "https://ghcr.io/token?service=ghcr.io&scope=repository:mock-server/mockserver:pull" 2>/dev/null \
+  | jq -r '.token // empty' 2>/dev/null)
+if [[ -n "$ghcr_token" ]]; then
+  ghcr_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+    -H "Authorization: Bearer $ghcr_token" \
+    -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+    "https://ghcr.io/v2/mock-server/mockserver/manifests/$V" 2>/dev/null)
+  if [[ "$ghcr_code" == "200" ]]; then
+    log_info "  PASS  ghcr.io/mock-server/mockserver:$V"
+  else
+    log_info "  WARN  ghcr.io/mock-server/mockserver:$V returned HTTP ${ghcr_code:-?} [soft] (mirror disabled, lagging, or token absent)"
+    SOFT_FAILS+=("GHCR mirror")
+  fi
+else
+  log_info "  WARN  could not obtain GHCR anonymous pull token [soft]"
+  SOFT_FAILS+=("GHCR mirror")
+fi
+
+log_info ""
 log_info "== Helm =="
 check_http "mockserver-$V.tgz" \
   "https://www.mock-server.com/mockserver-$V.tgz"
@@ -173,6 +211,14 @@ log_info "== Website =="
 check_http "main mock-server.com" "https://www.mock-server.com/"
 check_http "Javadoc $V apidocs" \
   "https://www.mock-server.com/versions/$V/apidocs/index.html"
+# The deployed docs must link to THIS release's OpenAPI spec label (X.Y.x), not
+# a stale one. update-version-references.sh bumps mockserver_api_version before
+# the website build, but a stale-config build or a botched versioned-site
+# snapshot would silently ship docs that point at the previous version's spec
+# (as the legacy 6-0 -> 5.15.x and 5-15 -> 5.14.x sites still do). Fail loudly.
+check_body_contains "live site links to OpenAPI spec $API_V" \
+  "https://www.mock-server.com/mock_server/clearing_and_resetting.html" \
+  "mock-server-openapi/${API_V_RE}[\"#/]"
 
 log_info ""
 log_info "== JSON Schema =="
@@ -181,18 +227,18 @@ check_http "expectations schema" "https://www.mock-server.com/schema/expectation
 
 log_info ""
 log_info "== SwaggerHub =="
-check_http "spec $V" \
-  "https://api.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/$V"
+check_http "spec $API_V" \
+  "https://api.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/$API_V"
 # Default-version check — SwaggerHub's settings/default endpoint returns
-# `{"version":"X.Y.Z"}` for the current default; if swaggerhub.sh's PUT
+# `{"version":"X.Y.x"}` for the current default; if swaggerhub.sh's PUT
 # /settings/default step silently failed, this is where we'd surface it.
 default_version=$(curl -sS --connect-timeout 10 --max-time 30 \
   "https://api.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/settings/default" 2>/dev/null \
   | jq -r '.version // empty' 2>/dev/null)
-if [[ "$default_version" == "$V" ]]; then
-  log_info "  PASS  SwaggerHub default version is $V"
+if [[ "$default_version" == "$API_V" ]]; then
+  log_info "  PASS  SwaggerHub default version is $API_V"
 else
-  log_error "  FAIL  SwaggerHub default version is '${default_version:-<empty>}', expected '$V'"
+  log_error "  FAIL  SwaggerHub default version is '${default_version:-<empty>}', expected '$API_V'"
   HARD_FAILS+=("SwaggerHub default version")
 fi
 
@@ -201,6 +247,10 @@ if [[ "$CREATE_VERSIONED_SITE" == "yes" ]]; then
   log_info "== Versioned site =="
   SUBDOMAIN=$(version_to_subdomain "$V")
   check_http "${SUBDOMAIN}.mock-server.com" "https://${SUBDOMAIN}.mock-server.com/"
+  # The frozen versioned snapshot must also link to this release's spec label.
+  check_body_contains "${SUBDOMAIN}.mock-server.com links to OpenAPI spec $API_V" \
+    "https://${SUBDOMAIN}.mock-server.com/mock_server/clearing_and_resetting.html" \
+    "mock-server-openapi/${API_V_RE}[\"#/]"
 fi
 
 log_info ""
@@ -214,6 +264,82 @@ else
   log_info "  WARN  Homebrew formula at '${homebrew_stable:-<empty>}' (expected $V) — BrewTestBot bumps within a few hours, check again later [soft check]"
   SOFT_FAILS+=("Homebrew formula")
 fi
+
+log_info ""
+log_info "== MCP registry (soft — discovery surface, not a release gate) =="
+# The official registry lists the server under the DNS-verified namespace.
+# Soft: publish is soft_fail and can lag the image becoming visible on Docker Hub.
+mcp_listed=$(curl -sS --connect-timeout 10 --max-time 30 \
+  "https://registry.modelcontextprotocol.io/v0/servers?search=com.mock-server/mockserver" 2>/dev/null \
+  | jq -r '[.servers[]? | select(.name=="com.mock-server/mockserver") | .version] | max // empty' 2>/dev/null)
+if [[ "$mcp_listed" == "$V" ]]; then
+  log_info "  PASS  MCP registry lists com.mock-server/mockserver @ $V"
+else
+  log_info "  WARN  MCP registry at '${mcp_listed:-<not found>}' (expected $V) [soft] — publish soft-fails / may lag the Docker Hub image"
+  SOFT_FAILS+=("MCP registry")
+fi
+
+log_info ""
+log_info "== Go Client (soft — pkg.go.dev indexing may lag) =="
+check_http_soft "Go client module on pkg.go.dev" \
+  "https://pkg.go.dev/github.com/mock-server/mockserver-monorepo/mockserver-client-go@v${V}"
+
+log_info ""
+log_info "== .NET Client (soft — NuGet indexing may lag) =="
+check_http_soft "MockServer.Client $V on NuGet" \
+  "https://api.nuget.org/v3-flatcontainer/mockserver.client/${V}/mockserver.client.${V}.nupkg"
+
+log_info ""
+log_info "== Rust Client (soft — crates.io indexing may lag) =="
+check_http_soft "mockserver-client $V on crates.io" \
+  "https://crates.io/api/v1/crates/mockserver-client/${V}" "200"
+
+log_info ""
+log_info "== PHP Client (soft — Packagist webhook may lag) =="
+php_check=$(curl -sS --connect-timeout 10 --max-time 30 \
+  "https://packagist.org/packages/mock-server/mockserver-client.json" 2>/dev/null \
+  | jq -e ".package.versions[\"${V}\"]" 2>/dev/null)
+if [[ -n "$php_check" && "$php_check" != "null" ]]; then
+  log_info "  PASS  PHP client $V on Packagist"
+else
+  log_info "  WARN  PHP client $V not (yet) on Packagist [soft — webhook may be pending]"
+  SOFT_FAILS+=("PHP client (Packagist)")
+fi
+
+log_info ""
+log_info "== @mockserver/testcontainers (npm, soft) =="
+check_http_soft "@mockserver/testcontainers@$V on npm" \
+  "https://registry.npmjs.org/@mockserver/testcontainers/$V"
+
+log_info ""
+log_info "== testcontainers-mockserver (PyPI, soft) =="
+check_http_soft "testcontainers-mockserver $V on PyPI" \
+  "https://pypi.org/pypi/testcontainers-mockserver/$V/json" "200"
+
+log_info ""
+log_info "== Testcontainers.MockServer (NuGet, soft) =="
+check_http_soft "Testcontainers.MockServer $V on NuGet" \
+  "https://api.nuget.org/v3-flatcontainer/testcontainers.mockserver/${V}/testcontainers.mockserver.${V}.nupkg"
+
+log_info ""
+log_info "== testcontainers-go (soft — pkg.go.dev indexing may lag) =="
+check_http_soft "testcontainers-go module on pkg.go.dev" \
+  "https://pkg.go.dev/github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go@v${V}"
+
+log_info ""
+log_info "== testcontainers-mockserver (crates.io, soft) =="
+check_http_soft "testcontainers-mockserver $V on crates.io" \
+  "https://crates.io/api/v1/crates/testcontainers-mockserver/${V}" "200"
+
+log_info ""
+log_info "== VS Code extension (soft — Marketplace indexing may lag) =="
+check_http_soft "mockserver VS Code extension" \
+  "https://marketplace.visualstudio.com/items?itemName=mock-server.mockserver"
+
+log_info ""
+log_info "== JetBrains plugin (soft — Marketplace indexing may lag) =="
+check_http_soft "mockserver JetBrains plugin" \
+  "https://plugins.jetbrains.com/plugin/com.mock-server.mockserver"
 
 log_info ""
 log_info "== Summary =="

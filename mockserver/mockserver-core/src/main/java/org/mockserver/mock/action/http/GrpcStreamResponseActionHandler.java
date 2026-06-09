@@ -3,10 +3,9 @@ package org.mockserver.mock.action.http;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.*;
-import org.mockserver.grpc.GrpcFrameCodec;
-import org.mockserver.grpc.GrpcJsonMessageConverter;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcStatusMapper;
+import org.mockserver.grpc.GrpcStreamMessageEncoder;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.Delay;
@@ -138,18 +137,9 @@ public class GrpcStreamResponseActionHandler {
     }
 
     private byte[] encodeMessage(GrpcStreamMessage message, com.google.protobuf.Descriptors.MethodDescriptor methodDescriptor) {
-        String json = message.getJson();
-        if (json == null || json.isEmpty()) {
-            return GrpcFrameCodec.encode(new byte[0]);
-        }
-
-        if (methodDescriptor != null) {
-            GrpcJsonMessageConverter converter = descriptorStore.getConverter();
-            byte[] protobufBytes = converter.toProtobuf(json, methodDescriptor.getOutputType());
-            return GrpcFrameCodec.encode(protobufBytes);
-        } else {
-            return GrpcFrameCodec.encode(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        }
+        // Delegate to the transport-neutral encoder so HTTP/2 and HTTP/3 server-streaming
+        // produce byte-identical gRPC frames.
+        return GrpcStreamMessageEncoder.encode(message, methodDescriptor, descriptorStore);
     }
 
     private void finishStream(ChannelHandlerContext ctx, GrpcStreamResponse grpcStreamResponse) {

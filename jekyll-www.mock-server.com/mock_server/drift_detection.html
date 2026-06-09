@@ -1,11 +1,11 @@
 ---
 title: Mock Drift Detection
 shortTitle: Drift Detection
-description: Detect when real upstream services have structurally changed compared to your mock stubs, catching status code mismatches, new or removed JSON fields, type changes, and header differences.
+description: Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes.
 layout: page
-pageOrder: 7
-section: 'Mock Server'
-subsection: false
+pageOrder: 5
+section: 'Verify & Test'
+subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
@@ -23,7 +23,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>When MockServer forwards a request to an upstream service (in proxy mode) and there are also response-type stub expectations matching the same request pattern, MockServer compares the real response against each matching stub and records any structural drifts. The analysis runs asynchronously and never slows down the response path.</p>
 
-<p>Drift detection is automatic -- no configuration is required. Simply have both forwarding expectations and response-type stub expectations for the same request patterns.</p>
+<p><strong>Structural</strong> drift detection (status, schema and header differences) is automatic and requires no configuration — simply have both forwarding expectations and response-type stub expectations for the same request patterns. The two enrichments described later on this page are opt-in: <a href="#semantic-drift">semantic drift analysis</a> (LLM-powered severity classification) and <a href="#performance-drift">performance drift detection</a> each need to be turned on with a configuration property.</p>
 
 <h2>What is detected</h2>
 
@@ -85,6 +85,8 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <pre><code>curl "http://localhost:1080/mockserver/drift?limit=10"</code></pre>
 
+<p>The <code>limit</code> parameter applies only to unfiltered queries (most-recent-first). When you filter by <code>expectationId</code>, <strong>all</strong> matching records are returned and <code>limit</code> is ignored.</p>
+
 <h2>Clearing drift records</h2>
 
 <p>To clear all recorded drifts:</p>
@@ -97,7 +99,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>Drift records are stored in an in-memory LRU (least recently used) buffer with a maximum capacity of 1000 entries. When the buffer is full, the oldest records are evicted to make room for new ones.</p>
 
-<h2>Semantic drift analysis (LLM-powered)</h2>
+<h2 id="semantic-drift">Semantic drift analysis (LLM-powered)</h2>
 
 <p>When you have a runtime LLM backend configured (see <a href="/mock_server/configuration_properties.html">Configuration Properties</a>), you can enable semantic drift analysis to automatically classify each structural drift as <strong>BREAKING</strong>, <strong>WARNING</strong>, or <strong>INFORMATIONAL</strong>.</p>
 
@@ -127,7 +129,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
   ]
 }</code></pre>
 
-<h2>Performance drift detection</h2>
+<h2 id="performance-drift">Performance drift detection</h2>
 
 <p>MockServer can track response times per expectation and alert you when the p95 (95th percentile) response time exceeds a threshold. This helps detect performance regressions in upstream services.</p>
 
@@ -138,3 +140,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 <p>When the p95 response time for any expectation exceeds 500ms, a <code>PERFORMANCE</code> drift record is emitted. MockServer uses a sliding window of the last 100 response time observations per expectation to calculate percentiles.</p>
 
 <p>Set to <code>0</code> (the default) to disable performance drift detection.</p>
+
+<h2 id="llm-drift">Not the same as LLM cassette drift</h2>
+
+<p>The drift detection described on this page is for <strong>HTTP mock stubs</strong> — it compares forwarded upstream responses against your stub expectations while MockServer proxies live traffic. It is <strong>separate</strong> from the LLM-specific <code>detect_llm_drift</code> MCP tool, which is a different mechanism: that tool <em>replays a recorded LLM cassette (fixture) against the live LLM provider</em> and reports structural drift (new/removed fields, type changes) in the provider's responses. It requires a configured runtime LLM backend and is intended for an opt-in / scheduled CI lane rather than the per-commit build. If you are validating recorded LLM/MCP traffic against a real provider, use <code>detect_llm_drift</code>; for everything else, use the <code>/mockserver/drift</code> endpoint documented here.</p>

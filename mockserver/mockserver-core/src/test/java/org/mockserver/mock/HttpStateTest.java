@@ -42,7 +42,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.fail;
+import static org.junit.Assert.fail;
 import static org.hamcrest.CoreMatchers.endsWith;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -3590,6 +3590,238 @@ public class HttpStateTest {
         // then
         assertThat(handle, is(true));
         assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    // ---- Replay endpoint tests ----
+
+    @Test
+    public void shouldHandleReplayRequestSuccessfully() {
+        // given — wire a fake replay handler that echoes back a fixed response
+        HttpResponse upstreamResponse = response()
+            .withStatusCode(200)
+            .withBody("upstream OK");
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(upstreamResponse));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("upstream OK"));
+    }
+
+    @Test
+    public void shouldReturnBadRequestForEmptyReplayBody() {
+        // given — wire a replay handler (it won't be called)
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(response()));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("request body must contain an HttpRequest JSON definition"));
+    }
+
+    @Test
+    public void shouldReturn501WhenNoReplayHandlerIsWired() {
+        // given — do NOT set a replay handler (it stays null)
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(501));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("replay is not available"));
+    }
+
+    @Test
+    public void shouldReturnBadGatewayWhenReplayFails() {
+        // given — wire a replay handler that fails
+        httpState.setReplayHandler(req -> {
+            CompletableFuture<HttpResponse> future = new CompletableFuture<>();
+            future.completeExceptionally(new RuntimeException("Connection refused"));
+            return future;
+        });
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(502));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("Connection refused"));
+    }
+
+    @Test
+    public void shouldReturn403WhenReplayTargetBlockedBySSRFPolicy() {
+        // given — enable SSRF protection and wire a replay handler that should NOT be reached
+        configuration.forwardProxyBlockPrivateNetworks(true);
+        final boolean[] handlerCalled = {false};
+        httpState.setReplayHandler(req -> {
+            handlerCalled[0] = true;
+            return CompletableFuture.completedFuture(response().withStatusCode(200));
+        });
+
+        // replay to a loopback address (127.0.0.1 — blocked by SSRF policy)
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/internal\",\"headers\":[{\"name\":\"host\",\"values\":[\"127.0.0.1:8080\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then — 403 returned and handler was never called
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(403));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("SSRF policy"));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("loopback"));
+        assertThat("replay handler must not be called when SSRF policy blocks", handlerCalled[0], is(false));
+    }
+
+    @Test
+    public void shouldReturn403WhenReplaySocketAddressBlockedBySSRFPolicy() {
+        // given — enable SSRF protection and wire a replay handler that should NOT be reached
+        configuration.forwardProxyBlockPrivateNetworks(true);
+        final boolean[] handlerCalled = {false};
+        httpState.setReplayHandler(req -> {
+            handlerCalled[0] = true;
+            return CompletableFuture.completedFuture(response().withStatusCode(200));
+        });
+
+        // replay using socketAddress to a private network address (192.168.1.1 — blocked)
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/internal\",\"socketAddress\":{\"host\":\"192.168.1.1\",\"port\":9090,\"scheme\":\"HTTP\"}}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then — 403 returned and handler was never called
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(403));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("SSRF policy"));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("private network"));
+        assertThat("replay handler must not be called when SSRF policy blocks", handlerCalled[0], is(false));
+    }
+
+    @Test
+    public void shouldAllowReplayToLoopbackWhenSSRFPolicyDisabled() {
+        // given — SSRF protection disabled (the default)
+        configuration.forwardProxyBlockPrivateNetworks(false);
+        HttpResponse upstreamResponse = response()
+            .withStatusCode(200)
+            .withBody("local OK");
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(upstreamResponse));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/local\",\"headers\":[{\"name\":\"host\",\"values\":[\"127.0.0.1:8080\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then — replay proceeds normally when SSRF policy is off
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("local OK"));
+    }
+
+    @Test
+    public void shouldReturn502WhenUpstreamResponseBodyExceedsMaxSize() {
+        // given — wire a replay handler that returns an oversized response
+        byte[] oversizedBody = new byte[10 * 1024 * 1024 + 1]; // just over 10 MB
+        Arrays.fill(oversizedBody, (byte) 'x');
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(
+            response().withStatusCode(200).withBody(new String(oversizedBody, UTF_8))
+        ));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/big\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then — 502 returned for oversized upstream response
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(502));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("response too large to return via control plane"));
+    }
+
+    @Test
+    public void shouldProperlyJsonEscapeReplayErrorMessages() {
+        // given — wire a replay handler that fails with a message containing JSON-hostile characters
+        httpState.setReplayHandler(req -> {
+            CompletableFuture<HttpResponse> future = new CompletableFuture<>();
+            future.completeExceptionally(new RuntimeException("line1\nline2\\path \"quoted\""));
+            return future;
+        });
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then — the response body must be valid JSON (no unescaped quotes/newlines)
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(502));
+        String responseBody = responseWriter.response.getBodyAsString();
+        // Verify it parses as valid JSON
+        try {
+            new com.fasterxml.jackson.databind.ObjectMapper().readTree(responseBody);
+        } catch (Exception e) {
+            fail("Response body is not valid JSON: " + responseBody);
+        }
+        // Verify the error message content is preserved (escaped)
+        assertThat(responseBody, containsString("line1"));
+        assertThat(responseBody, containsString("line2"));
+        assertThat(responseBody, containsString("quoted"));
     }
 
 }

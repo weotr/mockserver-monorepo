@@ -1,0 +1,12 @@
+## .NET build artifacts
+bin/
+obj/
+artifacts/
+
+## IDE
+.vs/
+*.user
+*.suo
+
+## NuGet
+*.nupkg

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MockServer.Client</RootNamespace>
+    <AssemblyName>MockServer.Client</AssemblyName>
+
+    <!-- NuGet package metadata -->
+    <PackageId>MockServer.Client</PackageId>
+    <Version>7.0.1</Version>
+    <Authors>James D Bloom</Authors>
+    <Company>MockServer</Company>
+    <Description>Hand-written idiomatic .NET client for MockServer's control-plane API. Provides fluent request/response builders and a When/Respond API for creating expectations, plus Verify, Clear, Reset, and Retrieve operations.</Description>
+    <PackageTags>mockserver;mock;http;testing;integration-testing</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://www.mock-server.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mock-server/mockserver-monorepo</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>

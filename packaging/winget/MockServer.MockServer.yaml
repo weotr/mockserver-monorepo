@@ -1,0 +1,54 @@
+# winget manifest — singleton format (combined version + defaultLocale + installer)
+# Submitted to https://github.com/microsoft/winget-pkgs via PR.
+#
+# TODO(cli-release): Replace all placeholder URLs and SHA256 once the CLI's
+# GitHub Releases artifact naming is finalized.
+
+PackageIdentifier: MockServer.MockServer
+# TODO(cli-release): Update to actual release version
+PackageVersion: "${VERSION}"
+PackageLocale: en-US
+Publisher: MockServer
+PublisherUrl: https://www.mock-server.com
+PublisherSupportUrl: https://github.com/mock-server/mockserver-monorepo/issues
+PackageName: MockServer
+PackageUrl: https://github.com/mock-server/mockserver-monorepo
+License: Apache-2.0
+LicenseUrl: https://github.com/mock-server/mockserver-monorepo/blob/master/LICENSE.md
+ShortDescription: Mock, proxy & record HTTP(S), gRPC, and async messaging for testing
+Description: |-
+  MockServer is an open-source HTTP(S) mock server and proxy for testing.
+  It can mock any system you integrate with via HTTP or HTTPS, proxy requests
+  to record and playback, and verify requests have been made.
+Tags:
+  - mock
+  - proxy
+  - testing
+  - http
+  - grpc
+  - api
+Moniker: mockserver
+ManifestType: singleton
+ManifestVersion: 1.9.0
+Installers:
+  # TODO(cli-release): Confirm architecture variants and binary naming convention.
+  # The installer type assumes a standalone .exe (not an MSI/MSIX) — adjust if
+  # the CLI ships as an MSI or MSIX bundle instead.
+  - Architecture: x64
+    InstallerType: exe
+    # TODO(cli-release): Replace with actual GitHub Releases download URL
+    InstallerUrl: https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-${VERSION}/mockserver-windows-x64.exe
+    # TODO(cli-release): Replace with actual SHA256 of the windows-x64 binary
+    InstallerSha256: "${SHA256_WINDOWS_X64}"
+    InstallerSwitches:
+      Silent: --silent
+      SilentWithProgress: --silent
+  - Architecture: arm64
+    InstallerType: exe
+    # TODO(cli-release): Replace with actual GitHub Releases download URL
+    InstallerUrl: https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-${VERSION}/mockserver-windows-arm64.exe
+    # TODO(cli-release): Replace with actual SHA256 of the windows-arm64 binary
+    InstallerSha256: "${SHA256_WINDOWS_ARM64}"
+    InstallerSwitches:
+      Silent: --silent
+      SilentWithProgress: --silent

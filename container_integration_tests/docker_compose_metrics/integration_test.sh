@@ -12,20 +12,7 @@ function cleanup() {
   tear-down 2>/dev/null || true
 }
 
-# Wait for a MockServer instance (by docker-compose service name) to answer its
-# status endpoint, or fail the test if it never comes up.
-function wait_ready() {
-  local host="${1}"
-  for _ in $(seq 1 30); do
-    if docker-exec-client "curl -sf -o /dev/null -X PUT http://${host}:1080/mockserver/status"; then
-      return 0
-    fi
-    sleep 1
-  done
-  printMessage "FAIL: ${host} did not become ready"
-  container-logs || true
-  return 1
-}
+# wait_ready is now provided by the shared docker-compose.sh harness.
 
 # Retry a client-side check until it passes or attempts run out — absorbs the
 # Prometheus scrape interval and the OTLP export interval on a cold runner
@@ -50,8 +37,8 @@ function integration_test() {
   TEST_EXIT_CODE=0
 
   # both the server under test and the MockServer acting as the OTLP sink
-  wait_ready "mockserver" || return 1
-  wait_ready "otlp-receiver" || return 1
+  wait_ready "mockserver" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
+  wait_ready "otlp-receiver" || { TEST_EXIT_CODE=1; logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"; return ${TEST_EXIT_CODE}; }
 
   # Tell the OTLP receiver to accept the exporter's metric POSTs with 200 so the
   # export succeeds cleanly (an unmatched request would 404 and make the OTel SDK

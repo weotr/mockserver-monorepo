@@ -1,5 +1,17 @@
 variable "buildkite_agent_token" {
-  description = "Buildkite agent registration token"
+  description = <<-EOT
+    Buildkite agent registration token.
+
+    NEVER write this value to terraform.tfvars. Supply it at apply time via
+    an environment variable:
+
+      export TF_VAR_buildkite_agent_token=$(aws ssm get-parameter \
+        --name /buildkite/buildkite/agent-token \
+        --with-decryption --query Parameter.Value --output text \
+        --profile mockserver-build)
+
+    The run.sh wrapper does this automatically.
+  EOT
   type        = string
   sensitive   = true
 }
@@ -62,6 +74,24 @@ variable "trigger_max_size" {
   description = "Maximum number of trigger agent instances"
   type        = number
   default     = 4
+}
+
+variable "perf_instance_types" {
+  description = "EC2 instance type for the perf queue — a SINGLE fixed-performance type (no comma list) for reproducible benchmark numbers"
+  type        = string
+  default     = "c5.4xlarge"
+}
+
+variable "perf_min_size" {
+  description = "Minimum perf agent instances. MUST be 0 (scale to zero — zero idle cost; AGENTS.md hard constraint)"
+  type        = number
+  default     = 0
+}
+
+variable "perf_max_size" {
+  description = "Maximum perf agent instances (1 — never run two perf jobs concurrently so they don't contend)"
+  type        = number
+  default     = 1
 }
 
 variable "alert_email" {

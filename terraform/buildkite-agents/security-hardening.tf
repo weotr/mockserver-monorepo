@@ -42,6 +42,7 @@ locals {
     try(module.buildkite_stack.vpc_id, null),
     try(module.buildkite_trigger_stack.vpc_id, null),
     try(module.buildkite_release_stack.vpc_id, null),
+    try(module.buildkite_perf_stack.vpc_id, null),
   ])
 }
 
@@ -92,6 +93,6 @@ resource "aws_flow_log" "vpc" {
   log_destination_type = "cloud-watch-logs"
   log_destination      = aws_cloudwatch_log_group.vpc_flow_logs[each.value].arn
   iam_role_arn         = aws_iam_role.vpc_flow_log[0].arn
-  traffic_type         = "REJECT"
+  traffic_type         = "ALL"
   vpc_id               = each.value
 }

@@ -23,6 +23,35 @@ You may install this plugin / node module with the following command:
 npm install mockserver-node --save-dev
 ```
 
+## Run without Java or Docker (binary bundle)
+
+The `mockserver` command downloads a self-contained MockServer bundle (a trimmed
+Java runtime + the server + a launcher) for your platform on first use and runs
+it — **no Java installation and no Docker required**:
+
+```shell
+npx -p mockserver-node mockserver run -p 1080
+npx -p mockserver-node mockserver --openapi ./petstore.yaml -p 1080
+npx -p mockserver-node mockserver --help
+```
+
+The bundle is fetched from the MockServer GitHub Release, verified against its
+published SHA-256, and cached per-user. Environment overrides:
+
+| Variable | Purpose |
+|---|---|
+| `MOCKSERVER_BINARY_BASE_URL` | mirror host for the release assets (corporate / air-gapped) |
+| `MOCKSERVER_BINARY_CACHE` | cache directory (default: per-OS user cache) |
+| `MOCKSERVER_SKIP_BINARY_DOWNLOAD` | fail instead of downloading (use with a pre-seeded cache) |
+| `NODE_EXTRA_CA_CERTS` | extra CA bundle for TLS-inspecting proxies (honoured by Node) |
+| `HTTPS_PROXY` / `HTTP_PROXY` | used when an https/http proxy agent module is installed (otherwise set a mirror) |
+
+> The SHA-256 is co-hosted with the archive, so it verifies download **integrity** (no corruption/truncation) but not **provenance**; a future release will add cosign signatures for provenance.
+
+The bundle exposes the full MockServer CLI (`run`, `proxy`, `openapi`, `version`,
+`help`). This is the reference implementation of the on-demand-binary pattern for
+the MockServer client libraries.
+
 ## Node Module
 
 To start or stop the MockServer from any Node.js code you need to import this module using `require('mockserver-node')` as follows:
@@ -112,7 +141,7 @@ This value specifies the path to the artifactory leading to the mockserver-netty
 
 #### options.mockServerVersion
 Type: `String` 
-Default value: `6.1.0`
+Default value: `7.0.0`
 
 This value specifies the artifact version of MockServer to download.
 

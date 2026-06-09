@@ -7,8 +7,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsIterableContaining.hasItems;
@@ -278,8 +276,8 @@ public class HeadersTest {
         headers.withEntry(header("name_three", "value_three_one", "value_three_two"));
 
         // then
-        assertTrue(headers.containsEntry("name_two"));
-        assertFalse(headers.containsEntry("name_other"));
+        assertThat(headers.containsEntry("name_two"), is(true));
+        assertThat(headers.containsEntry("name_other"), is(false));
     }
 
     @Test
@@ -291,10 +289,10 @@ public class HeadersTest {
         headers.withEntry(header("name_three", "value_three_one", "value_three_two"));
 
         // then
-        assertTrue(headers.containsEntry("name_two", "value_two_one"));
-        assertTrue(headers.containsEntry("name_two", "value_two_two"));
-        assertFalse(headers.containsEntry("name_other", "value_three_one"));
-        assertFalse(headers.containsEntry("name_three", "value_three_other"));
+        assertThat(headers.containsEntry("name_two", "value_two_one"), is(true));
+        assertThat(headers.containsEntry("name_two", "value_two_two"), is(true));
+        assertThat(headers.containsEntry("name_other", "value_three_one"), is(false));
+        assertThat(headers.containsEntry("name_three", "value_three_other"), is(false));
     }
 
     @Test
@@ -308,25 +306,25 @@ public class HeadersTest {
 
         // then
         // exact match, not key, string first value
-        assertTrue(headers.containsEntry(not("name_two"), string("value_two_one")));
+        assertThat(headers.containsEntry(not("name_two"), string("value_two_one")), is(true));
         // exact match, not key, string second value
-        assertTrue(headers.containsEntry(not("name_two"), string("value_two_two")));
+        assertThat(headers.containsEntry(not("name_two"), string("value_two_two")), is(true));
         // exact match, string key, not first value
-        assertTrue(headers.containsEntry(string("name_one"), not("value_one_one")));
+        assertThat(headers.containsEntry(string("name_one"), not("value_one_one")), is(true));
         // exact match, string key, string second value
-        assertTrue(headers.containsEntry(string("name_three"), string("value_three_two")));
+        assertThat(headers.containsEntry(string("name_three"), string("value_three_two")), is(true));
         // not value
-        assertTrue(headers.containsEntry(string("name_three"), not("value_other")));
+        assertThat(headers.containsEntry(string("name_three"), not("value_other")), is(true));
         // not key
-        assertTrue(headers.containsEntry(not("name_other"), string("value_three_one")));
+        assertThat(headers.containsEntry(not("name_other"), string("value_three_one")), is(true));
         // matches (matched "name_one" -> "!value_one_one")
-        assertTrue(headers.containsEntry(not("name_three"), string("value_three_one")));
+        assertThat(headers.containsEntry(not("name_three"), string("value_three_one")), is(true));
         // matches ("!name_two" -> "value_two_one")
-        assertTrue(headers.containsEntry(string("name_four"), not("value_four_one")));
+        assertThat(headers.containsEntry(string("name_four"), not("value_four_one")), is(true));
         // non-match name
-        assertFalse(headers.containsEntry(string("name_other"), string("value_three_one")));
+        assertThat(headers.containsEntry(string("name_other"), string("value_three_one")), is(false));
         // non-match value
-        assertFalse(headers.containsEntry(string("name_three"), string("value_three_other")));
+        assertThat(headers.containsEntry(string("name_three"), string("value_three_other")), is(false));
     }
 
     @Test

@@ -17,11 +17,11 @@ Run all four gates in order. **Any failure stops the merge** and leaves the work
 
 4. **Gate 3 — Adversarial review.** Spawn `review-final` subagent on `git diff origin/master...HEAD`. Block on BLOCK verdict. Quote any concerns back to the user.
 
-5. **Gate 4 — User approval.** Show:
+5. **Gate 4 — Summary & proceed.** Under the DVRR operating model (`.opencode/rules/operating-model.md`), gates 1–3 are the authority — they replace human pre-approval. Show:
    - `git diff --stat origin/master...HEAD`
    - List of changed files
    - Gate 1/2/3 results in one line each
-   Ask the user "Approve merge to master? (yes/no/show full diff)". Wait for explicit yes.
+   Then **proceed automatically** to the locked rebase. Do NOT wait for approval. Fail-closed: if any of gates 1–3 did not return a clean PASS, stop and leave the worktree intact. A user can interject at any time to halt.
 
 6. **Locked rebase.** Acquire `flock --timeout 300 .git/agent-rebase.lock` and inside the lock:
    ```bash

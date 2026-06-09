@@ -1,10 +1,10 @@
 ---
 title: HTTP/3 (QUIC) Support
-description: Experimental HTTP/3 over QUIC support in MockServer, enabled via the http3Port configuration property. HTTP/3 requests are routed through the full expectation matching pipeline.
+description: Experimental HTTP/3 over QUIC support in MockServer, enabled via the http3Port property and routed through the full expectation matching pipeline.
 shortTitle: HTTP/3
 layout: page
-pageOrder: 12
-section: 'Mock Server'
+pageOrder: 3
+section: 'Protocols & Advanced'
 subsection: true
 sitemap:
   priority: 0.6
@@ -13,7 +13,7 @@ sitemap:
 ---
 
 <div class="alert" style="background-color:#fff3cd;border-left:4px solid #ffc107;padding:12px 16px;margin-bottom:20px;">
-    <strong>EXPERIMENTAL</strong> &mdash; HTTP/3 support is fully integrated with MockServer's request pipeline but is labelled experimental because the underlying QUIC transport is a <a target="_blank" href="https://github.com/netty/netty-incubator-codec-http3" rel="noopener noreferrer">Netty incubator</a> dependency (pre-release artifact). HTTP/3 is off by default and must be explicitly enabled.
+    <strong>EXPERIMENTAL</strong> &mdash; HTTP/3 support is fully integrated with MockServer's request pipeline and now builds on the mainline <a target="_blank" href="https://github.com/netty/netty" rel="noopener noreferrer"><span class="inline_code">io.netty:netty-codec-http3</span></a> codec (Netty 4.2), which graduated from the Netty incubator. It is still labelled experimental because the HTTP/3 codec API may continue to evolve in future Netty releases. HTTP/3 is off by default and must be explicitly enabled.
 </div>
 
 <p>MockServer can optionally accept HTTP/3 requests over <a target="_blank" href="https://quicwg.org/" rel="noopener noreferrer">QUIC</a> (UDP). HTTP/3 is the third major version of the HTTP protocol, using QUIC as the transport instead of TCP. This is useful when you want to test clients that connect using HTTP/3.</p>
@@ -62,7 +62,7 @@ sitemap:
 
 <h2>Native platform requirement</h2>
 
-<p>HTTP/3 uses the <a target="_blank" href="https://github.com/netty/netty-incubator-codec-http3" rel="noopener noreferrer">netty-incubator-codec-http3</a> library, which requires a native BoringSSL library for the QUIC transport. The native library is included automatically for the following platforms:</p>
+<p>HTTP/3 uses the mainline <a target="_blank" href="https://github.com/netty/netty" rel="noopener noreferrer"><span class="inline_code">io.netty:netty-codec-http3</span></a> library (Netty 4.2), which requires a native BoringSSL library for the QUIC transport. The native library is included automatically for the following platforms:</p>
 
 <ul>
     <li><span class="inline_code">linux-x86_64</span></li>
@@ -82,6 +82,22 @@ sitemap:
 
 <p>If no custom certificate is configured, MockServer's auto-generated certificate (created via BouncyCastle) is used, which is suitable for testing.</p>
 
+<a id="http3_tuning" class="anchor" href="#http3_tuning">&nbsp;</a>
+
+<h2>Tuning / configuration</h2>
+
+<p>The QUIC transport parameters can be tuned for high-throughput or long-lived connection tests. Each has a sensible default and rarely needs changing:</p>
+
+<ul>
+    <li><span class="inline_code">http3MaxIdleTimeout</span> &mdash; idle timeout in milliseconds before a QUIC connection is closed</li>
+    <li><span class="inline_code">http3InitialMaxData</span> &mdash; connection-level flow-control limit (bytes)</li>
+    <li><span class="inline_code">http3InitialMaxStreamDataBidirectional</span> &mdash; per-stream flow-control limit (bytes)</li>
+    <li><span class="inline_code">http3InitialMaxStreamsBidirectional</span> &mdash; maximum number of concurrent bidirectional streams</li>
+    <li><span class="inline_code">http3QpackMaxTableCapacity</span> &mdash; QPACK dynamic header-table capacity (bytes)</li>
+</ul>
+
+<p>See the <a href="/mock_server/configuration_properties.html#button_configuration_http3_max_idle_timeout">HTTP/3 configuration properties</a> on the configuration page for defaults, value ranges, and the full four-form reference (Java code, system property, environment variable, property file).</p>
+
 <a id="http3_what_works" class="anchor" href="#http3_what_works">&nbsp;</a>
 
 <h2>What works</h2>
@@ -89,12 +105,19 @@ sitemap:
 <ul>
     <li><strong>Expectation matching</strong> &mdash; HTTP/3 requests are matched against expectations identically to HTTP/1.1 and HTTP/2</li>
     <li><strong>Response actions</strong> &mdash; all response action types (static, template, callback, etc.)</li>
+    <li><strong>Streaming / SSE responses</strong> &mdash; Server-Sent Events, chunked proxy forwarding, and LLM streaming responses are fully supported. Each body chunk is delivered as an HTTP/3 DATA frame with backpressure; the QUIC stream is cleanly shut down on completion or error</li>
     <li><strong>Request recording</strong> &mdash; HTTP/3 requests are recorded for verification</li>
     <li><strong>Proxy forwarding</strong> &mdash; unmatched requests can be forwarded when proxy mode is configured</li>
     <li><strong>Request body</strong> &mdash; text and binary request bodies are read and matched correctly</li>
     <li><strong>Configurable TLS</strong> &mdash; uses the same TLS certificate as the HTTPS server</li>
     <li><strong>Lifecycle integration</strong> &mdash; starts and stops automatically with MockServer</li>
     <li><strong>Fail-soft startup</strong> &mdash; graceful fallback when native QUIC is unavailable</li>
+    <li><strong>Alt-Svc auto-discovery</strong> &mdash; when <span class="inline_code">http3Port</span> is set, MockServer automatically adds an <span class="inline_code">Alt-Svc</span> header to all TCP (HTTP/1.1 and HTTP/2) responses advertising the HTTP/3 endpoint. HTTP/3-capable clients will automatically upgrade to QUIC on subsequent requests, with transparent fallback to HTTP/2 or HTTP/1.1 if QUIC is unavailable. The advertisement max-age is configurable via <span class="inline_code">http3AltSvcMaxAge</span> (default 86400 seconds). Set <span class="inline_code">http3AdvertiseAltSvc=false</span> to disable advertising while keeping HTTP/3 enabled</li>
+    <li><strong>W3C trace-context propagation</strong> &mdash; <span class="inline_code">traceparent</span> and <span class="inline_code">tracestate</span> headers on inbound HTTP/3 requests are parsed and stored for OpenTelemetry span parenting, matching the TCP path. When <span class="inline_code">otelPropagateTraceContext</span> is enabled, the headers are copied to outbound HTTP/3 responses. When <span class="inline_code">otelGenerateTraceId</span> is enabled, a trace context is generated for requests without a <span class="inline_code">traceparent</span> header. Both features are default-off (same config as TCP)</li>
+    <li><strong>mTLS client-certificate capture</strong> &mdash; when mTLS is configured (<span class="inline_code">tlsMutualAuthenticationRequired</span> or <span class="inline_code">tlsMutualAuthenticationCertificateChain</span>), client certificates are captured from the QUIC TLS handshake and attached to the request, enabling cert-based expectation matching and verification over HTTP/3</li>
+    <li><strong>MCP over HTTP/3</strong> &mdash; the Model Context Protocol Streamable HTTP transport works over HTTP/3 with the same control-plane authentication (JWT / mTLS) and CORS behaviour as the TCP path; the request processing is shared between the two transports</li>
+    <li><strong>gRPC over HTTP/3</strong> &mdash; unary, server-streaming, and bidirectional-streaming gRPC calls work over HTTP/3 with correct trailing-HEADERS <span class="inline_code">grpc-status</span> framing. Bidirectional streaming requires <span class="inline_code">grpcBidiStreamingEnabled</span> (the same flag as the TCP path)</li>
+    <li><strong>CONNECT-UDP (MASQUE) relay</strong> &mdash; a working forward-proxy relay for tunnelling UDP through MockServer (RFC 9298). When enabled via <span class="inline_code">http3ConnectUdpEnabled</span> (default <span class="inline_code">false</span>), the server advertises <span class="inline_code">SETTINGS_ENABLE_CONNECT_PROTOCOL</span> (RFC 9220) and handles extended-CONNECT requests with <span class="inline_code">:protocol=connect-udp</span>: it opens a UDP socket to the target authority and relays datagrams bidirectionally (one HTTP/3 DATA frame per UDP datagram). Normal (non-CONNECT) HTTP/3 requests are unaffected. <strong>Security &mdash; this is an open UDP relay.</strong> When enabled there is no restriction on the relay target, so a client can reach any UDP host:port reachable from MockServer (including private networks, loopback, and cloud metadata endpoints such as <span class="inline_code">169.254.169.254</span>). It is intended for controlled test environments only &mdash; leave it disabled (the default) and never expose a CONNECT-UDP&ndash;enabled HTTP/3 port to untrusted clients. See <a href="/mock_server/configuration_properties.html#button_configuration_http3_connect_udp_enabled">HTTP/3 CONNECT-UDP (MASQUE) Enabled</a> on the configuration page</li>
 </ul>
 
 <a id="http3_limitations" class="anchor" href="#http3_limitations">&nbsp;</a>
@@ -102,7 +125,27 @@ sitemap:
 <h2>Limitations</h2>
 
 <ul>
-    <li><strong>Streaming/SSE responses</strong> &mdash; streaming response bodies (Server-Sent Events, chunked streaming) are not supported over HTTP/3. If an expectation returns a streaming body, MockServer logs a warning and sends only the headers and any static body bytes. Use HTTP/1.1 or HTTP/2 for streaming responses.</li>
-    <li><strong>Dashboard visibility</strong> &mdash; HTTP/3 connections do not appear as a separate protocol in the MockServer dashboard (requests are logged and visible, but the protocol is not distinguished)</li>
-    <li><strong>Incubator dependency</strong> &mdash; the <span class="inline_code">netty-incubator-codec-http3</span> library is a pre-release artifact; its API may change in future Netty releases</li>
+    <li><strong>Codec API maturity</strong> &mdash; the HTTP/3 codec has graduated from the Netty incubator into mainline Netty 4.2, but the API may still evolve in future releases</li>
 </ul>
+
+<a id="http3_parity" class="anchor" href="#http3_parity">&nbsp;</a>
+
+<h2>HTTP/3 parity and known differences</h2>
+
+<p>All expectation matching, actions, recording, verification, HTTP chaos profiles, forward-proxy, trace-context propagation, mTLS, MCP (Model Context Protocol Streamable HTTP, including control-plane authentication), and gRPC (unary, server-streaming, and bidirectional streaming) work over HTTP/3, matching the TCP (HTTP/1.1 and HTTP/2) path.</p>
+
+<h3>Inherently not applicable over HTTP/3</h3>
+
+<ul>
+    <li><strong>TCP chaos (TcpChaosHandler)</strong> &mdash; QUIC has no TCP RST/FIN/slow_close semantics. HTTP-level chaos profiles (latency, error responses, degradation ramp) DO work over HTTP/3</li>
+    <li><strong>WebSocket callbacks + dashboard WebSocket</strong> &mdash; RFC 6455 HTTP/1.1 Upgrade has no HTTP/3 equivalent. The analog is WebTransport (not yet implemented)</li>
+    <li><strong>HTTP/1.1 framing fixups</strong> &mdash; handlers like <span class="inline_code">PreserveHeadersNettyRemoves</span> and <span class="inline_code">EarlyMatchingHandler</span> are HTTP/1.1-specific and have no meaning in HTTP/3</li>
+</ul>
+
+<h3>Not yet supported (deferred)</h3>
+
+<ul>
+    <li><strong>Per-connection dashboard detail</strong> &mdash; the dashboard shows the HTTP/3 port and an aggregate active-connection count; per-connection detail (remote address, stream count, duration) is deferred</li>
+</ul>
+
+<p><em>Previously deferred, now supported:</em> MCP-over-HTTP/3 (shared Streamable-HTTP processor with full control-plane authentication) and gRPC-over-HTTP/3 (unary, server-streaming, and bidirectional streaming) both work over HTTP/3.</p>

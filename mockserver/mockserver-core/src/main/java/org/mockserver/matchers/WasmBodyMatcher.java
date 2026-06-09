@@ -1,10 +1,14 @@
 package org.mockserver.matchers;
 
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.wasm.WasmRuntime;
 import org.mockserver.wasm.WasmStore;
 
 /**
  * Body matcher that delegates matching to a WASM module loaded in the {@link WasmStore}.
+ * <p>
+ * When WASM support is disabled ({@code wasmEnabled=false}), the matcher always
+ * returns {@code false} (no match) — consistent with the fail-closed design.
  * <p>
  * Fails closed: returns {@code false} if the module is not loaded or throws.
  */
@@ -19,6 +23,9 @@ public class WasmBodyMatcher extends BodyMatcher<String> {
 
     @Override
     public boolean matches(MatchDifference context, String actual) {
+        if (!ConfigurationProperties.wasmEnabled()) {
+            return false;
+        }
         byte[] wasmBytes = WasmStore.getInstance().get(moduleName);
         if (wasmBytes == null) {
             return false;

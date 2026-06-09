@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
 import AppBar from '../components/AppBar';
 import { useDashboardStore } from '../store';
+import * as http3StatusModule from '../lib/http3Status';
 
 function renderAppBar(overrides = {}) {
   const defaults = {
@@ -108,5 +109,46 @@ describe('AppBar', () => {
 
     expect(props.onClearLogs).toHaveBeenCalledOnce();
     expect(props.onClearServer).not.toHaveBeenCalled();
+  });
+
+  it('shows HTTP/3 status chip when H3 is enabled', async () => {
+    vi.spyOn(http3StatusModule, 'fetchHttp3Status').mockResolvedValue({
+      enabled: true,
+      port: 8443,
+      activeConnections: 2,
+    });
+
+    renderAppBar();
+
+    await waitFor(() => {
+      expect(screen.getByText('H3 :8443 (2)')).toBeInTheDocument();
+    });
+  });
+
+  it('does not show HTTP/3 chip when H3 is disabled', async () => {
+    const spy = vi.spyOn(http3StatusModule, 'fetchHttp3Status').mockResolvedValue({
+      enabled: false,
+      port: -1,
+      activeConnections: 0,
+    });
+
+    renderAppBar();
+
+    // Wait for the H3 status effect to complete before asserting absence.
+    // Using waitFor on the spy ensures the async effect has settled.
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(screen.queryByText(/^H3 :/)).not.toBeInTheDocument();
+  });
+
+  it('does not show HTTP/3 chip when endpoint is unavailable', async () => {
+    const spy = vi.spyOn(http3StatusModule, 'fetchHttp3Status').mockRejectedValue(
+      new Error('Not Found'),
+    );
+
+    renderAppBar();
+
+    // Wait for the H3 status effect to complete before asserting absence.
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(screen.queryByText(/^H3 :/)).not.toBeInTheDocument();
   });
 });

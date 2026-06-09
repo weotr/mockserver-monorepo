@@ -12,3 +12,17 @@ steps:
     if: "build.source == 'ui' || build.source == 'schedule'"
     agents:
       queue: "default"
+
+  # Daily performance-REGRESSION run (notify-only, stored-history baseline).
+  # Scheduled daily; the guard dynamically dispatches the heavy run/micro-bench/
+  # compare steps (on the dedicated pinned `perf` queue) ONLY when master moved
+  # since the last successful run. Cheap `trigger` queue for the guard itself.
+  - label: ":mag: perf regression — commit guard + dispatch"
+    command: ".buildkite/scripts/steps/perf-test-guard.sh"
+    timeout_in_minutes: 10
+    # `[perf-run]` in the build message is an explicit, safe force-trigger for a
+    # manual/API run (orchestrator/commit builds never carry it, so the daily-only
+    # design is preserved). UI and scheduled builds dispatch as before.
+    if: "build.source == 'ui' || build.source == 'schedule' || build.message =~ /\\[perf-run\\]/"
+    agents:
+      queue: "trigger"

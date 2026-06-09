@@ -8,9 +8,10 @@ import org.mockserver.serialization.model.VerificationTimesDTO;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationTimes;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpRequest.request;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -35,10 +36,10 @@ public class VerificationSerializerSchemaValidationTest {
         Verification verification = new VerificationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new VerificationDTO()
+        assertThat( verification, is(new VerificationDTO()
             .setHttpRequest(new HttpRequestDTO(request().withMethod("GET").withPath("somepath")))
             .setTimes(new VerificationTimesDTO(VerificationTimes.between(2, 3)))
-            .buildObject(), verification);
+            .buildObject()));
     }
 
     @Test
@@ -53,9 +54,9 @@ public class VerificationSerializerSchemaValidationTest {
         Verification verification = new VerificationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new VerificationDTO()
+        assertThat( verification, is(new VerificationDTO()
             .setHttpRequest(new HttpRequestDTO(request()))
-            .buildObject(), verification);
+            .buildObject()));
     }
 
     @Test
@@ -69,7 +70,7 @@ public class VerificationSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"GET\"," + NEW_LINE +
             "    \"path\" : \"somepath\"" + NEW_LINE +
@@ -78,7 +79,7 @@ public class VerificationSerializerSchemaValidationTest {
             "    \"atLeast\" : 2," + NEW_LINE +
             "    \"atMost\" : 3" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -91,12 +92,12 @@ public class VerificationSerializerSchemaValidationTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : { }," + NEW_LINE +
             "  \"times\" : {" + NEW_LINE +
             "    \"atLeast\" : 1," + NEW_LINE +
             "    \"atMost\" : 1" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 }

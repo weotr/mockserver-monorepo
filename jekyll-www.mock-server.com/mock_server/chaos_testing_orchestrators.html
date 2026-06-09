@@ -3,7 +3,7 @@ title: Driving MockServer from Chaos Orchestrators
 shortTitle: Chaos Orchestrators
 description: Drive MockServer's service-scoped chaos from Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos using the control-plane endpoint, with a TTL dead-man's switch for safe auto-revert.
 layout: page
-pageOrder: 3
+pageOrder: 4
 section: 'Chaos Testing'
 subsection: true
 sitemap:
@@ -47,6 +47,8 @@ curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
   -d '{"host":"payments.svc","remove":true}'</code></pre>
 
 <p><strong>Always set <code class="inline code">ttlMillis</code> when an orchestrator owns the experiment.</strong> Orchestrators crash, time out, get cancelled, and sometimes skip their rollback step. The TTL is a <strong>dead-man's switch</strong>: MockServer reverts the fault on its own after the window elapses, so a failed experiment can never leave a dependency permanently broken. Match the TTL to (or slightly above) the experiment's planned duration. See <a href="/mock_server/chaos_testing.html#service_scoped_chaos">Service-scoped Chaos</a>.</p>
+
+<p><strong>Clustered deployments:</strong> when MockServer runs as a <a href="/mock_server/centralized_deployment.html#option2">clustered HA fleet</a>, service-scoped HTTP, TCP and gRPC chaos registrations <strong>replicate across all nodes</strong>. A single control-plane call to any node breaks the host for the whole fleet, and the clear (or TTL auto-revert) reverts it fleet-wide — so your orchestrator does not need to address every node individually. See <a href="/mock_server/chaos_testing.html#fleet_chaos">Fleet-wide Chaos</a>.</p>
 
 <a id="chaos_toolkit" class="anchor" href="#chaos_toolkit">&nbsp;</a>
 
@@ -221,7 +223,7 @@ curl -sf -X PUT http://mockserver:1080/mockserver/serviceChaos \
 curl -sf http://mockserver:1080/mockserver/serviceChaos
 # -&gt; { "services": { "payments.svc": { ... } }, "ttlRemainingMillis": { "payments.svc": 248123 } }</code></pre>
 
-<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, the <code class="inline code">mock_server_active_service_chaos</code> Prometheus gauge reports how many hosts currently have active service-scoped chaos. Because it drops to 0 as profiles are cleared or their TTLs lapse, <code class="inline code">mock_server_active_service_chaos &gt; 0</code> is a natural alert for "a chaos experiment is still live" — a useful guard against an orchestrator that forgot to clean up. See <a href="/mock_server/chaos_testing.html#chaos_observability">Observability</a>.</p>
+<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, the <code class="inline code">mock_server_active_service_chaos</code> Prometheus gauge reports, per fault type, how many active service-scoped chaos profiles inject that fault — it is labelled by <code class="inline code">fault_type</code>, so one host configured with both error and latency contributes to two series and the per-type counts may sum to more than the number of registered hosts. Because every series drops to 0 as profiles are cleared or their TTLs lapse, <code class="inline code">sum(mock_server_active_service_chaos) &gt; 0</code> is a natural alert for "a chaos experiment is still live" — a useful guard against an orchestrator that forgot to clean up. See <a href="/mock_server/chaos_testing.html#chaos_observability">Observability</a>.</p>
 
 <a id="related" class="anchor" href="#related">&nbsp;</a>
 

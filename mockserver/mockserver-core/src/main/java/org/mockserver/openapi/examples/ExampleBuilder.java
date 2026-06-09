@@ -19,6 +19,7 @@ package org.mockserver.openapi.examples;
 import io.swagger.util.Json;
 import io.swagger.v3.oas.models.media.*;
 import org.apache.commons.lang3.StringUtils;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.openapi.examples.models.*;
@@ -57,10 +58,15 @@ public class ExampleBuilder {
     public static final double SAMPLE_DECIMAL_PROPERTY_VALUE = 1.5;
 
     public static Example fromSchema(Schema<?> property, Map<String, Schema> definitions) {
-        return fromProperty(null, property, definitions, new ConcurrentHashMap<>(), new ConcurrentSkipListSet<>(), new StringBuilder());
+        SampleDataGenerator generator = ConfigurationProperties.generateRealisticExampleValues() ? new SampleDataGenerator() : null;
+        return fromProperty(null, property, definitions, new ConcurrentHashMap<>(), new ConcurrentSkipListSet<>(), new StringBuilder(), generator);
     }
 
     public static Example fromProperty(String name, Schema<?> property, Map<String, Schema> definitions, Map<String, Example> processedModels, Set<String> modelsStartedProcessing, StringBuilder location) {
+        return fromProperty(name, property, definitions, processedModels, modelsStartedProcessing, location, null);
+    }
+
+    private static Example fromProperty(String name, Schema<?> property, Map<String, Schema> definitions, Map<String, Example> processedModels, Set<String> modelsStartedProcessing, StringBuilder location, SampleDataGenerator generator) {
         location = new StringBuilder(location);
         if (isNotBlank(name)) {
             location.append(name).append(".");
@@ -107,7 +113,7 @@ public class ExampleBuilder {
             } else if (definitions != null) {
                 Schema<?> model = definitions.get(ref);
                 if (model != null) {
-                    output = fromProperty(ref, model, definitions, processedModels, modelsStartedProcessing, location);
+                    output = fromProperty(ref, model, definitions, processedModels, modelsStartedProcessing, location, generator);
                     processedModels.put(ref, output);
                 }
             }
@@ -124,7 +130,7 @@ public class ExampleBuilder {
                     }
                 }
 
-                output = new StringExample(defaultValue == null ? SAMPLE_EMAIL_PROPERTY_VALUE : defaultValue);
+                output = new StringExample(defaultValue == null ? (generator != null ? generator.email() : SAMPLE_EMAIL_PROPERTY_VALUE) : defaultValue);
             }
         } else if (property instanceof UUIDSchema uuidSchema) {
             if (example != null) {
@@ -139,13 +145,13 @@ public class ExampleBuilder {
                     }
                 }
 
-                output = new StringExample(defaultValue == null ? SAMPLE_UUID_PROPERTY_VALUE : defaultValue.toString());
+                output = new StringExample(defaultValue == null ? (generator != null ? generator.uuid() : SAMPLE_UUID_PROPERTY_VALUE) : defaultValue.toString());
             }
         } else if (property instanceof ByteArraySchema) {
             if (example != null) {
                 output = new StringExample(example.toString());
             } else {
-                output = new StringExample(SAMPLE_BYTE_PROPERTY_VALUE);
+                output = new StringExample(generator != null ? generator.byteString() : SAMPLE_BYTE_PROPERTY_VALUE);
             }
         } else if (property instanceof StringSchema stringSchema) {
             if (example != null) {
@@ -160,7 +166,26 @@ public class ExampleBuilder {
                     }
                 }
 
-                output = new StringExample(defaultValue == null ? SAMPLE_STRING_PROPERTY_VALUE : defaultValue);
+                if (defaultValue == null) {
+                    if (generator != null) {
+                        String format = stringSchema.getFormat();
+                        if ("uri".equals(format) || "url".equals(format)) {
+                            output = new StringExample(generator.uri());
+                        } else if ("hostname".equals(format)) {
+                            output = new StringExample(generator.hostname());
+                        } else if ("ipv4".equals(format)) {
+                            output = new StringExample(generator.ipv4());
+                        } else if ("ipv6".equals(format)) {
+                            output = new StringExample(generator.ipv6());
+                        } else {
+                            output = new StringExample(generator.stringWithConstraints(stringSchema.getMinLength(), stringSchema.getMaxLength()));
+                        }
+                    } else {
+                        output = new StringExample(SAMPLE_STRING_PROPERTY_VALUE);
+                    }
+                } else {
+                    output = new StringExample(defaultValue);
+                }
             }
         } else if (property instanceof PasswordSchema passwordSchema) {
             if (example != null) {
@@ -175,7 +200,7 @@ public class ExampleBuilder {
                     }
                 }
 
-                output = new StringExample(defaultValue == null ? SAMPLE_STRING_PROPERTY_VALUE : defaultValue);
+                output = new StringExample(defaultValue == null ? (generator != null ? generator.password() : SAMPLE_STRING_PROPERTY_VALUE) : defaultValue);
             }
         } else if (property instanceof IntegerSchema integerSchema) {
             if (example != null) {
@@ -204,12 +229,12 @@ public class ExampleBuilder {
                 }
                 if (property.getFormat() != null) {
                     if (property.getFormat().equals("int32")) {
-                        output = new IntegerExample(defaultValue == null ? SAMPLE_INT_PROPERTY_VALUE : defaultValue.intValue());
+                        output = new IntegerExample(defaultValue == null ? (generator != null ? generator.integer(property.getMinimum(), property.getMaximum()) : SAMPLE_INT_PROPERTY_VALUE) : defaultValue.intValue());
                     } else if (property.getFormat().equals("int64")) {
-                        output = new LongExample(defaultValue == null ? SAMPLE_LONG_PROPERTY_VALUE : defaultValue.longValue());
+                        output = new LongExample(defaultValue == null ? (generator != null ? generator.longValue(property.getMinimum(), property.getMaximum()) : SAMPLE_LONG_PROPERTY_VALUE) : defaultValue.longValue());
                     }
                 } else {
-                    output = new IntegerExample(SAMPLE_BASE_INTEGER_PROPERTY_VALUE);
+                    output = new IntegerExample(generator != null ? generator.integer(property.getMinimum(), property.getMaximum()) : SAMPLE_BASE_INTEGER_PROPERTY_VALUE);
                 }
             }
         } else if (property instanceof NumberSchema numberSchema) {
@@ -240,13 +265,13 @@ public class ExampleBuilder {
                 }
                 if (property.getFormat() != null) {
                     if (property.getFormat().equals("double")) {
-                        output = new DoubleExample(defaultValue == null ? SAMPLE_DOUBLE_PROPERTY_VALUE : defaultValue.doubleValue());
+                        output = new DoubleExample(defaultValue == null ? (generator != null ? generator.doubleValue(property.getMinimum(), property.getMaximum()) : SAMPLE_DOUBLE_PROPERTY_VALUE) : defaultValue.doubleValue());
                     }
                     if (property.getFormat().equals("float")) {
-                        output = new FloatExample(defaultValue == null ? SAMPLE_FLOAT_PROPERTY_VALUE : defaultValue.floatValue());
+                        output = new FloatExample(defaultValue == null ? (generator != null ? generator.floatValue(property.getMinimum(), property.getMaximum()) : SAMPLE_FLOAT_PROPERTY_VALUE) : defaultValue.floatValue());
                     }
                 } else {
-                    output = new DecimalExample(new BigDecimal(SAMPLE_DECIMAL_PROPERTY_VALUE));
+                    output = new DecimalExample(generator != null ? generator.decimal(property.getMinimum(), property.getMaximum()) : new BigDecimal(SAMPLE_DECIMAL_PROPERTY_VALUE));
                 }
             }
 
@@ -255,7 +280,7 @@ public class ExampleBuilder {
                 output = new BooleanExample(Boolean.parseBoolean(example.toString()));
             } else {
                 Boolean defaultValue = (Boolean) property.getDefault();
-                output = new BooleanExample(defaultValue == null ? SAMPLE_BOOLEAN_PROPERTY_VALUE : defaultValue);
+                output = new BooleanExample(defaultValue == null ? (generator != null ? generator.booleanValue() : SAMPLE_BOOLEAN_PROPERTY_VALUE) : defaultValue);
             }
         } else if (property instanceof DateSchema dateSchema) {
             DateFormat format = new SimpleDateFormat("yyyy-MM-dd");
@@ -268,7 +293,7 @@ public class ExampleBuilder {
                 if (enums != null && !enums.isEmpty()) {
                     output = new StringExample(format.format(enums.get(0)));
                 } else {
-                    output = new StringExample(SAMPLE_DATE_PROPERTY_VALUE);
+                    output = new StringExample(generator != null ? generator.dateString() : SAMPLE_DATE_PROPERTY_VALUE);
                 }
             }
         } else if (property instanceof DateTimeSchema dateTimeSchema) {
@@ -280,7 +305,7 @@ public class ExampleBuilder {
                 if (enums != null && !enums.isEmpty()) {
                     output = new StringExample(enums.get(0).toString());
                 } else {
-                    output = new StringExample(SAMPLE_DATETIME_PROPERTY_VALUE);
+                    output = new StringExample(generator != null ? generator.dateTimeString() : SAMPLE_DATETIME_PROPERTY_VALUE);
                 }
             }
         } else if (property instanceof ObjectSchema objectSchema) {
@@ -302,7 +327,7 @@ public class ExampleBuilder {
                 if (objectSchema.getProperties() != null) {
                     for (String propertyname : objectSchema.getProperties().keySet()) {
                         Schema<?> inner = objectSchema.getProperties().get(propertyname);
-                        Example innerExample = fromProperty(propertyname, inner, definitions, processedModels, modelsStartedProcessing, location);
+                        Example innerExample = fromProperty(propertyname, inner, definitions, processedModels, modelsStartedProcessing, location, generator);
                         outputExample.put(propertyname, innerExample);
                     }
                     output = outputExample;
@@ -325,7 +350,7 @@ public class ExampleBuilder {
             } else {
                 Schema<?> inner = arraySchema.getItems();
                 if (inner != null) {
-                    Example innerExample = fromProperty(property.getType(), inner, definitions, processedModels, modelsStartedProcessing, location);
+                    Example innerExample = fromProperty(property.getType(), inner, definitions, processedModels, modelsStartedProcessing, location, generator);
                     if (innerExample != null) {
                         ArrayExample an = new ArrayExample();
                         an.add(innerExample);
@@ -341,7 +366,7 @@ public class ExampleBuilder {
                 List<Example> innerExamples = new ArrayList<>();
                 if (models != null) {
                     for (Schema im : models) {
-                        Example innerExample = fromProperty(im.getType(), im, definitions, processedModels, modelsStartedProcessing, location);
+                        Example innerExample = fromProperty(im.getType(), im, definitions, processedModels, modelsStartedProcessing, location, generator);
                         if (innerExample != null) {
                             innerExamples.add(innerExample);
                         }
@@ -350,7 +375,7 @@ public class ExampleBuilder {
                 if (composedSchema.getProperties() != null) {
                     Map<String, Schema> ownProperties = composedSchema.getProperties();
                     for (Map.Entry<String, Schema> entry : ownProperties.entrySet()) {
-                        Example propExample = fromProperty(entry.getKey(), entry.getValue(), definitions, processedModels, modelsStartedProcessing, location);
+                        Example propExample = fromProperty(entry.getKey(), entry.getValue(), definitions, processedModels, modelsStartedProcessing, location, generator);
                         if (propExample != null) {
                             ex.put(entry.getKey(), propExample);
                         }
@@ -363,7 +388,7 @@ public class ExampleBuilder {
                 List<Schema> models = composedSchema.getAnyOf();
                 if (models != null) {
                     for (Schema im : models) {
-                        Example innerExample = fromProperty(property.getType(), im, definitions, processedModels, modelsStartedProcessing, location);
+                        Example innerExample = fromProperty(property.getType(), im, definitions, processedModels, modelsStartedProcessing, location, generator);
                         if (innerExample != null) {
                             output = innerExample;
                             break;
@@ -375,7 +400,7 @@ public class ExampleBuilder {
                 List<Schema> models = composedSchema.getOneOf();
                 if (models != null) {
                     for (Schema im : models) {
-                        Example innerExample = fromProperty(property.getType(), im, definitions, processedModels, modelsStartedProcessing, location);
+                        Example innerExample = fromProperty(property.getType(), im, definitions, processedModels, modelsStartedProcessing, location, generator);
                         if (innerExample != null) {
                             output = innerExample;
                             break;
@@ -402,7 +427,7 @@ public class ExampleBuilder {
                     Map<String, Schema> properties = property.getProperties();
                     for (String propertyKey : properties.keySet()) {
                         Schema inner = properties.get(propertyKey);
-                        Example propExample = fromProperty(propertyKey, inner, definitions, processedModels, modelsStartedProcessing, location);
+                        Example propExample = fromProperty(propertyKey, inner, definitions, processedModels, modelsStartedProcessing, location, generator);
                         ex.put(propertyKey, propExample);
                     }
                 }
@@ -414,7 +439,7 @@ public class ExampleBuilder {
         if (property.getAdditionalProperties() instanceof Schema<?> inner) {
             if (inner != null) {
                 for (int i = 1; i <= 3; i++) {
-                    Example innerExample = fromProperty(inner.getType(), inner, definitions, processedModels, modelsStartedProcessing, location);
+                    Example innerExample = fromProperty(inner.getType(), inner, definitions, processedModels, modelsStartedProcessing, location, generator);
                     if (innerExample != null) {
                         if (output == null) {
                             output = new ObjectExample();

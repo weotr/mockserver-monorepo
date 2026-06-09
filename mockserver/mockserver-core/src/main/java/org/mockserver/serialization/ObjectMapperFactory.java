@@ -28,14 +28,12 @@ import org.mockserver.serialization.serializers.condition.VerificationTimesSeria
 import org.mockserver.serialization.serializers.expectation.OpenAPIExpectationDTOSerializer;
 import org.mockserver.serialization.serializers.expectation.OpenAPIExpectationSerializer;
 import org.mockserver.serialization.serializers.matcher.HttpRequestPropertiesMatcherSerializer;
-import org.mockserver.serialization.serializers.matcher.HttpRequestsPropertiesMatcherSerializer;
 import org.mockserver.serialization.serializers.request.HttpRequestDTOSerializer;
 import org.mockserver.serialization.serializers.request.OpenAPIDefinitionDTOSerializer;
 import org.mockserver.serialization.serializers.request.OpenAPIDefinitionSerializer;
 import org.mockserver.serialization.serializers.certificate.X509CertificateSerializer;
 import org.mockserver.serialization.serializers.response.HttpResponseSerializer;
 import org.mockserver.serialization.serializers.response.*;
-import org.mockserver.serialization.serializers.schema.*;
 import org.mockserver.serialization.serializers.string.NottableStringSerializer;
 
 import java.util.*;
@@ -47,6 +45,24 @@ import static org.mockserver.exception.ExceptionHandling.handleThrowable;
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class ObjectMapperFactory {
+
+    /**
+     * Whether swagger-core (the OpenAPI model classes) is on the classpath. The embedded server and the
+     * full client always have it; a slimmed-down client (mockserver-client-java excludes the Swagger/OpenAPI
+     * parser) does not. When absent, the Swagger-coupled serializers in {@link SwaggerSerializers} are not
+     * registered — there is never a Swagger object to serialise on a remote client — which keeps the object
+     * mapper from failing to initialise with a {@code NoClassDefFoundError}.
+     */
+    private static final boolean SWAGGER_PRESENT = isClassPresent("io.swagger.v3.oas.models.media.Schema");
+
+    private static boolean isClassPresent(String className) {
+        try {
+            Class.forName(className, false, ObjectMapperFactory.class.getClassLoader());
+            return true;
+        } catch (Throwable throwable) {
+            return false;
+        }
+    }
 
     private static ObjectMapper objectMapper = buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Collections.emptyList(), false);
     private static final ObjectWriter prettyPrintWriter = buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Collections.emptyList(), false).writerWithDefaultPrettyPrinter();
@@ -207,7 +223,7 @@ public class ObjectMapperFactory {
     }
 
     private static void addSerializers(SimpleModule module, JsonSerializer[] replacementJsonSerializers, boolean serialiseDefaultValues) {
-        List<JsonSerializer> jsonSerializers = Arrays.asList(
+        List<JsonSerializer> jsonSerializers = new ArrayList<>(Arrays.asList(
             // expectation
             new OpenAPIExpectationSerializer(),
             new OpenAPIExpectationDTOSerializer(),
@@ -267,27 +283,15 @@ public class ObjectMapperFactory {
             // log
             new org.mockserver.serialization.serializers.log.LogEntrySerializer(),
             // matcher
-            new HttpRequestsPropertiesMatcherSerializer(),
-            new HttpRequestPropertiesMatcherSerializer(),
-            // schema
-            new SchemaSerializer(),
-            new ArraySchemaSerializer(),
-            new BinarySchemaSerializer(),
-            new BooleanSchemaSerializer(),
-            new ByteArraySchemaSerializer(),
-            new ComposedSchemaSerializer(),
-            new DateSchemaSerializer(),
-            new DateTimeSchemaSerializer(),
-            new EmailSchemaSerializer(),
-            new FileSchemaSerializer(),
-            new IntegerSchemaSerializer(),
-            new MapSchemaSerializer(),
-            new NumberSchemaSerializer(),
-            new ObjectSchemaSerializer(),
-            new PasswordSchemaSerializer(),
-            new StringSchemaSerializer(),
-            new UUIDSchemaSerializer()
-        );
+            new HttpRequestPropertiesMatcherSerializer()
+        ));
+        // Swagger/OpenAPI-coupled serializers (schema serializers + the OpenAPI-derived
+        // HttpRequestsPropertiesMatcher serializer) are only registered when swagger-core is on the
+        // classpath. A remote client that excludes the OpenAPI parser never produces these objects, so
+        // skipping them avoids a NoClassDefFoundError while leaving server behaviour unchanged.
+        if (SWAGGER_PRESENT) {
+            jsonSerializers.addAll(SwaggerSerializers.swaggerSerializers());
+        }
         Map<Class, JsonSerializer> jsonSerializersByType = new HashMap<>();
         for (JsonSerializer jsonSerializer : jsonSerializers) {
             jsonSerializersByType.put(jsonSerializer.handledType(), jsonSerializer);

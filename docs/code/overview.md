@@ -23,7 +23,14 @@ mockserver-monorepo/
 │   ├── mockserver-spring-test-listener-no-dependencies/ # ↑ shaded, zero transitive deps
 │   ├── mockserver-testcontainers/                     # Testcontainers integration (depends on mockserver-client-java)
 │   ├── mockserver-integration-testing/                # Integration-test helpers
-│   └── mockserver-integration-testing-no-dependencies/# ↑ shaded, zero transitive deps
+│   ├── mockserver-integration-testing-no-dependencies/# ↑ shaded, zero transitive deps
+│   ├── mockserver-async/                              # AsyncAPI broker mocking (Kafka, MQTT)
+│   ├── mockserver-k8s-webhook/                        # K8s MutatingAdmissionWebhook for sidecar injection
+│   ├── mockserver-state-infinispan/                   # Infinispan-backed StateBackend (optional, clustered state)
+│   ├── mockserver-blob-s3/                            # S3-backed BlobStore (optional, cloud blob storage)
+│   ├── mockserver-blob-gcs/                           # GCS-backed BlobStore (optional, cloud blob storage)
+│   ├── mockserver-blob-azure/                         # Azure-backed BlobStore (optional, cloud blob storage)
+│   └── mockserver-benchmark/                          # JMH benchmarks (not part of default reactor build)
 ├── examples/                       # Runnable usage examples — java/node/python/ruby/curl/json/docker-compose/wasm/chaos
 ├── mockserver-ui/                  # React dashboard UI (Vite + TypeScript)
 ├── mockserver-node/                # Node.js MockServer launcher (npm)
@@ -43,7 +50,7 @@ mockserver-monorepo/
 
 | Directory | Tech Stack | Build Tool |
 |-----------|-----------|------------|
-| `mockserver/` | Java 17+, Netty 4.1 | Maven (`./mvnw`) |
+| `mockserver/` | Java 17+, Netty 4.2 | Maven (`./mvnw`) |
 | `mockserver-ui/` | React, TypeScript | Vite (`npm`) |
 | `mockserver-node/` | Node.js | Grunt (`npm`) |
 | `mockserver-client-node/` | TypeScript | npm |
@@ -72,6 +79,13 @@ Everything published to Maven Central under `org.mock-server` is produced by a m
 | `mockserver-testcontainers/` | `mockserver-testcontainers` | Canonical, MockServer-maintained Testcontainers module (`MockServerContainer`). Supersedes the thin upstream `org.testcontainers:mockserver`. Depends on `mockserver-client-java`. |
 | `mockserver-integration-testing/` | `mockserver-integration-testing` + `mockserver-integration-testing-no-dependencies` | Integration-test helpers. |
 | `examples/java/` (repo root) | `mockserver-examples` | Published, but documents usage rather than being a consumer dependency. Relocated from `mockserver/mockserver-examples/`; still a reactor module via `../examples/java`. |
+| `mockserver-async/` | `mockserver-async` | AsyncAPI broker mocking: spec parsing, Kafka/MQTT publisher adapters, and `AsyncApiMockOrchestrator`. |
+| `mockserver-k8s-webhook/` | `mockserver-k8s-webhook` | Kubernetes MutatingAdmissionWebhook HTTPS server for automatic sidecar injection. Standalone: depends only on jackson-databind, slf4j-api, and slf4j-jdk14. |
+| `mockserver-state-infinispan/` | `mockserver-state-infinispan` | Optional Infinispan-backed `StateBackend`. Only required when `stateBackend=infinispan` is configured. Not needed for standard deployments. |
+| `mockserver-blob-s3/` | `mockserver-blob-s3` | Optional S3-backed `BlobStore`. Implements the `BlobStore` SPI against AWS SDK v2 `S3Client`. Supports S3-compatible stores (MinIO) via endpoint override. Only required when `blobStoreType=s3`. |
+| `mockserver-blob-gcs/` | `mockserver-blob-gcs` | Optional GCS-backed `BlobStore`. Implements the `BlobStore` SPI against `google-cloud-storage`. Supports fake-gcs-server for testing. Only required when `blobStoreType=gcs`. |
+| `mockserver-blob-azure/` | `mockserver-blob-azure` | Optional Azure-backed `BlobStore`. Implements the `BlobStore` SPI against `azure-storage-blob`. Supports Azurite emulator for testing. Only required when `blobStoreType=azure`. |
+| `mockserver-benchmark/` | _(not published)_ | JMH benchmarks. Deliberately excluded from the default reactor build (not listed in `mockserver/pom.xml` `<modules>`); run manually via `mvn package -pl mockserver-benchmark`. |
 | `mockserver/mockserver-maven-plugin/` | `mockserver-maven-plugin` | Maven plugin (`pre-integration-test` / `post-integration-test` hooks). Inherits its version from `mockserver/pom.xml` and uses `${project.version}` for internal mockserver-* dependency refs, but is NOT a child module of `mockserver/pom.xml` — built and deployed by the dedicated `:java: Maven Plugin` step in `.buildkite/release-pipeline.yml`, separately from the main reactor. |
 
 The `*-no-dependencies` form is a real sibling module (e.g. `mockserver/mockserver-netty-no-dependencies/pom.xml`) — *not* a classifier on the source artifactId. Each sibling module is a thin pom that pulls in the source module as its single compile dependency, then runs `maven-shade-plugin` with `<shadedArtifactAttached>false</shadedArtifactAttached>` so the shaded jar IS the module's main artifact. This structure lets `central-publishing-maven-plugin` upload everything to Maven Central via the standard bundle flow under each artifact's natural coordinates. Before 6.0.0, the shaded jars were renamed at deploy time via `gpg:sign-and-deploy-file` and published under both `<classifier>shaded</classifier>` and the `-no-dependencies` artifactId; that dual-publish path was removed when the deploy mechanism switched to Sonatype Central Portal in 6.0.0.
@@ -117,7 +131,7 @@ REST API handler"]
     ACTION --> MATCH{"Expectation
 matched?"}
     MATCH -->|Yes| DISPATCH["Action Dispatcher
-14 action types"]
+19 action types"]
     MATCH -->|No, proxy mode| FWD["Forward to
 original destination"]
     MATCH -->|No, mock mode| NF[404 Not Found]
@@ -204,17 +218,19 @@ Usage examples"]
 
 MockServer targets **Java 17** as the minimum supported version.
 
-The Maven compiler source and target are set to `17` in the root `pom.xml`. The `javax`→`jakarta` namespace migration is a separate planned step — until it lands, dependencies still need to stay on the `javax` side of the namespace split:
+The Maven compiler source and target are set to `17` in `mockserver/pom.xml`. The `javax`→`jakarta` namespace migration is **complete**: the codebase now uses the `jakarta` namespace for all EE APIs (servlet, annotation, validation, xml.bind, ws.rs). JDK-namespace `javax.*` classes (`javax.net.ssl`, `javax.xml.*`, `javax.script.*`, `javax.security.*`) are unchanged — those remain part of the JDK.
 
-| Constraint | Maximum Version | Reason |
-|-----------|----------------|--------|
-| Spring Framework | 5.x | Spring 6 uses the `jakarta` namespace |
-| Spring Boot | 2.x | Spring Boot 3 requires Spring 6 |
-| Tomcat Embed | 9.x | Tomcat 10+ uses `jakarta` namespace |
-| Jetty | 9.x | Jetty 10+ uses `jakarta` namespace |
-| Servlet API | `javax.servlet` | `jakarta.servlet` requires Jakarta EE 9+ |
+Current dependency baseline:
 
-When evaluating dependency upgrade PRs (Snyk, Dependabot, or community), reject any that migrate from `javax` to `jakarta` namespace until the broader migration is scheduled.
+| Dependency | Version |
+|-----------|---------|
+| Spring Framework | 7.0.x |
+| Jakarta EE | 10 |
+| Tomcat Embed | 11.x |
+| Jetty | 12.x |
+| Servlet API | `jakarta.servlet` |
+
+See [docs/operations/migration-java17-jakarta.md](../operations/migration-java17-jakarta.md) for migration details and [docs/operations/security.md](../operations/security.md) for the current dependency policy.
 
 ## Key Architectural Principles
 
@@ -244,7 +260,7 @@ See: [Dashboard UI](dashboard-ui.md)
 
 ### 5. Action Dispatch Pattern
 
-Matched expectations produce one of 14 action types across two categories (response vs forward), each with a dedicated handler class. This pattern cleanly separates matching from action execution.
+Matched expectations produce one of 19 action types across two categories (response vs forward), each with a dedicated handler class. This pattern cleanly separates matching from action execution.
 
 See: [Request Processing, Mocking & Proxying](request-processing.md)
 
@@ -268,7 +284,7 @@ See: [Client & Integrations — MCP](client-and-integrations.md#mcp-model-contex
 | `org.mockserver.netty.mcp` | netty | MCP (Model Context Protocol) server handler | [Client & Integrations](client-and-integrations.md) |
 | `org.mockserver.integration` | netty | `ClientAndServer` combined class | [Client & Integrations](client-and-integrations.md) |
 | `org.mockserver.mock` | core | Expectation management, HttpState | [Request Processing](request-processing.md) |
-| `org.mockserver.mock.action.http` | core | Action handlers (14 types) | [Request Processing](request-processing.md) |
+| `org.mockserver.mock.action.http` | core | Action handlers (16 types) | [Request Processing](request-processing.md) |
 | `org.mockserver.matchers` | core | Request matching (15+ matcher types) | [Domain Model](domain-model.md) |
 | `org.mockserver.model` | core | Domain objects (HttpRequest, etc.) | [Domain Model](domain-model.md) |
 | `org.mockserver.serialization` | core | JSON/Java serialization | [Domain Model](domain-model.md) |
@@ -304,4 +320,6 @@ See: [Client & Integrations — MCP](client-and-integrations.md#mcp-model-contex
 | **Low** | [Client API & Test Integrations](client-and-integrations.md) | MockServerClient, JUnit 4/5, Spring, WebSocket callbacks |
 | **Medium** | [AI & RPC Protocol Mocking](ai-protocol-mocking.md) | SSE streaming, JSON-RPC, MCP, A2A, gRPC mocking |
 | **Medium** | [LLM Mocking](llm-mocking.md) | LLM response builder, provider codecs, conversation matchers, MCP tools, dashboard |
+| **Low** | [LLM Codec Golden-File Testing](llm-codec-fixtures.md) | Codec-generated golden fixtures, normalization, drift-detection test |
+| **Low** | [LLM Mocking Security Audit](llm-security-audit.md) | Security review of the LLM mocking feature (M0–M4) |
 | **Low** | [Metrics & Monitoring](metrics.md) | Prometheus metrics, memory monitoring |

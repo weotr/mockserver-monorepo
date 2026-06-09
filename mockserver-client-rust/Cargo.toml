@@ -1,0 +1,21 @@
+[package]
+name = "mockserver-client"
+version = "7.0.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["James D Bloom <jamesdbloom@gmail.com>"]
+description = "An idiomatic Rust client for MockServer's control-plane API"
+license = "Apache-2.0"
+repository = "https://github.com/mock-server/mockserver-monorepo"
+homepage = "https://www.mock-server.com"
+documentation = "https://docs.rs/mockserver-client"
+keywords = ["mockserver", "mock", "testing", "http", "integration-testing"]
+categories = ["development-tools::testing", "web-programming::http-client"]
+readme = "README.md"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]

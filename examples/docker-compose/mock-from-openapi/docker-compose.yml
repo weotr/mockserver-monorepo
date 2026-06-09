@@ -1,0 +1,11 @@
+services:
+  mockserver:
+    image: mockserver/mockserver:latest
+    ports:
+      - "1080:1080"
+    environment:
+      MOCKSERVER_LOG_LEVEL: INFO
+      # Generate expectations directly from the mounted OpenAPI spec at startup.
+      MOCKSERVER_INITIALIZATION_OPENAPI_PATH: /config/openapi.yaml
+    volumes:
+      - ./config:/config

@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MockServer;
+
+/**
+ * Fluent chain returned by MockServerClient::when() to attach an action.
+ *
+ * @example
+ *   $client->when(HttpRequest::request()->path('/hello'))
+ *       ->respond(HttpResponse::response()->statusCode(200)->body('world'));
+ */
+class ForwardChainExpectation
+{
+    private MockServerClient $client;
+    private Expectation $expectation;
+
+    public function __construct(MockServerClient $client, Expectation $expectation)
+    {
+        $this->client = $client;
+        $this->expectation = $expectation;
+    }
+
+    /**
+     * Set an explicit expectation ID.
+     */
+    public function withId(string $id): self
+    {
+        $this->expectation->id($id);
+        return $this;
+    }
+
+    /**
+     * Set the expectation priority.
+     */
+    public function withPriority(int $priority): self
+    {
+        $this->expectation->priority($priority);
+        return $this;
+    }
+
+    /**
+     * Respond with the given HTTP response.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respond(HttpResponse $response): array
+    {
+        $this->expectation->httpResponse($response);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Forward to the given destination.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function forward(HttpForward $forward): array
+    {
+        $this->expectation->httpForward($forward);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Return an error.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function error(HttpError $error): array
+    {
+        $this->expectation->httpError($error);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+}

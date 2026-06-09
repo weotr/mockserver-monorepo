@@ -24,6 +24,11 @@ import java.util.List;
  *       {@code channel.localAddress()} when TPROXY mode is active (the TPROXY iptables
  *       target preserves the original destination as the socket's local address).
  *       Returns {@code null} when TPROXY mode is not enabled in configuration.</li>
+ *   <li>{@link EbpfOriginalDestinationResolver} — O(1) BPF hash map lookup keyed by
+ *       socket cookie. An external BPF program (cgroup/connect4) records the original
+ *       destination before NAT; this resolver reads and consumes the entry. Returns
+ *       {@code null} when eBPF mode is not enabled or the pinned map is unavailable.
+ *       Requires Linux + epoll + JNA + CAP_BPF + external BPF program.</li>
  *   <li>{@link SoOriginalDstResolver} — O(1) {@code getsockopt(SO_ORIGINAL_DST)} via JNA
  *       (requires Linux + Netty epoll transport; returns null on NIO channels or non-Linux)</li>
  *   <li>{@link ConntrackOriginalDestinationResolver} — O(n) Linux conntrack table lookup
@@ -31,14 +36,6 @@ import java.util.List;
  *   <li>{@link DnsIntentOriginalDestinationResolver} — recovers the intended hostname
  *       from MockServer's DNS answer cache (DNS-steering mode)</li>
  * </ol>
- * <p>
- * <b>Future strategies (not yet implemented):</b>
- * <ul>
- *   <li><b>eBPF socket metadata</b> — an eBPF program attached to the cgroup can store
- *       the original destination in a BPF map keyed by socket cookie. The resolver would
- *       read the map entry via a JNI helper or {@code /sys/fs/bpf/} pinned map.
- *       See {@code docs/plans/g5-ebpf-original-dst.local.md} for the design note.</li>
- * </ul>
  * <p>
  * Note: PROXY protocol v1/v2 resolution is handled separately by
  * {@link ProxyProtocolOriginalDestinationHandler} in the Netty pipeline (it requires
@@ -65,29 +62,37 @@ public class CompositeOriginalDestinationResolver implements TransparentProxyHan
     }
 
     /**
-     * Returns the default chain: [TPROXY, SO_ORIGINAL_DST, conntrack, dns-intent].
+     * Returns the default chain: [TPROXY, eBPF, SO_ORIGINAL_DST, conntrack, dns-intent].
      * <p>
      * TPROXY is first — when TPROXY mode is active ({@code transparentProxyTproxy=true}),
      * the local address IS the original destination and no further resolution is needed.
      * When TPROXY is not enabled, the resolver returns null and the chain falls through.
      * <p>
-     * SO_ORIGINAL_DST (via JNA getsockopt) is tried second — it is an O(1) socket
+     * eBPF is second — when eBPF mode is active ({@code transparentProxyEbpf=true}),
+     * the resolver reads a pinned BPF hash map populated by an external cgroup BPF
+     * program. The lookup is O(1) and captures the original destination before any NAT
+     * rewrite, making it more authoritative than SO_ORIGINAL_DST. When eBPF is not
+     * enabled or the pinned map is unavailable, the resolver returns null and the
+     * chain falls through.
+     * <p>
+     * SO_ORIGINAL_DST (via JNA getsockopt) is tried third — it is an O(1) socket
      * option read, far cheaper than the O(n) conntrack table scan. It requires
      * Linux + Netty epoll transport; on NIO channels or non-Linux it returns null
      * and the chain falls through to conntrack.
      * <p>
-     * Conntrack is the third strategy because a real iptables-REDIRECT original
+     * Conntrack is the fourth strategy because a real iptables-REDIRECT original
      * destination is still the most authoritative source when SO_ORIGINAL_DST is
      * unavailable. The DNS-intent resolver fills the gap when all others return null —
      * it recovers the hostname that MockServer's DNS server mapped to the
      * connection's destination IP.
      *
-     * @param configuration the MockServer configuration (needed by TPROXY resolver)
+     * @param configuration the MockServer configuration (needed by TPROXY and eBPF resolvers)
      */
     public static CompositeOriginalDestinationResolver defaultChain(Configuration configuration) {
         return new CompositeOriginalDestinationResolver(
             Arrays.asList(
                 new TproxyOriginalDestinationResolver(configuration),
+                new EbpfOriginalDestinationResolver(configuration),
                 new SoOriginalDstResolver(),
                 new ConntrackOriginalDestinationResolver(),
                 new DnsIntentOriginalDestinationResolver()
@@ -96,10 +101,11 @@ public class CompositeOriginalDestinationResolver implements TransparentProxyHan
     }
 
     /**
-     * Returns the default chain without TPROXY: [SO_ORIGINAL_DST, conntrack, dns-intent].
+     * Returns the default chain without TPROXY or eBPF: [SO_ORIGINAL_DST, conntrack, dns-intent].
      * <p>
      * This overload maintains backward compatibility for callers that do not have
-     * a {@link Configuration} instance. TPROXY resolution is not included.
+     * a {@link Configuration} instance. TPROXY and eBPF resolution are not included
+     * (both require configuration).
      */
     public static CompositeOriginalDestinationResolver defaultChain() {
         return new CompositeOriginalDestinationResolver(

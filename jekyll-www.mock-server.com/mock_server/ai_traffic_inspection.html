@@ -199,7 +199,7 @@ client = openai.OpenAI(
 
 <p>Click <strong>Sessions</strong> in the navigation bar to see captured LLM traffic grouped into conversation swim-lanes. Each swim-lane is labelled with the scenario name and isolation value (for example, <code>weather-agent / agent-A</code>) and shows chips for each captured turn. Click a chip to open the Conversation view for that turn.</p>
 
-<p>An <strong>Unscoped requests</strong> strip at the bottom collects requests that did not match any isolated session. The Sessions view requires that LLM conversation expectations were set up with a per-session isolation key — see <a href="/mock_server/ai_mocking.html">LLM Conversation Mocking</a> for details.</p>
+<p>An <strong>Unscoped requests</strong> strip at the bottom collects requests that did not match any isolated session. The Sessions view requires that LLM conversation expectations were set up with a per-session isolation key — see <a href="/mock_server/ai_mcp_tools.html#create_llm_conversation">LLM Conversation Mocking</a> for details.</p>
 
 <h3>Download HAR and Export</h3>
 
@@ -448,6 +448,10 @@ curl -s -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES
     <li><a href="/mock_server/HTTPS_TLS.html"><strong>HTTPS &amp; TLS</strong></a> — full details on trusting the MockServer CA certificate</li>
     <li><a href="/proxy/getting_started.html"><strong>Getting Started Proxying</strong></a> — general proxy setup and client configuration</li>
     <li><a href="/mock_server/ai_debugging.html"><strong>Debugging with AI</strong></a> — using AI assistants to analyse captured traffic via MCP</li>
+    <li><a href="/mock_server/ai_mcp_setup.html"><strong>MCP Setup</strong></a> — connect your AI assistant to MockServer so it can read the recorded traffic</li>
+    <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> — the <code class="code inline">retrieve_recorded_requests</code> and related tools used to inspect captured traffic</li>
     <li><a href="/mock_server/configuration_properties.html#proxy_configuration"><strong>Proxying Configuration</strong></a> — all proxy-related configuration properties</li>
     <li><a href="/mock_server/mockserver_ui.html"><strong>MockServer UI</strong></a> — dashboard overview</li>
 </ul>
+
+{% include_subpage _includes/ai_see_also.html %}

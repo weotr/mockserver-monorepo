@@ -7,7 +7,7 @@ body {
 This is the parent `<div>` that contains the menu and the content area.
 */
 #layout {
-    padding-left: 200px; /* left col width "#menu" */
+    padding-left: 230px; /* left col width "#menu" */
     left: 0;
 }
 
@@ -32,7 +32,7 @@ The content `<div>` is where all your content goes.
 .header h1 {
     margin: 0.2em 0;
     font-weight: 300;
-    font: 4em 'Averia Sans Libre', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font: 4em 'Permanent Marker', 'Averia Sans Libre', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
 .header h2 {
@@ -51,7 +51,7 @@ The content `<div>` is where all your content goes.
 
 .page_header h1 {
     margin: 0.2em 0;
-    font: 4em 'Averia Sans Libre', 'Gloria Hallelujah', 'Indie Flower', Helvetica, Arial, sans-serif;
+    font: 4em 'Permanent Marker', 'Averia Sans Libre', 'Gloria Hallelujah', 'Indie Flower', Helvetica, Arial, sans-serif;
 }
 
 .footer {
@@ -85,13 +85,21 @@ img.action_image {
 img.ui_image {
     max-width: 1700px;
     width: 98%;
-    padding: 1%;
+    padding: 12px;
+    background-color: #000;
+    border: 1px solid #000;
+    border-radius: 9px;
+    box-sizing: border-box;
 }
 
 img.ui_image_half_width {
     max-width: 1700px;
     width: 60%;
-    padding: 1%;
+    padding: 12px;
+    background-color: #000;
+    border: 1px solid #000;
+    border-radius: 9px;
+    box-sizing: border-box;
 }
 
 /*
@@ -102,11 +110,11 @@ By using the combination of `position: fixed; top: 0; bottom:0;`, we can make
 the menu have 100% height and be fixed on the page as the rest of it scrolls.
 */
 #menu {
-    margin-left: -200px; /* this should be "#menu" width */
-    width: 200px;
+    margin-left: -230px; /* this should be "#menu" width */
+    width: 230px;
     position: fixed;
     top: 0;
-    left: 200px; /* this should be "#menu" width */
+    left: 230px; /* this should be "#menu" width */
     bottom: 0;
     z-index: 1; /* so the menu or its navicon stays above all content */
     background: #191818;
@@ -225,7 +233,7 @@ li.active {
 #menuLink {
     display: none; /* show this only on small screens */
     top: 0;
-    left: 200px; /* `#menu`'s width */
+    left: 230px; /* `#menu`'s width */
     background: #000;
     font-size: 10px; /* change this value to increase/decrease button size */
     z-index: 10;
@@ -430,12 +438,12 @@ Hides the menu at `767px`, but modify this based on your app's needs.
 
     #layout.active {
         position: relative;
-        left: 200px;
+        left: 230px;
     }
 
     #layout.active #menu {
-        left: 200px;
-        width: 200px;
+        left: 230px;
+        width: 230px;
     }
 
     #menu {
@@ -454,7 +462,7 @@ Hides the menu at `767px`, but modify this based on your app's needs.
     }
 
     #layout.active #menuLink {
-        left: 200px;
+        left: 230px;
     }
 
     .build_tag img {

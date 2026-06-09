@@ -114,4 +114,7 @@ export interface DebugMismatchResult {
   maxExpectationsEvaluated?: number;
   closestMatch?: DebugMismatchClosestMatch;
   results: DebugMismatchExpectationResult[];
+  /** The original unmatched request — attached client-side so the UI can
+   *  offer a "Create Expectation" action from the mismatch dialog. */
+  unmatchedRequest?: Record<string, unknown>;
 }

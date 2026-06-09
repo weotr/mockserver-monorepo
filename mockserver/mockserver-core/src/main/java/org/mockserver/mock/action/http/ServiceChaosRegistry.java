@@ -1,7 +1,16 @@
 package org.mockserver.mock.action.http;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.model.HttpChaosProfile;
+import org.mockserver.serialization.ObjectMapperFactory;
+import org.mockserver.serialization.model.HttpChaosProfileDTO;
+import org.mockserver.state.InvalidationListener;
+import org.mockserver.state.KeyValueStore;
+import org.mockserver.state.StateBackend;
 import org.mockserver.time.TimeService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -40,13 +49,28 @@ import java.util.function.LongSupplier;
  * <p>Hosts are matched case-insensitively and ignoring any {@code :port} suffix.
  * State is held in a {@link ConcurrentHashMap} and cleared on server reset
  * (see {@code HttpState.reset()}).
+ *
+ * <p><b>Fleet-awareness (G11):</b> when a clustered {@link StateBackend} is
+ * wired via {@link #setStateBackend(StateBackend)}, mutations (put/remove/reset/patch)
+ * write-through to the backend's {@code crudEntities("chaos-service")} store,
+ * and an {@link InvalidationListener} rebuilds the node-local map from the
+ * backend on remote writes. The {@link #get(String)} path remains purely
+ * node-local for zero-overhead chaos lookups during request handling. When
+ * no backend is set or the backend is not clustered, behaviour is identical
+ * to the pre-G11 node-local-only registry.
  */
 public class ServiceChaosRegistry {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ServiceChaosRegistry.class);
+    static final String BACKEND_NAMESPACE = "chaos-service";
 
     private static final ServiceChaosRegistry INSTANCE = new ServiceChaosRegistry(TimeService::currentTimeMillis);
 
     private final ConcurrentHashMap<String, Entry> byHost = new ConcurrentHashMap<>();
     private final LongSupplier clock;
+
+    // G11: optional clustered backend for fleet replication
+    private volatile KeyValueStore<ObjectNode> backendStore;
 
     public ServiceChaosRegistry(LongSupplier clock) {
         this.clock = clock;
@@ -54,6 +78,20 @@ public class ServiceChaosRegistry {
 
     public static ServiceChaosRegistry getInstance() {
         return INSTANCE;
+    }
+
+    /**
+     * Wires the clustered state backend for fleet-wide chaos replication.
+     * When the backend {@link StateBackend#isClustered() isClustered()},
+     * mutations are replicated via the backend's CRUD entity store, and
+     * an {@link InvalidationListener} is registered to rebuild the
+     * node-local map on remote writes. When the backend is not clustered,
+     * this method is a no-op — the registry stays purely node-local.
+     */
+    public void setStateBackend(StateBackend backend) {
+        if (backend != null && backend.isClustered()) {
+            this.backendStore = backend.crudEntities(BACKEND_NAMESPACE);
+        }
     }
 
     /**
@@ -92,6 +130,7 @@ public class ServiceChaosRegistry {
         }
         long expiresAtMillis = ttlMillis > 0 ? saturatingExpiry(clock.getAsLong(), ttlMillis) : 0L;
         byHost.put(key, new Entry(profile, expiresAtMillis));
+        writeToBackend(key, profile, expiresAtMillis);
     }
 
     /**
@@ -148,7 +187,11 @@ public class ServiceChaosRegistry {
             return new Entry(merged, existing.expiresAtMillis);
         });
         Entry updated = byHost.get(key);
-        return updated != null && !updated.isExpired(clock.getAsLong()) ? updated.profile : null;
+        if (updated != null && !updated.isExpired(clock.getAsLong())) {
+            writeToBackend(key, updated.profile, updated.expiresAtMillis);
+            return updated.profile;
+        }
+        return null;
     }
 
     private static HttpChaosProfile merge(HttpChaosProfile base, HttpChaosProfile patch) {
@@ -183,6 +226,7 @@ public class ServiceChaosRegistry {
         String key = normalizeHost(host);
         if (key != null) {
             byHost.remove(key);
+            removeFromBackend(key);
         }
     }
 
@@ -282,6 +326,94 @@ public class ServiceChaosRegistry {
     /** Clear all service-scoped chaos. Called on server reset and for test isolation. */
     public void reset() {
         byHost.clear();
+        clearBackend();
+    }
+
+    // --- G11: backend write-through and reconciliation ---
+
+    /**
+     * Writes a chaos profile entry to the clustered backend store.
+     * No-op when no clustered backend is configured.
+     */
+    private void writeToBackend(String key, HttpChaosProfile profile, long expiresAtMillis) {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            ObjectMapper mapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode node = mapper.createObjectNode();
+            node.set("profile", mapper.valueToTree(new HttpChaosProfileDTO(profile)));
+            node.put("expiresAtMillis", expiresAtMillis);
+            store.put(key, node);
+        } catch (Exception e) {
+            LOG.warn("failed to write service chaos to backend for key={}", key, e);
+        }
+    }
+
+    /**
+     * Removes a chaos profile entry from the clustered backend store.
+     * No-op when no clustered backend is configured.
+     */
+    private void removeFromBackend(String key) {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            store.remove(key);
+        } catch (Exception e) {
+            LOG.warn("failed to remove service chaos from backend for key={}", key, e);
+        }
+    }
+
+    /**
+     * Clears all chaos entries from the clustered backend store.
+     * No-op when no clustered backend is configured.
+     */
+    private void clearBackend() {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            store.clear();
+        } catch (Exception e) {
+            LOG.warn("failed to clear service chaos backend", e);
+        }
+    }
+
+    /**
+     * Rebuilds the node-local map from the backend store. Called by the
+     * {@link InvalidationListener} when a remote write is detected.
+     * Thread-safe: replaces the local map contents atomically relative
+     * to concurrent gets (ConcurrentHashMap iteration is weakly-consistent).
+     */
+    public void reconcileFromBackend() {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            ObjectMapper mapper = ObjectMapperFactory.createObjectMapper();
+            Map<String, Entry> newEntries = new HashMap<>();
+            store.entries().forEach(entry -> {
+                try {
+                    ObjectNode node = entry.getValue();
+                    HttpChaosProfileDTO dto = mapper.treeToValue(node.get("profile"), HttpChaosProfileDTO.class);
+                    long expiresAtMillis = node.path("expiresAtMillis").asLong(0L);
+                    HttpChaosProfile profile = dto.buildObject();
+                    newEntries.put(entry.getKey(), new Entry(profile, expiresAtMillis));
+                } catch (Exception e) {
+                    LOG.warn("failed to deserialize service chaos entry key={}", entry.getKey(), e);
+                }
+            });
+            // Replace local map: remove keys not in backend, add/update keys from backend
+            byHost.keySet().removeIf(k -> !newEntries.containsKey(k));
+            byHost.putAll(newEntries);
+        } catch (Exception e) {
+            LOG.warn("failed to reconcile service chaos from backend", e);
+        }
     }
 
     private static final class Entry {

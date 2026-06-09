@@ -1,14 +1,20 @@
-(function () {
+/*
+ * mockserver
+ * http://mock-server.com
+ *
+ * Copyright (c) 2014 James Bloom
+ * Licensed under the Apache License, Version 2.0
+ */
 
-    'use strict';
+'use strict';
 
-    var testCase = require('nodeunit').testCase;
-    var http = require('http');
-    var Q = require('q');
+var test = require('node:test');
+var assert = require('node:assert');
+var http = require('http');
+var mockserver = require(__dirname + '/../../..');
 
-    function sendRequest(method, host, port, path, jsonBody) {
-        var deferred = Q.defer();
-
+function sendRequest(method, host, port, path, jsonBody) {
+    return new Promise(function (resolve, reject) {
         var body = (typeof jsonBody === "string" ? jsonBody : JSON.stringify(jsonBody || ""));
         var options = {
             method: method,
@@ -23,7 +29,7 @@
             var data = '';
 
             if (response.statusCode === 400 || response.statusCode === 404) {
-                deferred.reject(response.statusCode);
+                reject(response.statusCode);
             }
 
             response.on('data', function (chunk) {
@@ -31,7 +37,7 @@
             });
 
             response.on('end', function () {
-                deferred.resolve({
+                resolve({
                     statusCode: response.statusCode,
                     body: data
                 });
@@ -39,37 +45,37 @@
         });
 
         req.once('error', function (error) {
-            deferred.reject(error);
+            reject(error);
         });
 
         req.write(body);
         req.end();
+    });
+}
 
-        return deferred.promise;
-    }
+var port = 1085;
 
-    exports.mock_server_stopped = {
-        'mock server has stopped': testCase({
-            'should fail when attempting to setup expectation': function (test) {
-                test.expect(1);
-                sendRequest("PUT", "localhost", 1080, "/expectation", {
-                    'httpRequest': {
-                        'path': '/somePath'
-                    },
-                    'httpResponse': {
-                        'statusCode': 201,
-                        'body': JSON.stringify({name: 'first_body'})
-                    }
-                }).then(function () {
-                    test.ok(false, "allowed expectation to be setup");
-                }, function () {
-                    test.ok(true, "did not allow expectation to be setup");
-                }).then(function () {
-                    // end
-                    test.done();
-                });
+test('mock server has stopped - should fail when attempting to setup expectation', async function () {
+    await mockserver.start_mockserver({serverPort: port, mockServerVersion: "6.0.0"});
+    await mockserver.stop_mockserver({serverPort: port});
+
+    // wait for the server to fully shut down
+    await new Promise(function (resolve) { setTimeout(resolve, 500); });
+
+    await assert.rejects(
+        sendRequest("PUT", "localhost", port, "/expectation", {
+            'httpRequest': {
+                'path': '/somePath'
+            },
+            'httpResponse': {
+                'statusCode': 201,
+                'body': JSON.stringify({name: 'first_body'})
             }
-        })
-    };
-
-})();
+        }),
+        function () {
+            // Any rejection (connection refused) means the server is stopped - this is expected
+            return true;
+        },
+        "did not allow expectation to be setup"
+    );
+});

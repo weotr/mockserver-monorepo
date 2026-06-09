@@ -10,9 +10,10 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.*;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.sameInstance;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
@@ -39,76 +40,76 @@ public class ExpectationTest {
         Expectation expectationThatResponds = new Expectation(httpRequest, times, timeToLive, priority).thenRespond(httpResponse);
 
         // then
-        assertEquals(httpRequest, expectationThatResponds.getHttpRequest());
-        assertEquals(httpResponse, expectationThatResponds.getHttpResponse());
-        assertEquals(httpResponse, expectationThatResponds.getAction());
-        assertNull(expectationThatResponds.getHttpForward());
-        assertNull(expectationThatResponds.getHttpError());
-        assertNull(expectationThatResponds.getHttpResponseClassCallback());
-        assertNull(expectationThatResponds.getHttpResponseObjectCallback());
-        assertEquals(times, expectationThatResponds.getTimes());
-        assertEquals(timeToLive, expectationThatResponds.getTimeToLive());
-        assertEquals(priority, expectationThatResponds.getPriority());
+        assertThat(expectationThatResponds.getHttpRequest(), is(httpRequest));
+        assertThat(expectationThatResponds.getHttpResponse(), is(httpResponse));
+        assertThat(expectationThatResponds.getAction(), is(httpResponse));
+        assertThat(expectationThatResponds.getHttpForward(), nullValue());
+        assertThat(expectationThatResponds.getHttpError(), nullValue());
+        assertThat(expectationThatResponds.getHttpResponseClassCallback(), nullValue());
+        assertThat(expectationThatResponds.getHttpResponseObjectCallback(), nullValue());
+        assertThat(expectationThatResponds.getTimes(), is(times));
+        assertThat(expectationThatResponds.getTimeToLive(), is(timeToLive));
+        assertThat(expectationThatResponds.getPriority(), is(priority));
 
         // when
         Expectation expectationThatForwards = new Expectation(httpRequest, times, timeToLive, priority).thenForward(httpForward);
 
         // then
-        assertEquals(httpRequest, expectationThatForwards.getHttpRequest());
-        assertNull(expectationThatForwards.getHttpResponse());
-        assertEquals(httpForward, expectationThatForwards.getHttpForward());
-        assertEquals(httpForward, expectationThatForwards.getAction());
-        assertNull(expectationThatForwards.getHttpError());
-        assertNull(expectationThatForwards.getHttpResponseClassCallback());
-        assertNull(expectationThatForwards.getHttpResponseObjectCallback());
-        assertEquals(times, expectationThatForwards.getTimes());
-        assertEquals(timeToLive, expectationThatForwards.getTimeToLive());
-        assertEquals(priority, expectationThatForwards.getPriority());
+        assertThat(expectationThatForwards.getHttpRequest(), is(httpRequest));
+        assertThat(expectationThatForwards.getHttpResponse(), nullValue());
+        assertThat(expectationThatForwards.getHttpForward(), is(httpForward));
+        assertThat(expectationThatForwards.getAction(), is(httpForward));
+        assertThat(expectationThatForwards.getHttpError(), nullValue());
+        assertThat(expectationThatForwards.getHttpResponseClassCallback(), nullValue());
+        assertThat(expectationThatForwards.getHttpResponseObjectCallback(), nullValue());
+        assertThat(expectationThatForwards.getTimes(), is(times));
+        assertThat(expectationThatForwards.getTimeToLive(), is(timeToLive));
+        assertThat(expectationThatForwards.getPriority(), is(priority));
 
         // when
         Expectation expectationThatErrors = new Expectation(httpRequest, times, timeToLive, priority).thenError(httpError);
 
         // then
-        assertEquals(httpRequest, expectationThatErrors.getHttpRequest());
-        assertNull(expectationThatErrors.getHttpResponse());
-        assertNull(expectationThatErrors.getHttpForward());
-        assertEquals(httpError, expectationThatErrors.getHttpError());
-        assertEquals(httpError, expectationThatErrors.getAction());
-        assertNull(expectationThatErrors.getHttpResponseClassCallback());
-        assertNull(expectationThatErrors.getHttpResponseObjectCallback());
-        assertEquals(times, expectationThatErrors.getTimes());
-        assertEquals(timeToLive, expectationThatErrors.getTimeToLive());
-        assertEquals(priority, expectationThatErrors.getPriority());
+        assertThat(expectationThatErrors.getHttpRequest(), is(httpRequest));
+        assertThat(expectationThatErrors.getHttpResponse(), nullValue());
+        assertThat(expectationThatErrors.getHttpForward(), nullValue());
+        assertThat(expectationThatErrors.getHttpError(), is(httpError));
+        assertThat(expectationThatErrors.getAction(), is(httpError));
+        assertThat(expectationThatErrors.getHttpResponseClassCallback(), nullValue());
+        assertThat(expectationThatErrors.getHttpResponseObjectCallback(), nullValue());
+        assertThat(expectationThatErrors.getTimes(), is(times));
+        assertThat(expectationThatErrors.getTimeToLive(), is(timeToLive));
+        assertThat(expectationThatErrors.getPriority(), is(priority));
 
         // when
         Expectation expectationThatCallsbacksClass = new Expectation(httpRequest, times, timeToLive, priority).thenRespond(httpClassCallback);
 
         // then
-        assertEquals(httpRequest, expectationThatForwards.getHttpRequest());
-        assertNull(expectationThatCallsbacksClass.getHttpResponse());
-        assertNull(expectationThatCallsbacksClass.getHttpForward());
-        assertNull(expectationThatCallsbacksClass.getHttpError());
-        assertEquals(httpClassCallback, expectationThatCallsbacksClass.getHttpResponseClassCallback());
-        assertEquals(httpClassCallback, expectationThatCallsbacksClass.getAction());
-        assertNull(expectationThatCallsbacksClass.getHttpResponseObjectCallback());
-        assertEquals(times, expectationThatCallsbacksClass.getTimes());
-        assertEquals(timeToLive, expectationThatCallsbacksClass.getTimeToLive());
-        assertEquals(priority, expectationThatCallsbacksClass.getPriority());
+        assertThat(expectationThatForwards.getHttpRequest(), is(httpRequest));
+        assertThat(expectationThatCallsbacksClass.getHttpResponse(), nullValue());
+        assertThat(expectationThatCallsbacksClass.getHttpForward(), nullValue());
+        assertThat(expectationThatCallsbacksClass.getHttpError(), nullValue());
+        assertThat(expectationThatCallsbacksClass.getHttpResponseClassCallback(), is(httpClassCallback));
+        assertThat(expectationThatCallsbacksClass.getAction(), is(httpClassCallback));
+        assertThat(expectationThatCallsbacksClass.getHttpResponseObjectCallback(), nullValue());
+        assertThat(expectationThatCallsbacksClass.getTimes(), is(times));
+        assertThat(expectationThatCallsbacksClass.getTimeToLive(), is(timeToLive));
+        assertThat(expectationThatCallsbacksClass.getPriority(), is(priority));
 
         // when
         Expectation expectationThatCallsbackObject = new Expectation(httpRequest, times, timeToLive, priority).thenRespond(httpObjectCallback);
 
         // then
-        assertEquals(httpRequest, expectationThatForwards.getHttpRequest());
-        assertNull(expectationThatCallsbackObject.getHttpResponse());
-        assertNull(expectationThatCallsbackObject.getHttpForward());
-        assertNull(expectationThatCallsbackObject.getHttpError());
-        assertNull(expectationThatCallsbackObject.getHttpResponseClassCallback());
-        assertEquals(httpObjectCallback, expectationThatCallsbackObject.getHttpResponseObjectCallback());
-        assertEquals(httpObjectCallback, expectationThatCallsbackObject.getAction());
-        assertEquals(times, expectationThatCallsbackObject.getTimes());
-        assertEquals(timeToLive, expectationThatCallsbackObject.getTimeToLive());
-        assertEquals(priority, expectationThatCallsbackObject.getPriority());
+        assertThat(expectationThatForwards.getHttpRequest(), is(httpRequest));
+        assertThat(expectationThatCallsbackObject.getHttpResponse(), nullValue());
+        assertThat(expectationThatCallsbackObject.getHttpForward(), nullValue());
+        assertThat(expectationThatCallsbackObject.getHttpError(), nullValue());
+        assertThat(expectationThatCallsbackObject.getHttpResponseClassCallback(), nullValue());
+        assertThat(expectationThatCallsbackObject.getHttpResponseObjectCallback(), is(httpObjectCallback));
+        assertThat(expectationThatCallsbackObject.getAction(), is(httpObjectCallback));
+        assertThat(expectationThatCallsbackObject.getTimes(), is(times));
+        assertThat(expectationThatCallsbackObject.getTimeToLive(), is(timeToLive));
+        assertThat(expectationThatCallsbackObject.getPriority(), is(priority));
     }
 
     @Test
@@ -117,29 +118,29 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(null, null, null, 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).thenRespond((HttpClassCallback) null).thenRespond((HttpObjectCallback) null);
 
         // then
-        assertTrue(expectation.isActive());
-        assertFalse(expectation.contains(null));
-        assertNull(expectation.getHttpRequest());
-        assertNull(expectation.getHttpResponse());
-        assertNull(expectation.getHttpForward());
-        assertNull(expectation.getHttpResponseClassCallback());
-        assertNull(expectation.getHttpResponseObjectCallback());
-        assertNull(expectation.getTimes());
-        assertNull(expectation.getTimeToLive());
-        assertEquals(expectation.getPriority(), 0);
+        assertThat(expectation.isActive(), is(true));
+        assertThat(expectation.contains(null), is(false));
+        assertThat(expectation.getHttpRequest(), nullValue());
+        assertThat(expectation.getHttpResponse(), nullValue());
+        assertThat(expectation.getHttpForward(), nullValue());
+        assertThat(expectation.getHttpResponseClassCallback(), nullValue());
+        assertThat(expectation.getHttpResponseObjectCallback(), nullValue());
+        assertThat(expectation.getTimes(), nullValue());
+        assertThat(expectation.getTimeToLive(), nullValue());
+        assertThat(0, is(expectation.getPriority()));
     }
 
     @Test
     public void shouldReturnAliveStatus() {
         // when no times left should return false
-        assertFalse(new Expectation(null, Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
-        assertFalse(new Expectation(request(), Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
-        assertFalse(new Expectation(request().withPath("un-matching"), Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
+        assertThat(new Expectation(null, Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
+        assertThat(new Expectation(request(), Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
+        assertThat(new Expectation(request().withPath("un-matching"), Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
 
         // when ttl expired should return false
-        assertFalse(new Expectation(null, Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
-        assertFalse(new Expectation(request(), Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
-        assertFalse(new Expectation(request().withPath("un-matching"), Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive());
+        assertThat(new Expectation(null, Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
+        assertThat(new Expectation(request(), Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
+        assertThat(new Expectation(request().withPath("un-matching"), Times.unlimited(), TimeToLive.exactly(TimeUnit.MICROSECONDS, 0L), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));
     }
 
     @Test
@@ -196,8 +197,8 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(httpRequest, Times.once(), TimeToLive.unlimited(), 0).thenForward(httpForward).thenRespond(httpResponse);
 
         // then
-        assertEquals(httpResponse, expectation.getHttpResponse());
-        assertEquals(httpForward, expectation.getHttpForward());
+        assertThat(expectation.getHttpResponse(), is(httpResponse));
+        assertThat(expectation.getHttpForward(), is(httpForward));
     }
 
     @Test
@@ -211,8 +212,8 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(httpRequest, Times.once(), TimeToLive.unlimited(), 0).thenError(httpError).thenRespond(httpResponse);
 
         // then
-        assertEquals(httpResponse, expectation.getHttpResponse());
-        assertEquals(httpError, expectation.getHttpError());
+        assertThat(expectation.getHttpResponse(), is(httpResponse));
+        assertThat(expectation.getHttpError(), is(httpError));
     }
 
     @Test
@@ -226,8 +227,8 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(httpRequest, Times.once(), TimeToLive.unlimited(), 0).thenRespond(httpResponse).thenForward(httpForward);
 
         // then
-        assertEquals(httpResponse, expectation.getHttpResponse());
-        assertEquals(httpForward, expectation.getHttpForward());
+        assertThat(expectation.getHttpResponse(), is(httpResponse));
+        assertThat(expectation.getHttpForward(), is(httpForward));
     }
 
     @Test
@@ -242,7 +243,7 @@ public class ExpectationTest {
             .thenForward(httpForward);
 
         // then
-        assertEquals(httpForward, expectation.getPrimaryAction());
+        assertThat(expectation.getPrimaryAction(), is(httpForward));
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -288,7 +289,7 @@ public class ExpectationTest {
 
         // then
         assertThat(expectation.getSecondaryActions().size(), is(1));
-        assertEquals(httpForward, expectation.getSecondaryActions().get(0));
+        assertThat(expectation.getSecondaryActions().get(0), is(httpForward));
     }
 
     @Test
@@ -325,8 +326,8 @@ public class ExpectationTest {
             .thenForward(httpForward);
 
         // then
-        assertEquals(httpForward, expectation.getAction());
-        assertEquals(expectation.getPrimaryAction(), expectation.getAction());
+        assertThat(expectation.getAction(), is(httpForward));
+        assertThat(expectation.getAction(), is(expectation.getPrimaryAction()));
     }
 
     @Test
@@ -335,8 +336,8 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(request());
 
         // then
-        assertNull(expectation.getPrimaryAction());
-        assertNull(expectation.getAction());
+        assertThat(expectation.getPrimaryAction(), nullValue());
+        assertThat(expectation.getAction(), nullValue());
     }
 
     @Test
@@ -369,17 +370,17 @@ public class ExpectationTest {
 
     @Test
     public void shouldMatchByPercentageWhenNull() {
-        assertTrue(new Expectation(request()).matchesByPercentage());
+        assertThat(new Expectation(request()).matchesByPercentage(), is(true));
     }
 
     @Test
     public void shouldMatchByPercentageWhen100() {
-        assertTrue(new Expectation(request()).withPercentage(100).matchesByPercentage());
+        assertThat(new Expectation(request()).withPercentage(100).matchesByPercentage(), is(true));
     }
 
     @Test
     public void shouldNotMatchByPercentageWhen0() {
-        assertFalse(new Expectation(request()).withPercentage(0).matchesByPercentage());
+        assertThat(new Expectation(request()).withPercentage(0).matchesByPercentage(), is(false));
     }
 
     @Test
@@ -392,7 +393,7 @@ public class ExpectationTest {
                 matchCount++;
             }
         }
-        assertTrue("Expected ~50% matches but got " + matchCount, matchCount > 3000 && matchCount < 7000);
+        assertThat("Expected ~50% matches but got " + matchCount, matchCount > 3000 && matchCount < 7000, is(true));
     }
 
     @Test
@@ -407,8 +408,8 @@ public class ExpectationTest {
         Expectation a = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(50);
         Expectation b = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(50);
         Expectation c = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(75);
-        assertEquals(a, b);
-        assertFalse(a.equals(c));
+        assertThat(b, is(a));
+        assertThat(a.equals(c), is(false));
     }
 
     @Test
@@ -416,8 +417,8 @@ public class ExpectationTest {
         Expectation a = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(50);
         Expectation b = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(50);
         Expectation c = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0).withPercentage(75);
-        assertEquals(a.hashCode(), b.hashCode());
-        assertNotSame(a.hashCode(), c.hashCode());
+        assertThat(b.hashCode(), is(a.hashCode()));
+        assertThat(c.hashCode(), not(sameInstance(a.hashCode())));
     }
 
     @Test
@@ -473,7 +474,7 @@ public class ExpectationTest {
             expectation.consumeMatch();
             seen.add(((HttpResponse) expectation.getAction()).getBodyAsString());
         }
-        assertTrue("Expected multiple different responses in RANDOM mode, but got: " + seen, seen.size() > 1);
+        assertThat("Expected multiple different responses in RANDOM mode, but got: " + seen, seen.size() > 1, is(true));
     }
 
     @Test
@@ -536,8 +537,8 @@ public class ExpectationTest {
         Expectation c = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
             .thenRespond(Arrays.asList(r1, r2))
             .withResponseMode(ResponseMode.RANDOM);
-        assertEquals(a, b);
-        assertFalse(a.equals(c));
+        assertThat(b, is(a));
+        assertThat(a.equals(c), is(false));
     }
 
     @Test
@@ -561,13 +562,13 @@ public class ExpectationTest {
         Expectation expectation = new Expectation(request(), Times.exactly(2), TimeToLive.unlimited(), 0)
             .thenRespond(response());
 
-        assertTrue(expectation.consumeMatch());
+        assertThat(expectation.consumeMatch(), is(true));
         assertThat(expectation.getMatchCount(), is(1));
 
-        assertTrue(expectation.consumeMatch());
+        assertThat(expectation.consumeMatch(), is(true));
         assertThat(expectation.getMatchCount(), is(2));
 
-        assertFalse(expectation.consumeMatch());
+        assertThat(expectation.consumeMatch(), is(false));
         assertThat(expectation.getMatchCount(), is(2));
     }
 
@@ -596,8 +597,8 @@ public class ExpectationTest {
         Expectation c = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
             .withScenarioName("S1")
             .withScenarioState("Different");
-        assertEquals(a, b);
-        assertFalse(a.equals(c));
+        assertThat(b, is(a));
+        assertThat(a.equals(c), is(false));
     }
 
     @Test
@@ -608,11 +609,11 @@ public class ExpectationTest {
             // before any match the anchor is unset
             assertThat(expectation.getChaosFirstMatchEpochMillis(), is(0L));
             // first match records the anchor via the controllable clock
-            assertTrue(expectation.consumeMatch());
+            assertThat(expectation.consumeMatch(), is(true));
             assertThat(expectation.getChaosFirstMatchEpochMillis(), is(1_000_000L));
             // advancing the clock and matching again must NOT move the anchor (set-once)
             org.mockserver.time.TimeService.advance(java.time.Duration.ofMillis(5_000L));
-            assertTrue(expectation.consumeMatch());
+            assertThat(expectation.consumeMatch(), is(true));
             assertThat(expectation.getChaosFirstMatchEpochMillis(), is(1_000_000L));
         } finally {
             org.mockserver.time.TimeService.reset();

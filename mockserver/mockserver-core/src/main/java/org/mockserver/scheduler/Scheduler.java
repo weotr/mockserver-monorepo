@@ -77,6 +77,15 @@ public class Scheduler {
         }
     }
 
+    /**
+     * Returns the underlying executor service for use with CompletableFuture
+     * async continuations (e.g. thenAcceptAsync). Returns null in synchronous
+     * mode — callers must handle that case (run inline).
+     */
+    public ScheduledExecutorService getExecutorService() {
+        return scheduler;
+    }
+
     public synchronized void shutdown() {
         if (!scheduler.isShutdown()) {
             scheduler.shutdown();

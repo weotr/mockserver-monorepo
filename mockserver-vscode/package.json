@@ -1,0 +1,68 @@
+{
+  "name": "mockserver",
+  "displayName": "MockServer",
+  "description": "Start, stop, and manage MockServer Docker containers directly from VS Code",
+  "version": "7.0.1",
+  "publisher": "mock-server",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mock-server/mockserver.git",
+    "directory": "mockserver-vscode"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "mockserver",
+    "mock",
+    "http",
+    "api",
+    "testing",
+    "docker"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mockserver.start",
+        "title": "MockServer: Start (Docker)"
+      },
+      {
+        "command": "mockserver.stop",
+        "title": "MockServer: Stop"
+      },
+      {
+        "command": "mockserver.openDashboard",
+        "title": "MockServer: Open Dashboard"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "json",
+        "path": "./snippets/expectation.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node ./out/test/extension.test.js",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package",
+    "publish:marketplace": "vsce publish -p $VSCE_PAT",
+    "publish:openvsx": "ovsx publish -p $OVSX_PAT"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.0.0",
+    "ovsx": "^0.9.0",
+    "typescript": "^5.5.0"
+  }
+}

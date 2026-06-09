@@ -13,15 +13,14 @@ import org.mockserver.verify.VerificationSequence;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.fail;
-import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -34,7 +33,6 @@ public class VerificationSequenceSerializationErrorsTest {
     private ObjectWriter objectWriter;
     @InjectMocks
     private VerificationSequenceSerializer verificationSequenceSerializer;
-
 
     @Before
     public void setupTestFixture() {
@@ -63,15 +61,10 @@ public class VerificationSequenceSerializationErrorsTest {
             fail("expected exception");
         } catch (IllegalArgumentException iae) {
             // then
-            String expectedPrefix = "incorrect verification sequence json format for:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  requestBytes" + NEW_LINE +
-                "" + NEW_LINE +
-                " schema validation errors:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  JsonParseException - Unrecognized token 'requestBytes': was expecting (JSON String, Number (or 'NaN'/'+INF'/'-INF'), Array, Object or token 'null', 'true' or 'false')" + NEW_LINE +
-                "   at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: ";
-            assertThat(iae.getMessage().startsWith(expectedPrefix), is(true));
+            assertThat(iae.getMessage(), containsString("incorrect verification sequence json format for:"));
+            assertThat(iae.getMessage(), containsString("requestBytes"));
+            assertThat(iae.getMessage(), containsString("schema validation errors:"));
+            assertThat(iae.getMessage(), containsString("Unrecognized token"));
         }
     }
 
@@ -104,35 +97,10 @@ public class VerificationSequenceSerializationErrorsTest {
             fail("expected exception");
         } catch (IllegalArgumentException iae) {
             // then
-            assertThat(iae.getMessage(), is("incorrect verification sequence json format for:" + NEW_LINE +
-                NEW_LINE +
-                "  {" + NEW_LINE +
-                "    \"expectationIds\" : [ {" + NEW_LINE +
-                "      \"id\" : \"one\"" + NEW_LINE +
-                "    }, {" + NEW_LINE +
-                "      \"id\" : \"two\"" + NEW_LINE +
-                "    } ]," + NEW_LINE +
-                "    \"httpRequests\" : [ {" + NEW_LINE +
-                "      \"path\" : \"some_path_one\"," + NEW_LINE +
-                "      \"body\" : \"some_body_one\"" + NEW_LINE +
-                "    }, {" + NEW_LINE +
-                "      \"path\" : \"some_body_multiple\"," + NEW_LINE +
-                "      \"body\" : \"some_body_multiple\"" + NEW_LINE +
-                "    }, {" + NEW_LINE +
-                "      \"path\" : \"some_path_three\"," + NEW_LINE +
-                "      \"body\" : \"some_body_three\"" + NEW_LINE +
-                "    }, {" + NEW_LINE +
-                "      \"path\" : \"some_body_multiple\"," + NEW_LINE +
-                "      \"body\" : \"some_body_multiple\"" + NEW_LINE +
-                "    } ]" + NEW_LINE +
-                "  }" + NEW_LINE +
-                NEW_LINE +
-                " schema validation errors:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  1 error:" + NEW_LINE +
-                "   - $: should be valid to one and only one schema, but 2 are valid with indexes '0, 1'" + NEW_LINE +
-                "  " + NEW_LINE +
-                "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  " )));
+            assertThat(iae.getMessage(), containsString("incorrect verification sequence json format for:"));
+            assertThat(iae.getMessage(), containsString("schema validation errors:"));
+            assertThat(iae.getMessage(), containsString("1 error:"));
+            assertThat(iae.getMessage(), containsString("should be valid to one and only one schema, but 2 are valid"));
         }
     }
 

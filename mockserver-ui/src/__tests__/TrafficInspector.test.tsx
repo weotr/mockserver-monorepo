@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
@@ -370,5 +370,266 @@ describe('TrafficInspector — per-request timing display', () => {
     expect(screen.getByText('connect 8ms')).toBeInTheDocument();
     expect(screen.getByText('TTFB 1200ms')).toBeInTheDocument();
     expect(screen.getByText('total 1500ms')).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — compare two requests (diff)', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'req-a',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'req-b',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 201 },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('lets the user pick two requests and diffs them via PUT /mockserver/diff', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        diffCount: 1,
+        identical: false,
+        diffs: [{ field: 'method', expectedValue: 'GET', actualValue: 'POST', diffType: 'CHANGED' }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+
+    // No compare checkboxes until compare mode is enabled.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+
+    // Diff button disabled until exactly two are picked.
+    const diffButton = screen.getByRole('button', { name: /Diff \(/ });
+    expect(diffButton).toBeDisabled();
+
+    await user.click(checkboxes[0]!);
+    expect(screen.getByRole('button', { name: /Diff \(1\/2\)/ })).toBeDisabled();
+    await user.click(checkboxes[1]!);
+
+    const ready = screen.getByRole('button', { name: /Diff \(2\/2\)/ });
+    expect(ready).toBeEnabled();
+    await user.click(ready);
+
+    // Dialog opens pre-populated; Compare submits the two picked requests to the diff endpoint.
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Compare' }));
+
+    expect(await within(dialog).findByText('Request Diff')).toBeInTheDocument();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toMatch(/\/mockserver\/diff$/);
+    expect((init as RequestInit).method).toBe('PUT');
+    const body = JSON.parse((init as RequestInit).body as string);
+    // First pick (req-a) maps to expected, second pick (req-b) to actual, sending the httpRequest definitions.
+    expect(body.expected).toMatchObject({ method: 'GET', path: '/api/users' });
+    expect(body.actual).toMatchObject({ method: 'POST', path: '/api/users' });
+  });
+
+  it('caps the selection at two requests', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      recordedRequests: [
+        { key: 'r1', value: { httpRequest: { method: 'GET', path: '/a' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r2', value: { httpRequest: { method: 'GET', path: '/b' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r3', value: { httpRequest: { method: 'GET', path: '/c' }, httpResponse: { statusCode: 200 } } },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[0]!);
+    await user.click(checkboxes[1]!);
+
+    // Once two are picked, the remaining unchecked checkbox is disabled.
+    expect(checkboxes[2]!).toBeDisabled();
+    // Already-checked ones remain interactive so the user can deselect.
+    expect(checkboxes[0]!).toBeEnabled();
+  });
+});
+
+describe('TrafficInspector — Replay button', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows Replay button in detail pane for a selected generic request', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-replay',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/test',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: {
+              statusCode: 200,
+              body: { type: 'STRING', string: 'original response' },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+
+    // Click on the row to select it
+    const row = screen.getByText(/\/api\/test/);
+    await user.click(row);
+
+    // The Replay button should be visible in the detail pane
+    expect(screen.getByRole('button', { name: /Replay/i })).toBeInTheDocument();
+  });
+
+  it('opens replay dialog and calls PUT /mockserver/replay on click', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-replay-2',
+          value: {
+            httpRequest: {
+              method: 'POST',
+              path: '/api/submit',
+              headers: [{ name: 'host', values: ['example.com'] }],
+              body: { type: 'JSON', json: '{"data":"test"}' },
+            },
+            httpResponse: {
+              statusCode: 200,
+            },
+          },
+        },
+      ],
+    });
+
+    // Mock fetch to intercept the replay call
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ statusCode: 200, body: 'replayed OK' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    renderTrafficInspector();
+
+    // Select the request
+    const row = screen.getByText(/\/api\/submit/);
+    await user.click(row);
+
+    // Click the Replay button in the detail pane
+    const replayBtn = screen.getByRole('button', { name: /Replay/i });
+    await user.click(replayBtn);
+
+    // The replay dialog should open
+    expect(screen.getByText('Replay Request')).toBeInTheDocument();
+
+    // Click the Replay button inside the dialog
+    const dialogReplayBtn = within(screen.getByRole('dialog')).getByRole('button', { name: /Replay/i });
+    await user.click(dialogReplayBtn);
+
+    // Verify fetch was called with the correct URL and method
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/mockserver/replay'),
+      expect.objectContaining({
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    // The response should be displayed
+    expect(await screen.findByText('Upstream Response')).toBeInTheDocument();
+  });
+
+  it('shows error alert and clears loading spinner when replay returns a server error', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-replay-err',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/failing',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+    });
+
+    // Stub fetch to return a 503 error response
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => 'Service Unavailable',
+    } as Response);
+
+    renderTrafficInspector();
+
+    // Select the request
+    const row = screen.getByText(/\/api\/failing/);
+    await user.click(row);
+
+    // Open the replay dialog
+    const replayBtn = screen.getByRole('button', { name: /Replay/i });
+    await user.click(replayBtn);
+
+    const dialog = screen.getByRole('dialog');
+
+    // Click the Replay button inside the dialog
+    const dialogReplayBtn = within(dialog).getByRole('button', { name: /Replay/i });
+    await user.click(dialogReplayBtn);
+
+    // An error Alert (severity="error") should appear with the status and message
+    const errorAlert = await within(dialog).findByRole('alert');
+    expect(errorAlert).toBeInTheDocument();
+    expect(errorAlert).toHaveTextContent('503');
+    expect(errorAlert).toHaveTextContent('Service Unavailable');
+
+    // The loading spinner should be gone (dialog replay button should be re-enabled)
+    expect(within(dialog).getByRole('button', { name: /Replay/i })).toBeEnabled();
+    expect(within(dialog).queryByRole('progressbar')).not.toBeInTheDocument();
   });
 });

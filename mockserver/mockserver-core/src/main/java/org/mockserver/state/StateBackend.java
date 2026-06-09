@@ -53,6 +53,17 @@ public interface StateBackend extends Closeable {
     String nodeId();
 
     /**
+     * Returns whether this backend is clustered (multi-node state
+     * replication). When {@code true}, callers must use CAS on the
+     * shared {@link KeyValueStore} for correctness-critical mutations
+     * such as Times consumption. The default is {@code false} (single
+     * node, all state node-local).
+     */
+    default boolean isClustered() {
+        return false;
+    }
+
+    /**
      * Closes the backend and releases any resources. No-op for the
      * in-memory backend.
      */

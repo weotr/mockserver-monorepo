@@ -4,9 +4,9 @@ import org.junit.Test;
 import org.mockserver.logging.MockServerLogger;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertFalse;
-import static junit.framework.TestCase.assertTrue;
 import static org.mockserver.matchers.NotMatcher.notMatcher;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -15,61 +15,61 @@ public class BinaryMatcherTest {
 
     @Test
     public void shouldMatchMatchingString() {
-        assertTrue(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "some_value".getBytes(UTF_8)), is(true));
     }
 
     @Test
     public void shouldNotMatchMatchingString() {
-        assertFalse(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "some_value".getBytes(UTF_8)), is(false));
     }
 
     @Test
     public void shouldMatchNullExpectation() {
-        assertTrue(new BinaryMatcher(new MockServerLogger(), null).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(new BinaryMatcher(new MockServerLogger(), null).matches(null, "some_value".getBytes(UTF_8)), is(true));
     }
 
     @Test
     public void shouldNotMatchNullExpectation() {
-        assertFalse(notMatcher(new BinaryMatcher(new MockServerLogger(), null)).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), null)).matches(null, "some_value".getBytes(UTF_8)), is(false));
     }
 
     @Test
     public void shouldMatchEmptyExpectation() {
-        assertTrue(new BinaryMatcher(new MockServerLogger(), "".getBytes(UTF_8)).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(new BinaryMatcher(new MockServerLogger(), "".getBytes(UTF_8)).matches(null, "some_value".getBytes(UTF_8)), is(true));
     }
 
     @Test
     public void shouldNotMatchEmptyExpectation() {
-        assertFalse(notMatcher(new BinaryMatcher(new MockServerLogger(), "".getBytes(UTF_8))).matches(null, "some_value".getBytes(UTF_8)));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), "".getBytes(UTF_8))).matches(null, "some_value".getBytes(UTF_8)), is(false));
     }
 
     @Test
     public void shouldNotMatchIncorrectString() {
-        assertFalse(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "not_matching".getBytes(UTF_8)));
+        assertThat(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "not_matching".getBytes(UTF_8)), is(false));
     }
 
     @Test
     public void shouldMatchIncorrectString() {
-        assertTrue(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "not_matching".getBytes(UTF_8)));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "not_matching".getBytes(UTF_8)), is(true));
     }
 
     @Test
     public void shouldNotMatchNullTest() {
-        assertFalse(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, null));
+        assertThat(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, null), is(false));
     }
 
     @Test
     public void shouldMatchNullTest() {
-        assertTrue(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, null));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, null), is(true));
     }
 
     @Test
     public void shouldNotMatchEmptyTest() {
-        assertFalse(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "".getBytes(UTF_8)));
+        assertThat(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8)).matches(null, "".getBytes(UTF_8)), is(false));
     }
 
     @Test
     public void shouldMatchEmptyTest() {
-        assertTrue(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "".getBytes(UTF_8)));
+        assertThat(notMatcher(new BinaryMatcher(new MockServerLogger(), "some_value".getBytes(UTF_8))).matches(null, "".getBytes(UTF_8)), is(true));
     }
 }

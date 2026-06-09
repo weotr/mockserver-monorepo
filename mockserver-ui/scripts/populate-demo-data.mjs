@@ -88,7 +88,7 @@ const SELF_HOST = TARGET.hostname;
 const SELF_PORT = Number(TARGET.port || (TARGET.protocol === 'https:' ? 443 : 80));
 const SELF_SCHEME = TARGET.protocol === 'https:' ? 'HTTPS' : 'HTTP';
 
-const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0 };
+const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0, asyncChannels: 0, mcpCalls: 0 };
 function log(msg) { if (!quiet) console.log(msg); }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1140,222 @@ async function grpcDescriptorExample() {
 }
 
 // ---------------------------------------------------------------------------
+// AsyncAPI broker-mock example (Tools · "AsyncAPI Broker Mock" panel)
+// ---------------------------------------------------------------------------
+// Loads one representative AsyncAPI 3.0 spec so the panel's header chips
+// (connected + spec title/version) and Channels table are populated for
+// screenshots. The channels are deliberately varied to exercise every column:
+// with/without a payload schema (✓ vs disabled icon) and 0 / 1 / many examples,
+// plus a multi-message channel and an MQTT-style wildcard topic.
+//
+// Two modes, controlled by the DEMO_MQTT_BROKER_URL env var:
+//
+//   • broker-less (default) — no brokerConfig is sent, so MockServer does NOT try
+//     to reach Kafka/MQTT. publishers/subscribers stay 0 and the "Recorded
+//     Messages" table shows its empty state. Keeps the demo self-contained
+//     (java/curl/node only — no Docker broker required).
+//
+//   • live broker (DEMO_MQTT_BROKER_URL set, e.g. tcp://localhost:1883) — the
+//     spec is loaded with a brokerConfig that points at a real MQTT broker and
+//     enables BOTH publish-on-a-schedule and consume. MockServer publishes each
+//     channel's example payload to the broker every few seconds and subscribes to
+//     the same topics, recording its own messages → the "Recorded Messages" table
+//     fills in (a live, ticking feed). `launch-with-demo-data.sh --with-broker`
+//     starts a Mosquitto container and sets this var automatically.
+//
+// All channel topics are MQTT-publishable (no '+'/'#' wildcards) so the live-broker
+// mode can publish to every channel. See docs/code/async-messaging.md.
+
+const ASYNCAPI_SPEC = {
+  asyncapi: '3.0.0',
+  info: { title: 'Order Fulfilment Events', version: '2.4.0' },
+  channels: {
+    // schema ✓, 1 example
+    'orders.placed': {
+      address: 'orders.placed',
+      messages: {
+        OrderPlaced: {
+          name: 'OrderPlaced',
+          payload: {
+            type: 'object',
+            properties: {
+              orderId: { type: 'string', format: 'uuid' },
+              customer: { type: 'string', format: 'email' },
+              total: { type: 'number', minimum: 0 },
+              currency: { type: 'string', enum: ['GBP', 'USD', 'EUR'] },
+              items: { type: 'integer', minimum: 1 },
+            },
+            required: ['orderId', 'total'],
+          },
+          examples: [
+            { payload: { orderId: 'a1b2c3d4-0000-4000-8000-000000000001', customer: 'alice@example.com', total: 129.99, currency: 'GBP', items: 3 } },
+          ],
+        },
+      },
+    },
+    // schema ✓, 2 examples
+    'payments.processed': {
+      address: 'payments.processed',
+      messages: {
+        PaymentProcessed: {
+          payload: {
+            type: 'object',
+            properties: {
+              paymentId: { type: 'string' },
+              orderId: { type: 'string' },
+              amount: { type: 'number', minimum: 0 },
+              status: { type: 'string', enum: ['captured', 'declined', 'refunded'] },
+            },
+            required: ['paymentId', 'status'],
+          },
+          examples: [
+            { payload: { paymentId: 'pay_1029', orderId: 'a1b2c3d4-0000-4000-8000-000000000001', amount: 129.99, status: 'captured' } },
+            { payload: { paymentId: 'pay_1030', orderId: 'b2c3d4e5-0000-4000-8000-000000000002', amount: 49.0, status: 'declined' } },
+          ],
+        },
+      },
+    },
+    // schema ✓, 0 examples (exercises the "schema but no example" row)
+    'inventory.low-stock': {
+      messages: {
+        LowStock: {
+          payload: {
+            type: 'object',
+            properties: {
+              sku: { type: 'string' },
+              warehouse: { type: 'string' },
+              remaining: { type: 'integer', minimum: 0 },
+            },
+            required: ['sku'],
+          },
+        },
+      },
+    },
+    // multi-message channel — schema ✓, exampleCount reflects the first message
+    'notifications/email': {
+      messages: {
+        UserRegistered: {
+          payload: { type: 'object', properties: { email: { type: 'string', format: 'email' }, name: { type: 'string' } } },
+          examples: [{ payload: { email: 'bob@example.com', name: 'Bob' } }],
+        },
+        PasswordReset: {
+          payload: { type: 'object', properties: { email: { type: 'string', format: 'email' }, token: { type: 'string' } } },
+          examples: [{ payload: { email: 'bob@example.com', token: 'reset-2f9c1a' } }],
+        },
+      },
+    },
+    // MQTT-publishable telemetry topic, no schema (exercises the disabled "no schema" icon)
+    'telemetry/device/status': {
+      messages: { DeviceStatus: {} },
+    },
+  },
+};
+
+async function asyncApiExamples() {
+  const brokerUrl = process.env.DEMO_MQTT_BROKER_URL;
+  log('\n→ AsyncAPI broker mock (Tools · AsyncAPI panel)');
+
+  // In live-broker mode, wrap the spec with a brokerConfig that publishes each
+  // channel's example on a schedule and consumes the same topics, so the Recorded
+  // Messages table populates from MockServer's own round-tripped messages.
+  const body = brokerUrl
+    ? { spec: ASYNCAPI_SPEC, brokerConfig: { mqttBrokerUrl: brokerUrl, consume: true, publishOnLoad: true, publishIntervalMillis: 3000 } }
+    : ASYNCAPI_SPEC;
+
+  const res = await api('PUT', '/mockserver/asyncapi', body);
+  if (res.status === 501) {
+    log('   ! skipped AsyncAPI — mockserver-async module not on this server classpath (501)');
+    return;
+  }
+  if (!res.ok) throw new Error(`Failed to load AsyncAPI spec: HTTP ${res.status}`);
+  const channelNames = Object.keys(ASYNCAPI_SPEC.channels);
+  counts.asyncChannels += channelNames.length;
+  log(`   + asyncapi spec  "${ASYNCAPI_SPEC.info.title}" v${ASYNCAPI_SPEC.info.version}  (${channelNames.length} channels)`);
+  for (const name of channelNames) log(`       channel  ${name}`);
+  if (brokerUrl) {
+    log(`   ↻ live broker  ${brokerUrl}  — publishing every 3s + consuming; Recorded Messages will tick up`);
+  } else {
+    log('   (broker-less load — Recorded Messages stay empty; run launch-with-demo-data.sh --with-broker for a live feed)');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MCP tool calls (Tools · MCP panel + Metrics · "MCP tool calls" chart)
+// ---------------------------------------------------------------------------
+// Drives a handful of READ-ONLY MCP tools over POST /mockserver/mcp so the
+// mock_server_mcp_tool_calls_total{tool} counter is populated and the Metrics
+// view's "MCP tool calls" line chart shows one cumulative series per tool. Each
+// tool is called a different number of times so the chart has distinct line
+// heights. Only read-only tools are used (never reset / clear / stop_server) so
+// the rest of the demo data is left intact; this runs last.
+
+const MCP_PATH = '/mockserver/mcp';
+
+// Perform the MCP initialize + notifications/initialized handshake (mirrors
+// src/lib/mcpClient.ts) and return the Mcp-Session-Id, or null if unavailable.
+async function mcpInitSession() {
+  const initRes = await fetch(`${BASE}${MCP_PATH}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'mockserver-demo', version: '1' } } }),
+  });
+  const sid = initRes.headers.get('Mcp-Session-Id');
+  await initRes.text().catch(() => undefined);
+  if (!initRes.ok || !sid) return null;
+  const note = await fetch(`${BASE}${MCP_PATH}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'Mcp-Session-Id': sid },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+  });
+  await note.text().catch(() => undefined);
+  return sid;
+}
+
+async function mcpCall(sid, name, args = {}) {
+  const res = await fetch(`${BASE}${MCP_PATH}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'Mcp-Session-Id': sid },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } }),
+  });
+  const ok = res.ok;
+  await res.text().catch(() => undefined);
+  return ok;
+}
+
+// Read-only tools + how many times to call each (varied line heights).
+const MCP_DEMO_CALLS = [
+  ['list_mock_tools', 5],
+  ['get_status', 4],
+  ['retrieve_recorded_requests', 3],
+  ['retrieve_logs', 3],
+  ['retrieve_request_responses', 2],
+  ['explain_unmatched_requests', 2],
+];
+
+async function mcpToolCallExamples() {
+  log('\n→ MCP tool calls (Tools · MCP panel + Metrics · MCP tool calls chart)');
+  let sid;
+  try {
+    sid = await mcpInitSession();
+  } catch (e) {
+    log(`   ! skipped MCP — could not initialise session (${e.message})`);
+    return;
+  }
+  if (!sid) {
+    log('   ! skipped MCP — server returned no Mcp-Session-Id (MCP endpoint unavailable?)');
+    return;
+  }
+  for (const [name, times] of MCP_DEMO_CALLS) {
+    let okCount = 0;
+    for (let i = 0; i < times; i++) {
+      if (await mcpCall(sid, name)) okCount++;
+    }
+    counts.mcpCalls += okCount;
+    log(`   + mcp tool  ${name.padEnd(30)} ×${okCount}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -1182,11 +1398,13 @@ async function main() {
   await scenarioStateExamples();
   await cassetteExamples();
   await grpcDescriptorExample();
+  await asyncApiExamples();
   await driftExamples();
   await plainHttpTraffic();
   await proxyTraffic();
   await llmTraffic();
   await agentLoops();
+  await mcpToolCallExamples();
 
   log('\n========================================');
   log(' Demo data loaded');
@@ -1203,6 +1421,8 @@ async function main() {
   log(` gRPC descriptor sets : ${counts.grpcServices} (greeting.dsc → com.example.grpc.GreetingService, 4 methods)`);
   log(` Cassettes            : ${counts.cassettes} (registered server-side; listed in Library · Cassettes)`);
   log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
+  log(` AsyncAPI channels    : ${counts.asyncChannels}${process.env.DEMO_MQTT_BROKER_URL ? ' (live MQTT broker — Recorded Messages ticking up)' : ' (broker-less; Recorded Messages need --with-broker)'}`);
+  log(` MCP tool calls       : ${counts.mcpCalls} (read-only tools; Metrics · "MCP tool calls" chart + Tools · MCP panel)`);
   log('');
 
   // The example cassettes are registered in the server-side registry (so they appear in the
@@ -1222,6 +1442,8 @@ async function main() {
   log('   Sessions           — agent-001 / agent-002 loops + call graphs; Scenarios panel lists the seeded scenario state machines');
   log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos');
   log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
+  log('   AsyncAPI           — Tools · AsyncAPI Broker Mock: loaded spec + Channels table (5 channels, varied schema/example counts)');
+  log('   Metrics            — request activity, throughput, MCP tool calls (6 tools), chaos faults' + (process.env.DEMO_MQTT_BROKER_URL ? ', async messages' : ''));
   log('');
 }
 

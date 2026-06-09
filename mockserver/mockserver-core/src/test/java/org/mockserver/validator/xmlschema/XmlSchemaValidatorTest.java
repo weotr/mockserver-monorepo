@@ -11,7 +11,7 @@ import org.slf4j.Logger;
 
 import java.text.MessageFormat;
 
-import static junit.framework.TestCase.fail;
+import static org.junit.Assert.fail;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.IsInstanceOf.instanceOf;

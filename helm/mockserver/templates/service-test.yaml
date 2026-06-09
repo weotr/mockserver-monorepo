@@ -17,5 +17,5 @@ spec:
     - name: curl
       image: {{ .Values.service.test.image}}
       command: ['curl']
-      args: ['-v', '-s', '-X', 'PUT', '{{ template "release.name" . }}:{{ .Values.service.port }}/status']
+      args: ['-v', '-fsS', '-X', 'PUT', 'http://{{ template "release.name" . }}:{{ .Values.service.port }}/mockserver/status']
   restartPolicy: Never

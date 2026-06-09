@@ -69,8 +69,9 @@ buildkite-agents/
 ├── monitoring.tf            # CloudWatch alarms, SNS notifications, dashboard
 ├── backend.tf               # S3 remote state configuration
 ├── build-secrets.tf         # Docker Hub secret + Buildkite agent IAM policy
+├── perf-results.tf          # S3 bucket (mockserver-ci-perf-results) + IAM policy for perf queue
 ├── variables.tf             # Input variables
-├── outputs.tf               # Outputs (ASG name, VPC ID, dashboard URL)
+├── outputs.tf               # Outputs (ASG name, VPC ID, dashboard URL, perf queue outputs)
 ├── versions.tf              # Terraform + provider versions
 ├── terraform.tfvars.example # Example variable values
 ├── run.sh                   # Wrapper script (auth + plan/apply)
@@ -163,6 +164,9 @@ flowchart LR
 | `min_size` | `number` | `0` | Minimum instances (0 = scale to zero) |
 | `max_size` | `number` | `10` | Maximum instances |
 | `on_demand_percentage` | `number` | `20` | % on-demand vs spot (20 = 20% on-demand fallback) |
+| `perf_instance_types` | `string` | `c5.4xlarge` | EC2 instance type for the perf queue |
+| `perf_min_size` | `number` | `0` | Minimum perf queue instances (must remain 0) |
+| `perf_max_size` | `number` | `1` | Maximum perf queue instances (1 = no concurrent runs) |
 | `alert_email` | `string` | `""` | Email address for infrastructure alerts |
 
 ## Outputs
@@ -174,6 +178,9 @@ flowchart LR
 | `lambda_scaler_arn` | ARN of the Lambda autoscaler function |
 | `dashboard_url` | CloudWatch Dashboard URL for agent monitoring |
 | `sns_topic_arn` | SNS topic ARN for infrastructure alerts |
+| `perf_auto_scaling_group_name` | Name of the perf queue AutoScaling Group |
+| `perf_lambda_scaler_arn` | ARN of the perf queue Lambda autoscaler |
+| `perf_results_bucket` | Name of the S3 bucket storing perf regression run history |
 
 ## Monitoring and Alerts
 
@@ -188,11 +195,27 @@ The infrastructure includes CloudWatch alarms and SNS email notifications for:
 
 **Email Alerts**: Set `alert_email` in `terraform.tfvars` to receive SNS notifications. You'll need to confirm the subscription via email after first apply.
 
+## Agent Queues
+
+Four agent queues separate workloads by resource needs:
+
+| Queue | Instance | Capacity mix | Max | Agents/instance | Purpose |
+|-------|----------|-------------|-----|-----------------|---------|
+| `default` | c5.2xlarge / c5a.2xlarge / m5.2xlarge | 20% on-demand / 80% Spot | 10 | 1 | Build and test (Maven, Docker, k3d) |
+| `trigger` | t3.small / t3a.small / t3.micro | 100% Spot | 4 | 4 | Trigger polling jobs (`sleep` + `curl` loops) |
+| `release` | Same as `default` | 100% on-demand | 2 | 1 | Release pipeline steps with release secrets |
+| `perf` | c5.4xlarge | 100% on-demand | 1 | 1 | Daily performance-regression benchmarks (k6 + JMH); max 1 enforces at most one concurrent run |
+
+All queues have `min_size = 0` (scale-to-zero). This is a hard constraint — do not set `min_size` to a non-zero value.
+
+The `perf` queue uses `perf-results.tf` (S3 bucket `mockserver-ci-perf-results` + IAM policy `buildkite-perf-results`) to persist historical run JSON for rolling-baseline comparison. The `perf` stack is defined as `module "buildkite_perf_stack"` in `main.tf`.
+
 ## Cost
 
 Current configuration (`min_size = 0`, `on_demand_percentage = 20`, diversified instance types):
 - **Idle cost:** ~$0 (scales to zero when no builds queued) + minimal CloudWatch alarm costs
 - **Build cost:** ~$0.03–0.10/hr per agent (20% on-demand, 80% spot, c5/m5 family)
+- **Perf queue cost:** ~$0.68/hr when active (c5.4xlarge on-demand, eu-west-2), runs at most once per day when master has new commits
 - **Monitoring cost:** <$1/month (alarms + dashboard + SNS)
 - Agents take 2–3 minutes to launch from cold start
 

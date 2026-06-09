@@ -4,8 +4,9 @@ import org.junit.Test;
 import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNull;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 
 /**
  * @author jamesdbloom
@@ -33,11 +34,11 @@ public class HopByHopHeaderFilterTest {
         httpRequest = new HopByHopHeaderFilter().onRequest(httpRequest);
 
         // then
-        assertEquals(httpRequest.getHeaderList().size(), 1);
+        assertThat(httpRequest.getHeaderList().size(), is(1));
     }
 
     @Test
     public void shouldNotHandleNullRequest() {
-        assertNull(new HopByHopHeaderFilter().onRequest(null));
+        assertThat(new HopByHopHeaderFilter().onRequest(null), nullValue());
     }
 }

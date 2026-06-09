@@ -1,7 +1,16 @@
 package org.mockserver.mock.action.http;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.model.GrpcChaosProfile;
+import org.mockserver.serialization.ObjectMapperFactory;
+import org.mockserver.serialization.model.GrpcChaosProfileDTO;
+import org.mockserver.state.InvalidationListener;
+import org.mockserver.state.KeyValueStore;
+import org.mockserver.state.StateBackend;
 import org.mockserver.time.TimeService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.List;
@@ -26,8 +35,19 @@ import java.util.function.LongSupplier;
  * following the same pattern as {@link org.mockserver.grpc.GrpcHealthRegistry}.
  *
  * <p>State is cleared on server reset (see {@code HttpState.reset()}).
+ *
+ * <p><b>Fleet-awareness (G11):</b> when a clustered {@link StateBackend} is
+ * wired via {@link #setStateBackend(StateBackend)}, mutations are replicated
+ * via the backend's {@code crudEntities("chaos-grpc")} store, and an
+ * {@link InvalidationListener} rebuilds the node-local map on remote writes.
+ * The {@link #get(String)} path remains purely node-local. When no backend is
+ * set or the backend is not clustered, behaviour is identical to the pre-G11
+ * node-local-only registry.
  */
 public class GrpcChaosRegistry {
+
+    private static final Logger LOG = LoggerFactory.getLogger(GrpcChaosRegistry.class);
+    static final String BACKEND_NAMESPACE = "chaos-grpc";
 
     private static final GrpcChaosRegistry INSTANCE = new GrpcChaosRegistry(TimeService::currentTimeMillis);
 
@@ -35,12 +55,29 @@ public class GrpcChaosRegistry {
     private final ConcurrentHashMap<String, AtomicInteger> matchCounters = new ConcurrentHashMap<>();
     private final LongSupplier clock;
 
+    // G11: optional clustered backend for fleet replication
+    private volatile KeyValueStore<ObjectNode> backendStore;
+
     public GrpcChaosRegistry(LongSupplier clock) {
         this.clock = clock;
     }
 
     public static GrpcChaosRegistry getInstance() {
         return INSTANCE;
+    }
+
+    /**
+     * Wires the clustered state backend for fleet-wide chaos replication.
+     * When the backend {@link StateBackend#isClustered() isClustered()},
+     * mutations are replicated via the backend's CRUD entity store, and
+     * an {@link InvalidationListener} is registered to rebuild the
+     * node-local map on remote writes. When the backend is not clustered,
+     * this method is a no-op — the registry stays purely node-local.
+     */
+    public void setStateBackend(StateBackend backend) {
+        if (backend != null && backend.isClustered()) {
+            this.backendStore = backend.crudEntities(BACKEND_NAMESPACE);
+        }
     }
 
     /**
@@ -72,6 +109,7 @@ public class GrpcChaosRegistry {
         }
         long expiresAtMillis = ttlMillis > 0 ? saturatingExpiry(clock.getAsLong(), ttlMillis) : 0L;
         byService.put(key, new Entry(profile, expiresAtMillis));
+        writeToBackend(key, profile, expiresAtMillis);
     }
 
     private static long saturatingExpiry(long now, long ttlMillis) {
@@ -131,7 +169,11 @@ public class GrpcChaosRegistry {
             return new Entry(merged, existing.expiresAtMillis);
         });
         Entry updated = byService.get(key);
-        return updated != null && !updated.isExpired(clock.getAsLong()) ? updated.profile : null;
+        if (updated != null && !updated.isExpired(clock.getAsLong())) {
+            writeToBackend(key, updated.profile, updated.expiresAtMillis);
+            return updated.profile;
+        }
+        return null;
     }
 
     private static GrpcChaosProfile merge(GrpcChaosProfile base, GrpcChaosProfile patch) {
@@ -158,6 +200,7 @@ public class GrpcChaosRegistry {
         if (key != null) {
             byService.remove(key);
             matchCounters.remove(key);
+            removeFromBackend(key);
         }
     }
 
@@ -263,6 +306,79 @@ public class GrpcChaosRegistry {
     public void reset() {
         byService.clear();
         matchCounters.clear();
+        clearBackend();
+    }
+
+    // --- G11: backend write-through and reconciliation ---
+
+    private void writeToBackend(String key, GrpcChaosProfile profile, long expiresAtMillis) {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            ObjectMapper mapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode node = mapper.createObjectNode();
+            node.set("profile", mapper.valueToTree(new GrpcChaosProfileDTO(profile)));
+            node.put("expiresAtMillis", expiresAtMillis);
+            store.put(key, node);
+        } catch (Exception e) {
+            LOG.warn("failed to write gRPC chaos to backend for key={}", key, e);
+        }
+    }
+
+    private void removeFromBackend(String key) {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            store.remove(key);
+        } catch (Exception e) {
+            LOG.warn("failed to remove gRPC chaos from backend for key={}", key, e);
+        }
+    }
+
+    private void clearBackend() {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            store.clear();
+        } catch (Exception e) {
+            LOG.warn("failed to clear gRPC chaos backend", e);
+        }
+    }
+
+    /**
+     * Rebuilds the node-local map from the backend store. Called by the
+     * {@link InvalidationListener} when a remote write is detected.
+     */
+    public void reconcileFromBackend() {
+        KeyValueStore<ObjectNode> store = this.backendStore;
+        if (store == null) {
+            return;
+        }
+        try {
+            ObjectMapper mapper = ObjectMapperFactory.createObjectMapper();
+            Map<String, Entry> newEntries = new HashMap<>();
+            store.entries().forEach(entry -> {
+                try {
+                    ObjectNode node = entry.getValue();
+                    GrpcChaosProfileDTO dto = mapper.treeToValue(node.get("profile"), GrpcChaosProfileDTO.class);
+                    long expiresAtMillis = node.path("expiresAtMillis").asLong(0L);
+                    GrpcChaosProfile profile = dto.buildObject();
+                    newEntries.put(entry.getKey(), new Entry(profile, expiresAtMillis));
+                } catch (Exception e) {
+                    LOG.warn("failed to deserialize gRPC chaos entry key={}", entry.getKey(), e);
+                }
+            });
+            byService.keySet().removeIf(k -> !newEntries.containsKey(k));
+            byService.putAll(newEntries);
+        } catch (Exception e) {
+            LOG.warn("failed to reconcile gRPC chaos from backend", e);
+        }
     }
 
     private static final class Entry {

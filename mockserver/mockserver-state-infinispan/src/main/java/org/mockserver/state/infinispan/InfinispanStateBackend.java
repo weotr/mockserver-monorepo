@@ -63,6 +63,27 @@ public class InfinispanStateBackend implements StateBackend {
     static final String BLOBS_CACHE = "blobs";
     static final String CRUD_CACHE_PREFIX = "crud-";
 
+    /**
+     * P0 SECURITY GATE: the explicit Java-deserialization allow-list applied to the clustered
+     * marshaller — exactly the types Infinispan needs to serialize for clustered replication.
+     * NO wildcard. Each pattern covers a specific MockServer package or a JDK/library type used
+     * as a field within the serialized objects. Exposed as a constant so the security test
+     * ({@code DeserializationAllowListTest}) asserts the SAME list the production marshaller uses
+     * and cannot silently drift from it.
+     */
+    static final List<String> CLUSTERED_ALLOW_LIST_PATTERNS = List.of(
+        "org\\.mockserver\\.state\\.infinispan\\..*",   // VersionedWrapper
+        "org\\.mockserver\\.state\\..*",                // ExpectationEntry, Blob
+        "org\\.mockserver\\.mock\\..*",                 // Expectation
+        "org\\.mockserver\\.model\\..*",                // HttpRequest, HttpResponse, etc.
+        "org\\.mockserver\\.matchers\\..*",             // TimeToLive, Times
+        "com\\.fasterxml\\.jackson\\..*",               // ObjectNode (CRUD entities)
+        "java\\.lang\\..*",                             // String, Long, etc.
+        "java\\.util\\..*",                             // Collections, Map entries
+        "java\\.time\\..*",                             // Instant, Duration, etc.
+        "\\[B"                                          // byte[] for Blob data
+    );
+
     private final EmbeddedCacheManager cacheManager;
     private final InfinispanKeyValueStore<ExpectationEntry> expectations;
     private final InfinispanKeyValueStore<String> scenarioStates;
@@ -179,21 +200,11 @@ public class InfinispanStateBackend implements StateBackend {
         // serialized as JSON inside ExpectationEntry's custom writeObject.
         global.serialization().marshaller(new JavaSerializationMarshaller());
 
-        // P0 SECURITY GATE: explicit allow-list covering exactly the types
-        // that Infinispan needs to serialize for clustered replication.
-        // NO wildcard. Each pattern covers a specific MockServer package or
-        // a JDK/library type used as a field within the serialized objects.
-        global.serialization().allowList()
-            .addRegexp("org\\.mockserver\\.state\\.infinispan\\..*")   // VersionedWrapper
-            .addRegexp("org\\.mockserver\\.state\\..*")                // ExpectationEntry, Blob
-            .addRegexp("org\\.mockserver\\.mock\\..*")                 // Expectation
-            .addRegexp("org\\.mockserver\\.model\\..*")                // HttpRequest, HttpResponse, etc.
-            .addRegexp("org\\.mockserver\\.matchers\\..*")             // TimeToLive, Times
-            .addRegexp("com\\.fasterxml\\.jackson\\..*")               // ObjectNode (CRUD entities)
-            .addRegexp("java\\.lang\\..*")                             // String, Long, etc.
-            .addRegexp("java\\.util\\..*")                             // Collections, Map entries
-            .addRegexp("java\\.time\\..*")                             // Instant, Duration, etc.
-            .addRegexp("\\[B");                                        // byte[] for Blob data
+        // P0 SECURITY GATE: explicit allow-list (see CLUSTERED_ALLOW_LIST_PATTERNS) covering
+        // exactly the types that Infinispan needs to serialize for clustered replication. NO
+        // wildcard. Applied from the shared constant so the security test cannot drift from it.
+        var allowList = global.serialization().allowList();
+        CLUSTERED_ALLOW_LIST_PATTERNS.forEach(allowList::addRegexp);
 
         // Expectations cache: REPL_SYNC, bounded
         ConfigurationBuilder expectationsConfig = new ConfigurationBuilder();
@@ -253,7 +264,20 @@ public class InfinispanStateBackend implements StateBackend {
             }
             crudConfig.memory().storage(StorageType.HEAP);
             cacheManager.defineConfiguration(cacheName, crudConfig.build());
-            return createKeyValueStore(cacheName);
+            InfinispanKeyValueStore<ObjectNode> store = createKeyValueStore(cacheName);
+            // G11: register a clustered cache listener on newly created CRUD
+            // caches so that remote writes (e.g. chaos profile replication)
+            // trigger InvalidationListener callbacks on this node. Without
+            // this, only expectations and scenarioStates caches fire cluster
+            // events — CRUD entity caches would be invisible to invalidation.
+            if (clustered) {
+                registerClusterListenerOnce(cacheName);
+                // Also wire local invalidation for any already-registered listeners
+                for (InvalidationListener listener : listeners) {
+                    store.addInvalidationListener(listener);
+                }
+            }
+            return store;
         });
     }
 
@@ -300,8 +324,12 @@ public class InfinispanStateBackend implements StateBackend {
     }
 
     /**
-     * Returns whether this backend is in clustered mode.
+     * Returns whether this backend is in clustered mode. Overrides the
+     * {@link StateBackend} default ({@code false}) to return the actual
+     * clustering state from the configuration. When {@code true},
+     * {@code RequestMatchers} will use backend CAS for Times consumption.
      */
+    @Override
     public boolean isClustered() {
         return clustered;
     }

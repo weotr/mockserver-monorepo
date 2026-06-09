@@ -63,13 +63,25 @@ resource "aws_iam_role_policy" "forwarder" {
         Resource = "${aws_s3_bucket.mail.arn}/*"
       },
       {
-        # Audit finding F-WEB-12: previously `Resource: "*"`. Scoped to the
-        # specific SES identity so a compromised Lambda cannot send as any
-        # other verified identity in the account.
-        Sid      = "SendForwardedEmail"
-        Effect   = "Allow"
-        Action   = "ses:SendRawEmail"
-        Resource = "arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.domain}"
+        # Audit finding F-WEB-12: previously `Resource: "*"`. Scoped to specific
+        # SES identities so a compromised Lambda cannot send as any other
+        # verified identity in the account.
+        #
+        # The account runs in the SES sandbox (no production access). In the
+        # sandbox, SES authorises `ses:SendRawEmail` against BOTH the sender
+        # identity (the domain, from the rewritten From address) AND each
+        # recipient identity. Scoping the resource to the domain alone therefore
+        # breaks forwarding with an AccessDenied on the recipient identity
+        # (e.g. identity/jamesdbloom@gmail.com). Authorise the domain plus every
+        # `forward_to` recipient identity to keep least privilege while allowing
+        # the send to succeed.
+        Sid    = "SendForwardedEmail"
+        Effect = "Allow"
+        Action = "ses:SendRawEmail"
+        Resource = concat(
+          ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.domain}"],
+          [for addr in var.forward_to : "arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${addr}"]
+        )
       },
       {
         Sid    = "CloudWatchLogs"
@@ -79,7 +91,7 @@ resource "aws_iam_role_policy" "forwarder" {
           "logs:CreateLogStream",
           "logs:PutLogEvents",
         ]
-        Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${replace(var.domain, ".", "-")}-email-forwarder:*"
       }
     ]
   })

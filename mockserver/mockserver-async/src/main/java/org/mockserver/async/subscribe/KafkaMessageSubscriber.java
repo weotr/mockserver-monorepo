@@ -9,6 +9,7 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.mockserver.async.security.KafkaSecurity;
 import org.mockserver.async.security.KafkaSecurityProperties;
+import org.mockserver.metrics.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -226,6 +227,7 @@ public class KafkaMessageSubscriber implements MessageSubscriber {
                     );
                     recordedMessages.computeIfAbsent(record.topic(),
                         k -> new BoundedMessageStore(maxRecordedMessages)).add(msg);
+                    Metrics.incrementAsyncMessageConsumed(record.topic());
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("Recorded message from Kafka topic '{}': key={}, value={}",
                             record.topic(), record.key(), truncate(record.value()));

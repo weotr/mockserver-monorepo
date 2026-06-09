@@ -1,0 +1,9 @@
+steps:
+  - label: ":golang: Go client unit tests"
+    command: ".buildkite/scripts/steps/go-unit-test.sh"
+    timeout_in_minutes: 10
+
+  - label: ":golang: :docker: Go testcontainers tests"
+    command: ".buildkite/scripts/steps/go-testcontainers-test.sh"
+    timeout_in_minutes: 15
+    soft_fail: true

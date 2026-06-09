@@ -14,11 +14,12 @@ import org.mockserver.model.PortBinding;
 import java.io.IOException;
 import java.util.Arrays;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.model.PortBinding.portBinding;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -52,7 +53,7 @@ public class PortBindingSerializerTest {
         PortBinding portBinding = portBindingSerializer.deserialize("requestBytes");
 
         // then
-        assertEquals(fullPortBinding, portBinding);
+        assertThat( portBinding, is(fullPortBinding));
     }
 
     @Test

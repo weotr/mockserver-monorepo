@@ -589,6 +589,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
         VERIFICATION_FAILED,
         VERIFICATION_PASSED,
         FORWARDED_REQUEST,
+        OPENAPI_REQUEST_VALIDATION_FAILED,
         OPENAPI_RESPONSE_VALIDATION_FAILED,
         TEMPLATE_GENERATED,
         SERVER_CONFIGURATION,
@@ -600,7 +601,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
         REQUEST_LIFECYCLE(LogMessageType.RECEIVED_REQUEST, LogMessageType.FORWARDED_REQUEST, LogMessageType.EXPECTATION_RESPONSE, LogMessageType.TEMPLATE_GENERATED),
         EXPECTATION_MANAGEMENT(LogMessageType.CREATED_EXPECTATION, LogMessageType.UPDATED_EXPECTATION, LogMessageType.REMOVED_EXPECTATION, LogMessageType.CLEARED),
         VERIFICATION(LogMessageType.VERIFICATION, LogMessageType.VERIFICATION_FAILED, LogMessageType.VERIFICATION_PASSED, LogMessageType.RETRIEVED),
-        SERVER(LogMessageType.SERVER_CONFIGURATION, LogMessageType.AUTHENTICATION_FAILED, LogMessageType.OPENAPI_RESPONSE_VALIDATION_FAILED),
+        SERVER(LogMessageType.SERVER_CONFIGURATION, LogMessageType.AUTHENTICATION_FAILED, LogMessageType.OPENAPI_REQUEST_VALIDATION_FAILED, LogMessageType.OPENAPI_RESPONSE_VALIDATION_FAILED),
         GENERAL(LogMessageType.TRACE, LogMessageType.DEBUG, LogMessageType.INFO, LogMessageType.WARN, LogMessageType.ERROR, LogMessageType.EXCEPTION);
 
         private static final Map<LogMessageType, LogMessageTypeCategory> TYPE_TO_CATEGORY = new EnumMap<>(LogMessageType.class);

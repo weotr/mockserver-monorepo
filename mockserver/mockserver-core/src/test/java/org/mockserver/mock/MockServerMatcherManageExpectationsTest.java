@@ -13,7 +13,6 @@ import java.util.concurrent.TimeUnit;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.collection.IsEmptyCollection.empty;
@@ -132,13 +131,13 @@ public class MockServerMatcherManageExpectationsTest {
         requestMatchers.add(notRemovedExpectation.thenRespond(response().withBody("someOtherBody")), API);
 
         // then
-        assertEquals(expectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath"))));
-        assertEquals(expectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath"))));
-        assertEquals(notRemovedExpectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath"))));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath"))), is(expectation));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath"))), is(expectation));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath"))), is(notRemovedExpectation));
         assertThat(requestMatchers.httpRequestMatchers.size(), is(1));
 
         // then
-        assertEquals(notRemovedExpectation, requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath"))));
+        assertThat(requestMatchers.postProcess(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("someOtherPath"))), is(notRemovedExpectation));
         assertThat(requestMatchers.httpRequestMatchers.size(), is(0));
     }
 

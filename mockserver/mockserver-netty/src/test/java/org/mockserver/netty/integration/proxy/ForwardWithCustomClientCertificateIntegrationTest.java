@@ -14,7 +14,6 @@ import org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBas
 
 import javax.net.ssl.SSLException;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.configuration.ConfigurationProperties.forwardProxyCertificateChain;
 import static org.mockserver.configuration.ConfigurationProperties.forwardProxyPrivateKey;
 import static org.mockserver.model.Header.header;
@@ -25,6 +24,8 @@ import static org.mockserver.model.HttpStatusCode.OK_200;
 import static org.mockserver.socket.tls.PEMToFile.privateKeyFromPEMFile;
 import static org.mockserver.socket.tls.PEMToFile.x509FromPEMFile;
 import static org.mockserver.stop.Stop.stopQuietly;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
 
 /**
  * @author jamesdbloom
@@ -148,11 +149,7 @@ public class ForwardWithCustomClientCertificateIntegrationTest extends AbstractM
             );
 
         // then - invalid certificate returns 502 because TLS handshake fails during forwarding
-        assertEquals(
-            response()
-                .withStatusCode(HttpStatusCode.BAD_GATEWAY_502.code())
-                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase()),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("trustNone"))
@@ -163,19 +160,12 @@ public class ForwardWithCustomClientCertificateIntegrationTest extends AbstractM
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(HttpStatusCode.BAD_GATEWAY_502.code())
+                .withReasonPhrase(HttpStatusCode.BAD_GATEWAY_502.reasonPhrase())));
 
         // then - trusted certificate returns response
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeaders(
-                    header("x-test", "test_headers_and_body")
-                )
-                .withBody("an_example_body_http"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("trustCustom"))
@@ -186,19 +176,16 @@ public class ForwardWithCustomClientCertificateIntegrationTest extends AbstractM
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
-
-        // then - valid certificate returns response
-        assertEquals(
-            response()
+            ), is(response()
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeaders(
                     header("x-test", "test_headers_and_body")
                 )
-                .withBody("an_example_body_http"),
-            makeRequest(
+                .withBody("an_example_body_http")));
+
+        // then - valid certificate returns response
+        assertThat(makeRequest(
                 request()
                     .withSecure(true)
                     .withPath(calculatePath("echo"))
@@ -209,8 +196,13 @@ public class ForwardWithCustomClientCertificateIntegrationTest extends AbstractM
                     )
                     .withBody("an_example_body_http"),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeaders(
+                    header("x-test", "test_headers_and_body")
+                )
+                .withBody("an_example_body_http")));
     }
 
 }

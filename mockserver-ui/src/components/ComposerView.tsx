@@ -66,6 +66,8 @@ import {
 } from '../lib/standardCodegen';
 import McpToolsPanel from './McpToolsPanel';
 import ImportForm from './ImportForm';
+import SnippetPalette from './SnippetPalette';
+import type { TemplateEngine as SnippetEngine } from '../lib/templateSnippets';
 
 // ---------------------------------------------------------------------------
 // Response action types
@@ -1448,24 +1450,42 @@ function TemplatePanel({
   state: TemplateState;
   setState: (s: TemplateState) => void;
 }) {
+  const handleSnippetInsert = useCallback(
+    (snippet: string) => {
+      setState({
+        ...state,
+        template: state.template
+          ? state.template + (state.template.endsWith('\n') ? '' : '\n') + snippet
+          : snippet,
+      });
+    },
+    [state, setState],
+  );
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Typography variant="body2" color="text.secondary">
         Build the response dynamically from the incoming request. The template engine
         receives a <code>request</code> object exposing method / path / headers / body.
       </Typography>
-      <TextField
-        label="Template engine"
-        size="small"
-        select
-        value={state.templateType}
-        onChange={(e) => setState({ ...state, templateType: e.target.value as TemplateType })}
-        sx={{ width: 200 }}
-      >
-        <MenuItem value="VELOCITY">Velocity</MenuItem>
-        <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
-        <MenuItem value="MUSTACHE">Mustache</MenuItem>
-      </TextField>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+        <TextField
+          label="Template engine"
+          size="small"
+          select
+          value={state.templateType}
+          onChange={(e) => setState({ ...state, templateType: e.target.value as TemplateType })}
+          sx={{ width: 200 }}
+        >
+          <MenuItem value="VELOCITY">Velocity</MenuItem>
+          <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
+          <MenuItem value="MUSTACHE">Mustache</MenuItem>
+        </TextField>
+        <SnippetPalette
+          engine={state.templateType as SnippetEngine}
+          onInsert={handleSnippetInsert}
+        />
+      </Box>
       <TextField
         label="Template body"
         multiline
@@ -2119,24 +2139,42 @@ function ForwardTemplatePanel({
   state: StandardForwardTemplateState;
   setState: (s: StandardForwardTemplateState) => void;
 }) {
+  const handleSnippetInsert = useCallback(
+    (snippet: string) => {
+      setState({
+        ...state,
+        template: state.template
+          ? state.template + (state.template.endsWith('\n') ? '' : '\n') + snippet
+          : snippet,
+      });
+    },
+    [state, setState],
+  );
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Typography variant="body2" color="text.secondary">
         Build the forwarded request dynamically using a template engine. The template receives
         a <code>request</code> object. This is the forward-direction counterpart of the response template.
       </Typography>
-      <TextField
-        label="Template engine"
-        size="small"
-        select
-        value={state.templateType}
-        onChange={(e) => setState({ ...state, templateType: e.target.value as StandardForwardTemplateState['templateType'] })}
-        sx={{ width: 200 }}
-      >
-        <MenuItem value="VELOCITY">Velocity</MenuItem>
-        <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
-        <MenuItem value="MUSTACHE">Mustache</MenuItem>
-      </TextField>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+        <TextField
+          label="Template engine"
+          size="small"
+          select
+          value={state.templateType}
+          onChange={(e) => setState({ ...state, templateType: e.target.value as StandardForwardTemplateState['templateType'] })}
+          sx={{ width: 200 }}
+        >
+          <MenuItem value="VELOCITY">Velocity</MenuItem>
+          <MenuItem value="JAVASCRIPT">JavaScript</MenuItem>
+          <MenuItem value="MUSTACHE">Mustache</MenuItem>
+        </TextField>
+        <SnippetPalette
+          engine={state.templateType as SnippetEngine}
+          onInsert={handleSnippetInsert}
+        />
+      </Box>
       <TextField
         label="Template body"
         multiline

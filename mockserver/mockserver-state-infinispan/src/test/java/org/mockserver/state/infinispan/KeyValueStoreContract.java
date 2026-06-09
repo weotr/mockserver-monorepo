@@ -190,6 +190,66 @@ public abstract class KeyValueStoreContract {
         assertThat(v2, greaterThanOrEqualTo(1L));
     }
 
+    // ---- putIfAbsent ----
+
+    @Test
+    void shouldPutIfAbsentWhenKeyDoesNotExist() {
+        Optional<Versioned<String>> existing = store.putIfAbsent("newKey", "value1");
+        assertFalse(existing.isPresent(), "putIfAbsent on missing key should return empty");
+
+        // Key should now exist with the value we inserted
+        Optional<Versioned<String>> result = store.get("newKey");
+        assertTrue(result.isPresent());
+        assertThat(result.get().getValue(), is("value1"));
+        assertThat(result.get().getVersion(), greaterThanOrEqualTo(1L));
+    }
+
+    @Test
+    void shouldNotOverwriteExistingOnPutIfAbsent() {
+        store.put("existingKey", "original");
+
+        Optional<Versioned<String>> existing = store.putIfAbsent("existingKey", "shouldNotReplace");
+        assertTrue(existing.isPresent(), "putIfAbsent on existing key should return the existing value");
+        assertThat(existing.get().getValue(), is("original"));
+
+        // Value must be unchanged
+        Optional<Versioned<String>> result = store.get("existingKey");
+        assertTrue(result.isPresent());
+        assertThat(result.get().getValue(), is("original"));
+    }
+
+    @Test
+    void shouldPutIfAbsentConcurrentlyWithExactlyOneCreator() throws Exception {
+        int threadCount = 10;
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(threadCount);
+        java.util.concurrent.atomic.AtomicInteger creatorCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        Thread[] threads = new Thread[threadCount];
+
+        for (int i = 0; i < threadCount; i++) {
+            final String value = "thread-" + i;
+            threads[i] = new Thread(() -> {
+                try {
+                    barrier.await();
+                    Optional<Versioned<String>> existing = store.putIfAbsent("raceKey", value);
+                    if (!existing.isPresent()) {
+                        creatorCount.incrementAndGet();
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            threads[i].start();
+        }
+
+        for (Thread thread : threads) {
+            thread.join();
+        }
+
+        assertThat("exactly one thread should be the creator", creatorCount.get(), is(1));
+        // The key should exist with the winner's value
+        assertTrue(store.get("raceKey").isPresent());
+    }
+
     // ---- CAS false-success regression ----
 
     /**

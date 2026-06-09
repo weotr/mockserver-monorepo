@@ -24,7 +24,6 @@ import java.net.URL;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.configuration.ConfigurationProperties.controlPlaneJWTAuthenticationJWKSource;
@@ -201,17 +200,14 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
             assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(1));
 
             // when
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withBody("websocket_response_handler_count_1_0"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("websocket_response_handler")),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withBody("websocket_response_handler_count_1_0")));
 
             // then
             assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_RESPONSE_HANDLERS_COUNT), CoreMatchers.is(0));
@@ -240,17 +236,14 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(0));
 
         // when
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("websocket_response_handler_count_0_0"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("websocket_response_handler")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("websocket_response_handler_count_0_0")));
 
         // then
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_RESPONSE_HANDLERS_COUNT), CoreMatchers.is(0));
@@ -277,17 +270,14 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
             tryWaitForSuccess(() -> assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(1)));
 
             // when
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withBody("websocket_forward_handler_count_1_0"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("websocket_forward_handler")),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withBody("websocket_forward_handler_count_1_0")));
 
             // then
             tryWaitForSuccess(() -> assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_FORWARD_HANDLERS_COUNT), CoreMatchers.is(0)));
@@ -314,17 +304,14 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(0));
 
         // when
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("websocket_forward_handler_count_0_0"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("websocket_forward_handler")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("websocket_forward_handler_count_0_0")));
 
         // then
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_FORWARD_HANDLERS_COUNT), CoreMatchers.is(0));
@@ -356,18 +343,15 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
             tryWaitForSuccess(() -> assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(1)));
 
             // when
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withHeader("x-response-test", "websocket_forward_handler_count_0_1")
-                    .withBody("websocket_forward_handler_count_1_0"),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("websocket_forward_handler")),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withHeader("x-response-test", "websocket_forward_handler_count_0_1")
+                    .withBody("websocket_forward_handler_count_1_0")));
 
             // then
             tryWaitForSuccess(() -> {
@@ -402,18 +386,15 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_CLIENTS_COUNT), CoreMatchers.is(0));
 
         // when
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withHeader("x-response-test", "websocket_forward_handler_count_0_0")
-                .withBody("websocket_forward_handler_count_0_0"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath(calculatePath("websocket_forward_handler")),
                 getHeadersToRemove()
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withHeader("x-response-test", "websocket_forward_handler_count_0_0")
+                .withBody("websocket_forward_handler_count_0_0")));
 
         // then
         assertThat(Metrics.get(Metrics.Name.WEBSOCKET_CALLBACK_FORWARD_HANDLERS_COUNT), CoreMatchers.is(0));
@@ -468,28 +449,22 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
 
             // then
             for (int i = 0; i < total; i++) {
-                assertEquals(
-                    response()
-                        .withStatusCode(OK_200.code())
-                        .withReasonPhrase(OK_200.reasonPhrase())
-                        .withBody("outer_websocket_client_registration_" + objectCallbackCounter),
-                    makeRequest(
+                assertThat(makeRequest(
                         request()
                             .withPath(calculatePath("outer_websocket_client_registration_" + objectCallbackCounter)),
                         getHeadersToRemove()
-                    )
-                );
-                assertEquals(
-                    response()
+                    ), is(response()
                         .withStatusCode(OK_200.code())
                         .withReasonPhrase(OK_200.reasonPhrase())
-                        .withBody("inner_websocket_client_registration_" + objectCallbackCounter),
-                    makeRequest(
+                        .withBody("outer_websocket_client_registration_" + objectCallbackCounter)));
+                assertThat(makeRequest(
                         request()
                             .withPath(calculatePath("inner_websocket_client_registration_" + objectCallbackCounter)),
                         getHeadersToRemove()
-                    )
-                );
+                    ), is(response()
+                        .withStatusCode(OK_200.code())
+                        .withReasonPhrase(OK_200.reasonPhrase())
+                        .withBody("inner_websocket_client_registration_" + objectCallbackCounter)));
                 objectCallbackCounter++;
             }
         });
@@ -540,28 +515,22 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
 
         // then
         for (int i = 0; i < total; i++) {
-            assertEquals(
-                response()
-                    .withStatusCode(OK_200.code())
-                    .withReasonPhrase(OK_200.reasonPhrase())
-                    .withBody("outer_websocket_client_registration_" + objectCallbackCounter),
-                makeRequest(
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("outer_websocket_client_registration_" + objectCallbackCounter)),
                     getHeadersToRemove()
-                )
-            );
-            assertEquals(
-                response()
+                ), is(response()
                     .withStatusCode(OK_200.code())
                     .withReasonPhrase(OK_200.reasonPhrase())
-                    .withBody("inner_websocket_client_registration_" + objectCallbackCounter),
-                makeRequest(
+                    .withBody("outer_websocket_client_registration_" + objectCallbackCounter)));
+            assertThat(makeRequest(
                     request()
                         .withPath(calculatePath("inner_websocket_client_registration_" + objectCallbackCounter)),
                     getHeadersToRemove()
-                )
-            );
+                ), is(response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withBody("inner_websocket_client_registration_" + objectCallbackCounter)));
             objectCallbackCounter++;
         }
     }
@@ -601,28 +570,22 @@ public class WebsocketCallbackRegistryIntegrationTest extends AbstractMockingInt
 
             // then
             for (int i = 0; i < total; i++) {
-                assertEquals(
-                    response()
-                        .withStatusCode(OK_200.code())
-                        .withReasonPhrase(OK_200.reasonPhrase())
-                        .withBody("outer_websocket_client_registration_" + objectCallbackCounter),
-                    makeRequest(
+                assertThat(makeRequest(
                         request()
                             .withPath(calculatePath("outer_websocket_client_registration_" + objectCallbackCounter)),
                         getHeadersToRemove()
-                    )
-                );
-                assertEquals(
-                    response()
+                    ), is(response()
                         .withStatusCode(OK_200.code())
                         .withReasonPhrase(OK_200.reasonPhrase())
-                        .withBody("inner_websocket_client_registration_" + objectCallbackCounter),
-                    makeRequest(
+                        .withBody("outer_websocket_client_registration_" + objectCallbackCounter)));
+                assertThat(makeRequest(
                         request()
                             .withPath(calculatePath("inner_websocket_client_registration_" + objectCallbackCounter)),
                         getHeadersToRemove()
-                    )
-                );
+                    ), is(response()
+                        .withStatusCode(OK_200.code())
+                        .withReasonPhrase(OK_200.reasonPhrase())
+                        .withBody("inner_websocket_client_registration_" + objectCallbackCounter)));
                 objectCallbackCounter++;
             }
         });

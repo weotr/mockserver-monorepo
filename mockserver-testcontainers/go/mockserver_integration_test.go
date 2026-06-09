@@ -1,0 +1,159 @@
+package mockserver
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+func isDockerAvailable() bool {
+	// Use testcontainers' own provider check — if the Docker daemon is not reachable,
+	// ProviderType returns an error. We use a lightweight exec-based check here.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt to start a minimal container request just to verify Docker connectivity.
+	// Instead, use a simple HTTP call to the Docker socket or exec docker info.
+	// The simplest portable check: try to run "docker info" via os/exec.
+	cmd := execCommand("docker", "info")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Run()
+	}()
+	select {
+	case err := <-done:
+		return err == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func TestIntegration_RunAndURL(t *testing.T) {
+	if !isDockerAvailable() {
+		t.Skip("Docker not available, skipping integration test")
+	}
+
+	ctx := context.Background()
+	ctr, err := Run(ctx, DefaultImage)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+	defer func() {
+		if err := ctr.Terminate(ctx); err != nil {
+			t.Logf("failed to terminate container: %v", err)
+		}
+	}()
+
+	// Verify URL returns a valid endpoint
+	url, err := ctr.URL(ctx)
+	if err != nil {
+		t.Fatalf("URL() failed: %v", err)
+	}
+	if !strings.HasPrefix(url, "http://") {
+		t.Errorf("URL() = %q, want http:// prefix", url)
+	}
+
+	// Verify ServerPort returns a positive port
+	port, err := ctr.ServerPort(ctx)
+	if err != nil {
+		t.Fatalf("ServerPort() failed: %v", err)
+	}
+	if port <= 0 || port > 65535 {
+		t.Errorf("ServerPort() = %d, want port in range 1-65535", port)
+	}
+
+	// Verify MockServer is actually responding (PUT /mockserver/status)
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url+"/mockserver/status", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("status request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("PUT /mockserver/status returned %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestIntegration_CreateExpectationAndVerify(t *testing.T) {
+	if !isDockerAvailable() {
+		t.Skip("Docker not available, skipping integration test")
+	}
+
+	ctx := context.Background()
+	ctr, err := Run(ctx, DefaultImage)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+	defer func() {
+		if err := ctr.Terminate(ctx); err != nil {
+			t.Logf("failed to terminate container: %v", err)
+		}
+	}()
+
+	url, err := ctr.URL(ctx)
+	if err != nil {
+		t.Fatalf("URL() failed: %v", err)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Create an expectation
+	expectationJSON := `{
+		"httpRequest": {"method": "GET", "path": "/hello"},
+		"httpResponse": {"statusCode": 200, "body": "world"}
+	}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url+"/mockserver/expectation",
+		strings.NewReader(expectationJSON))
+	if err != nil {
+		t.Fatalf("failed to create expectation request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("create expectation request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT /mockserver/expectation returned %d, want 201", resp.StatusCode)
+	}
+
+	// Call the mocked endpoint
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/hello", nil)
+	if err != nil {
+		t.Fatalf("failed to create GET request: %v", err)
+	}
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET /hello failed: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Errorf("GET /hello returned %d, want 200", getResp.StatusCode)
+	}
+
+	// Verify the request was received
+	verifyJSON := fmt.Sprintf(`{"httpRequest": {"method": "GET", "path": "/hello"}, "times": {"atLeast": 1}}`)
+	verifyReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url+"/mockserver/verify",
+		strings.NewReader(verifyJSON))
+	if err != nil {
+		t.Fatalf("failed to create verify request: %v", err)
+	}
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyResp, err := client.Do(verifyReq)
+	if err != nil {
+		t.Fatalf("verify request failed: %v", err)
+	}
+	verifyResp.Body.Close()
+	if verifyResp.StatusCode != http.StatusAccepted {
+		t.Errorf("PUT /mockserver/verify returned %d, want 202", verifyResp.StatusCode)
+	}
+}

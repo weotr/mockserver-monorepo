@@ -9,7 +9,7 @@ steps:
     fields:
       - text: "Release Version"
         key: "release-version"
-        hint: "e.g., 6.1.0"
+        hint: "e.g., 7.0.0"
         required: true
         format: "[0-9]+\\.[0-9]+\\.[0-9]+"
       - text: "Next SNAPSHOT Version"
@@ -126,7 +126,10 @@ steps:
       - label: ":docker: Docker Image"
         command: ".buildkite/scripts/release-runner.sh docker"
         timeout_in_minutes: 60
-        agents: { queue: "default" }
+        # release queue: needs mockserver-release/cosign-key (image signing) and
+        # the release-scoped Docker Hub / ECR push credentials. The default queue
+        # runs untrusted PR code and is not granted the release signing key.
+        agents: { queue: "release" }
 
       - label: ":package: npm"
         command: ".buildkite/scripts/release-runner.sh npm"
@@ -170,17 +173,111 @@ steps:
       - label: ":python: PyPI"
         command: ".buildkite/scripts/release-runner.sh pypi"
         timeout_in_minutes: 15
-        agents: { queue: "default" }
+        # Must run on the release queue: PyPI/RubyGems publish tokens
+        # (mockserver-build/pypi, mockserver-build/rubygems) are granted only to
+        # the release-queue agent role. The default queue runs untrusted PR
+        # builds and deliberately has no publish credentials.
+        agents: { queue: "release" }
 
       - label: ":gem: RubyGems"
         command: ".buildkite/scripts/release-runner.sh rubygems"
         timeout_in_minutes: 10
-        agents: { queue: "default" }
+        agents: { queue: "release" }
 
       - label: ":github: GitHub Release"
         command: ".buildkite/scripts/release-runner.sh github"
         timeout_in_minutes: 10
         agents: { queue: "release" }
+
+      - label: ":golang: Go Client"
+        command: ".buildkite/scripts/release-runner.sh client-go"
+        soft_fail: true
+        timeout_in_minutes: 10
+        agents: { queue: "release" }
+
+      - label: ":dotnet: .NET Client"
+        command: ".buildkite/scripts/release-runner.sh client-dotnet"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":rust: Rust Client"
+        command: ".buildkite/scripts/release-runner.sh client-rust"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":php: PHP Client"
+        command: ".buildkite/scripts/release-runner.sh client-php"
+        soft_fail: true
+        timeout_in_minutes: 10
+        agents: { queue: "release" }
+
+      - label: ":package: TC Node"
+        command: ".buildkite/scripts/release-runner.sh tc-node"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":python: TC Python"
+        command: ".buildkite/scripts/release-runner.sh tc-python"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":dotnet: TC .NET"
+        command: ".buildkite/scripts/release-runner.sh tc-dotnet"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":golang: TC Go"
+        command: ".buildkite/scripts/release-runner.sh tc-go"
+        soft_fail: true
+        timeout_in_minutes: 10
+        agents: { queue: "release" }
+
+      - label: ":rust: TC Rust"
+        command: ".buildkite/scripts/release-runner.sh tc-rust"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":vs_code: VS Code Extension"
+        command: ".buildkite/scripts/release-runner.sh vscode"
+        soft_fail: true
+        timeout_in_minutes: 15
+        agents: { queue: "release" }
+
+      - label: ":jetbrains: JetBrains Plugin"
+        command: ".buildkite/scripts/release-runner.sh jetbrains"
+        soft_fail: true
+        timeout_in_minutes: 20
+        agents: { queue: "release" }
+
+  - wait
+
+  # MCP must run AFTER the Docker Image step (in the publish group above) has
+  # pushed the labelled image to Docker Hub — the registry rejects the publish
+  # until that image is visible. Steps inside a group run in parallel, so MCP
+  # lives here, after the group's `wait`, rather than inside it. Soft-fail: a
+  # discovery surface, never a release gate.
+  - label: ":robot_face: MCP Registry"
+    command: ".buildkite/scripts/release-runner.sh mcp"
+    soft_fail: true
+    timeout_in_minutes: 10
+    agents: { queue: "release" }
+
+  # Build jlink JVM-less bundles for every platform and upload them to the
+  # GitHub Release created in the publish group above. Lives here, after the
+  # group `wait`, so the release exists before assets are uploaded. Soft-fail:
+  # a convenience self-hosting channel, never a release gate. Generous timeout
+  # — it downloads a target JDK per platform and runs jlink for each.
+  - label: ":package: Binary Bundles"
+    command: ".buildkite/scripts/release-runner.sh binary"
+    soft_fail: true
+    timeout_in_minutes: 60
+    agents: { queue: "release" }
 
   - wait
 

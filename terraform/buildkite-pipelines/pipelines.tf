@@ -44,6 +44,41 @@ locals {
       emoji       = ":ruby:"
       trigger     = "none"
     }
+    "go" = {
+      name        = "MockServer Go"
+      description = "Go client and testcontainers module — unit tests"
+      file        = ".buildkite/pipeline-go.yml"
+      emoji       = ":golang:"
+      trigger     = "none"
+    }
+    "dotnet" = {
+      name        = "MockServer Dotnet"
+      description = ".NET client and testcontainers module — unit tests"
+      file        = ".buildkite/pipeline-dotnet.yml"
+      emoji       = ":dotnet:"
+      trigger     = "none"
+    }
+    "rust" = {
+      name        = "MockServer Rust"
+      description = "Rust client and testcontainers module — tests and clippy"
+      file        = ".buildkite/pipeline-rust.yml"
+      emoji       = ":rust:"
+      trigger     = "none"
+    }
+    "php" = {
+      name        = "MockServer PHP"
+      description = "PHP client — unit tests"
+      file        = ".buildkite/pipeline-php.yml"
+      emoji       = ":php:"
+      trigger     = "none"
+    }
+    "editors" = {
+      name        = "MockServer Editors"
+      description = "VS Code extension and JetBrains plugin — build and test"
+      file        = ".buildkite/pipeline-editors.yml"
+      emoji       = ":vscode:"
+      trigger     = "none"
+    }
     "maven-plugin" = {
       name        = "MockServer Maven Plugin"
       description = "Maven plugin build and test"
@@ -53,7 +88,7 @@ locals {
     }
     "perf-test" = {
       name        = "MockServer Performance Test"
-      description = "Performance test validation"
+      description = "Performance test validation + daily performance-regression run"
       file        = ".buildkite/pipeline-perf-test.yml"
       emoji       = ":chart_with_upwards_trend:"
       trigger     = "none"
@@ -125,6 +160,19 @@ resource "buildkite_pipeline_schedule" "cleanup_daily" {
   message     = "Scheduled: clean up closed PR builds"
 }
 
+# Daily performance-regression run. Fires every day at 04:00 UTC (off-peak,
+# before the 06:00 cleanup). The build arrives with build.source == 'schedule',
+# which the perf-test pipeline's commit-guard step keys off; the guard then
+# dispatches the heavy run ONLY when master moved since the last successful run,
+# so an idle day costs just the cheap guard query.
+resource "buildkite_pipeline_schedule" "perf_regression_daily" {
+  pipeline_id = buildkite_pipeline.pipeline["perf-test"].id
+  label       = "Daily performance regression"
+  cronline    = "0 4 * * *"
+  branch      = "master"
+  message     = "Scheduled: daily performance regression run"
+}
+
 locals {
   # Audit finding F-BK-CLOUD-02: pipelines that load secrets via AWS Secrets
   # Manager must be PRIVATE so their build logs are not world-readable. The
@@ -156,6 +204,11 @@ locals {
     "python",       # mockserver-python — lint/test only
     "ruby",         # mockserver-ruby — lint/test only
     "maven-plugin", # mockserver-maven-plugin — build/test only
+    "go",           # mockserver-go — lint/test only
+    "dotnet",       # mockserver-dotnet — lint/test only
+    "rust",         # mockserver-rust — lint/test only
+    "php",          # mockserver-php — lint/test only
+    "editors",      # mockserver-editors — lint/test only
   ])
 }
 
@@ -168,6 +221,11 @@ resource "buildkite_pipeline" "pipeline" {
   default_branch = "master"
   emoji          = each.value.emoji
   visibility     = contains(local.public_pipelines, each.key) ? "PUBLIC" : "PRIVATE"
+
+  # Assign every pipeline to the Default cluster (Buildkite deprecated
+  # unclustered agents — see clusters.tf). Agents register with the cluster
+  # token and only run jobs from pipelines in this cluster.
+  cluster_id = data.buildkite_cluster.default.id
 
   cancel_intermediate_builds = true
   skip_intermediate_builds   = true

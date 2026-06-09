@@ -11,13 +11,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Start MockServer
         id: mockserver
         uses: mock-server/mockserver-monorepo/.github/actions/setup-mockserver@master
         with:
-          version: latest      # or a release tag e.g. mockserver-6.1.0
+          version: latest      # or a release tag e.g. mockserver-7.0.0
           port: '1080'
 
       - name: Run tests against MockServer
@@ -32,7 +32,7 @@ jobs:
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `version` | `latest` | MockServer Docker image tag (e.g. `latest`, `mockserver-6.1.0`). |
+| `version` | `latest` | MockServer Docker image tag (e.g. `latest`, `mockserver-7.0.0`). |
 | `port` | `1080` | Host port to expose MockServer on (the container listens on 1080 internally). |
 | `container-name` | `mockserver` | Name for the started container. |
 | `log-level` | `INFO` | MockServer log level (`INFO`, `WARN`, `DEBUG`, `TRACE`). |

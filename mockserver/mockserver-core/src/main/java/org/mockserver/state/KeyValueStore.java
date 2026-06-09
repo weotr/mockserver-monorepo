@@ -39,6 +39,24 @@ public interface KeyValueStore<V> {
     long put(String key, V value);
 
     /**
+     * Atomically inserts the value only if no entry for the key exists yet.
+     * If the key is already present, the store is not modified and the
+     * existing versioned value is returned. If insertion succeeds, an empty
+     * {@code Optional} is returned.
+     * <p>
+     * This is the create-only counterpart of {@link #put}: it never
+     * overwrites an existing entry. Callers that need last-writer-wins
+     * semantics should use {@link #put}; callers that need to detect
+     * and defer to a concurrent creator should use this method.
+     *
+     * @param key   the key
+     * @param value the value to insert
+     * @return empty if the entry was created by this call; otherwise the
+     *         existing versioned value that was already present
+     */
+    Optional<Versioned<V>> putIfAbsent(String key, V value);
+
+    /**
      * Atomically replaces the value only if the current version matches
      * {@code expectedVersion}. Returns {@code true} on success.
      *

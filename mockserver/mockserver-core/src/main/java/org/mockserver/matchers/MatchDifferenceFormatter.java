@@ -28,7 +28,7 @@ public class MatchDifferenceFormatter {
         return builder.toString();
     }
 
-    static String truncateDiffLine(String diff) {
+    public static String truncateDiffLine(String diff) {
         if (diff == null) {
             return "";
         }

@@ -5,13 +5,26 @@ Minimal, runnable `docker-compose.yml` files demonstrating different ways to con
 ## Running an example
 
 ```bash
-cd docker_compose_with_expectation_initialiser
+cd mock-from-openapi
 docker compose up -d
 # MockServer is now reachable on the host port exposed by the example
 docker compose down
 ```
 
-## Examples
+## Quick-start recipes
+
+Task-oriented, one-command starting points for the most common use cases. Each is a self-contained directory with its own `README.md`.
+
+| Recipe | What it does |
+|--------|--------------|
+| [`mock-from-openapi`](mock-from-openapi) | Serve mocks generated from a mounted OpenAPI spec |
+| [`record-replay-proxy`](record-replay-proxy) | Proxy to an upstream and record traffic to a replayable file |
+| [`validation-proxy`](validation-proxy) | Proxy to an upstream and validate requests/responses against an OpenAPI spec |
+| [`chaos-proxy`](chaos-proxy) | Proxy to an upstream while injecting latency and intermittent errors |
+
+## Configuration examples
+
+Minimal permutations showing individual configuration mechanisms.
 
 | Directory | What it shows |
 |-----------|---------------|

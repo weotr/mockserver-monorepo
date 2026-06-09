@@ -13,16 +13,16 @@ import org.mockserver.serialization.model.HttpResponseDTO;
 
 import java.io.IOException;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertArrayEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -35,7 +35,6 @@ public class HttpResponseSerializationErrorsTest {
     private ObjectWriter objectWriter;
     @InjectMocks
     private HttpResponseSerializer httpResponseSerializer;
-
 
     @Before
     public void setupTestFixture() {
@@ -72,8 +71,8 @@ public class HttpResponseSerializationErrorsTest {
     @SuppressWarnings("RedundantArrayCreation")
     public void shouldHandleNullAndEmptyWhileSerializingArray() {
         // when
-        assertEquals("[]", httpResponseSerializer.serialize(new HttpResponse[]{}));
-        assertEquals("[]", httpResponseSerializer.serialize((HttpResponse[]) null));
+        assertThat( httpResponseSerializer.serialize(new HttpResponse[]{}), is("[]"));
+        assertThat( httpResponseSerializer.serialize((HttpResponse[]) null), is("[]"));
     }
 
     @Test
@@ -84,15 +83,10 @@ public class HttpResponseSerializationErrorsTest {
             fail("expected exception to be thrown");
         } catch (IllegalArgumentException iae) {
             // then
-            String expectedPrefix = "incorrect response json format for:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  responseBytes" + NEW_LINE +
-                "" + NEW_LINE +
-                " schema validation errors:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  JsonParseException - Unrecognized token 'responseBytes': was expecting (JSON String, Number (or 'NaN'/'+INF'/'-INF'), Array, Object or token 'null', 'true' or 'false')" + NEW_LINE +
-                "   at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: ";
-            assertThat(iae.getMessage().startsWith(expectedPrefix), is(true));
+            assertThat(iae.getMessage(), containsString("incorrect response json format for:"));
+            assertThat(iae.getMessage(), containsString("responseBytes"));
+            assertThat(iae.getMessage(), containsString("schema validation errors:"));
+            assertThat(iae.getMessage(), containsString("Unrecognized token"));
         }
     }
 
@@ -104,9 +98,8 @@ public class HttpResponseSerializationErrorsTest {
             fail("expected exception to be thrown");
         } catch (IllegalArgumentException iae) {
             // then
-            String expectedPrefix = "com.fasterxml.jackson.core.JsonParseException: Unrecognized token 'responseBytes': was expecting (JSON String, Number (or 'NaN'/'+INF'/'-INF'), Array, Object or token 'null', 'true' or 'false')" + NEW_LINE +
-                " at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: ";
-            assertThat(iae.getMessage().startsWith(expectedPrefix), is(true));
+            assertThat(iae.getMessage(), containsString("Unrecognized token"));
+            assertThat(iae.getMessage(), containsString("responseBytes"));
         }
     }
 

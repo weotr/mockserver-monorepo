@@ -1133,6 +1133,22 @@ public class Expectation extends ObjectWithJsonToString {
         return true;
     }
 
+    /**
+     * Records a match consumption WITHOUT decrementing the node-local Times
+     * counter. Used when a clustered backend has already atomically
+     * decremented the shared remaining-times counter via CAS — the local
+     * Times object must not also decrement, or the node-local counter
+     * would diverge from the shared one.
+     * <p>
+     * Updates matchCount, lastConsumedCount, and chaosFirstMatchEpochMillis
+     * exactly as {@link #consumeMatch()} does. These are node-local runtime
+     * metrics that do not need to be shared across the cluster.
+     */
+    public void consumeMatchLocally() {
+        lastConsumedCount.set(matchCount.incrementAndGet());
+        chaosFirstMatchEpochMillis.compareAndSet(0L, TimeService.currentTimeMillis());
+    }
+
     @JsonIgnore
     public int getMatchCount() {
         return matchCount.get();

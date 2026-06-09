@@ -68,6 +68,8 @@ declare -a TESTS=(
   "$SCRIPT_DIR/components/schema.sh:schema"
   "$SCRIPT_DIR/components/swaggerhub.sh:swaggerhub"
   "$SCRIPT_DIR/components/github.sh:github"
+  # Limit to one platform so the dry-run doesn't download every target JDK.
+  "$SCRIPT_DIR/components/binary.sh:binary:BINARY_TARGETS=linux/x86_64"
   "$SCRIPT_DIR/components/versioned-site.sh:versioned-site"
   # Exercise the active path of versioned-site (not just the CREATE_VERSIONED_SITE=no
   # early-exit). Reuse the same script with a different name so logs separate.
@@ -75,7 +77,7 @@ declare -a TESTS=(
 )
 
 # Heavy tests touch Maven/JVM downloads which take minutes.
-HEAVY=(maven-central maven-plugin javadoc)
+HEAVY=(maven-central maven-plugin javadoc binary)
 
 LOGS_DIR="$SCRIPT_DIR/../../.tmp/test-all"
 mkdir -p "$LOGS_DIR"

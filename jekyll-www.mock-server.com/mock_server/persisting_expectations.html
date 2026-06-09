@@ -2,13 +2,13 @@
 title: Persisting Expectations
 description: Persist MockServer expectations and recorded proxy traffic to disk so they survive restarts and enable record-and-replay workflows.
 layout: page
-pageOrder: 7
-section: 'Mock Server'
+pageOrder: 1
+section: 'Data & State'
 subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-05T00:00:00+00:00
 ---
 
 <p>In MockServer expectations are only held in memory by default.  However, it is possible to persist expectations to the local file system to ensure that they survive a restart of MockServer.</p>
@@ -59,7 +59,7 @@ java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependen
 -Dmockserver.initializationJsonPath=recordedExpectations.json \
 -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080,1081 -logLevel INFO</code></pre>
 
-<p>This is separate from the <a href="#button_configuration_persist_expectations_as_json">persistExpectations</a> property which persists manually-created expectations. Both can be enabled simultaneously with different file paths.</p>
+<p>This is separate from the <a href="/mock_server/configuration_properties.html#button_configuration_persist_expectations_as_json">persistExpectations</a> property which persists manually-created expectations. Both can be enabled simultaneously with different file paths.</p>
 
 <a id="kubernetes_persistence" class="anchor" href="#kubernetes_persistence">&nbsp;</a>
 
@@ -80,6 +80,56 @@ java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependen
     (e.g. NFS, <a target="_blank" href="https://aws.amazon.com/efs/" rel="noopener noreferrer">AWS EFS</a>, or <a target="_blank" href="https://docs.microsoft.com/en-us/azure/storage/files/" rel="noopener noreferrer">Azure Files</a>).
     See the <a href="/where/kubernetes.html#helm_persistent_storage">Helm chart persistent storage documentation</a> for full details and examples.</p>
 
+<a id="cloud_blob_storage" class="anchor" href="#cloud_blob_storage">&nbsp;</a>
+
+<h2>Cloud Blob Storage</h2>
+
+<p>By default MockServer reads and writes persisted expectations, recorded proxy traffic, and fixture files on the local filesystem (<span class="inline_code">blobStoreType=filesystem</span>). When several nodes &mdash; or several short-lived CI runners &mdash; need durable, shared storage of this data <strong>without</strong> a shared POSIX volume (NFS / EFS / Azure Files), MockServer can store it in a cloud object store instead.</p>
+
+<p>Cloud blob storage is an <strong>opt-in module</strong>: <span class="inline_code">mockserver-core</span> ships with no cloud SDK on its classpath, so there is no dependency cost unless you use it. Add the module for the backend you want and set <span class="inline_code">blobStoreType</span> to its name &mdash; the backend registers itself automatically at startup.</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th><span class="inline_code">blobStoreType</span></th><th>Backend</th><th>Maven module</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">s3</span></td><td>Amazon S3 (and S3-compatible stores such as MinIO / LocalStack)</td><td><span class="inline_code">org.mock-server:mockserver-blob-s3</span></td></tr>
+        <tr><td><span class="inline_code">gcs</span></td><td>Google Cloud Storage</td><td><span class="inline_code">org.mock-server:mockserver-blob-gcs</span></td></tr>
+        <tr><td><span class="inline_code">azure</span></td><td>Azure Blob Storage</td><td><span class="inline_code">org.mock-server:mockserver-blob-azure</span></td></tr>
+    </tbody>
+</table>
+
+<p>The key required properties per backend are:</p>
+
+<ul>
+    <li><strong>S3</strong> (<span class="inline_code">blobStoreType=s3</span>): <span class="inline_code">blobStoreBucket</span> and <span class="inline_code">blobStoreRegion</span>. Credentials default to the standard AWS credential chain (environment, profile, instance/IRSA role); override explicitly with <span class="inline_code">blobStoreAccessKeyId</span> / <span class="inline_code">blobStoreSecretAccessKey</span>. Use <span class="inline_code">blobStoreEndpoint</span> to target an S3-compatible store such as MinIO or LocalStack.</li>
+    <li><strong>GCS</strong> (<span class="inline_code">blobStoreType=gcs</span>): <span class="inline_code">blobStoreBucket</span>. Credentials default to Application Default Credentials; set <span class="inline_code">blobStoreProjectId</span> to override the inferred project.</li>
+    <li><strong>Azure</strong> (<span class="inline_code">blobStoreType=azure</span>): <span class="inline_code">blobStoreContainer</span> and <span class="inline_code">blobStoreConnectionString</span> (the connection string carries the account name, key, and endpoint).</li>
+</ul>
+
+<p>An optional <span class="inline_code">blobStoreKeyPrefix</span> applies to all cloud backends so multiple deployments can share one bucket or container without colliding.</p>
+
+<p>Example (S3) running the Docker image &mdash; note that you must use an image with the relevant <span class="inline_code">mockserver-blob-*</span> module (and its cloud SDK) on the classpath:</p>
+
+<pre class="prettyprint lang-javascript code"><code class="code">MOCKSERVER_BLOB_STORE_TYPE=s3 \
+MOCKSERVER_BLOB_STORE_BUCKET=my-mockserver-fixtures \
+MOCKSERVER_BLOB_STORE_REGION=eu-west-1 \
+MOCKSERVER_BLOB_STORE_KEY_PREFIX=ci-shared/ \
+MOCKSERVER_PERSIST_EXPECTATIONS=true \
+java -jar mockserver-netty-jar-with-dependencies.jar -serverPort 1080 -logLevel INFO</code></pre>
+
+<p>See <a href="/mock_server/configuration_properties.html">Configuration Properties</a> for the full property list with defaults, and <a href="/mock_server/centralized_deployment.html#cloud-blob">Centralized Deployment &rarr; Cloud Blob Storage</a> for using a blob store across a shared or clustered deployment.</p>
+
 {% include_subpage _includes/clustering.html %}
 
 {% include_subpage _includes/initializer_persistence_configuration.html %}
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/initializing_expectations.html">Initializing Expectations</a> &mdash; reload persisted expectations automatically when MockServer starts</li>
+    <li><a href="/mock_server/file_storage.html">File Storage</a> &mdash; the in-memory file store REST API (<span class="inline_code">PUT /mockserver/files/...</span>) for uploading and retrieving named fixture files at runtime &mdash; distinct from on-disk expectation persistence</li>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the structure of the expectations being persisted: request matchers and response, forward, callback, and error actions</li>
+</ul>

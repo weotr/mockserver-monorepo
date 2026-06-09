@@ -28,6 +28,7 @@ import org.mockserver.model.*;
 import org.mockserver.openapi.OpenAPIConverter;
 import org.mockserver.openapi.OpenApiSyncPlanner;
 import org.mockserver.persistence.ExpectationFileSystemPersistence;
+import org.mockserver.proxyconfiguration.InetAddressValidator;
 import org.mockserver.persistence.ExpectationFileWatcher;
 import org.mockserver.responsewriter.ResponseWriter;
 import org.mockserver.scheduler.Scheduler;
@@ -113,6 +114,8 @@ public class HttpState {
     private final MemoryMonitoring memoryMonitoring;
     private OpenAPIConverter openAPIConverter;
     private org.mockserver.serialization.har.HarConverter harConverter;
+    private HttpRequestSerializer httpRequestSerializer;
+    private HttpResponseSerializer httpResponseSerializer;
     private org.mockserver.serialization.curl.HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private AuthenticationHandler controlPlaneAuthenticationHandler;
     private GrpcProtoDescriptorStore grpcDescriptorStore;
@@ -124,6 +127,8 @@ public class HttpState {
     // optional — set by LifeCycle when a runtime LLM backend is configured
     private volatile org.mockserver.llm.client.LlmCompletionService llmCompletionService;
     private volatile org.mockserver.llm.client.LlmBackend llmBackend;
+    // optional — set by the runtime (NettyHttpClient) to enable PUT /mockserver/replay
+    private volatile java.util.function.Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler;
 
     public static void setPort(final HttpRequest request) {
         if (request != null && request.getSocketAddress() != null) {
@@ -181,6 +186,32 @@ public class HttpState {
                 requestMatchers.reconcileFromBackend();
             }
         });
+        // G11: wire chaos registries to the clustered backend for fleet-wide
+        // chaos replication. When the backend is not clustered (default), the
+        // setStateBackend calls are no-ops and the registries stay node-local.
+        org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().setStateBackend(stateBackend);
+        org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().setStateBackend(stateBackend);
+        org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().setStateBackend(stateBackend);
+        // G11: register a SEPARATE InvalidationListener for chaos reconciliation
+        // so that remote writes to chaos stores trigger the node-local rebuild.
+        // This is distinct from the expectations reconcile listener above.
+        if (stateBackend.isClustered()) {
+            stateBackend.addInvalidationListener(new InvalidationListener() {
+                @Override
+                public void onChanged(String key) {
+                    org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reconcileFromBackend();
+                    org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reconcileFromBackend();
+                    org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reconcileFromBackend();
+                }
+
+                @Override
+                public void onCleared() {
+                    org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reconcileFromBackend();
+                    org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reconcileFromBackend();
+                    org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reconcileFromBackend();
+                }
+            });
+        }
         Metrics.setActiveExpectationsSupplier(() -> requestMatchers.retrieveActiveExpectations(null));
         if (configuration.persistExpectations()) {
             this.expectationFileSystemPersistence = new ExpectationFileSystemPersistence(configuration, mockServerLogger, requestMatchers, stateBackend.blobs());
@@ -193,6 +224,24 @@ public class HttpState {
             if ((isNotBlank(configuration.initializationJsonPath()) || isNotBlank(configuration.initializationOpenAPIPath())) && configuration.watchInitializationJson()) {
                 this.expectationFileWatcher = new ExpectationFileWatcher(configuration, mockServerLogger, requestMatchers, expectationInitializerLoader);
             }
+        }
+        // G11 follow-up: wire the cross-protocol event bus to the clustered
+        // backend for fleet-wide registration replication. When the backend is
+        // not clustered (default), setStateBackend is a no-op and the bus stays
+        // node-local. Mirrors the chaos registry wiring pattern above.
+        CrossProtocolEventBus.getInstance().setStateBackend(stateBackend);
+        if (stateBackend.isClustered()) {
+            stateBackend.addInvalidationListener(new InvalidationListener() {
+                @Override
+                public void onChanged(String key) {
+                    CrossProtocolEventBus.getInstance().reconcileFromBackend();
+                }
+
+                @Override
+                public void onCleared() {
+                    CrossProtocolEventBus.getInstance().reconcileFromBackend();
+                }
+            });
         }
         CrossProtocolEventBus.getInstance().setScenarioManager(requestMatchers.getScenarioManager());
         this.memoryMonitoring = new MemoryMonitoring(configuration, this.mockServerLog, this.requestMatchers);
@@ -238,6 +287,18 @@ public class HttpState {
 
     public void setControlPlaneAuthenticationHandler(AuthenticationHandler controlPlaneAuthenticationHandler) {
         this.controlPlaneAuthenticationHandler = controlPlaneAuthenticationHandler;
+    }
+
+    /**
+     * Install the replay handler that re-issues an {@link HttpRequest} to its
+     * target and returns the upstream response. Called by the runtime (e.g.
+     * {@code HttpRequestHandler} in the Netty module) after construction,
+     * wiring the existing {@code NettyHttpClient} so that
+     * {@code PUT /mockserver/replay} can delegate without core depending on
+     * the client directly.
+     */
+    public void setReplayHandler(java.util.function.Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler) {
+        this.replayHandler = replayHandler;
     }
 
     public Configuration getConfiguration() {
@@ -338,6 +399,7 @@ public class HttpState {
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.ChaosAutoHaltMonitor.getInstance().reset();
         org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reset();
         org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reset();
         org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
@@ -346,6 +408,7 @@ public class HttpState {
         CassetteRegistry.getInstance().reset();
         org.mockserver.mock.dns.DnsIntentRegistry.getInstance().clear();
         org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance().reset();
+        org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().reset();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -1657,6 +1720,34 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/continue", "/breakpoint/continue")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointContinue(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/modify", "/breakpoint/modify")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointModify(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/abort", "/breakpoint/abort")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointAbort(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint", "/breakpoint")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointList()), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/debugMismatch", "/debugMismatch")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1814,23 +1905,27 @@ public class HttpState {
             } else if (request.matches("PUT", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    try {
-                        String moduleName = request.getFirstQueryStringParameter("name");
-                        if (isBlank(moduleName)) {
-                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
-                        } else {
-                            byte[] bodyBytes = request.getBodyAsRawBytes();
-                            if (bodyBytes != null && bodyBytes.length > 0) {
-                                org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
-                                responseWriter.writeResponse(request, withDashboardCORS(request, response()
-                                    .withStatusCode(CREATED.code())
-                                    .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8)), true);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
+                    } else {
+                        try {
+                            String moduleName = request.getFirstQueryStringParameter("name");
+                            if (isBlank(moduleName)) {
+                                responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
                             } else {
-                                responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                                byte[] bodyBytes = request.getBodyAsRawBytes();
+                                if (bodyBytes != null && bodyBytes.length > 0) {
+                                    org.mockserver.wasm.WasmStore.getInstance().put(moduleName, bodyBytes);
+                                    responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                                        .withStatusCode(CREATED.code())
+                                        .withBody("{\"status\":\"loaded\",\"moduleName\":\"" + moduleName + "\"}", MediaType.JSON_UTF_8)), true);
+                                } else {
+                                    responseWriter.writeResponse(request, BAD_REQUEST, "WASM module body is empty", MediaType.create("text", "plain").toString());
+                                }
                             }
+                        } catch (Exception e) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
                         }
-                    } catch (Exception e) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to load WASM module: " + e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 canHandle.complete(true);
@@ -1946,6 +2041,14 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/replay", "/replay")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    handleReplay(request, responseWriter, canHandle);
+                } else {
+                    canHandle.complete(true);
+                }
+
             } else if (request.matches("PUT", PATH_PREFIX + "/diff", "/diff")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1996,6 +2099,12 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/breakpoint", "/breakpoint")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointList()), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleServiceChaosGet()), true);
@@ -2030,17 +2139,21 @@ public class HttpState {
             }
             if (request.matches("GET", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    try {
-                        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
-                        com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
-                        for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
-                            modulesArray.add(name);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
+                    } else {
+                        try {
+                            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                            com.fasterxml.jackson.databind.node.ArrayNode modulesArray = objectMapper.createArrayNode();
+                            for (String name : org.mockserver.wasm.WasmStore.getInstance().listNames()) {
+                                modulesArray.add(name);
+                            }
+                            responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                                .withStatusCode(OK.code())
+                                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8)), true);
+                        } catch (Exception e) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
                         }
-                        responseWriter.writeResponse(request, withDashboardCORS(request, response()
-                            .withStatusCode(OK.code())
-                            .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(modulesArray), MediaType.JSON_UTF_8)), true);
-                    } catch (Exception e) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "failed to list WASM modules: " + e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 return true;
@@ -2102,14 +2215,18 @@ public class HttpState {
 
             if (request.matches("DELETE", PATH_PREFIX + "/wasm/modules", "/wasm/modules")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    String moduleName = request.getFirstQueryStringParameter("name");
-                    if (isBlank(moduleName)) {
-                        responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
-                    } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
-                        org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
-                        responseWriter.writeResponse(request, withDashboardCORS(request, response().withStatusCode(OK.code())), true);
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
                     } else {
-                        responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                        String moduleName = request.getFirstQueryStringParameter("name");
+                        if (isBlank(moduleName)) {
+                            responseWriter.writeResponse(request, BAD_REQUEST, "query parameter 'name' is required", MediaType.create("text", "plain").toString());
+                        } else if (org.mockserver.wasm.WasmStore.getInstance().contains(moduleName)) {
+                            org.mockserver.wasm.WasmStore.getInstance().remove(moduleName);
+                            responseWriter.writeResponse(request, withDashboardCORS(request, response().withStatusCode(OK.code())), true);
+                        } else {
+                            responseWriter.writeResponse(request, NOT_FOUND, "WASM module '" + moduleName + "' not found", MediaType.create("text", "plain").toString());
+                        }
                     }
                 }
                 return true;
@@ -3382,6 +3499,165 @@ public class HttpState {
         return stateBackend;
     }
 
+    // ---- Replay control-plane ----
+
+    /**
+     * Maximum body size (in bytes) allowed for a replayed request to prevent OOM.
+     * Requests whose body exceeds this cap are rejected with 413 Payload Too Large.
+     */
+    private static final int REPLAY_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    /**
+     * Re-issue a previously recorded/proxied request to its target and return
+     * the upstream response. The payload is a standard {@code HttpRequest} JSON;
+     * the target host/port is resolved from the {@code Host} header or the
+     * explicit {@code socketAddress} field in the JSON (same rules as the
+     * regular forward/proxy path).
+     */
+    private void handleReplay(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
+        try {
+            if (replayHandler == null) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"replay is not available — no HTTP client has been wired\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            String body = controlPlaneRequest.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain an HttpRequest JSON definition\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            HttpRequest requestToReplay = getHttpRequestSerializer().deserialize(body);
+
+            // Safety: enforce body-size cap on outbound request
+            byte[] requestBody = requestToReplay.getBodyAsRawBytes();
+            if (requestBody != null && requestBody.length > REPLAY_MAX_BODY_SIZE) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(REQUEST_ENTITY_TOO_LARGE.code())
+                    .withBody("{\"error\":\"request body exceeds maximum replay size of " + REPLAY_MAX_BODY_SIZE + " bytes\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            // SSRF protection: validate the target host against the same policy
+            // enforced by the normal forward path (HttpForwardActionHandler).
+            // Resolves the host from socketAddress (if set) or the Host header,
+            // mirroring HttpRequest.socketAddressFromHostHeader().
+            String replayTargetHost = resolveReplayTargetHost(requestToReplay);
+            if (isNotBlank(replayTargetHost)) {
+                try {
+                    InetAddressValidator.validateForwardTarget(configuration, replayTargetHost);
+                } catch (IllegalArgumentException blocked) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.WARN)
+                            .setHttpRequest(requestToReplay)
+                            .setMessageFormat("replay blocked by SSRF policy:{}")
+                            .setArguments(blocked.getMessage())
+                    );
+                    responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                        .withStatusCode(FORBIDDEN.code())
+                        .withBody("{\"error\":" + jsonEncodeString("replay blocked by SSRF policy: " + blocked.getMessage()) + "}", MediaType.JSON_UTF_8)), true);
+                    canHandle.complete(true);
+                    return;
+                }
+            }
+
+            replayHandler.apply(requestToReplay)
+                .orTimeout(configuration.maxSocketTimeoutInMillis(), MILLISECONDS)
+                .whenComplete((upstreamResponse, throwable) -> {
+                    try {
+                        if (throwable != null) {
+                            String errorMessage = throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName();
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.WARN)
+                                    .setHttpRequest(requestToReplay)
+                                    .setMessageFormat("exception replaying request:{}error:{}")
+                                    .setArguments(requestToReplay, errorMessage)
+                                    .setThrowable(throwable)
+                            );
+                            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                                .withStatusCode(BAD_GATEWAY.code())
+                                .withBody("{\"error\":" + jsonEncodeString("replay failed: " + errorMessage) + "}", MediaType.JSON_UTF_8)), true);
+                        } else {
+                            // Return the upstream response wrapped in a JSON envelope
+                            // so the dashboard can display it alongside the original request.
+                            HttpResponse replayResponse = upstreamResponse != null ? upstreamResponse : response().withStatusCode(OK.code());
+
+                            // Safety: enforce body-size cap on upstream response to prevent
+                            // OOM from materializing + JSON-serializing an unbounded body.
+                            byte[] responseBody = replayResponse.getBodyAsRawBytes();
+                            if (responseBody != null && responseBody.length > REPLAY_MAX_BODY_SIZE) {
+                                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                                    .withStatusCode(BAD_GATEWAY.code())
+                                    .withBody("{\"error\":\"upstream response body exceeds maximum replay size of " + REPLAY_MAX_BODY_SIZE + " bytes — response too large to return via control plane\"}", MediaType.JSON_UTF_8)), true);
+                                return;
+                            }
+
+                            String serializedResponse = getHttpResponseSerializer().serialize(replayResponse);
+                            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                                .withStatusCode(OK.code())
+                                .withBody(serializedResponse, MediaType.JSON_UTF_8)), true);
+                        }
+                    } finally {
+                        canHandle.complete(true);
+                    }
+                });
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setHttpRequest(controlPlaneRequest)
+                    .setMessageFormat("exception handling replay request:{}error:{}")
+                    .setArguments(controlPlaneRequest, e.getMessage())
+                    .setThrowable(e)
+            );
+            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":" + jsonEncodeString(e.getMessage() != null ? e.getMessage() : "unknown error") + "}", MediaType.JSON_UTF_8)), true);
+            canHandle.complete(true);
+        }
+    }
+
+    /**
+     * Resolve the target host from a replay request, using the same precedence
+     * as {@link HttpRequest#socketAddressFromHostHeader()}: explicit
+     * {@code socketAddress.host} first, then the {@code Host} header.
+     */
+    private static String resolveReplayTargetHost(HttpRequest request) {
+        if (request.getSocketAddress() != null && request.getSocketAddress().getHost() != null) {
+            return request.getSocketAddress().getHost();
+        }
+        String hostHeader = request.getFirstHeader(HOST.toString());
+        if (isNotBlank(hostHeader)) {
+            return HttpRequest.splitHostPort(hostHeader)[0];
+        }
+        return null;
+    }
+
+    /**
+     * JSON-encode a string value (with surrounding quotes) using Jackson so that
+     * special characters (quotes, backslashes, newlines, control chars) are
+     * properly escaped — replacing the naive {@code .replace("\"","'")} pattern.
+     */
+    private static String jsonEncodeString(String value) {
+        try {
+            return ObjectMapperFactory.createObjectMapper().writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // Fallback: manual minimal escaping (should never happen for a plain string)
+            return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\"";
+        }
+    }
+
+    // ---- Lazy serializer getters ----
+
     private ExpectationIdSerializer getExpectationIdSerializer() {
         if (this.expectationIdSerializer == null) {
             this.expectationIdSerializer = new ExpectationIdSerializer(mockServerLogger);
@@ -3496,6 +3772,20 @@ public class HttpState {
             this.harConverter = new org.mockserver.serialization.har.HarConverter();
         }
         return harConverter;
+    }
+
+    private HttpRequestSerializer getHttpRequestSerializer() {
+        if (this.httpRequestSerializer == null) {
+            this.httpRequestSerializer = new HttpRequestSerializer(mockServerLogger);
+        }
+        return httpRequestSerializer;
+    }
+
+    private HttpResponseSerializer getHttpResponseSerializer() {
+        if (this.httpResponseSerializer == null) {
+            this.httpResponseSerializer = new HttpResponseSerializer(mockServerLogger);
+        }
+        return httpResponseSerializer;
     }
 
     private org.mockserver.serialization.curl.HttpRequestToCurlSerializer getHttpRequestToCurlSerializer() {
@@ -3616,6 +3906,190 @@ public class HttpState {
             String message = String.valueOf(e.getMessage());
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to verify async messages: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- breakpoint control endpoints ---
+
+    private HttpResponse handleBreakpointList() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.breakpoint.BreakpointRegistry registry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ArrayNode exchanges = objectMapper.createArrayNode();
+            for (java.util.Map.Entry<String, org.mockserver.mock.breakpoint.PausedExchange> entry : registry.entries().entrySet()) {
+                org.mockserver.mock.breakpoint.PausedExchange paused = entry.getValue();
+                com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+                node.put("id", paused.getCorrelationId());
+                node.put("phase", paused.getPhase().name());
+                node.put("ageMillis", paused.ageMillis());
+                if (paused.getMatchedExpectationId() != null) {
+                    node.put("expectationId", paused.getMatchedExpectationId());
+                }
+                HttpRequest req = paused.getCapturedRequest();
+                if (req != null) {
+                    com.fasterxml.jackson.databind.node.ObjectNode requestSummary = objectMapper.createObjectNode();
+                    if (req.getMethod() != null) {
+                        requestSummary.put("method", req.getMethod().getValue());
+                    }
+                    if (req.getPath() != null) {
+                        requestSummary.put("path", req.getPath().getValue());
+                    }
+                    node.set("request", requestSummary);
+                }
+                // include response summary for RESPONSE-phase exchanges
+                if (paused.getPhase() == org.mockserver.mock.breakpoint.PausedExchange.Phase.RESPONSE && paused.getCapturedResponse() != null) {
+                    HttpResponse resp = paused.getCapturedResponse();
+                    com.fasterxml.jackson.databind.node.ObjectNode responseSummary = objectMapper.createObjectNode();
+                    if (resp.getStatusCode() != null) {
+                        responseSummary.put("statusCode", resp.getStatusCode());
+                    }
+                    if (resp.getReasonPhrase() != null) {
+                        responseSummary.put("reasonPhrase", resp.getReasonPhrase());
+                    }
+                    node.set("response", responseSummary);
+                }
+                exchanges.add(node);
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.set("pausedExchanges", exchanges);
+            result.put("count", registry.size());
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    private HttpResponse handleBreakpointContinue(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with an 'id' field\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String id = node.path("id").asText(null);
+            if (isBlank(id)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
+            }
+            boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveContinue(id);
+            if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "continued");
+            resultNode.put("id", id);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    private HttpResponse handleBreakpointModify(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with 'id' and either 'httpRequest' or 'httpResponse' field\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String id = node.path("id").asText(null);
+            if (isBlank(id)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
+            }
+
+            // Determine whether this is a request-phase or response-phase modify
+            boolean hasRequest = node.hasNonNull("httpRequest");
+            boolean hasResponse = node.hasNonNull("httpResponse");
+
+            if (!hasRequest && !hasResponse) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"either 'httpRequest' (for request-phase) or 'httpResponse' (for response-phase) is required for modify\"}", MediaType.JSON_UTF_8);
+            }
+
+            boolean resolved;
+            if (hasResponse) {
+                // Response-phase modify: write a replacement response
+                HttpResponse modifiedResponse = getHttpResponseSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpResponse")));
+                resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveModifyResponse(id, modifiedResponse);
+            } else {
+                // Request-phase modify: forward a replacement request (A1a behaviour)
+                HttpRequest modifiedRequest = getHttpRequestSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpRequest")));
+                resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveModify(id, modifiedRequest);
+            }
+
+            if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "modified");
+            resultNode.put("id", id);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    private HttpResponse handleBreakpointAbort(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with an 'id' field\"}", MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String id = node.path("id").asText(null);
+            if (isBlank(id)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
+            }
+            HttpResponse abortResponse = null;
+            if (node.hasNonNull("httpResponse")) {
+                abortResponse = getHttpResponseSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpResponse")));
+            }
+            boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveAbort(id, abortResponse);
+            if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "aborted");
+            resultNode.put("id", id);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    /**
+     * Builds a safe JSON error response for breakpoint endpoints using Jackson,
+     * avoiding string-concatenation JSON injection.
+     */
+    private HttpResponse breakpointErrorResponse(com.fasterxml.jackson.databind.ObjectMapper objectMapper, Exception e) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+            errNode.put("error", String.valueOf(e.getMessage()));
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+        } catch (Exception jsonEx) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"internal error building response\"}", MediaType.JSON_UTF_8);
         }
     }
 }

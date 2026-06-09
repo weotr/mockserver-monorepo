@@ -104,4 +104,10 @@ public class ClientServerWarWithContextPathIntegrationTest extends AbstractBasic
     protected boolean supportsHTTP2() {
         return false;
     }
+
+    @Override
+    protected boolean supportsRequestBodyDecompression() {
+        // Tomcat / servlet containers do not decompress request bodies
+        return false;
+    }
 }

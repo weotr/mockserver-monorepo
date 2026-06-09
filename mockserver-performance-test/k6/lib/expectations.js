@@ -13,7 +13,7 @@
 
 import http from 'k6/http';
 import { check, fail } from 'k6';
-import { CONFIG } from './config.js';
+import { CONFIG, FORWARD } from './config.js';
 
 // The 4 seeded expectations — byte-for-byte the same shapes as the legacy
 // expectations.json so recorded baselines remain comparable.
@@ -71,6 +71,36 @@ export const REGEX_EXPECTATION = {
   times: { unlimited: true },
 };
 
+// A Velocity response-template expectation to exercise the dynamic
+// response-generation path (TemplateEngine), the heaviest always-available
+// per-request CPU path that needs no external responder. VELOCITY is the
+// default engine and is always on the classpath, so this runs on the stock
+// image. (Object/class callbacks need a connected websocket responder / a class
+// on the classpath — deferred to a v2 nullable `callback` behaviour.)
+export const TEMPLATE_EXPECTATION = {
+  httpRequest: { path: '/template' },
+  httpResponseTemplate: {
+    templateType: 'VELOCITY',
+    template: '{ "statusCode": 200, "body": "path=$!request.path method=$!request.method" }',
+  },
+  times: { unlimited: true },
+};
+
+// Build the /forward expectation routed at the given upstream host. Uses
+// httpOverrideForwardedRequest (a forward action that applies overrides then
+// forwards), routing /forward -> <host>/simple. For a regression baseline the
+// host is a DEDICATED upstream so the forward latency is not contaminated by the
+// matching load on the instance under measurement.
+export function forwardExpectation(host) {
+  return {
+    httpRequest: { path: '/forward' },
+    httpOverrideForwardedRequest: {
+      httpRequest: { headers: { host: [host] }, path: '/simple' },
+    },
+    times: { unlimited: true },
+  };
+}
+
 function jsonParams(extraTags) {
   return {
     headers: { 'Content-Type': 'application/json', ...CONFIG.keepAliveHeaders },
@@ -95,6 +125,30 @@ export function resetMockServer() {
   return http.put(`${CONFIG.controlPlane}/reset`, null, jsonParams());
 }
 
+// Seed the expectations exercised by regression.js / growth.js: the static
+// /simple (mock match), /template (dynamic response), /forward (forward action
+// to the upstream — or self when K6_FORWARD_SELF=true), and the large JSON body.
+// The upstream MockServer must itself be seeded with a /simple response (done by
+// perf-test-run.sh) for the forward behaviour to return 200.
+export function seedRegression() {
+  const host = FORWARD.forwardSelf ? '127.0.0.1:1080' : FORWARD.upstreamHost;
+  const expectations = [
+    {
+      httpRequest: { path: '/simple' },
+      httpResponse: { statusCode: 200, body: 'some simple response' },
+      times: { unlimited: true },
+    },
+    TEMPLATE_EXPECTATION,
+    forwardExpectation(host),
+    LARGE_BODY_EXPECTATION,
+  ];
+  const res = http.put(`${CONFIG.controlPlane}/expectation`, JSON.stringify(expectations), jsonParams());
+  if (res.status !== 201 && res.status !== 200) {
+    fail(`failed to seed regression expectations: HTTP ${res.status} ${res.body}`);
+  }
+  return res;
+}
+
 // --- actions (tagged so k6 reports per-operation) --------------------------
 
 const SIMPLE_EXPECTATION = JSON.stringify([
@@ -115,10 +169,10 @@ export function createSimpleExpectation() {
   return res;
 }
 
-export function getSimple() {
+export function getSimple(extraTags) {
   const res = http.get(`${CONFIG.baseUrl}/simple`, {
     headers: CONFIG.keepAliveHeaders,
-    tags: { op: 'match', name: 'GET /simple' },
+    tags: { op: 'match', name: 'GET /simple', ...(extraTags || {}) },
   });
   check(res, { 'match: 200': (r) => r.status === 200 });
   return res;
@@ -145,5 +199,14 @@ export function getRegex() {
     tags: { op: 'regex', name: 'GET /regex/:id/resource' },
   });
   check(res, { 'regex: 200': (r) => r.status === 200 });
+  return res;
+}
+
+export function getTemplated() {
+  const res = http.get(`${CONFIG.baseUrl}/template`, {
+    headers: CONFIG.keepAliveHeaders,
+    tags: { op: 'template', name: 'GET /template' },
+  });
+  check(res, { 'template: 200': (r) => r.status === 200 });
   return res;
 }

@@ -12,7 +12,8 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.scheduler.Scheduler;
 
-import static junit.framework.TestCase.assertEquals;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 import static org.mockito.Mockito.mock;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.mock.listeners.MockServerMatcherNotifier.Cause.API;
@@ -54,8 +55,8 @@ public class MockServerMatcherOverlappingRequestsTest {
         requestMatchers.add(expectationOne, API);
 
         // then
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationOne));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath")), is(expectationOne));
     }
 
     @Test
@@ -67,8 +68,8 @@ public class MockServerMatcherOverlappingRequestsTest {
         requestMatchers.add(expectationOne, API);
 
         // then
-        assertEquals(expectationZero, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath").withCookies(new Cookie("name", "value"))));
-        assertEquals(expectationOne, requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath").withCookies(new Cookie("name", "value"))));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath").withCookies(new Cookie("name", "value"))), is(expectationZero));
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somepath").withCookies(new Cookie("name", "value"))), is(expectationOne));
     }
 
 }

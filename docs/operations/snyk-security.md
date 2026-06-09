@@ -4,27 +4,11 @@
 
 MockServer uses [Snyk](https://snyk.io) for continuous security vulnerability scanning of Maven dependencies. Snyk automatically scans pull requests and reports vulnerabilities before they are merged.
 
-## ⚠️ javax / jakarta Compatibility Constraint
+## Namespace Migration Status
 
-**Critical limitation:** MockServer targets Java 17 as the minimum supported JVM version, but the codebase still uses the `javax` namespace throughout. The `javax`→`jakarta` migration is a separate planned step. Until it lands, many security vulnerability fixes that ship only on the `jakarta` side of the split are unavailable.
+The `javax`→`jakarta` namespace migration is **complete**. MockServer now targets Jakarta EE 10, Spring Framework 7.0.7, Tomcat 11, and Jetty 12. The `.snyk` policy file no longer carries ignore rules blocked solely by the old `javax` constraint.
 
-### Consequence: Blocked Security Fixes
-
-Many modern dependency versions ship only against the `jakarta` namespace:
-- ❌ Spring Framework 6.x (uses `jakarta`)
-- ❌ Spring Boot 3.x (uses `jakarta`)
-- ❌ Jetty 10.x/12.x (uses `jakarta`)
-- ❌ Jakarta EE 9+ (`javax`→`jakarta` namespace migration)
-- ❌ OkHttp 5.x (also depends on the jakarta-side ecosystem)
-
-**Most outstanding Snyk vulnerabilities in MockServer are due to this constraint.** The vulnerabilities cannot be fixed without first scheduling the `javax`→`jakarta` migration.
-
-### Mitigation
-
-- Most vulnerable dependencies are **test-only** (`mockserver-examples`, `mockserver-spring-test-listener`)
-- Not shipped in production artifacts (`mockserver-netty` JAR, Docker images)
-- All vulnerabilities are tracked in the `.snyk` policy file with documented reasons
-- Expiration dates trigger periodic review (currently: 2026-08-11)
+For full details see [docs/operations/security.md](security.md).
 
 ## Integration Points
 
@@ -107,12 +91,7 @@ snyk monitor --maven-aggregate-project
 
 ### Compatibility Constraints
 
-**Critical constraint:** MockServer runs on Java 17+ but the codebase still uses the `javax` namespace throughout. Until the `javax`→`jakarta` migration is scheduled and landed, the following upgrades are blocked:
-
-- **Spring Framework 6.x** (uses `jakarta` namespace; current: 5.3.39)
-- **Spring Boot 3.x** (requires Spring 6; current: 2.7.18)
-- **Jetty 10+/12+** (uses `jakarta` namespace; current: 9.4.58)
-- **Jakarta EE 9+** (the `javax`→`jakarta` namespace migration itself)
+The `javax`→`jakarta` namespace migration is complete (Spring 7.0.7, Jakarta EE 10, Jetty 12, Tomcat 11). Previously blocked upgrades are now unblocked. See [docs/operations/security.md](security.md) for the current dependency policy and any remaining constraints.
 
 ### Vulnerability Categories
 
@@ -120,61 +99,44 @@ Snyk reports vulnerabilities in several categories. Prioritize based on:
 
 1. **Severity** (Critical > High > Medium > Low)
 2. **Exploitability** (Is the vulnerable code path actually used in MockServer?)
-3. **Remediation path** (Can we upgrade while staying on the `javax` namespace?)
+3. **Remediation path** (Is a fixed version available and compatible?)
 
 ### Decision Tree
 
 ```mermaid
 flowchart TD
     START[Snyk reports vulnerability] --> SEVERITY{Severity?}
-    SEVERITY -->|Critical/High| EXPLOITABLE{Exploitable in<br/>MockServer context?}
+    SEVERITY -->|Critical/High| EXPLOITABLE{"Exploitable in\nMockServer context?"}
     SEVERITY -->|Medium/Low| REVIEW[Review in backlog]
     
-    EXPLOITABLE -->|Yes| JAVAX{"Fix available\non javax side?"}
-    EXPLOITABLE -->|No| DOCUMENT[Document why not exploitable\nAdd to .snyk ignore list]
+    EXPLOITABLE -->|Yes| FIXAVAIL{"Fixed version\navailable?"}
+    EXPLOITABLE -->|No| DOCUMENT["Document why not exploitable\nAdd to .snyk ignore list"]
 
-    JAVAX -->|Yes| UPGRADE[Upgrade dependency]
-    JAVAX -->|No| RISK{"Accept risk or\nfind alternative?"}
+    FIXAVAIL -->|Yes| UPGRADE[Upgrade dependency]
+    FIXAVAIL -->|No| RISK{"Accept risk or\nfind alternative?"}
     
     RISK -->|Accept risk| DOCUMENT
-    RISK -->|Find alternative| BACKPORT[Backport fix or<br/>find workaround]
+    RISK -->|Find alternative| BACKPORT["Backport fix or\nfind workaround"]
 ```
 
-### Current Status (as of May 2026)
+### Current Status (as of June 2026)
 
-**Modules with vulnerabilities:**
-- `mockserver-spring-test-listener`: 8 issues (Spring Framework 5.3.39)
-- `mockserver-examples`: 28 issues (Spring Boot 2.7.18, Jetty 9.4.58, OkHttp 4.12.0)
+**All modules:** ✅ No known vulnerabilities blocked by namespace constraints. The `javax`→`jakarta` migration is complete; Spring 7.0.7, Jetty 12, and Tomcat 11 are now in use.
 
-**All other modules:** ✅ No known vulnerabilities
-
-**Blocked upgrades pending the javax→jakarta migration:**
-- Spring Framework 5.3.39 → 6.x (uses `jakarta`)
-- Spring Boot 2.7.18 → 3.x (requires Spring 6)
-- Jetty 9.4.58 → 10+/12+ (uses `jakarta`)
-
-### Jetty Critical Vulnerability (HTTP Request Smuggling)
-
-**Issue:** Jetty 9.4.58 has a critical HTTP Request Smuggling vulnerability (SNYK-JAVA-ORGECLIPSEJETTY-16061843)
-
-**Status:** Jetty 9.4.x is end-of-life. The fix is only available in Jetty 12.x, which uses the `jakarta` namespace.
-
-**Impact in MockServer:** Jetty is only used in test dependencies (`mockserver-examples`), not in production runtime. The vulnerability does not affect MockServer's core functionality or production deployments.
-
-**Mitigation:** The vulnerable Jetty dependency is isolated to the examples module which is not shipped in production artifacts. Users should not run the examples module in production environments.
+For any outstanding vulnerabilities, consult the Snyk dashboard at https://app.snyk.io/org/mockserver/projects.
 
 ## Snyk Policy File
 
 **File:** `.snyk`
 
-MockServer uses a Snyk policy file to document vulnerabilities that cannot be fixed due to the outstanding `javax`→`jakarta` namespace migration.
+MockServer uses a Snyk policy file to document vulnerabilities that are ignored with documented reasons (e.g., not exploitable in MockServer's context, or mitigated by isolation to test-only modules).
 
 ### Policy Structure
 
 The `.snyk` file contains:
-- **Ignore rules** for vulnerabilities where fixes only ship on the `jakarta` side of the split
-- **Expiration dates** (currently 2026-08-11) to trigger periodic review
-- **Documented reasons** explaining the `javax`/`jakarta` constraint
+- **Ignore rules** for vulnerabilities that cannot be fixed or are not exploitable
+- **Expiration dates** to trigger periodic review
+- **Documented reasons** explaining each ignore decision
 
 ### Adding New Ignores
 
@@ -186,7 +148,7 @@ snyk ignore --id=SNYK-JAVA-ORGSPRINGFRAMEWORK-12008931
 
 # Command line - specify all parameters
 snyk ignore --id=SNYK-JAVA-ORGSPRINGFRAMEWORK-12008931 \
-  --reason="Spring 6.x required for fix, but Spring 6.x uses the jakarta namespace. MockServer still uses javax." \
+  --reason="Not exploitable in MockServer context: only used in test-only examples module." \
   --expires="2026-08-11"
 ```
 
@@ -206,8 +168,7 @@ snyk test --policy-path=.snyk
 
 The expiration dates in the policy file trigger automatic Snyk notifications when they approach. This ensures:
 - Regular review of ignored vulnerabilities
-- Re-evaluation when the javax→jakarta migration is scheduled
-- Updates when backports become available
+- Updates when backports or fixed versions become available
 
 ## Integration with Dependabot
 
@@ -217,8 +178,6 @@ Snyk and Dependabot work together:
 2. **Snyk** scans the PRs for new/resolved vulnerabilities
 3. Both checks must pass before merge
 
-For upgrades that force the `jakarta` namespace, both Snyk and manual review will reject the PR until the javax→jakarta migration is scheduled.
-
 ## GitHub Actions Integration
 
 Snyk checks run automatically via GitHub's built-in Snyk integration. No custom workflow is required. The integration is configured at the organization/repository level in GitHub settings.
@@ -226,8 +185,7 @@ Snyk checks run automatically via GitHub's built-in Snyk integration. No custom 
 ## Next Steps
 
 1. **Regular monitoring:** Review Snyk dashboard monthly for new vulnerabilities
-2. **javax→jakarta migration:** Schedule the namespace migration (enables Spring 6.x, Jetty 12, etc.); see `docs/plans/java-17-migration.md` for scope
-3. **Backport evaluation:** For critical vulnerabilities, evaluate if backports or workarounds exist on the `javax` side
+2. **Backport evaluation:** For critical vulnerabilities, evaluate if backports or fixed upstream versions are available
 
 ## References
 

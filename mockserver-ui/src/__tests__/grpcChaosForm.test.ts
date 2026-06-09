@@ -4,7 +4,7 @@
  * no-op; the builder now defaults the probability to 1 (always inject) when a status code is set.
  */
 import { describe, it, expect } from 'vitest';
-import { buildGrpcChaosProfile, EMPTY_GRPC_CHAOS_FORM } from '../components/ServiceChaosPanel';
+import { buildGrpcChaosProfile, EMPTY_GRPC_CHAOS_FORM } from '../lib/grpcChaosForm';
 
 describe('buildGrpcChaosProfile', () => {
   it('defaults errorProbability to 1 when a status code is set but no probability given', () => {

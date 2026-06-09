@@ -17,7 +17,7 @@ layout: default
 
 <div class="build_tag">
 	<a target="_blank" rel="noopener noreferrer" href="https://github.com/orgs/mock-server/projects/1"><img width="47px" src="images/GitHub_Logo.png" alt="MockServer GitHub Project"></a>&nbsp;
-	<a target="_blank" rel="noopener noreferrer" href="https://join-mock-server-slack.herokuapp.com"><img width="66px" src="images/slack-logo-slim.png" alt="Join MockServer Slack"></a>&nbsp;
+	<a target="_blank" rel="noopener noreferrer" href="/slack.html"><img width="66px" src="images/slack-logo-slim.png" alt="Join MockServer Slack"></a>&nbsp;
 	<a target="_blank" rel="noopener noreferrer" href="https://buildkite.com/mockserver/mockserver"><img src="https://badge.buildkite.com/3b6803f4fe98cb5ed7bf18292a1434f800b53d8fecb92811d8.svg?style=square&theme=slack&branch=master" alt="BuildKite Build Status"></a>
 </div>
 
@@ -38,6 +38,16 @@ layout: default
 	<li>a <a href="/proxy/getting_started.html">proxy</a> recording and optionally modifying requests and responses</li>
 	<li>both a <a href="/proxy/getting_started.html">proxy</a> for some requests and a <a href="/mock_server/getting_started.html">mock</a> for other requests at the same time</li>
 	<li>an <a href="/mock_server/ai_mcp_setup.html">MCP server</a> that lets AI coding assistants drive the mock and proxy in natural language</li>
+</ul>
+
+<p>Beyond mocking and proxying, the same MockServer instance also lets you:</p>
+
+<ul>
+	<li><strong><a href="/mock_server/verification.html">verify</a></strong> that expected requests were (or were not) made &mdash; as test assertions</li>
+	<li><strong><a href="/proxy/record_and_replay.html">record and replay</a></strong> real traffic to reproduce how a system behaves</li>
+	<li><strong><a href="/mock_server/chaos_testing.html">inject chaos and faults</a></strong> &mdash; latency, errors, dropped connections, malformed responses &mdash; to test how your system copes when its dependencies misbehave (HTTP, gRPC and TCP fault injection, plus <a href="/mock_server/chaos_testing_kubernetes.html">Kubernetes</a> and <a href="/mock_server/service_mesh.html">service-mesh</a> chaos)</li>
+	<li>mock more than REST &mdash; <a href="/mock_server/grpc_mocking.html">gRPC</a>, <a href="/mock_server/asyncapi_messaging.html">AsyncAPI message brokers</a> (Kafka, MQTT, AMQP) and <a href="/mock_server/mocking_oauth2.html">OAuth2 / OIDC</a></li>
+	<li>generate mocks and validate traffic directly from an <a href="/mock_server/using_openapi.html">OpenAPI / Swagger specification</a></li>
 </ul>
 
 <p>MockServer is also <strong>AI-native</strong>: every instance ships a built-in <a href="https://modelcontextprotocol.io/" target="_blank" rel="noopener noreferrer">Model Context Protocol (MCP)</a> server at <code>/mockserver/mcp</code> with no extra configuration, and the documentation is published in machine-readable form for LLMs. In practice this means:</p>
@@ -65,20 +75,20 @@ layout: default
 <p>MockServer supports the follow <strong>actions</strong>:</p>
 <ul>
 	<li>
-        <strong>return a "mock" <a href="/mock_server/creating_expectations.html#mock_response">response</a></strong> when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>
+        <strong>return a "mock" <a href="/mock_server/creating_expectations.html#response_action">response</a></strong> when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>
         <p><img class="action_image" src="images/expectation_response_action.png" alt="Response Action Expectation"></p>
     </li>
 	<li>
-        <strong><a href="/mock_server/creating_expectations.html#mock_forward">forward</a> a request</strong> when the request matches an <a href="/mock_server/creating_expectations.html">expectation</a> (i.e. a dynamic port forwarding proxy)
+        <strong><a href="/mock_server/creating_expectations.html#forward_action">forward</a> a request</strong> when the request matches an <a href="/mock_server/creating_expectations.html">expectation</a> (i.e. a dynamic port forwarding proxy)
         <p><img class="action_image" src="images/expectation_forward_action.png" alt="Forward Action Expectation"></p>
     </li>
 	<li>
-        <strong>execute a <a href="/mock_server/creating_expectations.html#callback">callback</a></strong> when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>, allowing the response to be created dynamically
+        <strong>execute a <a href="/mock_server/creating_expectations.html#actions">callback</a></strong> when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>, allowing the response to be created dynamically
         <p><img class="action_image" src="images/expectation_callback_action.png" alt="Callback Action Expectation"></p>
     </li>
 
     <li>
-        <strong>return an <a href="/mock_server/creating_expectations.html#mock_error">invalid response</a></strong> or close the connection when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>
+        <strong>return an <a href="/mock_server/creating_expectations.html#error_action">invalid response</a></strong> or close the connection when a request matches an <a href="/mock_server/creating_expectations.html">expectation</a>
         <p><img class="action_image" src="images/expectation_error_action.png" alt="Error Action Expectation"></p>
     </li>
 	<li>
@@ -168,11 +178,11 @@ layout: default
 
 <ul>
 	<li><strong><a href="/mock_server/ai_mcp_setup.html">MCP Setup</a></strong> — connect Claude Code, Cursor, Windsurf, Cline, or OpenCode to a running MockServer at <code>http://localhost:1080/mockserver/mcp</code> over the MCP Streamable HTTP transport</li>
-	<li><strong><a href="/mock_server/ai_mcp_tools.html">MCP Tools Reference</a></strong> — every tool the AI assistant can invoke: <code>create_expectation</code>, <code>verify_request</code>, <code>retrieve_recorded_requests</code>, <code>retrieve_logs</code>, <code>debug_request_mismatch</code>, and more</li>
+	<li><strong><a href="/mock_server/ai_mcp_tools.html">MCP Tools Reference</a></strong> — every tool the AI assistant can invoke: <code>create_expectation</code>, <code>verify_request</code>, <code>retrieve_recorded_requests</code>, <code>retrieve_logs</code>, <code>retrieve_request_responses</code>, <code>debug_request_mismatch</code>, and more</li>
 	<li><strong><a href="/mock_server/ai_debugging.html">AI-Assisted Debugging</a></strong> — diagnose request mismatches and inspect recorded request/response pairs through an AI assistant</li>
 	<li><strong><a href="/mock_server/ai_verification.html">AI-Assisted Verification</a></strong> — build test assertions using natural language</li>
 	<li><strong><a href="/mock_server/ai_traffic_inspection.html">AI Traffic Inspection</a></strong> — record outbound traffic and let an AI assistant explain what happened</li>
-	<li><strong><a href="/mock_server/ai_protocol_mocking.html">AI Protocol Mocking</a></strong> — generate mocks for REST, gRPC, and OAuth2 flows from prompts</li>
+	<li><strong><a href="/mock_server/ai_protocol_mocking.html">AI Protocol Mocking</a></strong> — mock MCP, A2A, SSE and WebSocket AI-protocol servers</li>
 	<li><strong><a href="/mock_server/ai_openapi.html">OpenAPI Fallback for AI</a></strong> — use MockServer's <a href="/mockserver-openapi.yaml">OpenAPI spec</a> with AI tools that don't yet support MCP</li>
 </ul>
 

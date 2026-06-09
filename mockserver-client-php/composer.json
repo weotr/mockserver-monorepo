@@ -1,0 +1,36 @@
+{
+    "name": "mock-server/mockserver-client",
+    "description": "PHP client for MockServer - enables easy mocking of any system you integrate with via HTTP or HTTPS",
+    "type": "library",
+    "license": "Apache-2.0",
+    "keywords": ["mockserver", "mock", "testing", "http", "stub", "proxy"],
+    "homepage": "https://www.mock-server.com",
+    "authors": [
+        {
+            "name": "James D Bloom",
+            "email": "jamesdbloom@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "guzzlehttp/guzzle": "^7.5",
+        "psr/http-client": "^1.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "MockServer\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "MockServer\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable"
+}

@@ -7,7 +7,8 @@ import Tooltip from '@mui/material/Tooltip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import type { LogGroup as LogGroupType } from '../types';
-import LogEntry, { entryToText } from './LogEntry';
+import LogEntry from './LogEntry';
+import { entryToText } from '../lib/logEntryText';
 import CopyButton from './CopyButton';
 
 interface LogGroupProps {

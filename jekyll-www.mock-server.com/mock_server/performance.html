@@ -2,8 +2,8 @@
 title: Scalability & Latency
 description: "MockServer performance benchmarks: sub-2ms average latency at 95k requests/sec, tuning guidance for memory, thread pools, and log entry limits."
 layout: page
-pageOrder: 6
-section: 'General'
+pageOrder: 3
+section: 'Operations'
 subsection: true
 sitemap:
 priority: 0.8
@@ -26,7 +26,7 @@ lastmod: 2019-11-10T08:00:00+01:00
 <ul>
     <li><a target="_blank" href="https://netty.io" rel="noopener noreferrer">Netty</a> an asynchronous event-driven network application framework to maximise the scalability of HTTP and TLS</li>
     <li><a target="_blank" href="https://lmax-exchange.github.io/disruptor" rel="noopener noreferrer">LMAX Disruptor</a> a high performance inter-thread messaging library to maximise the scalability of recording events (i.e. state) and logging</li>
-    <li><a target="_blank" href="https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/ScheduledThreadPoolExecutor.html" rel="noopener noreferrer">ScheduledThreadPoolExecutor</a> a thread pool that can scheduled delayed tasks is used to execute delay response to avoid
+    <li><a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/ScheduledThreadPoolExecutor.html" rel="noopener noreferrer">ScheduledThreadPoolExecutor</a> a thread pool that can scheduled delayed tasks is used to execute delay response to avoid
         blocking threads
     </li>
 </ul>
@@ -39,11 +39,15 @@ lastmod: 2019-11-10T08:00:00+01:00
     <li>basic GET request matching third expectation (i.e. three matches are attempted for each request)</li>
 </ul>
 
+<p><strong>These figures are historical and indicative.</strong> They were measured on an older Java 13 JVM on specific hardware, so they are not a guarantee of current performance. Real-world throughput and latency depend on your hardware, payload size, expectation complexity, and JVM/configuration tuning &mdash; treat the numbers below as a rough reference and benchmark your own workload rather than as a fixed Java 17 baseline.</p>
+
 <p>During the test MockServer was run on a Java 13 JVM, with the following command:</p>
 
 <pre class="prettyprint lang-bash code"><code class="code">java -Xmx500m -Dmockserver.logLevel=WARN -Dmockserver.disableLogging=true -jar ~/.m2/repository/org/mock-server/mockserver-netty/{{ site.mockserver_version }}/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080</code></pre>
 
 <p><strong>Note:</strong> The benchmark uses <span class="inline_code">-Dmockserver.disableLogging=true</span> to suppress system-out log output and <span class="inline_code">-Dmockserver.logLevel=WARN</span> to reduce diagnostic log entries, minimising I/O and formatting overhead. Request/response log entries are still stored in memory for verification. For sustained high-throughput operation, the most effective tuning is to reduce <span class="inline_code">maxLogEntries</span> &mdash; see the <a href="#troubleshooting_performance">troubleshooting section</a> below for guidance.</p>
+
+<p><strong>Note for long-running instances:</strong> the in-memory request/event log (bounded by <span class="inline_code">maxLogEntries</span>, default the minimum of free heap KB / 8 and 100,000 entries) grows as requests are received and is the dominant source of memory pressure over time. Clearing expectations alone does <strong>not</strong> free the log. To reclaim that memory on a running instance, clear the log explicitly with <span class="inline_code">PUT /mockserver/clear?type=LOG</span>, or clear everything (expectations, recorded requests and log) with <span class="inline_code">PUT /mockserver/clear?type=ALL</span> or <span class="inline_code">PUT /mockserver/reset</span>.</p>
 
 <p>The following graph shows how the p99 increases as the number of parallel clients increase.</p>
 
@@ -253,7 +257,7 @@ lastmod: 2019-11-10T08:00:00+01:00
 
 <h3>Locust Performance Test Results</h3>
 
-<p><a target="_blank" href="https://httpd.apache.org/docs/2.4/programs/ab.html" rel="noopener noreferrer">Apache Benchmark</a> was executed as follows:</p>
+<p><a target="_blank" href="https://docs.locust.io/" rel="noopener noreferrer">Locust</a> was executed as follows:</p>
 
 <pre class="prettyprint lang-bash code"><code class="code">locust --loglevel=WARNING --headless --only-summary -u &lt;parallel clients&gt; -r 100 -t 180 --host=http://127.0.0.1:1080</code></pre>
 
@@ -436,7 +440,7 @@ lastmod: 2019-11-10T08:00:00+01:00
 <pre class="prettyprint lang-python code"><code class="code">import locust.stats
 from locust import task, between
 locust.stats.CONSOLE_STATS_INTERVAL_SEC = 60
-from locust.contrib.fasthttp import FastHttpLocust
+from locust.contrib.fasthttp import FastHttpUser
 
 class UserBehavior(FastHttpUser):
     wait_time = between(1, 1)

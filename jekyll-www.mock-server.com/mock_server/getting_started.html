@@ -4,7 +4,7 @@ description: Step-by-step guide to starting MockServer, creating your first expe
 shortTitle: Getting Started
 layout: page
 pageOrder: 1
-section: 'Mock Server'
+section: 'Getting Started'
 subsection: true
 sitemap:
   priority: 0.9
@@ -53,9 +53,9 @@ sitemap:
 
 <h2>Spring Boot Compatibility</h2>
 
-<p>MockServer targets <strong>Java 17</strong> as the minimum supported version and uses the <span class="inline_code">javax</span> namespace throughout. This means MockServer is compatible with <strong>Spring Boot 2.x</strong> (which uses Spring Framework 5.x) but is <strong>not compatible with Spring Boot 3.x</strong> (which uses Spring Framework 6.x).</p>
+<p>MockServer targets <strong>Java 17</strong> as the minimum supported version and uses the <span class="inline_code">jakarta</span> namespace (Jakarta EE / Spring Framework 6+) throughout. This means MockServer is compatible with <strong>Spring Boot 3.x and later</strong>. Spring Boot 2.x (which uses Spring Framework 5.x and the older <span class="inline_code">javax</span> namespace) is no longer the target.</p>
 
-<p>Spring Boot 3 migrated from the <span class="inline_code">javax</span> namespace to the <span class="inline_code">jakarta</span> namespace. If your project uses Spring Boot 3, you can still use MockServer as a standalone Docker container or process, but the Spring Test Execution Listener and JUnit integrations that depend on Spring classpath integration are not supported.</p>
+<p>Spring Boot 3 migrated from the <span class="inline_code">javax</span> namespace to the <span class="inline_code">jakarta</span> namespace, and MockServer has moved to <span class="inline_code">jakarta</span> to match. The Spring Test Execution Listener and JUnit integrations that depend on Spring classpath integration target Spring Boot 3.x and later.</p>
 
 <table>
     <tr>
@@ -65,15 +65,15 @@ sitemap:
         <th>MockServer Compatible</th>
     </tr>
     <tr>
-        <td>2.x</td>
-        <td>5.x</td>
-        <td><span class="inline_code">javax</span></td>
+        <td>3.x and later</td>
+        <td>6+</td>
+        <td><span class="inline_code">jakarta</span></td>
         <td>Yes</td>
     </tr>
     <tr>
-        <td>3.x</td>
-        <td>6.x</td>
-        <td><span class="inline_code">jakarta</span></td>
+        <td>2.x</td>
+        <td>5.x</td>
+        <td><span class="inline_code">javax</span></td>
         <td>No (use Docker or standalone)</td>
     </tr>
 </table>
@@ -110,3 +110,14 @@ sitemap:
 <h2>Single Port Architecture</h2>
 
 <p>MockServer serves both mock and proxy traffic on the same port (default 1080). There is no separate port for proxying. The <span class="inline_code">proxyRemotePort</span> and <span class="inline_code">proxyRemoteHost</span> settings specify the upstream target server that unmatched requests are forwarded to — they do not open a separate listening port. All expectations, proxy forwarding, and protocol support (HTTP, HTTPS, SOCKS) share the single <span class="inline_code">serverPort</span>.</p>
+
+<a id="next_steps" class="anchor" href="#next_steps">&nbsp;</a>
+
+<h2>Next Steps</h2>
+
+<ul>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the full reference for request matchers and response, forward, callback, and error actions</li>
+    <li><a href="/mock_server/verification.html">Verify Requests</a> &mdash; assert that your code under test sent the requests you expected</li>
+    <li><a href="/mock_server/mockserver_testcontainers.html">Testcontainers Integration</a> &mdash; start a MockServer container for your JVM tests with the official Testcontainers module</li>
+    <li><a href="/mock_server/importing_expectations.html">Importing Expectations</a> &mdash; load expectations in bulk from JSON or an OpenAPI specification instead of one at a time</li>
+</ul>

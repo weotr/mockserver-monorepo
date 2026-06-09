@@ -68,6 +68,122 @@ These look like knobs but are not — changing them rarely helps and often hurts
 - **`matchersFailFast`** — defaults to `true` (early-exit on first non-matching field) and that is almost always right. Disable only when you specifically need every field's match status in the failure log.
 - **`regexMatchingTimeoutMillis`** — defaults to 5000 ms (5 seconds), which hands every regex evaluation off to a thread pool with a `future.get(timeout)` to guard against catastrophic-backtracking (ReDoS). The thread-pool hand-off itself costs a context switch per regex evaluation per matcher per request. If you control all expectations and are confident no regex can back-track catastrophically, set `regexMatchingTimeoutMillis=0` to run the regex inline on the event-loop thread and skip the hand-off entirely. **Do not set this to 0 when expectations come from untrusted sources** — `MatchingTimeoutExecutor` is the ReDoS guard.
 
+## Performance regression pipeline
+
+A daily, notify-only pipeline catches performance regressions automatically by comparing each run against a rolling stored-history baseline. It runs independently of the opt-in `k6 load test` step that already exists in the regular build pipeline (that step stays unchanged).
+
+### What it runs
+
+```mermaid
+flowchart TD
+    SCHED["Buildkite daily schedule
+04:00 UTC"] --> GUARD["perf-test-guard.sh
+trigger queue
+commit-guard check"]
+    GUARD -->|"HEAD == last RUN commit"| SKIP["Annotate: skipped
+exit 0"]
+    GUARD -->|"new commit since last RUN"| UPLOAD["Dynamic pipeline upload
+run + microbench + compare steps"]
+    UPLOAD --> RUN["perf-test-run.sh
+perf queue  c5.4xlarge"]
+    UPLOAD --> MICRO["perf-test-microbench.sh
+perf queue  c5.4xlarge"]
+    RUN --> ARTIFACTS["Upload perf-result.json
+Buildkite artifacts"]
+    MICRO --> ARTIFACTS
+    ARTIFACTS --> COMPARE["perf-test-compare.sh
+perf queue
+merge + persist to S3 + compare"]
+    COMPARE --> ANNOTATE["Buildkite annotation
+markdown table
+NOTIFY ONLY — exits 0"]
+```
+
+**Commit guard:** `perf-test-guard.sh` resolves the commit the heavy regression run *last actually executed against* (`last_perf_run_commit` in `lib/last-successful-commit.sh`) and dispatches only when `HEAD` differs. Crucially this keys off **real runs, not lint passes**: the perf-test pipeline passes on its lint step on every push, so "last successful build" would almost always be `HEAD` and the guard would skip forever. Instead, `perf-test-run.sh` records `perf_regression_ran_commit` in the build's Buildkite meta-data when it runs, and the guard reads the most recent such value via the Buildkite API. If `HEAD` equals it, the pipeline annotates "skipped" and exits; otherwise it dynamically uploads the run/microbench/compare steps. (The sibling `last_successful_commit` helper — last *passed build* — remains used by `generate-pipeline.sh` for path-based change detection.)
+
+**Run step (`perf-test-run.sh`, `perf` queue):** Starts a dedicated upstream MockServer (needed for the `forward` behaviour) and the server under test with metrics enabled and default `maxLogEntries`. On hosts with 16+ vCPU it core-pins the server, upstream, and k6 to disjoint cpusets for reproducibility; on smaller hosts it skips pinning with a warning. Runs `regression.js` twice — once over plain HTTP, once over HTTPS (ALPN auto-negotiates HTTP/2), then runs `growth.js` with a background sampler collecting CPU (`docker stats`), heap (`jvm_memory_used_bytes{area="heap"}`), GC (`jvm_gc_collection_seconds_sum`), and threads (`jvm_threads_current`) from `/mockserver/metrics` every 5 seconds. Assembles and uploads `perf-result.json`.
+
+**Microbench step (`perf-test-microbench.sh`, `perf` queue):** Builds `mockserver-core` inside `mockserver/mockserver:maven`, runs the JMH `MatchingBenchmark` (`mockserver/mockserver-benchmark`) with `-prof gc` over focused params. Reshapes JMH output into `perf-microbench.json`.
+
+**Compare step (`perf-test-compare.sh`, `perf` queue):** Merges the two artifacts; persists the run to `s3://mockserver-ci-perf-results/runs/<branch>/<iso>__<sha>.json`; fetches the last N=10 prior runs. If fewer than MIN_BASELINE=5 runs exist it annotates "baseline warming up" and stops. Otherwise it computes a regression threshold per metric using a rolling **median + MAD** baseline and flags regressions.
+
+### Triggering a run
+
+The heavy run is gated so it does not fire on ordinary commits. There are three ways to start one:
+
+- **Daily schedule (automatic).** A Buildkite schedule (`perf_regression_daily`, `0 4 * * *` UTC, defined in `terraform/buildkite-pipelines/pipelines.tf`) creates a `build.source == 'schedule'` build. The commit guard dispatches the heavy steps only if `master` has moved since the last *actual* run (see the meta-data mechanism above).
+- **Manual UI build.** Clicking **New Build** on the `mockserver-performance-test` pipeline creates a `build.source == 'ui'` build. This **force-dispatches** the run regardless of the new-commit check, so you can re-measure the same commit on demand.
+- **`[perf-run]` build message (API / CLI).** Any build whose message contains `[perf-run]` force-dispatches the run — the programmatic equivalent of the UI button. The daily schedule and the orchestrator's path-based triggers never carry this marker, so it cannot fire the heavy run by accident. Example:
+  ```bash
+  curl -H "Authorization: Bearer $BK_TOKEN" \
+    -X POST "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver-performance-test/builds" \
+    -d '{"commit":"<sha>","branch":"master","message":"[perf-run] manual run"}'
+  ```
+
+`ui` and `[perf-run]` set `FORCE_RUN=true` in `perf-test-guard.sh`, bypassing the "new commit since last run" check; a `schedule` build respects it. The guard runs on the cheap `trigger` queue; only the dispatched run/microbench/compare steps consume the `perf` queue (a c5.4xlarge that scales from zero, so allow a few minutes for the agent to launch).
+
+### Behaviours measured
+
+Four behaviours run in `regression.js`, each as a `constant-arrival-rate` k6 scenario tagged `op:<name>`:
+
+| Tag | What it measures |
+|-----|-----------------|
+| `match` | Static mock match and response |
+| `forward` | Forward action to a dedicated upstream MockServer |
+| `template` | Velocity response template rendering |
+| `large` | ~4 KB JSON response body |
+
+A warmup scenario (`op:warmup`) always runs first so JIT compilation and GC reach steady state before measurements begin.
+
+Each behaviour is measured twice: `<op>_http` over plain HTTP and `<op>_https_h2` over HTTPS with HTTP/2 (ALPN). Result keys are `<op>_<proto>` (`match_http`, `match_https_h2`, etc.).
+
+`growth.js` covers the separate "resource grows over time" class of regression (validated against [issue #2329](https://github.com/mock-server/mockserver/issues/2329): O(n) request-log eviction once the 100k `maxLogEntries` ring fills causes CPU/latency to climb). It runs a sustained `load` scenario on the match path at a rate high enough to fill `maxLogEntries` early, with low-rate latency probes at the start (`window:first`) and end (`window:last`) of the run. It emits first/last-window p95 and their ratio.
+
+### Result JSON schema
+
+Two artifacts are produced per run and merged by the compare step before persisting to S3:
+
+- `perf-result.json` — `{metadata, behaviours: {<op>_<proto>: {p50_ms, p95_ms, p99_ms, throughput_rps, error_rate}}, growth: {cpu_peak, heap_start, heap_end, heap_peak, heap_ratio, gc_seconds_delta, threads_peak, p95_start, p95_end, p95_ratio}}`
+- `perf-microbench.json` — `{microbench: {<matcherType>_<count>: {time_per_op, time_unit, alloc_bytes_per_op}}}`
+
+### Regression thresholds
+
+The compare step applies a **rolling median + MAD** baseline over the last N=10 prior runs. A metric is flagged when the head value crosses `max(median + 3 × 1.4826 × MAD, percent-floor)`:
+
+| Metric class | Direction | Min pct floor |
+|---|---|---|
+| Latency (p50/p95/p99) | Higher is worse | 10% |
+| CPU, heap, alloc | Higher is worse | 10% |
+| Throughput | Lower is worse | 10% |
+| Microbench time/alloc | Higher is worse | 5% |
+| Growth slope (CPU ratio, heap ratio) | Higher is worse; absolute floor 1.30 (constant-load CPU/heap should hold ≈ 1.0) so steady-state badness is not normalised away | 10% |
+| Growth slope (p95 latency ratio) | Higher is worse; absolute floor 2.0 (latency is noisier; a #2329-class signal is ~hundreds×) — rolling median+MAD stays the sensitive gate | 10% |
+| Error rate | Higher is worse; absolute floor 0.005 | — |
+
+The pipeline is **notify-only**: the compare step always exits 0 (`soft_fail: true` as belt-and-braces). It never fails the build. A flagged regression appears as a Buildkite annotation table on the run. An optional webhook notification fires when `PERF_NOTIFY_WEBHOOK` is set.
+
+### Reading the annotation table
+
+The annotation shows one row per flagged metric with columns: metric key, baseline (median), head value, change %, and threshold. A metric not listed passed. The "baseline warming up" annotation appears when fewer than 5 prior runs exist on the branch — this is expected when the pipeline is first deployed or after the S3 history is pruned.
+
+### Re-baselining
+
+The rolling baseline is self-healing: as runs accumulate, old outlier runs age out of the N=10 window. To force a clean baseline (e.g. after a deliberate performance improvement), delete the S3 objects under `s3://mockserver-ci-perf-results/runs/master/` for the range you want to drop. The pipeline will annotate "baseline warming up" until 5 new runs accumulate.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `.buildkite/pipeline-perf-test.yml` | Pipeline definition — guard step gated on `build.source == 'schedule'`/`'ui'` or a `[perf-run]` build message |
+| `.buildkite/scripts/lib/last-successful-commit.sh` | Shared helper: `last_successful_commit` (last passed build) for `generate-pipeline.sh` + `last_perf_run_commit` (last actual run, via `perf_regression_ran_commit` meta-data) for the guard |
+| `.buildkite/scripts/steps/perf-test-guard.sh` | Commit-guard + dynamic pipeline upload (`trigger` queue) |
+| `.buildkite/scripts/steps/perf-test-run.sh` | k6 run + background sampler + result assembly (`perf` queue) |
+| `.buildkite/scripts/steps/perf-test-microbench.sh` | JMH microbench + JSON reshape (`perf` queue) |
+| `.buildkite/scripts/steps/perf-test-compare.sh` | S3 persistence + median+MAD compare + annotation (`perf` queue) |
+| `mockserver-performance-test/k6/regression.js` | k6 regression scenarios (4 behaviours × HTTP+HTTPS/H2, warmup) |
+| `mockserver-performance-test/k6/growth.js` | k6 growth/slope scenarios (sustained fill + window probes) |
+| `s3://mockserver-ci-perf-results/` | Historical run storage (see [AWS Infrastructure](../infrastructure/aws-infrastructure.md)) |
+
 ## When perf regresses unexpectedly
 
 1. Check if `metricsEnabled` is on in the affected environment. If not, turn it on and re-run.

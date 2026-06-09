@@ -52,6 +52,19 @@ public class InMemoryKeyValueStore<V> implements KeyValueStore<V> {
     }
 
     @Override
+    public Optional<Versioned<V>> putIfAbsent(String key, V value) {
+        VersionedEntry<V> newEntry = new VersionedEntry<>(value);
+        VersionedEntry<V> existing = map.putIfAbsent(key, newEntry);
+        if (existing != null) {
+            // Key already existed — return the existing value without modification
+            return Optional.of(new Versioned<>(existing.value, existing.version.get()));
+        }
+        // Successfully created the entry
+        fireChanged(key);
+        return Optional.empty();
+    }
+
+    @Override
     public boolean compareAndSet(String key, long expectedVersion, V value) {
         VersionedEntry<V> entry = map.get(key);
         if (entry == null) {

@@ -5,12 +5,12 @@ import io.netty.handler.ssl.SslProvider;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.mockserver.client.MockServerClient;
-import org.mockserver.testing.integration.mock.AbstractBasicMockingIntegrationTest;
+import org.mockserver.testing.integration.mock.AbstractPackagingSmokeTest;
 
 /**
  * @author jamesdbloom
  */
-public class ClientServerMavenPluginTestPort1086 extends AbstractBasicMockingIntegrationTest {
+public class ClientServerMavenPluginTestPort1086 extends AbstractPackagingSmokeTest {
 
     private final static int SERVER_HTTP_PORT = 1086;
 

@@ -45,7 +45,7 @@ Dependabot monitors **8 package ecosystems** across the monorepo for outdated an
 | Docker | `/docker` + subdirs, `/docker_build/*` | 10 |
 | Terraform | `/terraform/*` | 10 |
 
-The Docker and Terraform directory columns are summarised; Dependabot has no glob support, so each directory is listed explicitly in [`.github/dependabot.yml`](../../.github/dependabot.yml) (8 Docker dirs, 4 Terraform dirs). When you add a new Docker/Terraform directory, add it there too or it will not be scanned.
+The Docker and Terraform directory columns are summarised; Dependabot has no glob support, so each directory is listed explicitly in [`.github/dependabot.yml`](../../.github/dependabot.yml) (10 Docker dirs, 4 Terraform dirs). When you add a new Docker/Terraform directory, add it there too or it will not be scanned.
 
 Dependabot runs **daily** and opens pull requests for version updates and security patches. Minor and patch updates are **grouped per ecosystem** (e.g. `maven-minor-and-patch`) so related bumps land in a single PR instead of many.
 
@@ -72,11 +72,11 @@ Dependencies that interact with the OS kernel or native libraries, added for spe
 
 | Dependency | Version | Module | Purpose | Java 17 compatible |
 |------------|---------|--------|---------|:---:|
-| `net.java.dev.jna:jna` | `${jna.version}` (5.17.0) | `mockserver-netty` | JNA-based `getsockopt(SO_ORIGINAL_DST)` for transparent proxy original-destination resolution (`SoOriginalDstResolver`). O(1) socket option read, tried before the O(n) conntrack table scan. | Yes (supports Java 8+) |
+| `net.java.dev.jna:jna` | `${jna.version}` (5.19.0) | `mockserver-netty` | JNA-based `getsockopt(SO_ORIGINAL_DST)` for transparent proxy original-destination resolution (`SoOriginalDstResolver`). O(1) socket option read, tried before the O(n) conntrack table scan. | Yes (supports Java 8+) |
 | `io.netty:netty-transport-classes-epoll` | `${netty.version}` | `mockserver-core`, `mockserver-netty` | Pure-Java API classes for `EpollSocketChannel`, `EpollEventLoopGroup`, `EpollServerSocketChannel`, and `Epoll.isAvailable()` — needed at compile time by `NettyTransport` (transport selection) and `SoOriginalDstResolver` (fd extraction). No native classifier (the `.so` is only needed at runtime on Linux). | Yes (follows Netty BOM) |
 | `io.netty:netty-transport-native-epoll` (classifier: `linux-x86_64`) | `${netty.version}` | `mockserver-netty` (runtime) | Native JNI library that activates `Epoll.isAvailable()` on Linux x86_64. Bundled in the distribution jar-with-dependencies and Docker images. Inert on non-Linux platforms. | Yes (follows Netty BOM) |
 | `io.netty:netty-transport-native-epoll` (classifier: `linux-aarch_64`) | `${netty.version}` | `mockserver-netty` (runtime) | Native JNI library that activates `Epoll.isAvailable()` on Linux aarch64 (ARM64). Bundled in the distribution jar-with-dependencies and Docker images. Inert on non-Linux/non-ARM platforms. | Yes (follows Netty BOM) |
-| `io.netty.incubator:netty-incubator-codec-http3` | `0.0.30.Final` | `mockserver-netty` (compile) | HTTP/3 codec for experimental QUIC support. Transitively pulls `netty-incubator-codec-native-quic` (0.0.73.Final) with native classifiers for linux-x86_64, linux-aarch_64, osx-x86_64, osx-aarch_64, windows-x86_64. The native artifact contains a BoringSSL JNI binding. Fail-soft at runtime: if the native cannot be loaded, `Quic.isAvailable()` returns false and the HTTP/3 server is not started. | Yes (incubator, pre-release API) |
+| `io.netty:netty-codec-http3` | `${netty.version}` | `mockserver-netty` (compile) | HTTP/3 codec for experimental QUIC support (graduated from the Netty incubator into mainline Netty 4.2). Transitively pulls `netty-codec-native-quic` with native classifiers for linux-x86_64, linux-aarch_64, osx-x86_64, osx-aarch_64, windows-x86_64. The native artifact contains a BoringSSL JNI binding. Fail-soft at runtime: if the native cannot be loaded, `Quic.isAvailable()` returns false and the HTTP/3 server is not started. | Yes (follows Netty BOM) |
 
 ### Embedded Data Grid Dependencies (Optional Module)
 
@@ -102,7 +102,17 @@ Dependencies introduced by `mockserver-state-infinispan`, which provides the Inf
 
 The `ExpectationEntry` uses custom `writeObject`/`readObject` to serialize the `Expectation` as its JSON string (via `ExpectationDTO`), avoiding the need for the entire domain model to implement `Serializable`. The LOCAL-mode path retains the `".*"` wildcard because heap-only storage never deserializes untrusted bytes.
 
-**Clustering limitation -- Scenario state transitions are not yet clustered.** While the `scenarioStates` KV store in `StateBackend` is replicated across cluster nodes (REPL_SYNC), the `ScenarioManager` that drives `matchesAndTransition()` / `transitionState()` still uses a node-local in-memory map. Expectations using scenario sequencing (`scenarioName` + `scenarioState` / `newScenarioState`) should not rely on cross-node state consistency. This is a planned follow-up to the Phase 2c clustering work.
+### Cloud Blob Store Dependencies (Optional Modules)
+
+Dependencies introduced by the cloud blob store modules, which provide durable `BlobStore` implementations for S3, GCS, and Azure Blob Storage. Each module is **optional** -- it is not pulled into `mockserver-core` or any other module. mockserver-core has **zero** compile-time or runtime dependencies on any cloud SDK; the cloud modules self-register via reflection when present on the classpath. Their transitive dependencies enter CodeQL/Dependabot scan scope only when the module is included in the reactor build.
+
+| Dependency | Version | Module | Purpose | Java 17 compatible |
+|------------|---------|--------|---------|:---:|
+| `software.amazon.awssdk:s3` | 2.31.9 | `mockserver-blob-s3` | AWS SDK v2 S3 client for the S3-backed `BlobStore`. Supports any S3-compatible store (MinIO, LocalStack) via endpoint override. | Yes (targets Java 8+) |
+| `com.google.cloud:google-cloud-storage` | 2.49.0 | `mockserver-blob-gcs` | Google Cloud Storage client for the GCS-backed `BlobStore`. Supports fake-gcs-server for testing. | Yes (targets Java 8+) |
+| `com.azure:azure-storage-blob` | 12.29.1 | `mockserver-blob-azure` | Azure Blob Storage client for the Azure-backed `BlobStore`. Supports Azurite emulator for testing. | Yes (targets Java 8+) |
+
+**Dependency isolation:** Each cloud SDK lives exclusively in its own module. The `mockserver-core` dependency tree contains no AWS, Google Cloud, or Azure artifacts. This is enforced by the module structure: core depends only on its own SPI interfaces (`BlobStore`, `BlobStoreFactory`), and cloud modules register their implementations via `StateBackendFactory.registerBlobStoreFactory()` at startup, discovered by reflection when `blobStoreType` is configured.
 
 ### Test Dependencies (Docker-Gated)
 
@@ -110,7 +120,7 @@ Test-scoped dependencies used for Docker-gated integration tests. These are neve
 
 | Dependency | Version | Module | Purpose |
 |------------|---------|--------|---------|
-| `org.testcontainers:testcontainers` | 1.21.4 | `mockserver-async` (test) | Core Testcontainers API for Docker-gated integration tests |
+| `org.testcontainers:testcontainers` | 1.21.4 | `mockserver-async`, `mockserver-blob-s3`, `mockserver-blob-gcs`, `mockserver-blob-azure` (test) | Core Testcontainers API for Docker-gated integration tests |
 | `org.testcontainers:kafka` | 1.21.4 | `mockserver-async` (test) | Kafka container module for live-broker integration tests |
 
 The Testcontainers version (1.21.4) is aligned with the existing `mockserver-testcontainers` module. Note that `mockserver-testcontainers` depends on `org.testcontainers:testcontainers` (and its transitive `docker-java-*` 3.4.2 artifacts) at **compile scope** — not test scope — because its public `MockServerContainer` extends Testcontainers' `GenericContainer`; consumers of `mockserver-testcontainers` therefore resolve Testcontainers 1.21.4 transitively (overridable via their own dependency management), and these artifacts are in CodeQL/Dependabot scan scope for that module. The 1.20.6 to 1.21.4 bump was required to fix `DockerClientFactory.isDockerAvailable()` returning false on Docker Desktop 4.67+ / Engine 29.x / API 1.54 — the bundled docker-java 3.4.1 in 1.20.6 got a 400 on the info endpoint; 1.21.4 bundles docker-java 3.4.2 and includes explicit fixes for recent Docker Engine API changes. MQTT integration tests use a `GenericContainer` with `eclipse-mosquitto:2.0` (no additional Testcontainers module needed). Transparent-proxy end-to-end tests (`SoOriginalDstEndToEndIT`, `TproxyEndToEndIT`) use the Docker CLI directly (via `ProcessBuilder`) to build and run privileged containers with NET_ADMIN for iptables REDIRECT/TPROXY rule setup — they do not use Testcontainers.
@@ -134,6 +144,59 @@ The `.snyk` policy file excludes `mockserver-examples` (sample code, not shipped
 When an ignore **is** added, give it a dated `expires:` (convention: 3 months out) so it cannot silently outlive its rationale. Renewal is a manual checkpoint: before the expiry date, re-run the Snyk scan, confirm the constraint still holds, and either remove the ignore (if the fix is now available) or refresh the `expires:` date with an updated reason. An empty ignore list (the current state) needs no renewal.
 
 See [Snyk Security](snyk-security.md) for the full triage workflow, CLI commands, and vulnerability status by module.
+
+## CI/CD Infrastructure Security
+
+Controls applied to the Buildkite build infrastructure and release pipeline. See [AWS Infrastructure](../infrastructure/aws-infrastructure.md) and [CI/CD](../infrastructure/ci-cd.md) for full details.
+
+### Least-Privilege CI Secrets
+
+Each agent queue receives only the Secrets Manager policies it actually consumes — the single `buildkite-read-build-secrets` policy has been replaced by per-secret, per-queue policies:
+
+| Queue | IAM policies attached | Rationale |
+|-------|----------------------|-----------|
+| `default` | `read-build-secrets-default` (API token + Sonatype), `read-dockerhub-secret`, `ecr-public-push` | Snapshot Docker push on master |
+| `trigger` | `read-buildkite-api-token` | Trigger polling only needs API token |
+| `perf` | `read-buildkite-api-token`, `perf-results` | Commit guard + S3 results |
+| `release` | `read-build-secrets-release`, `read-release-secrets`, `read-dockerhub-secret`, `ecr-public-push`, `release-website-tfstate` | Full release publishing |
+
+The `dependency-cache` policy is detached from all queues (runtime wiring reverted pending cache-integrity implementation).
+
+### Release Secret Hygiene (File-based, not env vars)
+
+Release scripts write secrets to `0600` files under `.tmp/` (volume-mounted into Docker containers) rather than passing them as `docker run -e` flags. This prevents secrets appearing in `/proc/1/environ` or `docker inspect` output on the agent host.
+
+### Released Image Signing
+
+All release Docker images (Docker Hub + ECR) are cosign-signed by digest after push, using the same key stored in `mockserver-release/cosign-key`. This allows consumers to verify image provenance. The release Docker step runs on the **release** queue (the only queue granted `read_release_secrets`, which includes the cosign key) and auto-installs a checksum-pinned cosign binary; signing is non-fatal if the key is unavailable. See [Docker](../infrastructure/docker.md#verifying-image-signatures) for the verification command.
+
+### CloudTrail Audit Events
+
+The CloudTrail trail (`mockserver-management-trail`) uses advanced event selectors to capture:
+- All management events (which include every Secrets Manager API call — `GetSecretValue` on `mockserver-build/` and `mockserver-release/` secrets is logged here)
+- All S3 object-level **data** events on the Terraform state bucket (`mockserver-terraform-state/`)
+
+Secrets Manager is not a supported CloudTrail data-event resource type, so secret access is audited via management events rather than a dedicated data-event selector (an `AWS::SecretsManager::Secret` data selector is rejected by the CloudTrail API with `InvalidEventSelectorsException`).
+
+### GuardDuty Alerting
+
+GuardDuty findings with severity ≥ 7 (HIGH and CRITICAL) trigger an EventBridge rule that forwards to the existing `buildkite-mockserver-alerts` SNS topic. The SNS topic is encrypted with `alias/aws/sns`.
+
+### KMS Encryption at Rest
+
+| Resource | CMK |
+|----------|-----|
+| Terraform state bucket | `alias/mockserver-terraform-state` (bootstrap CMK, rotation enabled) |
+| AWS Config delivery bucket | CloudTrail CMK (`alias/mockserver-cloudtrail`, shared) |
+| SNS alerts topic | `alias/aws/sns` (AWS-managed) |
+
+### VPC Flow Logs
+
+VPC flow logs are set to `traffic_type = ALL` on all four VPCs (default, trigger, release, perf queues), capturing both accepted and rejected traffic. Previously only REJECT traffic was logged.
+
+### Tfstate Lock Scoping
+
+The `buildkite-release-website-tfstate` IAM policy grants `s3:DeleteObject` only on `website/terraform.tfstate.tflock` (the S3-native lock file), not on the state file itself. GetObject/PutObject on the state file are separate statements. This prevents accidental or malicious deletion of the live state.
 
 ## AI Security Review
 
@@ -200,11 +263,15 @@ In the Maven ecosystem, a `-SNAPSHOT` suffix (e.g., `5.16.0-SNAPSHOT`) indicates
 
 **Between releases**, the `master` branch and SNAPSHOT artifacts may temporarily carry unresolved advisories -- for example, when a new CVE is published against a dependency but the fix has not yet been integrated.
 
+### Base Image OS CVEs (Expected Baseline)
+
+Container scanners (Trivy, Grype, the ArtifactHub Helm security report) will always list a residual set of CVEs against the Debian OS packages baked into the `gcr.io/distroless/java17` base image (`libc6`, `libexpat1`, `zlib1g`, `libuuid1`, `libpng16`, `liblcms2-2`, `libbz2-1.0`). These belong to the JRE base layer, not to MockServer code or its Maven dependencies, and are **expected** — most carry `Fixed in: -` (no upstream Debian patch yet), so they cannot be remediated at build time regardless of the JRE/Java version. The pinned base-image digests are kept current automatically by Dependabot's `docker` ecosystem, so fixes are adopted as soon as distroless rebuilds. See [Docker → Base Image CVE Baseline](../infrastructure/docker.md#base-image-cve-baseline) for the full triage guide.
+
 ### Recommendations for Consumers
 
-- **For maximum security:** Pin to a specific release version (e.g., `6.1.0`), not `latest` or `SNAPSHOT`
+- **For maximum security:** Pin to a specific release version (e.g., `7.0.0`), not `latest` or `SNAPSHOT`
 - **For Renovate/Dependabot users:** Configure version constraints to only match release versions, not SNAPSHOTs
-- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:6.1.0`) rather than `latest`
+- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:7.0.0`) rather than `latest`
 - **Subscribe to releases:** Watch the [GitHub releases page](https://github.com/mock-server/mockserver-monorepo/releases) for new versions with resolved security issues
 
 ## Vulnerability Reporting

@@ -92,27 +92,28 @@ The `DashboardWebSocketHandler` implements both `MockServerLogListener` and `Moc
 
 ## Top-Level Views
 
-The dashboard has **nine top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Composer**, **Library**, **Chaos**, **Drift**, **Metrics**, and **MCP Tools**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'`.
+The dashboard has **ten top-level views** controlled by a toggle strip in the AppBar: **Dashboard**, **Traffic**, **Sessions**, **Mocks**, **Library**, **Chaos**, **Drift**, **Verification**, **AsyncAPI**, and **Metrics**. The view state is stored in Zustand as `view: ViewMode` where `ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async'`. Note that the `'composer'` value is surfaced in the UI under the button label **Mocks**, and `'async'` is the **AsyncAPI** broker view.
 
-The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Composer, Library, Chaos, Drift, Metrics, and MCP Tools.
+The Request Filter panel is shown on Dashboard, Traffic, and Sessions views. It is hidden on Mocks (composer), Library, Chaos, Drift, Verification, AsyncAPI, and Metrics.
 
-| View | Component | Description |
-|------|-----------|-------------|
-| `dashboard` | `DashboardGrid.tsx` | 2×2 grid of Log Messages, Active Expectations, Received Requests, Proxied Requests panels |
-| `traffic` | `TrafficInspector.tsx` | Full-width master/detail list of all captured traffic (mock-matched + proxied) |
-| `sessions` | `SessionInspector.tsx` | Swim-lane grouped view of isolated LLM conversation sessions |
-| `composer` | `ComposerView.tsx` | Unified expectation creator/editor for Standard HTTP and LLM Conversation expectations |
-| `library` | `LibraryView.tsx` | Fixture cassettes, run comparison, and export (HAR / OpenAPI / Postman / Bruno) |
-| `chaos` | `ServiceChaosPanel.tsx` | Service-scoped HTTP chaos registration, live TTL countdown, and clear-all |
-| `drift` | `DriftPanel.tsx` | Mock drift detection results: divergence records between forwarded responses and stub expectations |
-| `metrics` | `MetricsView.tsx` | Prometheus metrics polling: request counters, latency percentiles, JVM stats, chaos gauges |
-| `mcp-tools` | `McpToolsPanel.tsx` | Interactive MCP tool explorer for MockServer's own `/mockserver/mcp` control-plane tools |
+| View | Button label | Component | Description |
+|------|--------------|-----------|-------------|
+| `dashboard` | Dashboard | `DashboardGrid.tsx` | 2×2 grid of Log Messages, Active Expectations, Received Requests, Proxied Requests panels |
+| `traffic` | Traffic | `TrafficInspector.tsx` | Full-width master/detail list of all captured traffic (mock-matched + proxied) |
+| `sessions` | Sessions | `SessionInspector.tsx` | Swim-lane grouped view of isolated LLM conversation sessions |
+| `composer` | Mocks | `ComposerView.tsx` | Unified expectation creator/editor for Standard HTTP and LLM Conversation expectations |
+| `library` | Library | `LibraryView.tsx` | Fixture cassettes, run comparison, and export (HAR / OpenAPI / Postman / Bruno) |
+| `chaos` | Chaos | `ServiceChaosPanel.tsx` | Service-scoped HTTP chaos registration, live TTL countdown, and clear-all |
+| `drift` | Drift | `DriftPanel.tsx` | Mock drift detection results: divergence records between forwarded responses and stub expectations |
+| `verification` | Verify | `VerificationView.tsx` | Build and run verifications — request matchers, expected counts (atLeast/atMost/exactly/between), or an ordered sequence — against received requests |
+| `async` | Async | `AsyncApiPanel.tsx` | AsyncAPI broker mock status: loaded spec, channels/topics, publisher/subscriber summary, and recorded broker messages |
+| `metrics` | Metrics | `MetricsView.tsx` | Prometheus metrics polling: request counters, latency percentiles, JVM stats, chaos gauges |
 
 ```mermaid
 graph TB
     APP["App.tsx"]
     AB["AppBar.tsx
-9-button toggle strip"]
+10-button toggle strip"]
     FP["FilterPanel.tsx
 (dashboard, traffic, sessions only)"]
     DG["DashboardGrid.tsx
@@ -122,17 +123,19 @@ graph TB
     SI["SessionInspector.tsx
 (view = 'sessions')"]
     CV["ComposerView.tsx
-(view = 'composer')"]
+(view = 'composer', label 'Mocks')"]
     LV["LibraryView.tsx
 (view = 'library')"]
     SCP["ServiceChaosPanel.tsx
 (view = 'chaos')"]
     DP["DriftPanel.tsx
 (view = 'drift')"]
+    VV["VerificationView.tsx
+(view = 'verification')"]
+    AAP["AsyncApiPanel.tsx
+(view = 'async')"]
     MV["MetricsView.tsx
 (view = 'metrics')"]
-    MTP["McpToolsPanel.tsx
-(view = 'mcp-tools')"]
 
     APP --> AB
     APP --> FP
@@ -144,8 +147,9 @@ graph TB
     APP -->|view = library| LV
     APP -->|view = chaos| SCP
     APP -->|view = drift| DP
+    APP -->|view = verification| VV
+    APP -->|view = async| AAP
     APP -->|view = metrics| MV
-    APP -->|view = mcp-tools| MTP
 ```
 
 ## Metrics View
@@ -297,9 +301,9 @@ A separate **Unscoped requests** strip at the bottom holds requests that did not
 
 The grouping logic lives in `src/lib/sessionGrouping.ts`. It uses `scenarioName` and `scenarioState` from the request data to identify which requests belong to which conversation session.
 
-## Composer View
+## Mocks (composer) View
 
-`ComposerView.tsx` is a unified expectation creator and editor — a single inline form covering standard HTTP expectations of every action type plus multi-turn LLM conversations.
+`ComposerView.tsx` (view = `composer`, surfaced under the AppBar label **Mocks**) is a unified expectation creator and editor — a single inline form covering standard HTTP expectations of every action type plus multi-turn LLM conversations.
 
 At the top is an **Expectation kind** radio: **Standard HTTP expectation** or **LLM Conversation**.
 
@@ -329,6 +333,26 @@ The edit-existing flow works because `ComposerView.tsx` collects the current exp
 | **Runs** | Pick two captured sessions (Run A / Run B) and see a side-by-side structural trajectory diff (tool-call chain + per-turn token usage table). |
 | **Export** | Single dropdown that crosses scope (registered expectations / recorded requests) with file format (MockServer JSON / HAR / OpenAPI 3 / Postman v2.1 / Bruno zip). Each option maps to a `PUT /mockserver/retrieve?type=ACTIVE_EXPECTATIONS\|REQUEST_RESPONSES&format=JSON\|HAR\|OPENAPI\|POSTMAN\|BRUNO` call. BRUNO returns `application/zip` since Bruno collections are multi-file (`.bru` per request + `bruno.json` manifest). Generation lives in `mockserver-core`'s `ExpectationExportSerializer` — best-effort for the non-MockServer formats (positive-string matchers round-trip, NottableString negation and dynamic actions appear as placeholders). |
 
+## Verification View
+
+`VerificationView.tsx` (view = `verification`, AppBar label **Verify**) builds and runs request verifications against the requests MockServer has already received. A toggle switches between two modes:
+
+- **Single request** — one `httpRequest` matcher (method, path, header lines, query `key=value` lines, substring/JSON body) plus a times assertion. The times mode (`VerificationTimesMode`) is one of `atLeast` / `atMost` / `exactly` / `between`; `between` reveals a second count field. Submitting calls `verifyRequest(...)` in `lib/verification.ts`.
+- **Ordered sequence** — an ordered list of matcher rows (add / remove steps) that must have been received in order (other requests may occur in between). Submitting calls `verifySequence(...)`.
+
+Empty form fields are omitted from the built `httpRequest` (`buildHttpRequest`). A pass renders a green "Verified" alert; a failure renders the server's `failureMessage` (closest matches + actual count) in a red alert. `lib/verification.ts` is framework-agnostic (plain `fetch`) so it is unit-tested independently of the component. This is the visual equivalent of the verification REST API (`PUT /mockserver/verify` and `PUT /mockserver/verifySequence`).
+
+## AsyncAPI View
+
+`AsyncApiPanel.tsx` (view = `async`, AppBar label **Async**) shows the live status of the AsyncAPI broker mock (the `mockserver-async` module). It **polls** `GET /mockserver/asyncapi` every 5s via `getAsyncApiStatus` in `lib/asyncApi.ts` (with a manual refresh button) rather than using the WebSocket. It renders:
+
+- a **status header** — a connection chip (`connected` / `no spec loaded` / `unavailable`) plus the loaded spec title and version when present,
+- a **Channels** table — one row per channel/topic with a schema-present indicator and example count,
+- a **publisher / subscriber summary** — chips for active publisher count, subscriber count, and recorded-message count,
+- a **Recorded Messages** table — messages captured from broker subscriptions (channel, key, truncated payload with full-text tooltip, schema-valid indicator, timestamp), with a free-text filter over channel / key / payload.
+
+When the `mockserver-async` jar is not on the server's classpath the helper returns `null` and the panel shows a "Module unavailable" warning. A spec is loaded from the **AsyncAPI broker mock** entry in the Tools menu (`AsyncApiDialog`) or via `PUT /mockserver/asyncapi`.
+
 ## MCP Session Handshake
 
 `mockserver-ui/src/lib/mcpClient.ts` manages all MCP tool calls from the UI (capture-as-mock, conversation registration, cassette record/load). It performs the MCP `initialize` + `notifications/initialized` handshake lazily on first use and caches the resulting `Mcp-Session-Id` per base URL in a module-level `Map`. If a call fails with a "Missing or invalid Mcp-Session-Id" error, the client reinitializes automatically before retrying.
@@ -337,7 +361,7 @@ Prior to this, any UI feature that called an MCP tool was broken with a session-
 
 ## AppBar Styling
 
-The AppBar renders the nine toggle buttons (Dashboard / Traffic / Sessions / Composer / Library / Chaos / Drift / Metrics / MCP Tools) as a `ToggleButtonGroup`. The HAR download lives in Library → Export rather than as a top-bar icon.
+The AppBar renders the ten toggle buttons (Dashboard / Traffic / Sessions / Mocks / Library / Chaos / Drift / Verify / Async / Metrics) as a `ToggleButtonGroup`. The **Mocks** button maps to `view = 'composer'`, **Verify** to `view = 'verification'`, and **Async** to `view = 'async'` (the AsyncAPI broker view). The HAR download lives in Library → Export rather than as a top-bar icon.
 
 **Light mode**: toggle buttons use `primary.contrastText` (white) text with a translucent white border (`rgba(255,255,255,0.3)`) and a translucent-white selected state. The status chip uses pale colour tints (`#7fffa0` connected, `#ffd180` connecting, `#ff8a80` error) so colour semantics remain readable against the blue AppBar background.
 
@@ -396,7 +420,7 @@ The AppBar "Import / export" (wrench) menu groups one-off control-plane tools, e
   receivedSearch: '',
   proxiedSearch: '',
   trafficSearch: '',
-  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'mcp-tools'
+  view: 'dashboard',        // 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async'  (composer is labelled "Mocks", async is the AsyncAPI view)
   selectedTrafficIndex: null,
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -425,7 +449,7 @@ graph TB
 Orchestrator: theme, WebSocket, shortcuts"]
     AB["AppBar.tsx
 Title bar: status, theme, clear menu
-9-button view toggle"]
+10-button view toggle"]
     FP["FilterPanel.tsx
 Collapsible request filter form"]
     DG["DashboardGrid.tsx
@@ -505,12 +529,12 @@ Expandable match failure reasons"]
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 9-button view toggle |
+| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu, 10-button view toggle (Dashboard / Traffic / Sessions / Mocks / Library / Chaos / Drift / Verify / Async / Metrics) |
 | `FilterPanel` | `FilterPanel.tsx` | Collapsible request filter form (method, path, headers, query params, cookies) with debounced WebSocket send; shown on dashboard/traffic/sessions |
 | `DashboardGrid` | `DashboardGrid.tsx` | 2×2 CSS grid layout for the four panels |
 | `TrafficInspector` | `TrafficInspector.tsx` | Full-width master list + adaptive detail pane for all captured traffic (mock-matched + proxied) |
 | `SessionInspector` | `SessionInspector.tsx` | Swim-lane grouped view of isolated LLM conversation sessions |
-| `ComposerView` | `ComposerView.tsx` | Unified expectation creator/editor; inline Standard HTTP and LLM Conversation forms |
+| `ComposerView` | `ComposerView.tsx` | Mocks (composer) view — unified expectation creator/editor; inline Standard HTTP and LLM Conversation forms |
 | `LibraryView` | `LibraryView.tsx` | Cassettes / Runs / Export sub-tabs |
 | `ConversationView` | `ConversationView.tsx` | Five provider-specific chat-transcript renderers: Anthropic, OpenAI, OpenAI Responses, Gemini, Ollama |
 | `LlmUsageDetail` | `LlmUsageDetail.tsx` | Thin strip shown above the detail pane tab row for LLM traffic: provider chip, model, tokens, cost, stop reason |

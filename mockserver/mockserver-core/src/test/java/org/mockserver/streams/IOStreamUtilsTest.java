@@ -11,7 +11,8 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 import static org.mockito.Mockito.*;
 import static org.mockserver.character.Character.NEW_LINE;
 
@@ -32,7 +33,7 @@ public class IOStreamUtilsTest {
         String result = IOStreamUtils.readHttpInputStreamToString(socket);
 
         // then
-        assertEquals("bytes" + NEW_LINE, result);
+        assertThat(result, is("bytes" + NEW_LINE));
     }
 
     @Test
@@ -45,7 +46,7 @@ public class IOStreamUtilsTest {
         String result = IOStreamUtils.readHttpInputStreamToString(socket);
 
         // then
-        assertEquals("bytes" + NEW_LINE, result);
+        assertThat(result, is("bytes" + NEW_LINE));
     }
 
     @Test
@@ -68,7 +69,7 @@ public class IOStreamUtilsTest {
         String result = IOStreamUtils.readHttpInputStreamToString(socket);
 
         // then
-        assertEquals("" +
+        assertThat(result, is("" +
             "Cache-Control:public, max-age=60" + NEW_LINE +
             "Content-Length:10" + NEW_LINE +
             "Content-Type:text/html; charset=utf-8" + NEW_LINE +
@@ -77,7 +78,7 @@ public class IOStreamUtilsTest {
             "Last-Modified:Sat, 04 Jan 2014 17:18:54 GMT" + NEW_LINE +
             "Vary:*" + NEW_LINE +
             NEW_LINE +
-            "1234567890", result);
+            "1234567890"));
     }
 
     @Test
@@ -100,7 +101,7 @@ public class IOStreamUtilsTest {
         String result = IOStreamUtils.readHttpInputStreamToString(socket);
 
         // then
-        assertEquals("" +
+        assertThat(result, is("" +
             "cache-control:public, max-age=60" + NEW_LINE +
             "content-length:10" + NEW_LINE +
             "content-type:text/html; charset=utf-8" + NEW_LINE +
@@ -109,7 +110,7 @@ public class IOStreamUtilsTest {
             "last-modified:Sat, 04 Jan 2014 17:18:54 GMT" + NEW_LINE +
             "vary:*" + NEW_LINE +
             NEW_LINE +
-            "1234567890", result);
+            "1234567890"));
     }
 
     @Test
@@ -124,7 +125,7 @@ public class IOStreamUtilsTest {
         String result = ioStreamUtils.readHttpInputStreamToString(servletRequest);
 
         // then
-        assertEquals("bytes", result);
+        assertThat(result, is("bytes"));
     }
 
     @Test(expected = RuntimeException.class)
@@ -171,7 +172,7 @@ public class IOStreamUtilsTest {
         // then
         byte[] content = new byte[byteBuffer.limit()];
         byteBuffer.get(content);
-        assertEquals("byte_buffer", new String(content));
+        assertThat(new String(content), is("byte_buffer"));
     }
 
     static class DelegatingServletInputStream extends ServletInputStream {

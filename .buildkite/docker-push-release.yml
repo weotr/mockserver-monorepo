@@ -2,3 +2,5 @@ steps:
   - label: ":docker: Build and push release image"
     command: ".buildkite/scripts/steps/docker-push-release.sh"
     timeout_in_minutes: 45
+    agents:
+      queue: release

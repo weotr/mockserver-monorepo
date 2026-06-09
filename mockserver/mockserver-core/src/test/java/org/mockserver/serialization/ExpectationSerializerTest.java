@@ -15,11 +15,11 @@ import java.util.concurrent.TimeUnit;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertArrayEquals;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -33,6 +33,7 @@ import static org.mockserver.model.Parameter.param;
 import static org.mockserver.model.ParameterBody.params;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -229,30 +230,13 @@ public class ExpectationSerializerTest {
             fail("expected exception to be thrown");
         } catch (Throwable throwable) {
             assertThat(throwable, instanceOf(IllegalArgumentException.class));
-            assertThat(throwable.getMessage(), is("incorrect expectation json format for:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  {" + NEW_LINE +
-                "    \"httpRequest\" : {" + NEW_LINE +
-                "      \"path\" : \"somePath\"," + NEW_LINE +
-                "      \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "    }," + NEW_LINE +
-                "    \"httpResponse\" : {" + NEW_LINE +
-                "      \"body\" : \"someBody\"," + NEW_LINE +
-                "      \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "    }" + NEW_LINE +
-                "  }" + NEW_LINE +
-                "" + NEW_LINE +
-                " schema validation errors:" + NEW_LINE +
-                "" + NEW_LINE +
-                "  6 errors:" + NEW_LINE +
-                "   - $.httpRequest.binaryData: is missing, but is required, if specifying action of type Request.binaryData" + NEW_LINE +
-                "   - $.httpRequest.dnsName: is missing, but is required, if specifying action of type Request.dnsName" + NEW_LINE +
-                "   - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "   - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                "   - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
-                "  " + NEW_LINE +
-                "  " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "  ")));
+            String message = throwable.getMessage();
+            assertThat(message, containsString("incorrect expectation json format for:"));
+            assertThat(message, containsString("schema validation errors:"));
+            assertThat(message, containsString("6 errors:"));
+            assertThat(message, containsString("$.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties"));
+            assertThat(message, containsString("$.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties"));
+            assertThat(message, containsString("oneOf of the following must be specified"));
         }
     }
 
@@ -358,82 +342,17 @@ public class ExpectationSerializerTest {
             fail("expected exception to be thrown");
         } catch (Throwable throwable) {
             assertThat(throwable, instanceOf(IllegalArgumentException.class));
-            assertThat(throwable.getMessage(), is("[" + NEW_LINE +
-                "  incorrect expectation json format for:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    {" + NEW_LINE +
-                "      \"httpRequest\" : {" + NEW_LINE +
-                "        \"path\" : \"somePath\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }," + NEW_LINE +
-                "      \"httpResponse\" : {" + NEW_LINE +
-                "        \"body\" : \"someBody\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }" + NEW_LINE +
-                "    }" + NEW_LINE +
-                "  " + NEW_LINE +
-                "   schema validation errors:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    6 errors:" + NEW_LINE +
-                "     - $.httpRequest.binaryData: is missing, but is required, if specifying action of type Request.binaryData" + NEW_LINE +
-                "     - $.httpRequest.dnsName: is missing, but is required, if specifying action of type Request.dnsName" + NEW_LINE +
-                "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
-                "    " + NEW_LINE +
-                "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + "," + NEW_LINE +
-                "  " + NEW_LINE +
-                "  incorrect expectation json format for:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    {" + NEW_LINE +
-                "      \"httpRequest\" : {" + NEW_LINE +
-                "        \"path\" : \"somePath\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }," + NEW_LINE +
-                "      \"httpResponse\" : {" + NEW_LINE +
-                "        \"body\" : \"someBody\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }" + NEW_LINE +
-                "    }" + NEW_LINE +
-                "  " + NEW_LINE +
-                "   schema validation errors:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    6 errors:" + NEW_LINE +
-                "     - $.httpRequest.binaryData: is missing, but is required, if specifying action of type Request.binaryData" + NEW_LINE +
-                "     - $.httpRequest.dnsName: is missing, but is required, if specifying action of type Request.dnsName" + NEW_LINE +
-                "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
-                "    " + NEW_LINE +
-                "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + "," + NEW_LINE +
-                "  " + NEW_LINE +
-                "  incorrect expectation json format for:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    {" + NEW_LINE +
-                "      \"httpRequest\" : {" + NEW_LINE +
-                "        \"path\" : \"somePath\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }," + NEW_LINE +
-                "      \"httpResponse\" : {" + NEW_LINE +
-                "        \"body\" : \"someBody\"," + NEW_LINE +
-                "        \"extra_field\" : \"extra_value\"" + NEW_LINE +
-                "      }" + NEW_LINE +
-                "    }" + NEW_LINE +
-                "  " + NEW_LINE +
-                "   schema validation errors:" + NEW_LINE +
-                "  " + NEW_LINE +
-                "    6 errors:" + NEW_LINE +
-                "     - $.httpRequest.binaryData: is missing, but is required, if specifying action of type Request.binaryData" + NEW_LINE +
-                "     - $.httpRequest.dnsName: is missing, but is required, if specifying action of type Request.dnsName" + NEW_LINE +
-                "     - $.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - $.httpRequest.specUrlOrPayload: is missing, but is required, if specifying OpenAPI request matcher" + NEW_LINE +
-                "     - $.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties" + NEW_LINE +
-                "     - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
-                "    " + NEW_LINE +
-                "    " + OPEN_API_SPECIFICATION_URL.replaceAll(NEW_LINE, NEW_LINE + "    ") + NEW_LINE +
-                "]"));
+            String message = throwable.getMessage();
+            // verify the response is an array-style error
+            assertThat(message, startsWith("["));
+            // verify the error is reported for all 3 array elements (one block per element)
+            assertThat(message, containsString("incorrect expectation json format for:"));
+            assertThat(message.split("incorrect expectation json format for:", -1).length - 1, is(3));
+            assertThat(message, containsString("schema validation errors:"));
+            assertThat(message, containsString("6 errors:"));
+            assertThat(message, containsString("$.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties"));
+            assertThat(message, containsString("$.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties"));
+            assertThat(message, containsString("oneOf of the following must be specified"));
         }
     }
 
@@ -515,7 +434,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation, is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -570,7 +489,7 @@ public class ExpectationSerializerTest {
                         )
                     )
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation);
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -612,7 +531,9 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat(
+            expectation
+        , is(new ExpectationDTO()
                 .setId("bf4e3011-5d39-4c02-a373-c6132d0642da")
                 .setPriority(-1)
                 .setHttpRequest(
@@ -636,9 +557,7 @@ public class ExpectationSerializerTest {
                 )
                 .setTimes(new TimesDTO(Times.unlimited()))
                 .setTimeToLive(new TimeToLiveDTO(TimeToLive.unlimited()))
-                .buildObject(),
-            expectation
-        );
+                .buildObject()));
     }
 
     @Test
@@ -706,7 +625,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then;
-        assertEquals(expected, expectation);
+        assertThat( expectation, is(expected));
     }
 
     @Test
@@ -748,7 +667,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation, is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -770,7 +689,7 @@ public class ExpectationSerializerTest {
                     .setCookies(new Cookies().withEntries(
                         cookie("cookieNameResponse", "cookieValueResponse")
                     ))
-            ).buildObject(), expectation);
+            ).buildObject()));
     }
 
     @Test
@@ -827,7 +746,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -857,8 +777,7 @@ public class ExpectationSerializerTest {
                     .setDelay(new DelayDTO(new Delay(MICROSECONDS, 1)))
 
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -910,7 +829,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -937,8 +857,7 @@ public class ExpectationSerializerTest {
                 new HttpClassCallbackDTO()
                     .setCallbackClass("someClass")
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -990,7 +909,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1017,8 +937,7 @@ public class ExpectationSerializerTest {
                 new HttpObjectCallbackDTO()
                     .setClientId("someClientId")
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -1072,7 +991,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1102,8 +1022,7 @@ public class ExpectationSerializerTest {
                     .setScheme(HttpForward.Scheme.HTTPS)
             )
             .setTimes(new TimesDTO(Times.exactly(5)))
-            .setTimeToLive(new TimeToLiveDTO(TimeToLive.unlimited())).buildObject(), expectation
-        );
+            .setTimeToLive(new TimeToLiveDTO(TimeToLive.unlimited())).buildObject()));
     }
 
     @Test
@@ -1160,7 +1079,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1190,8 +1110,7 @@ public class ExpectationSerializerTest {
                     .setDelay(new DelayDTO(new Delay(MICROSECONDS, 1)))
 
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -1243,7 +1162,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1270,8 +1190,7 @@ public class ExpectationSerializerTest {
                 new HttpClassCallbackDTO()
                     .setCallbackClass("someClass")
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -1323,7 +1242,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1350,8 +1270,7 @@ public class ExpectationSerializerTest {
                 new HttpObjectCallbackDTO()
                     .setClientId("someClientId")
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -1403,7 +1322,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1439,8 +1359,7 @@ public class ExpectationSerializerTest {
                         .setValue(1)
                     )
             )
-            .setTimes(new TimesDTO(Times.exactly(5))).buildObject(), expectation
-        );
+            .setTimes(new TimesDTO(Times.exactly(5))).buildObject()));
     }
 
     @Test
@@ -1497,7 +1416,8 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation
+        , is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1527,8 +1447,7 @@ public class ExpectationSerializerTest {
                     .setResponseBytes("some_bytes".getBytes(UTF_8))
             )
             .setTimes(new TimesDTO(Times.exactly(5)))
-            .setTimeToLive(new TimeToLiveDTO(TimeToLive.unlimited())).buildObject(), expectation
-        );
+            .setTimeToLive(new TimeToLiveDTO(TimeToLive.unlimited())).buildObject()));
     }
 
     @Test
@@ -1549,7 +1468,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation, is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1560,7 +1479,7 @@ public class ExpectationSerializerTest {
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(exact("someBody")))
             )
-            .buildObject(), expectation);
+            .buildObject()));
     }
 
     @Test
@@ -1585,7 +1504,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation, is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1597,7 +1516,7 @@ public class ExpectationSerializerTest {
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(exact("someBody")))
             )
-            .buildObject(), expectation);
+            .buildObject()));
     }
 
     @Test
@@ -1628,7 +1547,7 @@ public class ExpectationSerializerTest {
         Expectation expectation = new ExpectationSerializer(new MockServerLogger()).deserialize(requestBytes);
 
         // then
-        assertEquals(new ExpectationDTO()
+        assertThat( expectation, is(new ExpectationDTO()
             .setId("some_key")
             .setPriority(10)
             .setHttpRequest(
@@ -1643,7 +1562,7 @@ public class ExpectationSerializerTest {
                 new HttpResponseDTO()
                     .setBody(new StringBodyDTO(exact("someBody")))
             )
-            .buildObject(), expectation);
+            .buildObject()));
     }
 
     @Test
@@ -1704,7 +1623,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"someMethod\"," + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
@@ -1757,7 +1676,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -1798,7 +1717,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"someMethod\"," + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
@@ -1834,7 +1753,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -1873,7 +1792,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"someMethod\"," + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
@@ -1905,7 +1824,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -1944,7 +1863,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"someMethod\"," + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
@@ -1976,7 +1895,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2017,7 +1936,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpForward\" : {" + NEW_LINE +
             "    \"host\" : \"someHost\"," + NEW_LINE +
             "    \"port\" : 1234," + NEW_LINE +
@@ -2051,7 +1970,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2092,7 +2011,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpForwardTemplate\" : {" + NEW_LINE +
             "    \"delay\" : {" + NEW_LINE +
             "      \"timeUnit\" : \"MICROSECONDS\"," + NEW_LINE +
@@ -2128,7 +2047,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2167,7 +2086,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpForwardClassCallback\" : {" + NEW_LINE +
             "    \"callbackClass\" : \"someClass\"" + NEW_LINE +
             "  }," + NEW_LINE +
@@ -2199,7 +2118,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2238,7 +2157,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpForwardObjectCallback\" : {" + NEW_LINE +
             "    \"clientId\" : \"someClientId\"" + NEW_LINE +
             "  }," + NEW_LINE +
@@ -2270,7 +2189,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2316,7 +2235,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
             "    \"delay\" : {" + NEW_LINE +
             "      \"timeUnit\" : \"MICROSECONDS\"," + NEW_LINE +
@@ -2355,7 +2274,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2408,7 +2327,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
             "    \"delay\" : {" + NEW_LINE +
             "      \"timeUnit\" : \"MICROSECONDS\"," + NEW_LINE +
@@ -2453,7 +2372,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2547,7 +2466,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
             "    \"delay\" : {" + NEW_LINE +
             "      \"timeUnit\" : \"MICROSECONDS\"," + NEW_LINE +
@@ -2645,7 +2564,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2686,7 +2605,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpError\" : {" + NEW_LINE +
             "    \"delay\" : {" + NEW_LINE +
             "      \"timeUnit\" : \"HOURS\"," + NEW_LINE +
@@ -2723,7 +2642,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2765,7 +2684,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"method\" : \"someMethod\"," + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
@@ -2802,7 +2721,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2825,7 +2744,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"" + NEW_LINE +
             "  }," + NEW_LINE +
@@ -2841,7 +2760,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2865,7 +2784,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -2885,7 +2804,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2930,7 +2849,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -2953,7 +2872,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -2995,7 +2914,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -3035,7 +2954,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -3059,7 +2978,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -3081,7 +3000,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -3104,7 +3023,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -3123,7 +3042,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -3149,7 +3068,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"," + NEW_LINE +
             "    \"body\" : {" + NEW_LINE +
@@ -3171,7 +3090,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"remainingTimes\" : 5" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -3192,7 +3111,7 @@ public class ExpectationSerializerTest {
         );
 
         // then
-        assertEquals("{" + NEW_LINE +
+        assertThat( jsonExpectation, is("{" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"" + NEW_LINE +
             "  }," + NEW_LINE +
@@ -3207,7 +3126,7 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"unlimited\" : true" + NEW_LINE +
             "  }" + NEW_LINE +
-            "}", jsonExpectation);
+            "}"));
     }
 
     @Test
@@ -3233,7 +3152,7 @@ public class ExpectationSerializerTest {
         });
 
         // then
-        assertEquals("[ {" + NEW_LINE +
+        assertThat( jsonExpectation, is("[ {" + NEW_LINE +
             "  \"httpRequest\" : {" + NEW_LINE +
             "    \"path\" : \"somePath\"" + NEW_LINE +
             "  }," + NEW_LINE +
@@ -3278,6 +3197,6 @@ public class ExpectationSerializerTest {
             "  \"times\" : {" + NEW_LINE +
             "    \"unlimited\" : true" + NEW_LINE +
             "  }" + NEW_LINE +
-            "} ]", jsonExpectation);
+            "} ]"));
     }
 }

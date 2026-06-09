@@ -64,6 +64,7 @@ fi
 log_info "Using JAR: $SHADED_JAR"
 cp "$SHADED_JAR" docker/local/mockserver-netty-jar-with-dependencies.jar
 cp "$SHADED_JAR" docker/graaljs/mockserver-netty-jar-with-dependencies.jar
+cp "$SHADED_JAR" docker/clustered/mockserver-netty-jar-with-dependencies.jar
 
 # Stage a CA bundle into the graaljs build context. The alpine stages COPY it
 # in and (when non-empty) trust it before `apk add`, so builds behind a
@@ -76,12 +77,96 @@ else
   : > docker/graaljs/ca-bundle.pem
 fi
 
+# ---- Resolve Infinispan clustered-state libs for the -clustered image ------
+# Use Maven to resolve the transitive runtime dependencies of the
+# mockserver-state-infinispan module. The module JAR itself is downloaded
+# separately from Maven Central (it's excluded by -DexcludeGroupIds).
+find_local_infinispan_jar() {
+  find mockserver/mockserver-state-infinispan/target \
+    -name 'mockserver-state-infinispan-*.jar' \
+    ! -name '*-sources.jar' \
+    ! -name '*-javadoc.jar' \
+    ! -name '*-tests.jar' \
+    -print -quit 2>/dev/null || true
+}
+
+mkdir -p docker/clustered/libs
+INFINISPAN_JAR=$(find_local_infinispan_jar)
+if [[ -z "$INFINISPAN_JAR" ]]; then
+  log_info "Infinispan JAR not found locally — downloading from Maven Central"
+  INFINISPAN_JAR="mockserver/mockserver-state-infinispan/target/mockserver-state-infinispan-${RELEASE_VERSION}.jar"
+  INFINISPAN_CENTRAL_URL="https://repo1.maven.org/maven2/org/mock-server/mockserver-state-infinispan/${RELEASE_VERSION}/mockserver-state-infinispan-${RELEASE_VERSION}.jar"
+  if is_dry_run && ! curl -sf -I "$INFINISPAN_CENTRAL_URL" >/dev/null 2>&1; then
+    log_dry "skip: download infinispan $RELEASE_VERSION JAR (not yet on Maven Central)"
+    INFINISPAN_JAR=$(find_local_infinispan_jar)
+    if [[ -z "$INFINISPAN_JAR" ]]; then
+      log_dry "no local infinispan JAR available — running 'mvn package' to produce one"
+      in_maven -w /build/mockserver \
+        -- mvn -DskipTests -pl mockserver-state-infinispan -am package
+      INFINISPAN_JAR=$(find_local_infinispan_jar)
+    fi
+  else
+    mkdir -p mockserver/mockserver-state-infinispan/target
+    curl -fsSL --max-time 300 --connect-timeout 30 --retry 3 --retry-delay 5 \
+      -o "$INFINISPAN_JAR" \
+      "$INFINISPAN_CENTRAL_URL"
+  fi
+fi
+
+BUILD_CLUSTERED=false
+if [[ -n "$INFINISPAN_JAR" && -f "$INFINISPAN_JAR" ]]; then
+  log_info "Using infinispan JAR: $INFINISPAN_JAR"
+  cp "$INFINISPAN_JAR" docker/clustered/libs/
+
+  # Resolve transitive runtime dependencies (Infinispan, JGroups, etc.)
+  log_info "Resolving infinispan transitive dependencies"
+  in_maven -w /build/mockserver \
+    -- mvn -pl mockserver-state-infinispan dependency:copy-dependencies \
+      -DincludeScope=runtime -DexcludeGroupIds=org.mock-server \
+      -DoutputDirectory=/build/docker/clustered/libs
+  BUILD_CLUSTERED=true
+else
+  log_info "WARNING: Infinispan JAR not available — skipping clustered image build"
+fi
+
 # ---- Auth (skipped in dry-run) --------------------------------------------
+# MIRROR_GHCR gates the GHCR image mirror (ghcr.io/mock-server/mockserver). It
+# is enabled only when a GHCR login succeeds, so a missing/expired token or a
+# GHCR outage degrades to "Docker Hub + ECR only" rather than aborting.
+MIRROR_GHCR=false
 if ! is_dry_run; then
   log_info "Login to Docker Hub + ECR Public"
-  "$REPO_ROOT/.buildkite/scripts/docker-login.sh"
+  # Release images use the release-scoped Docker Hub token (release queue only).
+  DOCKERHUB_SECRET_ID="mockserver-release/dockerhub" \
+    "$REPO_ROOT/.buildkite/scripts/docker-login.sh"
   "$REPO_ROOT/.buildkite/scripts/ecr-login.sh"
+
+  # GHCR mirror login. Reuses the same mockserver-release/ghcr-token secret the
+  # Helm chart already pushes with (oci://ghcr.io/mock-server/charts), so the
+  # org packages + write scope already exist. Non-fatal: a GHCR mirror is a
+  # convenience surface, never a release gate.
+  if aws secretsmanager describe-secret --region "$REGION" \
+       --secret-id mockserver-release/ghcr-token >/dev/null 2>&1; then
+    log_info "Login to GHCR (ghcr.io/mock-server) for the image mirror"
+    if GHCR_USER=$(load_secret "mockserver-release/ghcr-token" "username") \
+       && GHCR_TOKEN=$(load_secret "mockserver-release/ghcr-token" "token") \
+       && printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+            --username "$GHCR_USER" --password-stdin >/dev/null 2>&1; then
+      MIRROR_GHCR=true
+      log_info "  GHCR login OK — images will be mirrored to ghcr.io/mock-server/mockserver"
+    else
+      log_info "  WARNING: GHCR login failed — skipping GHCR mirror (non-fatal)"
+    fi
+    unset GHCR_TOKEN GHCR_USER
+  else
+    log_info "GHCR token not configured (mockserver-release/ghcr-token) — skipping GHCR mirror"
+  fi
 fi
+
+# GHCR image repository (mirror target). The manifests are copied from Docker
+# Hub with `docker buildx imagetools create` after the primary push, so the
+# GHCR images share the exact same digest (and cosign signature) as Docker Hub.
+GHCR_REPO="ghcr.io/mock-server/mockserver"
 
 FULL_TAG="mockserver-$RELEASE_VERSION"
 SHORT_TAG="$RELEASE_VERSION"
@@ -100,6 +185,43 @@ else
 fi
 
 log_info "Build images"
+
+# ---- Locate or build webhook fat JAR ----------------------------------------
+find_local_webhook_jar() {
+  find mockserver/mockserver-k8s-webhook/target \
+    -name 'mockserver-k8s-webhook-*-jar-with-dependencies.jar' \
+    -print -quit 2>/dev/null || true
+}
+WEBHOOK_JAR=$(find_local_webhook_jar)
+if [[ -z "$WEBHOOK_JAR" ]]; then
+  log_info "Webhook fat JAR not found locally — downloading from Maven Central"
+  mkdir -p mockserver/mockserver-k8s-webhook/target
+  WEBHOOK_JAR="mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-${RELEASE_VERSION}-jar-with-dependencies.jar"
+  WEBHOOK_CENTRAL_URL="https://repo1.maven.org/maven2/org/mock-server/mockserver-k8s-webhook/${RELEASE_VERSION}/mockserver-k8s-webhook-${RELEASE_VERSION}-jar-with-dependencies.jar"
+  if is_dry_run && ! curl -sf -I "$WEBHOOK_CENTRAL_URL" >/dev/null 2>&1; then
+    log_dry "skip: download webhook $RELEASE_VERSION JAR (not yet on Maven Central)"
+    WEBHOOK_JAR=$(find_local_webhook_jar)
+    if [[ -z "$WEBHOOK_JAR" ]]; then
+      log_dry "no local webhook JAR available — running 'mvn package' to produce one"
+      in_maven -w /build/mockserver \
+        -- mvn -DskipTests -pl mockserver-k8s-webhook -am package
+      WEBHOOK_JAR=$(find_local_webhook_jar)
+    fi
+  else
+    curl -fsSL --max-time 300 --connect-timeout 30 --retry 3 --retry-delay 5 \
+      -o "$WEBHOOK_JAR" \
+      "$WEBHOOK_CENTRAL_URL"
+  fi
+fi
+if [[ -n "$WEBHOOK_JAR" && -f "$WEBHOOK_JAR" ]]; then
+  log_info "Using webhook JAR: $WEBHOOK_JAR"
+  cp "$WEBHOOK_JAR" docker/webhook/mockserver-webhook.jar
+  BUILD_WEBHOOK=true
+else
+  log_info "WARNING: Webhook JAR not available — skipping webhook image build"
+  BUILD_WEBHOOK=false
+fi
+
 if is_dry_run; then
   # Local single-arch via the default daemon. Plain `docker build` reuses
   # Docker Desktop's CA trust (whereas a fresh buildx builder does not).
@@ -122,7 +244,30 @@ if is_dry_run; then
     --tag "${ECR_REPO}:latest-graaljs" \
     docker/graaljs
 
+  if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+    docker build \
+      --tag "mockserver/mockserver:clustered-$FULL_TAG" \
+      --tag "mockserver/mockserver:clustered-$SHORT_TAG" \
+      --tag "mockserver/mockserver:clustered-latest" \
+      --tag "${ECR_REPO}:clustered-$FULL_TAG" \
+      --tag "${ECR_REPO}:clustered-$SHORT_TAG" \
+      --tag "${ECR_REPO}:clustered-latest" \
+      docker/clustered
+  fi
+
+  if [[ "$BUILD_WEBHOOK" == "true" ]]; then
+    docker build \
+      --tag "mockserver/mockserver-webhook:$FULL_TAG" \
+      --tag "mockserver/mockserver-webhook:$SHORT_TAG" \
+      --tag "mockserver/mockserver-webhook:latest" \
+      --tag "${ECR_REPO}-webhook:$FULL_TAG" \
+      --tag "${ECR_REPO}-webhook:$SHORT_TAG" \
+      --tag "${ECR_REPO}-webhook:latest" \
+      docker/webhook
+  fi
+
   log_dry "skip: push to Docker Hub + ECR (built locally, not pushed)"
+  log_dry "skip: mirror to ghcr.io/mock-server/mockserver (only on --execute)"
 else
   # CI: multi-arch + push via buildx.
   docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
@@ -149,6 +294,246 @@ else
     --tag "${ECR_REPO}:$SHORT_TAG-graaljs" \
     --tag "${ECR_REPO}:latest-graaljs" \
     docker/graaljs
+
+  if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+    # Error-isolated: a clustered image push failure must never abort the
+    # release — the main + GraalJS images have already been published above.
+    echo "--- :docker: Building and pushing clustered image variant"
+    if ! docker buildx build \
+      --platform "linux/amd64,linux/arm64" \
+      --push \
+      --tag "mockserver/mockserver:clustered-$FULL_TAG" \
+      --tag "mockserver/mockserver:clustered-$SHORT_TAG" \
+      --tag "mockserver/mockserver:clustered-latest" \
+      --tag "${ECR_REPO}:clustered-$FULL_TAG" \
+      --tag "${ECR_REPO}:clustered-$SHORT_TAG" \
+      --tag "${ECR_REPO}:clustered-latest" \
+      docker/clustered; then
+      log_info "WARNING: clustered image push failed — continuing (main images already published)"
+    fi
+  fi
+
+  if [[ "$BUILD_WEBHOOK" == "true" ]]; then
+    # Push webhook to Docker Hub first (primary registry used by Helm chart).
+    # Error-isolated: a webhook push failure must never abort the release —
+    # the main + GraalJS images have already been published above.
+    if ! docker buildx build \
+      --platform "linux/amd64,linux/arm64" \
+      --push \
+      --tag "mockserver/mockserver-webhook:$FULL_TAG" \
+      --tag "mockserver/mockserver-webhook:$SHORT_TAG" \
+      --tag "mockserver/mockserver-webhook:latest" \
+      docker/webhook; then
+      log_info "WARNING: webhook Docker Hub push failed — continuing (main images already published)"
+    fi
+    # Push webhook to ECR separately — the ECR repo may not be provisioned yet.
+    if ! docker buildx build \
+      --platform "linux/amd64,linux/arm64" \
+      --push \
+      --tag "${ECR_REPO}-webhook:$FULL_TAG" \
+      --tag "${ECR_REPO}-webhook:$SHORT_TAG" \
+      --tag "${ECR_REPO}-webhook:latest" \
+      docker/webhook; then
+      log_info "WARNING: webhook ECR push failed — continuing (Docker Hub is the primary registry)"
+    fi
+  fi
+
+  # ---- Mirror images to GHCR -----------------------------------------------
+  # Copy the already-pushed multi-arch manifests from Docker Hub to GHCR with
+  # `docker buildx imagetools create` (a registry-to-registry manifest copy — no
+  # rebuild, identical digest). Strictly non-fatal and error-isolated per tag:
+  # the primary Docker Hub + ECR images are already published above, so a GHCR
+  # hiccup must never abort the release. Signed below alongside the other refs.
+  if [[ "$MIRROR_GHCR" == "true" ]]; then
+    echo "--- :docker: Mirroring images to ghcr.io/mock-server/mockserver"
+    mirror_to_ghcr() {
+      # $1 = source ref (Docker Hub), $2 = destination ref (GHCR)
+      if ! docker buildx imagetools create --tag "$2" "$1"; then
+        log_info "WARNING: GHCR mirror failed for $2 (non-fatal)"
+        return 1
+      fi
+    }
+    for t in "$FULL_TAG" "$SHORT_TAG" "latest" \
+             "$FULL_TAG-graaljs" "$SHORT_TAG-graaljs" "latest-graaljs"; do
+      mirror_to_ghcr "mockserver/mockserver:$t" "${GHCR_REPO}:$t" || true
+    done
+    if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+      for t in "clustered-$FULL_TAG" "clustered-$SHORT_TAG" "clustered-latest"; do
+        mirror_to_ghcr "mockserver/mockserver:$t" "${GHCR_REPO}:$t" || true
+      done
+    fi
+    if [[ "$BUILD_WEBHOOK" == "true" ]]; then
+      for t in "$FULL_TAG" "$SHORT_TAG" "latest"; do
+        mirror_to_ghcr "mockserver/mockserver-webhook:$t" "${GHCR_REPO}-webhook:$t" || true
+      done
+    fi
+  fi
+
+  # ---- Cosign-sign pushed Docker images ------------------------------------
+  # Sign by digest so the signature binds to the exact manifest, not a mutable
+  # tag. Uses the SAME cosign key infrastructure as helm.sh. NO-OP until a
+  # signing key is stored at mockserver-release/cosign-key (keys: key, password)
+  # — the describe-secret guard skips this entirely otherwise.
+  # Signing is additive and STRICTLY non-fatal: a failure here never aborts
+  # the release — the images are already pushed.
+  # Resolve a usable cosign binary into $_cosign_bin. Prefer one already on PATH;
+  # otherwise download the pinned release into .tmp/ (writable, no sudo needed —
+  # docker.sh signs on the HOST, unlike helm.sh which installs inside a root
+  # container). Pinned version + sha256 match helm.sh so both signers use the
+  # same cosign. Returns non-zero if cosign cannot be made available.
+  ensure_cosign() {
+    if command -v cosign >/dev/null 2>&1; then
+      _cosign_bin="cosign"
+      return 0
+    fi
+    mkdir -p "$REPO_ROOT/.tmp"
+    local target="$REPO_ROOT/.tmp/cosign"
+    log_info "  cosign not on PATH — downloading pinned cosign v2.4.3 to .tmp/"
+    # curl (not wget) — docker.sh runs on the bare agent host and only curl is
+    # a guaranteed-present tool here (require_cmd curl); helm.sh uses wget only
+    # because it runs inside a container image that bundles it.
+    if ! curl -fsSL --max-time 120 -o "$target" "https://github.com/sigstore/cosign/releases/download/v2.4.3/cosign-linux-amd64"; then
+      log_info "WARNING: failed to download cosign — skipping signing"
+      return 1
+    fi
+    if ! echo "caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708  $target" | sha256sum -c - >/dev/null 2>&1; then
+      log_info "WARNING: cosign checksum mismatch — refusing to use downloaded binary"
+      rm -f "$target"
+      return 1
+    fi
+    chmod +x "$target"
+    _cosign_bin="$target"
+    return 0
+  }
+
+  cosign_sign_docker_image() {
+    local image_ref="$1"
+    # Resolve the tag to a digest so we sign by content, not by mutable tag.
+    local digest
+    digest=$(docker buildx imagetools inspect "$image_ref" --format '{{.Digest}}' 2>/dev/null || true)
+    if [[ -z "$digest" ]]; then
+      log_info "WARNING: could not resolve digest for $image_ref — skipping cosign sign"
+      return 1
+    fi
+    local repo="${image_ref%%:*}"
+    local ref_by_digest="${repo}@${digest}"
+    log_info "  cosign sign $ref_by_digest"
+    "$_cosign_bin" sign --yes --key "$_cosign_key_file" "$ref_by_digest" || return 1
+  }
+
+  cosign_sign_docker_images() {
+    local rc=0
+    ensure_cosign || return 1
+    mkdir -p "$REPO_ROOT/.tmp"
+    _cosign_key_file="$REPO_ROOT/.tmp/cosign-key-docker.$$"
+    local _cosign_pw_file="$REPO_ROOT/.tmp/cosign-pw-docker.$$"
+    ( umask 077; load_secret "mockserver-release/cosign-key" "key" > "$_cosign_key_file" ) \
+      || { rm -f "$_cosign_key_file"; return 1; }
+    ( umask 077; load_secret "mockserver-release/cosign-key" "password" > "$_cosign_pw_file" ) \
+      || { rm -f "$_cosign_key_file" "$_cosign_pw_file"; return 1; }
+    export COSIGN_PASSWORD
+    COSIGN_PASSWORD=$(cat "$_cosign_pw_file")
+    rm -f "$_cosign_pw_file"
+
+    # Sign primary images (Docker Hub + ECR) by their :latest tag (resolves to
+    # the multi-arch manifest digest).
+    local -a images_to_sign=(
+      "mockserver/mockserver:$FULL_TAG"
+      "${ECR_REPO}:$FULL_TAG"
+      "mockserver/mockserver:$FULL_TAG-graaljs"
+      "${ECR_REPO}:$FULL_TAG-graaljs"
+    )
+    if [[ "$BUILD_CLUSTERED" == "true" ]]; then
+      images_to_sign+=(
+        "mockserver/mockserver:clustered-$FULL_TAG"
+        "${ECR_REPO}:clustered-$FULL_TAG"
+      )
+    fi
+    if [[ "$BUILD_WEBHOOK" == "true" ]]; then
+      images_to_sign+=(
+        "mockserver/mockserver-webhook:$FULL_TAG"
+      )
+    fi
+    # GHCR mirror refs (same digests as Docker Hub, but cosign stores the
+    # signature in the registry holding the image, so GHCR needs its own sign).
+    if [[ "$MIRROR_GHCR" == "true" ]]; then
+      images_to_sign+=(
+        "${GHCR_REPO}:$FULL_TAG"
+        "${GHCR_REPO}:$FULL_TAG-graaljs"
+      )
+      [[ "$BUILD_CLUSTERED" == "true" ]] && images_to_sign+=( "${GHCR_REPO}:clustered-$FULL_TAG" )
+      [[ "$BUILD_WEBHOOK" == "true" ]]   && images_to_sign+=( "${GHCR_REPO}-webhook:$FULL_TAG" )
+    fi
+    for img in "${images_to_sign[@]}"; do
+      cosign_sign_docker_image "$img" || {
+        log_info "WARNING: cosign signing failed for $img (non-fatal)"
+        rc=1
+      }
+    done
+    rm -f "$_cosign_key_file"
+    unset COSIGN_PASSWORD
+    return $rc
+  }
+
+  if aws secretsmanager describe-secret --region "$REGION" \
+       --secret-id mockserver-release/cosign-key >/dev/null 2>&1; then
+    log_info "Cosign-signing pushed Docker images (mockserver-release/cosign-key found)"
+    # cosign signs on the HOST (the images are already pushed to a registry).
+    # cosign_sign_docker_images resolves a cosign binary via ensure_cosign,
+    # installing the pinned release into .tmp/ if one is not already on PATH.
+    if cosign_sign_docker_images; then
+      log_info "Docker images signed with cosign"
+    else
+      log_info ":warning: cosign signing had partial failures (non-fatal) — images published but some unsigned"
+    fi
+  else
+    log_info "cosign key not configured (mockserver-release/cosign-key) — skipping Docker image signing"
+  fi
+
+  # ---- Sync the Docker Hub "Overview" from docker/DOCKERHUB.md --------------
+  # Keeps the repo's Docker Hub landing page in sync with version control so it
+  # never goes stale (it previously drifted: dead Trello board + Heroku Slack
+  # link). STRICTLY non-fatal: needs a Docker Hub token with repo-write scope,
+  # which the push/pull token may lack (403 insufficient scope) — skipped with a
+  # warning in that case so it never aborts a release.
+  sync_dockerhub_description() {
+    local desc_file="$REPO_ROOT/docker/DOCKERHUB.md" user token bearer code
+    [[ -f "$desc_file" ]] || { log_info "  no docker/DOCKERHUB.md — skipping overview sync"; return 0; }
+    user=$(load_secret "mockserver-release/dockerhub" "username") || return 1
+    token=$(load_secret "mockserver-release/dockerhub" "token") || return 1
+    # A Docker Hub Personal/Org Access Token must be exchanged for a bearer via
+    # /v2/auth/token (it cannot be used as a bearer directly, and the legacy
+    # /v2/users/login JWT lacks the scope to edit repo metadata).
+    bearer=$(curl -s --max-time 30 -H "Content-Type: application/json" \
+      -d "{\"identifier\":\"${user}\",\"secret\":\"${token}\"}" \
+      https://hub.docker.com/v2/auth/token \
+      | python3 -c "import sys,json;print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+    [[ -n "$bearer" ]] || { log_info "  Docker Hub token exchange failed — skipping overview sync"; return 1; }
+    code=$(python3 - "$bearer" "$desc_file" <<'PY'
+import sys, json, urllib.request, urllib.error
+bearer, path = sys.argv[1], sys.argv[2]
+body = json.dumps({"full_description": open(path).read()}).encode()
+req = urllib.request.Request(
+    "https://hub.docker.com/v2/repositories/mockserver/mockserver/",
+    data=body, method="PATCH",
+    headers={"Content-Type": "application/json", "Authorization": "Bearer " + bearer})
+try:
+    print(urllib.request.urlopen(req, timeout=30).status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+PY
+)
+    if [[ "$code" == "200" ]]; then
+      log_info "  Docker Hub overview updated from docker/DOCKERHUB.md"
+    else
+      # Editing the repo description needs a token with repo:admin scope; the
+      # push token is typically repo:write only (HTTP 403). Non-fatal.
+      log_info "  WARNING: Docker Hub overview update returned HTTP ${code:-?} (the token needs repo:admin scope, not just repo:write) — skipped"
+      return 1
+    fi
+  }
+  log_info "Sync Docker Hub overview from docker/DOCKERHUB.md"
+  sync_dockerhub_description || log_info ":warning: Docker Hub overview not updated (non-fatal)"
 fi
 
 log_info "Docker publish complete"

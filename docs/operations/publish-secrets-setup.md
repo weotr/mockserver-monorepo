@@ -1,0 +1,252 @@
+# Publish Secrets Setup Runbook
+
+## TL;DR
+
+Five new release channels soft-skip because their AWS Secrets Manager secrets
+do not exist yet. This runbook explains how to obtain each credential, store it
+under the expected secret name and JSON key, and verify the channel went live
+after the next release.
+
+All secrets live in the `mockserver-build` AWS account, region `eu-west-2`,
+under the `mockserver-release/` prefix. Once created, apply the Terraform
+snippet from `docs/operations/publish-secrets-terraform-snippet.md` to grant
+the release-queue IAM policy access.
+
+## Secret Inventory
+
+| Secret ID | JSON Key | Components | Registry |
+|---|---|---|---|
+| `mockserver-release/nuget` | `api_key` | `client-dotnet.sh`, `tc-dotnet.sh` | NuGet.org |
+| `mockserver-release/crates` | `token` | `client-rust.sh`, `tc-rust.sh` | crates.io |
+| `mockserver-release/vsce` | `token` | `vscode.sh` | VS Code Marketplace |
+| `mockserver-release/ovsx` | `token` | `vscode.sh` | Open VSX Registry |
+| `mockserver-release/jetbrains` | `token` | `jetbrains.sh` | JetBrains Marketplace |
+
+## 1. NuGet (mockserver-release/nuget)
+
+### Obtain the token
+
+1. Sign in to [nuget.org](https://www.nuget.org/) with the MockServer account.
+2. Go to **Account Settings > API Keys**.
+3. Click **Create** and configure:
+   - **Key name:** `mockserver-release`
+   - **Expiration:** 365 days (the maximum; set a calendar reminder to rotate)
+   - **Package owner:** select the account/org that owns `MockServer.Client`
+   - **Glob pattern:** `MockServer.*` (covers both `MockServer.Client` and
+     `Testcontainers.MockServer`)
+   - **Scopes:** Push (push new packages and package versions)
+4. Click **Create** and copy the API key immediately (it is shown only once).
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-release/nuget \
+  --description "NuGet.org API key for publishing MockServer.Client and Testcontainers.MockServer" \
+  --secret-string '{"api_key":"<PASTE_NUGET_API_KEY>"}'
+```
+
+### Post-release verification
+
+`verify.sh` runs two soft checks:
+
+```
+.NET Client (soft):
+  https://api.nuget.org/v3-flatcontainer/mockserver.client/<VERSION>/mockserver.client.<VERSION>.nupkg
+
+Testcontainers.MockServer (NuGet, soft):
+  https://api.nuget.org/v3-flatcontainer/testcontainers.mockserver/<VERSION>/testcontainers.mockserver.<VERSION>.nupkg
+```
+
+Both should return HTTP 200 after NuGet indexing completes (typically < 15 min).
+
+---
+
+## 2. crates.io (mockserver-release/crates)
+
+### Obtain the token
+
+1. Sign in to [crates.io](https://crates.io/) with the MockServer GitHub account.
+2. Go to **Account Settings > API Tokens**.
+3. Click **New Token** and configure:
+   - **Name:** `mockserver-release`
+   - **Scopes:** select **publish-update** (publish new crates and new versions
+     of existing crates). If the crates `mockserver-client` and
+     `testcontainers-mockserver` have not been published before, also select
+     **publish-new**.
+   - **Crate scope:** leave blank (all crates) or restrict to
+     `mockserver-client` and `testcontainers-mockserver`.
+4. Click **Generate Token** and copy it immediately.
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-release/crates \
+  --description "crates.io API token for publishing mockserver-client and testcontainers-mockserver Rust crates" \
+  --secret-string '{"token":"<PASTE_CRATES_IO_TOKEN>"}'
+```
+
+### Post-release verification
+
+`verify.sh` runs two soft checks:
+
+```
+Rust Client (soft):
+  https://crates.io/api/v1/crates/mockserver-client/<VERSION>
+
+testcontainers-mockserver (crates.io, soft):
+  https://crates.io/api/v1/crates/testcontainers-mockserver/<VERSION>
+```
+
+Both should return HTTP 200 (crates.io indexes within seconds).
+
+---
+
+## 3. VS Code Marketplace (mockserver-release/vsce)
+
+### Obtain the token
+
+1. Sign in to [Azure DevOps](https://dev.azure.com/) with the MockServer
+   account (the VS Code Marketplace uses Azure DevOps PATs for publisher
+   authentication).
+2. Click the **User Settings** icon (top-right) > **Personal access tokens**.
+3. Click **New Token** and configure:
+   - **Name:** `mockserver-vsce-release`
+   - **Organization:** select **All accessible organizations**
+   - **Expiration:** Custom (up to 1 year)
+   - **Scopes:** click **Show all scopes**, then check **Marketplace > Manage**
+4. Click **Create** and copy the token.
+5. If a publisher identity does not exist yet, create one:
+   ```bash
+   npx vsce create-publisher mock-server
+   npx vsce login mock-server
+   ```
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-release/vsce \
+  --description "VS Code Marketplace PAT (Azure DevOps) for publishing mockserver-vscode extension" \
+  --secret-string '{"token":"<PASTE_AZURE_DEVOPS_PAT>"}'
+```
+
+### Post-release verification
+
+`verify.sh` runs a soft check:
+
+```
+VS Code extension (soft):
+  https://marketplace.visualstudio.com/items?itemName=mock-server.mockserver
+```
+
+The page should exist and return HTTP 200. The specific version is not checked
+in the URL (the Marketplace item page always shows the latest version), so
+visually confirm the listed version matches the release.
+
+---
+
+## 4. Open VSX (mockserver-release/ovsx)
+
+### Obtain the token
+
+1. Sign in to the [Open VSX Registry](https://open-vsx.org/) with GitHub.
+2. Go to **Settings > Access Tokens**.
+3. Click **Generate Token** and configure:
+   - **Description:** `mockserver-release`
+   - No scope restrictions (Open VSX tokens are full-access per namespace).
+4. Copy the token.
+5. If a namespace has not been claimed yet, create one:
+   ```bash
+   npx ovsx create-namespace mock-server -p <TOKEN>
+   ```
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-release/ovsx \
+  --description "Open VSX Registry PAT for publishing mockserver-vscode extension" \
+  --secret-string '{"token":"<PASTE_OPEN_VSX_TOKEN>"}'
+```
+
+### Post-release verification
+
+There is no separate `verify.sh` check for Open VSX. Manually confirm at:
+
+```
+https://open-vsx.org/extension/mock-server/mockserver
+```
+
+The extension page should show the released version.
+
+---
+
+## 5. JetBrains Marketplace (mockserver-release/jetbrains)
+
+### Obtain the token
+
+1. Sign in to the [JetBrains Marketplace](https://plugins.jetbrains.com/)
+   with the MockServer JetBrains account.
+2. Go to the plugin page > **Edit** (if the plugin is already registered) or
+   **Upload plugin** (for the first publication).
+3. Navigate to **Profile > Personal Access Tokens** (or visit
+   `https://plugins.jetbrains.com/author/me/tokens`).
+4. Click **Generate Token** and configure:
+   - **Name:** `mockserver-release`
+   - **Expiration:** 1 year (set a calendar reminder to rotate)
+5. Copy the token.
+
+The `jetbrains.sh` component passes the token via the `JETBRAINS_TOKEN`
+environment variable to `./gradlew publishPlugin`. The Gradle IntelliJ Plugin
+reads `JETBRAINS_TOKEN` (or the `token` property in `intellijPlatform.publishing`)
+to authenticate the upload.
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-release/jetbrains \
+  --description "JetBrains Marketplace token for publishing mockserver-jetbrains plugin" \
+  --secret-string '{"token":"<PASTE_JETBRAINS_TOKEN>"}'
+```
+
+### Post-release verification
+
+`verify.sh` runs a soft check:
+
+```
+JetBrains plugin (soft):
+  https://plugins.jetbrains.com/plugin/com.mock-server.mockserver
+```
+
+The page should return HTTP 200. Visually confirm the version matches the
+release.
+
+---
+
+## Rotation
+
+All five tokens should be rotated annually. When rotating:
+
+1. Generate a new token from the registry.
+2. Update the secret value:
+   ```bash
+   aws secretsmanager put-secret-value \
+     --region eu-west-2 \
+     --secret-id mockserver-release/<name> \
+     --secret-string '{"<key>":"<NEW_TOKEN>"}'
+   ```
+3. Run a `--dry-run` release to confirm the secret loads without error.
+
+## Terraform IAM Grants
+
+After creating the secrets, apply the Terraform changes described in
+[publish-secrets-terraform-snippet.md](publish-secrets-terraform-snippet.md)
+so the release-queue Buildkite agents can read them.

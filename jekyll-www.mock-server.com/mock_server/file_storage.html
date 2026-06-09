@@ -3,8 +3,8 @@ title: File Storage
 description: Store, retrieve, list, and delete named binary or text files in MockServer's in-memory file store to use as response bodies, test fixtures, or certificate payloads.
 shortTitle: File Storage
 layout: page
-pageOrder: 9.7
-section: 'Mock Server'
+pageOrder: 3
+section: 'Data & State'
 subsection: true
 sitemap:
   priority: 0.7
@@ -107,6 +107,8 @@ Content-Type: application/json
 
 <pre class="prettyprint lang-java code"><code class="code">["response-body.json","logo.png"]</code></pre>
 
+<p>The order of file names in the response is <strong>not guaranteed</strong> &mdash; it does not necessarily reflect the order in which files were stored. If you need a stable order, sort the returned array client-side.</p>
+
 <a id="delete_a_file" class="anchor" href="#delete_a_file">&nbsp;</a>
 
 <h2>Delete a file</h2>
@@ -150,3 +152,12 @@ curl -s -X PUT http://localhost:1080/mockserver/files/retrieve \
 curl -s -X PUT http://localhost:1080/mockserver/files/delete \
   -H 'Content-Type: application/json' \
   -d '{"name":"user.json"}'</code></pre>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/crud_data_store.html">CRUD Data Store</a> &mdash; a stateful keyed data store for mocking create, read, update, and delete APIs</li>
+    <li><a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> &mdash; save and reload expectations using the files managed here</li>
+</ul>

@@ -107,6 +107,16 @@ Work through each lens from the constitution. For each lens:
 - Solving hypothetical future problems (CPX-04)
 - Simplest solution not chosen (CPX-07)
 
+### Structure Expectation
+
+Well-formed specs follow the **Pyramid Principle with progressive disclosure**
+(`.opencode/rules/documentation-style.md`): an executive summary / outcome
+first, then context, then detailed requirements — exactly the shape of
+`.opencode/skills/ideate/spec-template.md`. If a spec buries its conclusion,
+introduces detail before its context, or has no top-level takeaway, record it as
+an **OBSERVATION** (it impairs reviewability) — not a blocking finding unless it
+also causes a genuine ambiguity or incompleteness defect under the lenses above.
+
 ## Step 5: Verify Claims Against Codebase
 
 The spec may make claims about existing code behaviour, file locations, API

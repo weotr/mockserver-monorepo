@@ -1,63 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.buildkite/scripts/lib/last-successful-commit.sh
+source "$SCRIPT_DIR/lib/last-successful-commit.sh"
+
 DEFAULT_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-}"
 if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)
 fi
 DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
-
-last_successful_commit() {
-  local secret_id="${BUILDKITE_API_TOKEN_SECRET_ID:-mockserver-build/buildkite-api-token}"
-  local region="${AWS_REGION:-eu-west-2}"
-  local org="${BUILDKITE_ORGANIZATION_SLUG:-mockserver}"
-  local pipeline="${BUILDKITE_PIPELINE_SLUG:-mockserver}"
-  local branch="${BUILDKITE_BRANCH:-master}"
-  local current_build="${BUILDKITE_BUILD_NUMBER:-}"
-
-  local token
-  { set +x; } 2>/dev/null  # F-BK-04: suppress xtrace before secret fetch
-  token=$(aws secretsmanager get-secret-value \
-    --secret-id "$secret_id" --region "$region" \
-    --query SecretString --output text 2>/dev/null) || { echo "    reason: secrets manager unavailable" >&2; return 1; }
-  [ -n "$token" ] || { echo "    reason: empty API token" >&2; return 1; }
-
-  local api_base="https://api.buildkite.com/v2/organizations/${org}/pipelines/${pipeline}/builds"
-
-  local response
-  response=$(curl -sS --max-time 10 --connect-timeout 5 \
-    --get "$api_base" \
-    --data-urlencode "branch=${branch}" \
-    --data-urlencode "state=passed" \
-    --data-urlencode "per_page=10" \
-    -H "Authorization: Bearer ${token}" 2>/dev/null) || { echo "    reason: Buildkite API request failed" >&2; return 1; }
-
-  if ! printf '%s' "$response" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    echo "    reason: Buildkite API returned non-array response" >&2
-    return 1
-  fi
-
-  local commit
-  if [ -n "$current_build" ] && [[ "$current_build" =~ ^[0-9]+$ ]]; then
-    commit=$(printf '%s' "$response" | jq -r \
-      --argjson current "$current_build" \
-      '[.[] | select(.number < $current)][0].commit // empty' 2>/dev/null)
-  else
-    commit=$(printf '%s' "$response" | jq -r '.[0].commit // empty' 2>/dev/null)
-  fi
-
-  if [ -z "$commit" ]; then
-    echo "    reason: no previous successful build found" >&2
-    return 1
-  fi
-
-  if ! git cat-file -t "$commit" >/dev/null 2>&1; then
-    echo "    reason: commit ${commit:0:10} not in local history (shallow clone?)" >&2
-    return 1
-  fi
-
-  echo "$commit"
-}
 
 trigger_all_pipelines() {
   echo "--- :warning: Cannot determine change base — triggering all pipelines"
@@ -113,9 +65,14 @@ if printf '%s\n' "$CHANGED_FILES" | grep -E -- "^(mockserver/|mockserver-ui/)" |
   trigger_if_changed "^(mockserver/|mockserver-ui/)" "mockserver-java" "MockServer Java"
 fi
 trigger_if_changed "^mockserver-ui/" "mockserver-ui" "MockServer UI"
-trigger_if_changed "^(mockserver-node/|mockserver-client-node/)" "mockserver-node" "MockServer Node"
-trigger_if_changed "^mockserver-client-python/" "mockserver-python" "MockServer Python"
+trigger_if_changed "^(mockserver-node/|mockserver-client-node/|mockserver-testcontainers/node/)" "mockserver-node" "MockServer Node"
+trigger_if_changed "^(mockserver-client-python/|mockserver-testcontainers/python/)" "mockserver-python" "MockServer Python"
 trigger_if_changed "^mockserver-client-ruby/" "mockserver-ruby" "MockServer Ruby"
+trigger_if_changed "^(mockserver-client-go/|mockserver-testcontainers/go/)" "mockserver-go" "MockServer Go"
+trigger_if_changed "^(mockserver-client-dotnet/|mockserver-testcontainers/dotnet/)" "mockserver-dotnet" "MockServer .NET"
+trigger_if_changed "^(mockserver-client-rust/|mockserver-testcontainers/rust/)" "mockserver-rust" "MockServer Rust"
+trigger_if_changed "^mockserver-client-php/" "mockserver-php" "MockServer PHP"
+trigger_if_changed "^(mockserver-vscode/|mockserver-jetbrains/)" "mockserver-editors" "MockServer Editors"
 trigger_if_changed "^mockserver/mockserver-maven-plugin/" "mockserver-maven-plugin" "MockServer Maven Plugin"
 trigger_if_changed "^mockserver-performance-test/" "mockserver-performance-test" "MockServer Performance Test"
 trigger_if_changed "^container_integration_tests/" "mockserver-container-tests" "MockServer Container Tests"

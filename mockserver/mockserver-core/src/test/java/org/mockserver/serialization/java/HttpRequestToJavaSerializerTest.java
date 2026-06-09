@@ -8,8 +8,9 @@ import org.mockserver.serialization.Base64Converter;
 import java.util.Arrays;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static junit.framework.TestCase.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * @author jamesdbloom
@@ -20,16 +21,7 @@ public class HttpRequestToJavaSerializerTest {
 
     @Test
     public void shouldSerializeArrayOfObjectsAsJava() {
-        assertEquals(NEW_LINE +
-                "request()" + NEW_LINE +
-                "        .withMethod(\"GET\")" + NEW_LINE +
-                "        .withPath(\"somePathOne\")" + NEW_LINE +
-                "        .withBody(new StringBody(\"responseBodyOne\"));" + NEW_LINE +
-                NEW_LINE +
-                "request()" + NEW_LINE +
-                "        .withMethod(\"GET\")" + NEW_LINE +
-                "        .withPath(\"somePathTwo\")" + NEW_LINE +
-                "        .withBody(new StringBody(\"responseBodyTwo\"));" + NEW_LINE,
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(
                 Arrays.asList(
                     new HttpRequest()
@@ -42,37 +34,21 @@ public class HttpRequestToJavaSerializerTest {
                         .withBody(new StringBody("responseBodyTwo"))
                 )
             )
-        );
+        , is(NEW_LINE +
+                "request()" + NEW_LINE +
+                "        .withMethod(\"GET\")" + NEW_LINE +
+                "        .withPath(\"somePathOne\")" + NEW_LINE +
+                "        .withBody(new StringBody(\"responseBodyOne\"));" + NEW_LINE +
+                NEW_LINE +
+                "request()" + NEW_LINE +
+                "        .withMethod(\"GET\")" + NEW_LINE +
+                "        .withPath(\"somePathTwo\")" + NEW_LINE +
+                "        .withBody(new StringBody(\"responseBodyTwo\"));" + NEW_LINE));
     }
 
     @Test
     public void shouldSerializeFullObjectAsJava() {
-        assertEquals(NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withMethod(\"GET\")" + NEW_LINE +
-                "                .withPath(\"somePath\")" + NEW_LINE +
-                "                .withHeaders(" + NEW_LINE +
-                "                        new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
-                "                        new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withCookies(" + NEW_LINE +
-                "                        new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
-                "                        new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withQueryStringParameters(" + NEW_LINE +
-                "                        new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
-                "                        new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withSecure(true)" + NEW_LINE +
-                "                .withKeepAlive(false)" + NEW_LINE +
-                "                .withProtocol(Protocol.HTTP_2)" + NEW_LINE +
-                "                .withSocketAddress(" + NEW_LINE +
-                "                        new SocketAddress()" + NEW_LINE +
-                "                                .withHost(\"someHost\")" + NEW_LINE +
-                "                                .withPort(1234)" + NEW_LINE +
-                "                                .withScheme(SocketAddress.Scheme.HTTPS)" + NEW_LINE +
-                "                )" + NEW_LINE +
-                "                .withBody(new StringBody(\"responseBody\"))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withMethod("GET")
@@ -97,19 +73,37 @@ public class HttpRequestToJavaSerializerTest {
                     )
                     .withBody(new StringBody("responseBody"))
             )
-        );
+        , is(NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withMethod(\"GET\")" + NEW_LINE +
+                "                .withPath(\"somePath\")" + NEW_LINE +
+                "                .withHeaders(" + NEW_LINE +
+                "                        new Header(\"requestHeaderNameOne\", \"requestHeaderValueOneOne\", \"requestHeaderValueOneTwo\")," + NEW_LINE +
+                "                        new Header(\"requestHeaderNameTwo\", \"requestHeaderValueTwo\")" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withCookies(" + NEW_LINE +
+                "                        new Cookie(\"requestCookieNameOne\", \"requestCookieValueOne\")," + NEW_LINE +
+                "                        new Cookie(\"requestCookieNameTwo\", \"requestCookieValueTwo\")" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withQueryStringParameters(" + NEW_LINE +
+                "                        new Parameter(\"requestQueryStringParameterNameOne\", \"requestQueryStringParameterValueOneOne\", \"requestQueryStringParameterValueOneTwo\")," + NEW_LINE +
+                "                        new Parameter(\"requestQueryStringParameterNameTwo\", \"requestQueryStringParameterValueTwo\")" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withSecure(true)" + NEW_LINE +
+                "                .withKeepAlive(false)" + NEW_LINE +
+                "                .withProtocol(Protocol.HTTP_2)" + NEW_LINE +
+                "                .withSocketAddress(" + NEW_LINE +
+                "                        new SocketAddress()" + NEW_LINE +
+                "                                .withHost(\"someHost\")" + NEW_LINE +
+                "                                .withPort(1234)" + NEW_LINE +
+                "                                .withScheme(SocketAddress.Scheme.HTTPS)" + NEW_LINE +
+                "                )" + NEW_LINE +
+                "                .withBody(new StringBody(\"responseBody\"))"));
     }
 
     @Test
     public void shouldSerializeFullObjectWithParameterBodyRequestAsJava() {
-        assertEquals(NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withBody(" + NEW_LINE +
-                "                        new ParameterBody(" + NEW_LINE +
-                "                                new Parameter(\"requestBodyParameterNameOne\", \"requestBodyParameterValueOneOne\", \"requestBodyParameterValueOneTwo\")," + NEW_LINE +
-                "                                new Parameter(\"requestBodyParameterNameTwo\", \"requestBodyParameterValueTwo\")" + NEW_LINE +
-                "                        )" + NEW_LINE +
-                "                )",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withBody(
@@ -119,51 +113,33 @@ public class HttpRequestToJavaSerializerTest {
                         )
                     )
             )
-        );
+        , is(NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withBody(" + NEW_LINE +
+                "                        new ParameterBody(" + NEW_LINE +
+                "                                new Parameter(\"requestBodyParameterNameOne\", \"requestBodyParameterValueOneOne\", \"requestBodyParameterValueOneTwo\")," + NEW_LINE +
+                "                                new Parameter(\"requestBodyParameterNameTwo\", \"requestBodyParameterValueTwo\")" + NEW_LINE +
+                "                        )" + NEW_LINE +
+                "                )"));
     }
 
     @Test
     public void shouldSerializeFullObjectWithBinaryBodyRequestAsJava() {
         // when
-        assertEquals(NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("responseBody".getBytes(UTF_8)) + "\"))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withBody(
                         new BinaryBody("responseBody".getBytes(UTF_8))
                     )
-            ));
+            ), is(NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withBody(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("responseBody".getBytes(UTF_8)) + "\"))"));
     }
 
     @Test
     public void shouldEscapeJsonBodies() {
-        assertEquals("" + NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withPath(\"somePath\")" + NEW_LINE +
-                "                .withBody(new JsonBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    }," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    }," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "    }" + StringEscapeUtils.escapeJava(NEW_LINE) +
-                "]\", JsonBodyMatchType.ONLY_MATCHING_FIELDS))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withPath("somePath")
@@ -191,7 +167,32 @@ public class HttpRequestToJavaSerializerTest {
                         "    }" + NEW_LINE +
                         "]"))
             )
-        );
+        , is("" + NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withPath(\"somePath\")" + NEW_LINE +
+                "                .withBody(new JsonBody(\"[" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"id\\\": \\\"1\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"title\\\": \\\"Xenophon's imperial fiction : on the education of Cyrus\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"author\\\": \\\"James Tatum\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"isbn\\\": \\\"0691067570\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"publicationDate\\\": \\\"1989\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    }," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"id\\\": \\\"2\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"title\\\": \\\"You are here : personal geographies and other maps of the imagination\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"author\\\": \\\"Katharine A. Harmon\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"isbn\\\": \\\"1568984308\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"publicationDate\\\": \\\"2004\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    }," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    {" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"id\\\": \\\"3\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"title\\\": \\\"You just don't understand : women and men in conversation\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"author\\\": \\\"Deborah Tannen\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"isbn\\\": \\\"0345372050\\\"," + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "        \\\"publicationDate\\\": \\\"1990\\\"" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "    }" + StringEscapeUtils.escapeJava(NEW_LINE) +
+                "]\", JsonBodyMatchType.ONLY_MATCHING_FIELDS))"));
     }
 
     @Test
@@ -226,16 +227,16 @@ public class HttpRequestToJavaSerializerTest {
             "    }," + NEW_LINE +
             "    \"required\": [\"id\", \"name\", \"price\"]" + NEW_LINE +
             "}";
-        assertEquals("" + NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withPath(\"somePath\")" + NEW_LINE +
-                "                .withBody(new JsonSchemaBody(\"" + StringEscapeUtils.escapeJava(jsonSchema) + "\"))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withPath("somePath")
                     .withBody(new JsonSchemaBody(jsonSchema))
             )
-        );
+        , is("" + NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withPath(\"somePath\")" + NEW_LINE +
+                "                .withBody(new JsonSchemaBody(\"" + StringEscapeUtils.escapeJava(jsonSchema) + "\"))"));
     }
 
     @Test
@@ -270,29 +271,29 @@ public class HttpRequestToJavaSerializerTest {
             "    }," + NEW_LINE +
             "    \"required\": [\"id\", \"name\", \"price\"]" + NEW_LINE +
             "}";
-        assertEquals("" + NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withPath(\"somePath\")" + NEW_LINE +
-                "                .withBody(new XmlSchemaBody(\"" + StringEscapeUtils.escapeJava(xmlSchema) + "\"))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withPath("somePath")
                     .withBody(new XmlSchemaBody(xmlSchema))
             )
-        );
+        , is("" + NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withPath(\"somePath\")" + NEW_LINE +
+                "                .withBody(new XmlSchemaBody(\"" + StringEscapeUtils.escapeJava(xmlSchema) + "\"))"));
     }
 
     @Test
     public void shouldSerializeMinimalObjectAsJava() {
-        assertEquals(NEW_LINE +
-                "        request()" + NEW_LINE +
-                "                .withPath(\"somePath\")" + NEW_LINE +
-                "                .withBody(new StringBody(\"responseBody\"))",
+        assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
                 new HttpRequest()
                     .withPath("somePath")
                     .withBody("responseBody")
             )
-        );
+        , is(NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withPath(\"somePath\")" + NEW_LINE +
+                "                .withBody(new StringBody(\"responseBody\"))"));
     }
 }

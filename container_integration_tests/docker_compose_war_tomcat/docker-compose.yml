@@ -1,0 +1,11 @@
+services:
+  mockserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.tomcat
+    ports:
+      - "0:8080"
+  client:
+    image: mockserver/mockserver:integration_testing_client_curl
+    depends_on:
+      - mockserver

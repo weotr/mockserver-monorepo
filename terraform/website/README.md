@@ -9,8 +9,8 @@ flowchart LR
     USER[User browser] -->|HTTPS| MAIN[CloudFront 'main' distribution]
     USER -->|HTTPS| VER[CloudFront 'site' distribution per version]
 
-    MAIN -->|OAI| LATEST[S3 bucket: latest version]
-    VER -->|OAI| BUCKET[S3 bucket: this version]
+    MAIN -->|OAC| LATEST[S3 bucket: latest version]
+    VER -->|OAC| BUCKET[S3 bucket: this version]
 
     DNS["Route 53 zone\nmock-server.com"]
     DNS -->|A alias apex + www| MAIN
@@ -20,16 +20,15 @@ flowchart LR
     ACM -.->|TLS| VER
 
     BUILD["Build account\nBuildkite agent role"] -->|sts:AssumeRole| ROLE["IAM role\nmockserver-release-website"]
-    ROLE -->|s3:* on website buckets\ncloudfront:*\nroute53:ChangeRecordSets| AWSWEB[Website account resources]
+    ROLE -->|scoped s3 + cloudfront + route53| AWSWEB[Website account resources]
 ```
 
 ## How it works
 
 For each entry in the `sites` map (e.g. `"6-0" = { bucket_name = "aws-website-mockserver-6-0" }`) Terraform creates:
 
-- An S3 bucket (`eu-west-2`, private, public-access-block enabled) configured as a static website
-- A CloudFront origin access identity scoped to that bucket
-- An S3 bucket policy granting only that OAI (plus the main OAI when this version is the `latest_version`) `s3:GetObject`
+- An S3 bucket (`eu-west-2`, private, public-access-block enabled)
+- An S3 bucket policy granting OAC (plus legacy OAI during transition) `s3:GetObject`
 - A CloudFront distribution serving `<version>.mock-server.com` with HTTP/2+3, TLSv1.2_2021, gzip, redirect-HTTP-to-HTTPS
 - A Route 53 A-alias from `<version>.mock-server.com` to the CloudFront distribution
 
@@ -93,6 +92,7 @@ terraform apply
 | `zone_id` | string | (required) | Route 53 hosted-zone ID for the root domain |
 | `acm_certificate_arn` | string | (required) | ARN of an ACM cert in `us-east-1` covering the root + `*.<domain>` |
 | `website_role_arn` | string | `""` | Role ARN to assume in CI. Empty in manual runs (uses the SSO profile chain instead). |
+| `role_external_id` | string (sensitive) | `""` | ExternalId for cross-account AssumeRole. Supplied at apply time via `TF_VAR_role_external_id` (from Secrets Manager); never committed. Must match on both the trust policy and the provider assume_role. |
 
 ## Outputs
 
@@ -106,13 +106,27 @@ terraform apply
 
 ## Cross-account access
 
-The build account's Buildkite agents need to push releases into the website account. Rather than long-lived credentials, this module creates an IAM role (`mockserver-release-website`) in the website account whose trust policy permits assumption from `build_account_agent_role_arn`. The role's permissions are scoped:
+The build account's Buildkite agents need to push releases into the website account. Rather than long-lived credentials, this module creates an IAM role (`mockserver-release-website`) in the website account whose trust policy permits assumption from `build_account_agent_role_arn`, guarded by an `sts:ExternalId` condition when `role_external_id` is supplied. The role's permissions are scoped:
 
-- `s3:*` on buckets matching `arn:aws:s3:::aws-website-mockserver-*` only
-- `cloudfront:*` account-wide (CloudFront doesn't support resource-level permissions for distribution-list/create)
+- Specific S3 object and bucket verbs on `arn:aws:s3:::aws-website-mockserver-*` only (ACL and website-configuration verbs removed — buckets use OAC + BucketOwnerEnforced)
+- Specific CloudFront distribution and invalidation verbs account-wide (CloudFront doesn't support resource-level permissions for distribution-list/create)
 - Hosted-zone-scoped Route 53 read + `ChangeResourceRecordSets` on `mock-server.com` (`route53:GetHostedZone`, `ListResourceRecordSets`, `ListTagsForResource`, `ChangeResourceRecordSets`), plus account-wide `route53:GetChange` (needed to poll change propagation status — Route 53 doesn't support resource-level scoping for that one)
 
 The release pipeline (`scripts/release/components/website.sh`, `…/javadoc.sh`, `…/helm.sh`, `…/versioned-site.sh`) calls `sts:AssumeRole` against this role and uses the resulting credentials for the rest of the step.
+
+### ExternalId requirement
+
+When `role_external_id` is set, both the trust policy on `aws_iam_role.release_website` and the provider `assume_role` blocks require a matching ExternalId. Supply it at apply time:
+
+```bash
+export TF_VAR_role_external_id="$(aws secretsmanager get-secret-value \
+  --profile mockserver-build \
+  --secret-id mockserver-release/website-external-id \
+  --query SecretString --output text)"
+terraform apply
+```
+
+The secret must exist in both accounts: the build account (so release steps can pass it) and the website account's trust policy (so the condition matches). Create the secret in the build account's Secrets Manager and wire it into the release steps (`website.sh`, `versioned-site.sh`, `javadoc.sh`, `helm.sh`) before the next apply.
 
 ## State
 

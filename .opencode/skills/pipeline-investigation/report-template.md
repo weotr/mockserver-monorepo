@@ -7,8 +7,16 @@ the skill subagent into a formatted markdown report.
 
 ## Markdown Report
 
+Lead with the bottom line (Pyramid Principle — see
+`.opencode/rules/documentation-style.md`): the TL;DR below states the outcome
+before any metadata or evidence, so a reader who stops after the first screen
+already knows the root cause, fix status, and next action.
+
 ```markdown
 # Pipeline Investigation: {build.pipeline}
+
+> **TL;DR** — {root_cause.summary} Fix status: **{fix_status}**.
+> Action: {recommended_fix || "None — fix already applied"}.
 
 **Build Number**: {build.number}
 **Branch**: {build.branch}

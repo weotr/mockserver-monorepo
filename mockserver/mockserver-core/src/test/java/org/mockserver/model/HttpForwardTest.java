@@ -6,11 +6,13 @@ import org.skyscreamer.jsonassert.JSONAssert;
 
 import java.util.concurrent.TimeUnit;
 
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.assertNotSame;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.HttpForward.forward;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsSame.sameInstance;
+import static org.hamcrest.CoreMatchers.not;
 /**
  * @author jamesdbloom
  */
@@ -27,29 +29,29 @@ public class HttpForwardTest {
 
     @Test
     public void shouldAlwaysCreateNewObject() {
-        assertEquals(forward(), forward());
-        assertNotSame(forward(), forward());
+        assertThat(forward(), is(forward()));
+        assertThat(forward(), not(sameInstance(forward())));
     }
 
     @Test
     public void returnsPort() {
-        assertEquals(new Integer(9090), new HttpForward().withPort(9090).getPort());
+        assertThat(new HttpForward().withPort(9090).getPort(), is(new Integer(9090)));
     }
 
     @Test
     public void returnsHost() {
-        assertEquals("some_host", new HttpForward().withHost("some_host").getHost());
+        assertThat(new HttpForward().withHost("some_host").getHost(), is("some_host"));
     }
 
     @Test
     public void returnsDelay() {
-        assertEquals(new Delay(TimeUnit.HOURS, 1), new HttpForward().withDelay(new Delay(TimeUnit.HOURS, 1)).getDelay());
-        assertEquals(new Delay(TimeUnit.HOURS, 1), new HttpForward().withDelay(TimeUnit.HOURS, 1).getDelay());
+        assertThat(new HttpForward().withDelay(new Delay(TimeUnit.HOURS, 1)).getDelay(), is(new Delay(TimeUnit.HOURS, 1)));
+        assertThat(new HttpForward().withDelay(TimeUnit.HOURS, 1).getDelay(), is(new Delay(TimeUnit.HOURS, 1)));
     }
 
     @Test
     public void returnsScheme() {
-        assertEquals(HttpForward.Scheme.HTTPS, new HttpForward().withScheme(HttpForward.Scheme.HTTPS).getScheme());
+        assertThat(new HttpForward().withScheme(HttpForward.Scheme.HTTPS).getScheme(), is(HttpForward.Scheme.HTTPS));
     }
 
     @Test

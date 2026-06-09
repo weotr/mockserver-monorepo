@@ -5,6 +5,8 @@ import { useDashboardStore } from '../store';
 import DebugMismatchDialog from '../components/DebugMismatchDialog';
 import type { DebugMismatchResult } from '../types';
 
+const connectionParams = { host: 'localhost', port: '1080', secure: false };
+
 const sampleResult: DebugMismatchResult = {
   correlationId: 'abc-123',
   timestamp: '2025-05-10T12:00:00Z',
@@ -49,7 +51,7 @@ beforeEach(() => {
 
 describe('DebugMismatchDialog', () => {
   it('does not render content when closed', () => {
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.queryByText("Why Didn't This Match?")).not.toBeInTheDocument();
   });
 
@@ -58,7 +60,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText("Why Didn't This Match?")).toBeInTheDocument();
     expect(screen.getByText('2 expectations')).toBeInTheDocument();
   });
@@ -68,7 +70,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchLoading: true,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('Analyzing match results...')).toBeInTheDocument();
   });
 
@@ -77,7 +79,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchError: 'Connection failed',
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('Connection failed')).toBeInTheDocument();
   });
 
@@ -86,7 +88,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('10/12')).toBeInTheDocument();
     expect(screen.getByText('6/12')).toBeInTheDocument();
   });
@@ -96,7 +98,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('GET /api/users')).toBeInTheDocument();
     expect(screen.getByText('POST /api/orders')).toBeInTheDocument();
   });
@@ -106,7 +108,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('closest')).toBeInTheDocument();
   });
 
@@ -116,7 +118,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
     await user.click(screen.getByText('GET /api/users'));
     expect(screen.getByText('path')).toBeInTheDocument();
@@ -129,7 +131,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
     await user.click(screen.getByText('Close'));
     const state = useDashboardStore.getState();
@@ -147,7 +149,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: truncatedResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('Showing first 100 of 150 expectations')).toBeInTheDocument();
   });
 
@@ -163,7 +165,7 @@ describe('DebugMismatchDialog', () => {
       debugMismatchOpen: true,
       debugMismatchResult: emptyResult,
     });
-    render(<DebugMismatchDialog />);
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('No active expectations')).toBeInTheDocument();
   });
 });

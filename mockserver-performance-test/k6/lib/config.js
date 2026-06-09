@@ -135,4 +135,54 @@ export function baseThresholds() {
   };
 }
 
+// Regression scenario tunables (regression.js). Unlike load.js, the regression
+// run offers a FIXED rate per behaviour (constant-arrival-rate) so the recorded
+// number is "latency under fixed load" — the only thing comparable across runs
+// when the goal is detecting a change, not finding peak throughput. A warmup
+// window runs first (tagged op:warmup) so JIT/GC reach steady state before the
+// measured window; only the measured window feeds the result JSON.
+export const REGRESSION = {
+  rate: num('K6_REG_RATE', 200), // offered req/s PER behaviour
+  duration: env('K6_REG_DURATION', '2m'), // measured window
+  warmup: env('K6_REG_WARMUP', '30s'), // pre-measurement warmup window
+  preAllocatedVUs: num('K6_REG_PRE_VUS', 20),
+  maxVUs: num('K6_REG_MAX_VUS', 200),
+  // Transport label recorded in the result key (<op>_<proto>). Defaults from the
+  // BASE_URL scheme; HTTPS auto-negotiates HTTP/2 with MockServer via ALPN, so
+  // the https run is labelled https_h2 unless K6_HTTP2=false.
+  proto: env('PROTO', baseUrl.startsWith('https') ? (bool('K6_HTTP2', true) ? 'https_h2' : 'https') : 'http'),
+  // handleSummary() writes the machine-readable result here (mapped to a file by
+  // k6); the perf-test-run.sh step merges the http + https_h2 runs into one JSON.
+  resultPath: env('K6_RESULT_PATH', 'regression-result.json'),
+};
+
+// Resource-growth scenario tunables (growth.js). A sustained constant-load run
+// whose purpose is to surface "X increases over time" regressions (e.g. issue
+// #2329: O(n) log eviction once the request log fills to maxLogEntries). The
+// rate is high enough to fill the DEFAULT 100k log within the run; low-rate
+// latency probes at the start and end measure the latency slope, paired with the
+// CPU/heap trajectory sampled by perf-test-run.sh. Do NOT shrink maxLogEntries
+// for this run — a smaller log would never fill and would hide the bug.
+export const GROWTH = {
+  rate: num('K6_GROWTH_RATE', 800), // fill load (req/s) — fills 100k log in ~50s
+  // Keep K6_GROWTH_DURATION >= 3 × K6_GROWTH_PROBE so the first/last probe
+  // windows have a clear gap between them and the ratio measures a real slope.
+  duration: env('K6_GROWTH_DURATION', '6m'),
+  probeWindow: env('K6_GROWTH_PROBE', '30s'), // first/last latency-probe window
+  probeRate: num('K6_GROWTH_PROBE_RATE', 20),
+  preAllocatedVUs: num('K6_GROWTH_PRE_VUS', 50),
+  maxVUs: num('K6_GROWTH_MAX_VUS', 400),
+  resultPath: env('K6_GROWTH_RESULT_PATH', 'growth-result.json'),
+};
+
+// Forward/proxy behaviour target. The forward action routes /forward to a
+// DEDICATED upstream (a second MockServer) so the forward latency is not
+// contaminated by the matching load on the instance under measurement. Set
+// K6_FORWARD_SELF=true to keep the legacy self-forward (127.0.0.1:1080) for a
+// quick single-container local smoke.
+export const FORWARD = {
+  upstreamHost: env('FORWARD_UPSTREAM_HOST', 'mockserver-upstream:1080'),
+  forwardSelf: bool('K6_FORWARD_SELF', false),
+};
+
 export { env, num, bool };

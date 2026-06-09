@@ -8,11 +8,11 @@ import org.mockserver.model.HttpResponse;
 import org.mockserver.model.HttpStatusCode;
 import org.springframework.mock.web.MockHttpServletResponse;
 
-import static junit.framework.TestCase.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 
+import static org.hamcrest.core.Is.is;
 /**
  * @author jamesdbloom
  */
@@ -41,7 +41,7 @@ public class MockServerHttpResponseToHttpServletResponseEncoderCookieHeaderTest 
         new MockServerHttpResponseToHttpServletResponseEncoder(new MockServerLogger()).mapMockServerResponseToHttpServletResponse(httpResponse, httpServletResponse);
 
         // then
-        assertEquals(HttpStatusCode.OK_200.code(), httpServletResponse.getStatus());
+        assertThat(httpServletResponse.getStatus(), is(HttpStatusCode.OK_200.code()));
         assertThat(httpServletResponse.getHeaders("Set-Cookie"), containsInAnyOrder(
             "cookieName1=\"\"; Path=/; Max-Age=15552000; Expires=Sat, 19 Mar 2016 18:43:26 GMT",
             "cookieName2=\"cookie==Value2\"; Path=/; Max-Age=15552000; Expires=Sat, 19 Mar 2016 18:43:26 GMT",

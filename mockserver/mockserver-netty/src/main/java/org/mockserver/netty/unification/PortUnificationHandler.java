@@ -328,6 +328,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                 }
                 addLastIfNotPresent(pipeline, new MockServerHttpServerCodec(configuration, mockServerLogger, false, null, ctx.channel().localAddress()));
                 addLastIfNotPresent(pipeline, new TraceContextHandler(configuration));
+                addAltSvcHandlerIfEnabled(pipeline);
                 if (httpState.getGrpcDescriptorStore() != null && httpState.getGrpcDescriptorStore().hasServices()) {
                     addLastIfNotPresent(pipeline, new GrpcToHttpResponseHandler(mockServerLogger, httpState.getGrpcDescriptorStore()));
                     addLastIfNotPresent(pipeline, new GrpcToHttpRequestHandler(mockServerLogger, httpState.getGrpcDescriptorStore()));
@@ -381,6 +382,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                 }
                 addLastIfNotPresent(pipeline, new MockServerHttpServerCodec(configuration, mockServerLogger, isSslEnabledUpstream(ctx.channel()), SniHandler.retrieveClientCertificates(mockServerLogger, ctx), ctx.channel().localAddress()));
                 addLastIfNotPresent(pipeline, new TraceContextHandler(configuration));
+                addAltSvcHandlerIfEnabled(pipeline);
                 if (httpState.getGrpcDescriptorStore() != null && httpState.getGrpcDescriptorStore().hasServices()) {
                     addLastIfNotPresent(pipeline, new GrpcToHttpResponseHandler(mockServerLogger, httpState.getGrpcDescriptorStore()));
                     addLastIfNotPresent(pipeline, new GrpcToHttpRequestHandler(mockServerLogger, httpState.getGrpcDescriptorStore()));
@@ -468,6 +470,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                 }
                 addLastIfNotPresent(pipeline, new MockServerHttpServerCodec(configuration, mockServerLogger, isSslEnabledUpstream(ctx.channel()), SniHandler.retrieveClientCertificates(mockServerLogger, ctx), ctx.channel().localAddress()));
                 addLastIfNotPresent(pipeline, new TraceContextHandler(configuration));
+                addAltSvcHandlerIfEnabled(pipeline);
                 // gRPC-Web works over HTTP/1.1, so add gRPC handlers here too
                 if (httpState.getGrpcDescriptorStore() != null && httpState.getGrpcDescriptorStore().hasServices()) {
                     addLastIfNotPresent(pipeline, new GrpcToHttpResponseHandler(mockServerLogger, httpState.getGrpcDescriptorStore()));
@@ -557,6 +560,13 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
         localAddresses.add("[::1]" + portExtension);
         localAddresses.add("0:0:0:0:0:0:0:1" + portExtension);
         return unmodifiableSet(localAddresses);
+    }
+
+    private void addAltSvcHandlerIfEnabled(ChannelPipeline pipeline) {
+        int h3Port = configuration.http3Port();
+        if (h3Port > 0 && configuration.http3AdvertiseAltSvc()) {
+            addLastIfNotPresent(pipeline, new AltSvcHeaderHandler(h3Port, configuration.http3AltSvcMaxAge()));
+        }
     }
 
     private void addLastIfNotPresent(ChannelPipeline pipeline, ChannelHandler channelHandler) {

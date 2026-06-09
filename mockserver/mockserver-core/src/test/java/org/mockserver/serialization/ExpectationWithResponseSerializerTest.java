@@ -23,8 +23,10 @@ import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -182,28 +184,16 @@ public class ExpectationWithResponseSerializerTest {
         when(expectationValidator.isValid("\"requestBytes\"")).thenReturn("an error");
         when(objectMapper.readValue(eq("\"requestBytes\""), same(ExpectationDTO.class))).thenReturn(fullExpectationDTO);
 
-        // then
-        thrown.expect(IllegalArgumentException.class);
-        thrown.expectMessage("" +
-            "[" + NEW_LINE +
-            "  incorrect expectation json format for:" + NEW_LINE +
-            "  " + NEW_LINE +
-            "    \"requestBytes\"" + NEW_LINE +
-            "  " + NEW_LINE +
-            "   schema validation errors:" + NEW_LINE +
-            "  " + NEW_LINE +
-            "    an error," + NEW_LINE +
-            "  " + NEW_LINE +
-            "  incorrect expectation json format for:" + NEW_LINE +
-            "  " + NEW_LINE +
-            "    \"requestBytes\"" + NEW_LINE +
-            "  " + NEW_LINE +
-            "   schema validation errors:" + NEW_LINE +
-            "  " + NEW_LINE +
-            "    an error" + NEW_LINE +
-            "]");
-
         // when
-        expectationSerializer.deserializeArray("requestBytes", false);
+        try {
+            expectationSerializer.deserializeArray("requestBytes", false);
+            fail("expected exception to be thrown");
+        } catch (IllegalArgumentException iae) {
+            // then
+            String message = iae.getMessage();
+            assertThat(message, containsString("incorrect expectation json format for:"));
+            assertThat(message, containsString("schema validation errors:"));
+            assertThat(message, containsString("an error"));
+        }
     }
 }

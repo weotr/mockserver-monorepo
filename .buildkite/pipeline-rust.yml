@@ -1,0 +1,9 @@
+steps:
+  - label: ":rust: Rust client tests + clippy"
+    command: ".buildkite/scripts/steps/rust-unit-test.sh"
+    timeout_in_minutes: 15
+
+  - label: ":rust: :docker: Rust testcontainers tests"
+    command: ".buildkite/scripts/steps/rust-testcontainers-test.sh"
+    timeout_in_minutes: 15
+    soft_fail: true

@@ -31,7 +31,6 @@ import java.util.concurrent.TimeoutException;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.*;
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.hamcrest.CoreMatchers.anyOf;
 import static org.hamcrest.CoreMatchers.containsString;
@@ -43,6 +42,7 @@ import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpStatusCode.OK_200;
 import static org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBase.HEADERS_TO_IGNORE;
 import static org.mockserver.testing.integration.mock.AbstractMockingIntegrationTestBase.filterHeaders;
+import static org.junit.Assert.fail;
 
 /**
  * @author jamesdbloom
@@ -105,9 +105,9 @@ public class StopIntegrationTest {
                 mockServerClient = new MockServerClient("localhost", MOCK_SERVER_PORT);
 
                 // then
-                assertTrue(mockServerClient.hasStopped());
+                assertThat(mockServerClient.hasStopped(), is(true));
                 new MockServer(MOCK_SERVER_PORT);
-                assertTrue(mockServerClient.hasStarted());
+                assertThat(mockServerClient.hasStarted(), is(true));
             }
 
         } finally {
@@ -161,9 +161,9 @@ public class StopIntegrationTest {
                 mockServerClient = new MockServerClient("localhost", MOCK_SERVER_PORT);
 
                 // then
-                assertTrue(mockServerClient.hasStopped());
+                assertThat(mockServerClient.hasStopped(), is(true));
                 new MockServer(MOCK_SERVER_PORT);
-                assertTrue(mockServerClient.hasStarted());
+                assertThat(mockServerClient.hasStarted(), is(true));
             }
 
         } finally {
@@ -213,9 +213,9 @@ public class StopIntegrationTest {
                 mockServerClient.stop();
 
                 // then
-                assertTrue(mockServerClient.hasStopped());
+                assertThat(mockServerClient.hasStopped(), is(true));
                 mockServerClient = new ClientAndServer(MOCK_SERVER_PORT);
-                assertTrue(mockServerClient.hasStarted());
+                assertThat(mockServerClient.hasStarted(), is(true));
             }
 
         } finally {
@@ -262,9 +262,9 @@ public class StopIntegrationTest {
                 mockServer.stop();
 
                 // then
-                assertFalse(mockServer.isRunning());
+                assertThat(mockServer.isRunning(), is(false));
                 mockServer = new MockServer(MOCK_SERVER_PORT);
-                assertTrue(mockServer.isRunning());
+                assertThat(mockServer.isRunning(), is(true));
             }
 
         } finally {
@@ -308,8 +308,8 @@ public class StopIntegrationTest {
         mockServerClient.stop();
 
         // then
-        assertFalse(mockServerClient.isRunning());
-        assertFalse(mockServerClient.isRunning(10, 1000, TimeUnit.MILLISECONDS));
+        assertThat(mockServerClient.isRunning(), is(false));
+        assertThat(mockServerClient.isRunning(10, 1000, TimeUnit.MILLISECONDS), is(false));
     }
 
     @Test
@@ -321,8 +321,8 @@ public class StopIntegrationTest {
         mockServerClient.stop();
 
         // then
-        assertTrue(mockServerClient.hasStopped());
-        assertTrue(mockServerClient.hasStopped(10, 1000, TimeUnit.MILLISECONDS));
+        assertThat(mockServerClient.hasStopped(), is(true));
+        assertThat(mockServerClient.hasStopped(10, 1000, TimeUnit.MILLISECONDS), is(true));
     }
 
     @Test
@@ -331,8 +331,8 @@ public class StopIntegrationTest {
         MockServerClient mockServerClient = ClientAndServer.startClientAndServer();
 
         // then
-        assertTrue(mockServerClient.hasStarted());
-        assertTrue(mockServerClient.hasStarted(20, 1000, TimeUnit.MILLISECONDS));
+        assertThat(mockServerClient.hasStarted(), is(true));
+        assertThat(mockServerClient.hasStarted(20, 1000, TimeUnit.MILLISECONDS), is(true));
 
         // clean-up
         mockServerClient.stop();
@@ -348,14 +348,14 @@ public class StopIntegrationTest {
             mockServer.stop();
 
             // then
-            assertFalse(mockServer.isRunning());
+            assertThat(mockServer.isRunning(), is(false));
             mockServer = new MockServer(MOCK_SERVER_PORT);
-            assertTrue(mockServer.isRunning());
+            assertThat(mockServer.isRunning(), is(true));
         }
 
-        assertTrue(mockServer.isRunning());
+        assertThat(mockServer.isRunning(), is(true));
         mockServer.stop();
-        assertFalse(mockServer.isRunning());
+        assertThat(mockServer.isRunning(), is(false));
     }
 
     @Test
@@ -408,18 +408,15 @@ public class StopIntegrationTest {
             );
 
         // then
-        assertEquals(
-            response()
-                .withStatusCode(OK_200.code())
-                .withReasonPhrase(OK_200.reasonPhrase())
-                .withBody("some_body_response"),
-            makeRequest(
+        assertThat(makeRequest(
                 request()
                     .withPath("/some/path")
                     .withMethod("POST"),
                 HEADERS_TO_IGNORE
-            )
-        );
+            ), is(response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("some_body_response")));
     }
 
     protected HttpResponse makeRequest(HttpRequest httpRequest, Collection<String> headersToIgnore) {

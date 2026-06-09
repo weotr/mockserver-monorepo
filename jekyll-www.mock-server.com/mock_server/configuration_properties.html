@@ -2,8 +2,8 @@
 title: Configuration
 description: Complete reference for every MockServer configuration property, including memory limits, log level, TLS options, and environment-variable mappings.
 layout: page
-pageOrder: 10
-section: 'General'
+pageOrder: 1
+section: 'Operations'
 subsection: true
 sitemap:
   priority: 0.8
@@ -123,6 +123,31 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 {% include_subpage _includes/logging_configuration.html %}
 
+<a id="dev_mode_configuration" class="anchor" href="#dev_mode_configuration">&nbsp;</a>
+
+<h2>Developer Mode:</h2>
+
+<button id="button_configuration_dev_mode" class="accordion title"><strong>Dev Mode</strong></button>
+<div class="panel title">
+    <p>When enabled, applies a developer-friendly configuration profile that reduces memory usage for laptop and test-suite workloads. The following defaults are overridden (only for properties the user has not explicitly set via system property, environment variable, or properties file):</p>
+    <ul>
+        <li><span class="inline_code">maxLogEntries</span> is set to <span class="this_value">1,000</span> (instead of the heap-based default up to 100,000)</li>
+        <li><span class="inline_code">maxExpectations</span> is set to <span class="this_value">1,000</span> (instead of the heap-based default up to 15,000)</li>
+    </ul>
+    <p>This is useful when running MockServer locally during development, where retaining tens of thousands of log entries is unnecessary and wastes memory.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.devMode(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.devMode=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DEV_MODE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.devMode=...</code></pre>
+    <p>Command Line:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver run -p 1080 --dev</code></pre>
+</div>
+
 <a id="memory_configuration" class="anchor" href="#memory_configuration">&nbsp;</a>
 
 <h2>Memory Usage Configuration:</h2>
@@ -219,7 +244,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 <button id="button_configuration_http3_port" class="accordion title"><strong>HTTP/3 (QUIC) Port</strong></button>
 <div class="panel title">
-    <p><strong>Experimental.</strong> UDP port for the experimental HTTP/3 (QUIC) listener. When set to a non-zero value MockServer starts an HTTP/3 server on this port in addition to the normal HTTP port(s); leave unset or <span class="inline_code">0</span> to disable (the default). Requires the BoringSSL/QUIC native library for the runtime platform. See <a href="/mock_server/http3.html">HTTP/3 (QUIC) Support</a> for details and current limitations.</p>
+    <p><strong>Experimental.</strong> UDP port for the experimental HTTP/3 (QUIC) listener. When set to a non-zero value MockServer starts an HTTP/3 server on this port in addition to the normal HTTP port(s); leave unset or <span class="inline_code">0</span> to disable (the default). When enabled, MockServer also advertises the HTTP/3 endpoint via an <span class="inline_code">Alt-Svc</span> header on all TCP (HTTP/1.1 and HTTP/2) responses so HTTP/3-capable clients automatically upgrade to QUIC (see <span class="inline_code">http3AdvertiseAltSvc</span> and <span class="inline_code">http3AltSvcMaxAge</span>). Requires the BoringSSL/QUIC native library for the runtime platform. See <a href="/mock_server/http3.html">HTTP/3 (QUIC) Support</a> for details and current limitations.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">0 (disabled)</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3Port(int port)</code></pre>
@@ -231,6 +256,135 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3Port=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3Port="1080"</code></pre>
+</div>
+
+<button id="button_configuration_http3_max_idle_timeout" class="accordion title"><strong>HTTP/3 Max Idle Timeout</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Maximum idle timeout in milliseconds for QUIC connections. After this period of inactivity, the QUIC connection is closed. Increase this value if clients need to keep long-lived idle HTTP/3 connections open (e.g. for SSE or streaming scenarios).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">5000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3MaxIdleTimeout(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3MaxIdleTimeout=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_MAX_IDLE_TIMEOUT=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3MaxIdleTimeout=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3MaxIdleTimeout="30000"</code></pre>
+</div>
+
+<button id="button_configuration_http3_initial_max_data" class="accordion title"><strong>HTTP/3 Initial Max Data</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Connection-level flow control limit in bytes for QUIC. This is the maximum amount of data the peer can send across all streams combined before receiving a flow-control update. The default (10 MB) is generous for testing. Reduce this if you want to simulate a constrained connection or increase it for very large request/response bodies.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">10000000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3InitialMaxData(long bytes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxData=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_INITIAL_MAX_DATA=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3InitialMaxData=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxData="50000000"</code></pre>
+</div>
+
+<button id="button_configuration_http3_initial_max_stream_data_bidirectional" class="accordion title"><strong>HTTP/3 Initial Max Stream Data (Bidirectional)</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Per-stream flow control limit in bytes for bidirectional QUIC streams. Applied to both local and remote bidirectional streams. Each HTTP/3 request uses one bidirectional stream, so this controls how much request/response data can be in flight per request before flow-control kicks in.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">1000000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3InitialMaxStreamDataBidirectional(long bytes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxStreamDataBidirectional=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_INITIAL_MAX_STREAM_DATA_BIDIRECTIONAL=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3InitialMaxStreamDataBidirectional=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxStreamDataBidirectional="5000000"</code></pre>
+</div>
+
+<button id="button_configuration_http3_initial_max_streams_bidirectional" class="accordion title"><strong>HTTP/3 Initial Max Streams (Bidirectional)</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Maximum number of concurrent bidirectional streams per QUIC connection. Each HTTP/3 request uses one bidirectional stream. The default (100) allows 100 concurrent requests per connection. Increase this if you need more parallelism per connection.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">100</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3InitialMaxStreamsBidirectional(long maxStreams)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxStreamsBidirectional=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3InitialMaxStreamsBidirectional=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3InitialMaxStreamsBidirectional="200"</code></pre>
+</div>
+
+<button id="button_configuration_http3_qpack_max_table_capacity" class="accordion title"><strong>HTTP/3 QPACK Max Table Capacity</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Maximum capacity in bytes of the QPACK dynamic table used for HTTP/3 header compression. QPACK uses a dynamic table to compress frequently repeated headers (similar to HPACK in HTTP/2). Set to <span class="inline_code">0</span> (the default) to disable the dynamic table entirely and use only the static table. Enable and increase this when you want HTTP/3 header compression to be more efficient for repeated headers at the cost of additional memory per connection.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">0 (dynamic table disabled)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3QpackMaxTableCapacity(long bytes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3QpackMaxTableCapacity=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3QpackMaxTableCapacity=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3QpackMaxTableCapacity="4096"</code></pre>
+</div>
+
+<button id="button_configuration_http3_alt_svc_max_age" class="accordion title"><strong>HTTP/3 Alt-Svc Max Age</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Max-age in seconds for the <span class="inline_code">Alt-Svc</span> header that MockServer adds to TCP (HTTP/1.1 and HTTP/2) responses when <span class="inline_code">http3Port</span> is set. This tells HTTP/3-capable clients how long to cache the Alt-Svc advertisement. After the max-age expires, clients will re-discover via the next response. Only relevant when <span class="inline_code">http3Port &gt; 0</span> and <span class="inline_code">http3AdvertiseAltSvc</span> is <span class="inline_code">true</span>.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">86400 (24 hours)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3AltSvcMaxAge(long seconds)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3AltSvcMaxAge=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3AltSvcMaxAge=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3AltSvcMaxAge="3600"</code></pre>
+</div>
+
+<button id="button_configuration_http3_advertise_alt_svc" class="accordion title"><strong>HTTP/3 Advertise Alt-Svc</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Whether to add an <span class="inline_code">Alt-Svc</span> header advertising HTTP/3 to responses served over the TCP (HTTP/1.1 and HTTP/2) paths when <span class="inline_code">http3Port</span> is set. When <span class="inline_code">true</span> (the default), HTTP/3-capable clients will automatically upgrade to QUIC on subsequent requests and fall back to HTTP/2 or HTTP/1.1 if QUIC is unavailable. Set to <span class="inline_code">false</span> to keep HTTP/3 enabled for direct QUIC clients without advertising it to TCP clients.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3AdvertiseAltSvc(boolean advertise)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3AdvertiseAltSvc=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3AdvertiseAltSvc=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3AdvertiseAltSvc="false"</code></pre>
+</div>
+
+<button id="button_configuration_http3_connect_udp_enabled" class="accordion title"><strong>HTTP/3 CONNECT-UDP (MASQUE) Enabled</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Enable the CONNECT-UDP (MASQUE, RFC 9298) forward proxy on the HTTP/3 server. When enabled, the server advertises <span class="inline_code">SETTINGS_ENABLE_CONNECT_PROTOCOL</span> (RFC 9220) and extended-CONNECT requests with <span class="inline_code">:protocol=connect-udp</span> are relayed: MockServer opens a UDP socket to the target authority and forwards datagrams in both directions, so an HTTP/3 client can tunnel UDP through MockServer. Normal (non-CONNECT) HTTP/3 requests are unaffected regardless of this setting.</p>
+    <p><strong>Security &mdash; this is an open UDP relay.</strong> When enabled there is no restriction on the relay target, so a client can reach any UDP host:port reachable from MockServer (including private networks, loopback, and cloud metadata endpoints such as 169.254.169.254). This is intended for controlled test environments only &mdash; leave it disabled (the default) and do not expose a CONNECT-UDP&ndash;enabled HTTP/3 port to untrusted clients.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3ConnectUdpEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3ConnectUdpEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3ConnectUdpEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3ConnectUdpEnabled="true"</code></pre>
 </div>
 
 <button id="button_configuration_max_socket_timeout" class="accordion title"><strong>Maximum Socket Timeout In Millis</strong></button>
@@ -447,6 +601,23 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.customJsonUnitMatchersClass="com.example.MyJsonUnitMatchers"</code></pre>
 </div>
 
+<button id="button_configuration_attach_mismatch_diagnostic_to_response" class="accordion title"><strong>Attach Mismatch Diagnostic To Unmatched Response</strong></button>
+<div class="panel title">
+    <p>When enabled, if no expectation matches an incoming request the 404 response carries the closest-match diagnostic: an <span class="inline_code">x-mockserver-closest-match</span> header plus a JSON body describing which expectation came closest to matching and which fields differed. This lets you see why a mock did not match directly from the response, without checking the MockServer logs or dashboard.</p>
+    <p>Useful when debugging in test environments. Leave it disabled (the default) for any production-facing use, as the diagnostic exposes expectation internals in the response.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.attachMismatchDiagnosticToResponse(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.attachMismatchDiagnosticToResponse=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.attachMismatchDiagnosticToResponse=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.attachMismatchDiagnosticToResponse="true"</code></pre>
+</div>
+
 <button id="button_configuration_forward_proxy_block_private_networks" class="accordion title"><strong>Block Forwarding To Private Networks (SSRF Protection)</strong></button>
 <div class="panel title">
     <p>When enabled, MockServer rejects forward and proxy targets that resolve to loopback, link-local, RFC 1918 private, or cloud metadata addresses (such as <span class="inline_code">169.254.169.254</span>). This blocks server-side request forgery (SSRF) attacks where a malicious expectation would otherwise forward through MockServer to internal infrastructure.</p>
@@ -574,6 +745,23 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.attemptToProxyIfNoMatchingExpectation=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.attemptToProxyIfNoMatchingExpectation="false"</code></pre>
+</div>
+
+<button id="button_configuration_forward_binary_requests_without_waiting_for_response" class="accordion title"><strong>Forward Binary Requests Without Waiting For Response</strong></button>
+<div class="panel title">
+    <p>If true, binary (non-HTTP) requests that are forwarded upstream are sent without waiting for a response from the upstream server (fire-and-forget). This is useful for one-way binary protocols where no response is expected.</p>
+    <p>If false (the default), MockServer waits for the upstream server to respond before completing the forwarded binary request.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardBinaryRequestsWithoutWaitingForResponse(boolean forwardBinaryRequestsAsynchronously)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardBinaryRequestsWithoutWaitingForResponse=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_BINARY_REQUESTS_WITHOUT_WAITING_FOR_RESPONSE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardBinaryRequestsWithoutWaitingForResponse=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardBinaryRequestsWithoutWaitingForResponse="true"</code></pre>
 </div>
 
 <button id="button_configuration_http_proxy" class="accordion title"><strong>HTTP Proxy For Forwarded Requests</strong></button>
@@ -952,6 +1140,84 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftResponseTimeThresholdMs="500"</code></pre>
 </div>
 
+<button id="button_configuration_breakpoints" class="accordion title"><strong>Interactive Breakpoints</strong></button>
+<div class="panel title">
+    <p>Interactive breakpoints let you pause proxied or forwarded exchanges at two independent phases:</p>
+    <ul>
+        <li><strong>Request breakpoints</strong> &mdash; hold the outbound request before it reaches the upstream server</li>
+        <li><strong>Response breakpoints</strong> &mdash; hold the upstream response before it is written back to the client (non-streaming responses only)</li>
+    </ul>
+    <p>At either phase you can inspect, modify, continue, or abort the exchange via the control-plane REST API. This is useful for debugging, manual testing, and step-through inspection of live traffic.</p>
+    <p>When a breakpoint-paused exchange is not resolved within the timeout, it is automatically continued. The <code>breakpointMaxHeld</code> cap prevents resource exhaustion &mdash; when the cap is reached, new exchanges bypass the breakpoint and proceed normally. The implementation is fully non-blocking: paused exchanges do not consume scheduler threads or event-loop threads while waiting for resolution.</p>
+    <p><strong>Enable request breakpoints</strong> &mdash; holds outbound requests before forwarding. Default is <code>false</code> (off, zero overhead).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_ENABLED=...</code></pre>
+    <p><strong>Enable response breakpoints</strong> &mdash; holds upstream responses before writing to the client. Independent of request breakpoints. Default is <code>false</code> (off, zero overhead).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointResponseEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointResponseEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED=...</code></pre>
+    <p><strong>Timeout</strong> &mdash; maximum time in milliseconds an exchange may be held at a breakpoint before it is automatically continued. Shared by both request and response breakpoints. Default is <code>30000</code> (30 seconds).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">30000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointTimeoutMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointTimeoutMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS=...</code></pre>
+    <p><strong>Max held</strong> &mdash; maximum number of exchanges (request + response combined) that can be simultaneously held at breakpoints. When this cap is reached, new exchanges bypass the breakpoint and proceed normally. Default is <code>50</code>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointMaxHeld(int maxHeld)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointMaxHeld=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_MAX_HELD=...</code></pre>
+    <p>Example (enable both phases with 10-second timeout and max 20 held):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled="true" -Dmockserver.breakpointResponseEnabled="true" -Dmockserver.breakpointTimeoutMillis="10000" -Dmockserver.breakpointMaxHeld="20"</code></pre>
+</div>
+
+<button id="button_configuration_chaos_auto_halt" class="accordion title"><strong>Chaos Auto-Halt Circuit-Breaker</strong></button>
+<div class="panel title">
+    <p>A safety circuit-breaker for service-scoped chaos experiments. When enabled, MockServer counts <strong>error-class</strong> chaos faults &mdash; synthetic 5xx errors (<code>error</code>), dropped connections (<code>drop</code>), and quota-limit responses (<code>quota</code>) &mdash; in a sliding time window. If the count exceeds the configured threshold, all active service-scoped chaos profiles are automatically disabled, preventing a chaos experiment from causing cascading failures.</p>
+    <p>Benign fault types such as <code>latency</code>, <code>slow</code>, <code>truncate</code>, <code>malformed</code>, and <code>graphql</code> do <strong>not</strong> count toward the threshold. This means a latency-only chaos experiment will never auto-halt.</p>
+    <p>This provides the "steady-state guardrail" SREs expect: chaos experiments automatically stop if they produce too many destructive errors too quickly. The auto-halt state is reflected in the <code>mock_server_active_service_chaos</code> gauge (all values drop to 0) and a <code>mock_server_chaos_auto_halt</code> counter is incremented.</p>
+    <p><strong>Enable chaos auto-halt</strong> &mdash; master switch for the circuit-breaker. Default is <code>false</code> (feature off &mdash; no overhead when disabled).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_ENABLED=...</code></pre>
+    <p><strong>Error threshold</strong> &mdash; the number of error-class chaos faults (5xx/dropped/quota) within the window that triggers the halt. Default is <code>50</code>.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">50</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltErrorThreshold(long threshold)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltErrorThreshold=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD=...</code></pre>
+    <p><strong>Window duration</strong> &mdash; the sliding window in milliseconds over which errors are counted. Default is <code>60000</code> (60 seconds).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">60000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.chaosAutoHaltWindowMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltWindowMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS=...</code></pre>
+    <p>Example (halt chaos if more than 20 errors in 30 seconds):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltEnabled="true" -Dmockserver.chaosAutoHaltErrorThreshold="20" -Dmockserver.chaosAutoHaltWindowMillis="30000"</code></pre>
+</div>
+
 <button id="button_configuration_otel" class="accordion title"><strong>OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</strong></button>
 <div class="panel title">
     <p>MockServer can export to an OpenTelemetry (OTLP) collector, in two independent parts that are each <strong>off by default</strong> and <strong>fail-soft</strong> (a startup error logs one line and never stops the server or affects a response). Both use the OTLP HTTP/protobuf exporter with the JDK HTTP client (no gRPC/OkHttp) and share the same endpoint.</p>
@@ -1025,7 +1291,7 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p>Path to support HTTP GET requests for status response (also available on PUT /mockserver/status).</p>
     <p>If this value is not modified then only PUT /mockserver/status but is a none blank value is provided for this value then GET requests to this path will return the 200 Ok status response showing the MockServer version and bound ports.</p>
     <p>A GET request to this path will be matched before any expectation matching or proxying of requests.</p>
-    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">null</span></p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.livenessHttpGetPath(String livenessPath)</code></pre>
     <p>System Property:</p>
@@ -1036,6 +1302,90 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.livenessHttpGetPath=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.livenessHttpGetPath="/liveness/probe"</code></pre>
+</div>
+
+<a id="openapi_configuration" class="anchor" href="#openapi_configuration">&nbsp;</a>
+
+<h2>OpenAPI Configuration:</h2>
+
+<button id="button_configuration_openapi_context_path_prefix" class="accordion title"><strong>OpenAPI Context Path Prefix</strong></button>
+<div class="panel title">
+    <p>A path prefix to add to all paths generated from OpenAPI specifications. For example, if set to <span class="inline_code">/api/v1</span> then a path <span class="inline_code">/pets</span> from the spec becomes <span class="inline_code">/api/v1/pets</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (empty string)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.openAPIContextPathPrefix(String openAPIContextPathPrefix)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIContextPathPrefix=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_OPENAPI_CONTEXT_PATH_PREFIX=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.openAPIContextPathPrefix=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIContextPathPrefix="/api/v1"</code></pre>
+</div>
+
+<button id="button_configuration_openapi_response_validation" class="accordion title"><strong>OpenAPI Response Validation</strong></button>
+<div class="panel title">
+    <p>If enabled, MockServer validates that mock responses conform to the OpenAPI spec schema they were generated from. Validation is advisory only - responses are still returned to the client even if validation fails.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.openAPIResponseValidation(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIResponseValidation=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_OPENAPI_RESPONSE_VALIDATION=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.openAPIResponseValidation=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIResponseValidation="true"</code></pre>
+</div>
+
+<button id="button_configuration_validate_proxy_openapi_spec" class="accordion title"><strong>Validation Proxy OpenAPI Spec</strong></button>
+<div class="panel title">
+    <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML payload, MockServer validates every forwarded/proxied request and its upstream response against the spec. Request violations are recorded as <span class="inline_code">OPENAPI_REQUEST_VALIDATION_FAILED</span> log events and response violations as <span class="inline_code">OPENAPI_RESPONSE_VALIDATION_FAILED</span> log events. By default, validation is report-only and does not block traffic. To block non-conformant traffic, also enable <span class="inline_code">validateProxyEnforce</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (disabled)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.validateProxyOpenAPISpec(String specUrlOrPayload)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyOpenAPISpec=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.validateProxyOpenAPISpec=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyOpenAPISpec="https://petstore.swagger.io/v2/swagger.json"</code></pre>
+</div>
+
+<button id="button_configuration_validate_proxy_enforce" class="accordion title"><strong>Validation Proxy Enforce</strong></button>
+<div class="panel title">
+    <p>When enabled (and <span class="inline_code">validateProxyOpenAPISpec</span> is set), forwarded requests that violate the OpenAPI spec are rejected with a 400, and non-streaming upstream responses that violate the spec are replaced with a 502. Streaming responses cannot be replaced after their body has been written to the client, so they are validated in report-only mode (violations logged but not blocked) even when enforce is enabled. When disabled (the default), violations are logged but traffic flows unmodified.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.validateProxyEnforce(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyEnforce=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_VALIDATE_PROXY_ENFORCE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.validateProxyEnforce=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyEnforce="true"</code></pre>
+</div>
+
+<button id="button_configuration_generate_realistic_example_values" class="accordion title"><strong>Generate Realistic Example Values</strong></button>
+<div class="panel title">
+    <p>When enabled, OpenAPI example responses that have no explicit <span class="inline_code">example</span> value are filled with realistic, format-aware fake data (e.g. plausible emails, dates, UUIDs) instead of static placeholders. The generated values are deterministic (same seed produces the same output).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">new Configuration().generateRealisticExampleValues(true)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.generateRealisticExampleValues=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.generateRealisticExampleValues=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.generateRealisticExampleValues="true"</code></pre>
 </div>
 
 <a id="async_messaging_configuration" class="anchor" href="#async_messaging_configuration">&nbsp;</a>
@@ -1106,7 +1456,22 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
 
 <p>These properties configure multi-node clustering. When enabled, MockServer instances sharing the same cluster name replicate expectation state via an embedded Infinispan data grid with JGroups transport. Requires the <span class="inline_code">mockserver-state-infinispan</span> module on the classpath and <span class="inline_code">stateBackend=infinispan</span>.</p>
 
-<p><strong>Limitation:</strong> Scenario state transitions are not yet clustered. Expectations using scenario sequencing (<span class="inline_code">scenarioName</span> + <span class="inline_code">scenarioState</span> / <span class="inline_code">newScenarioState</span>) should not rely on cross-node state consistency (planned follow-up).</p>
+<button id="button_configuration_state_backend" class="accordion title"><strong>State Backend</strong></button>
+<div class="panel title">
+    <p>Selects the backend used to store expectation and request-log state. The default <span class="inline_code">memory</span> backend keeps all state in the local JVM, so each MockServer instance is independent. Set this to <span class="inline_code">infinispan</span> to replicate state across a cluster of MockServer instances using an embedded Infinispan data grid.</p>
+    <p>The <span class="inline_code">infinispan</span> backend requires the <span class="inline_code">mockserver-state-infinispan</span> module on the classpath and is normally combined with the clustering properties below.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">memory</span> (valid values: <span class="inline_code">memory</span>, <span class="inline_code">infinispan</span>)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.stateBackend(String stateBackend)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.stateBackend=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_STATE_BACKEND=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.stateBackend=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.stateBackend="infinispan"</code></pre>
+</div>
 
 <button id="button_configuration_cluster_enabled" class="accordion title"><strong>Cluster Enabled</strong></button>
 <div class="panel title">
@@ -1148,6 +1513,116 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG="/etc/mockserver/jgroups-tcp.xml"</code></pre>
     <p>Property File:</p>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterTransportConfig=/etc/mockserver/jgroups-tcp.xml</code></pre>
+</div>
+
+<h2>Cloud Blob Store Configuration:</h2>
+
+<p>These properties configure cloud-backed blob storage for durable persistence of expectations, cassettes, and fixture files. Each cloud backend requires its own optional module on the classpath. Set <span class="inline_code">blobStoreType</span> to <span class="inline_code">s3</span>, <span class="inline_code">gcs</span>, or <span class="inline_code">azure</span> and configure the backend-specific properties below.</p>
+
+<button id="button_configuration_blob_store_type" class="accordion title"><strong>Blob Store Type</strong></button>
+<div class="panel title">
+    <p>Selects where MockServer stores blob data such as persisted expectations, recorded cassettes, and fixture files. The default <span class="inline_code">filesystem</span> backend writes blobs to the local disk (preserving the existing on-disk persistence behaviour). The <span class="inline_code">memory</span> backend keeps blobs in the JVM only, so they are lost when the process exits. The <span class="inline_code">s3</span>, <span class="inline_code">gcs</span>, and <span class="inline_code">azure</span> backends store blobs in the corresponding cloud object store and require the matching optional module on the classpath plus the backend-specific properties below.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">filesystem</span> (valid values: <span class="inline_code">filesystem</span>, <span class="inline_code">memory</span>, <span class="inline_code">s3</span>, <span class="inline_code">gcs</span>, <span class="inline_code">azure</span>)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.blobStoreType(String blobStoreType)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreType=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_TYPE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.blobStoreType=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreType="s3"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_bucket" class="accordion title"><strong>Blob Store Bucket (S3 / GCS)</strong></button>
+<div class="panel title">
+    <p>The bucket name for S3 or GCS blob storage. Required when <span class="inline_code">blobStoreType</span> is <span class="inline_code">s3</span> or <span class="inline_code">gcs</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (none)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreBucket="my-mockserver-bucket"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_BUCKET="my-mockserver-bucket"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_region" class="accordion title"><strong>Blob Store Region (S3)</strong></button>
+<div class="panel title">
+    <p>The AWS region for S3 blob storage. If not set, defaults to <span class="inline_code">us-east-1</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (us-east-1)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreRegion="eu-west-1"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_REGION="eu-west-1"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_endpoint" class="accordion title"><strong>Blob Store Endpoint Override</strong></button>
+<div class="panel title">
+    <p>Endpoint override URL for S3-compatible stores (e.g. MinIO, LocalStack) or GCS emulators (e.g. fake-gcs-server). When set, the cloud client connects to this URL instead of the real cloud service.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (none -- use real cloud endpoint)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreEndpoint="http://localhost:9000"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_ENDPOINT="http://localhost:9000"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_key_prefix" class="accordion title"><strong>Blob Store Key Prefix</strong></button>
+<div class="panel title">
+    <p>An optional prefix prepended to all blob keys in the cloud store. Useful for namespacing MockServer objects within a shared bucket or container (e.g. <span class="inline_code">mockserver/</span>).</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (no prefix)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreKeyPrefix="mockserver/"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_KEY_PREFIX="mockserver/"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_container" class="accordion title"><strong>Blob Store Container (Azure)</strong></button>
+<div class="panel title">
+    <p>The Azure Blob Storage container name. Required when <span class="inline_code">blobStoreType</span> is <span class="inline_code">azure</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (none)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreContainer="my-container"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_CONTAINER="my-container"</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_connection_string" class="accordion title"><strong>Blob Store Connection String (Azure)</strong></button>
+<div class="panel title">
+    <p>The Azure Blob Storage connection string (includes account name, key, and endpoint). Required when <span class="inline_code">blobStoreType</span> is <span class="inline_code">azure</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (none)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreConnectionString="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=..."</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=...;AccountKey=..."</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_access_key_id" class="accordion title"><strong>Blob Store Access Key ID (S3)</strong></button>
+<div class="panel title">
+    <p>Explicit AWS access key ID for the S3 blob store. Optional — when empty, the default AWS credential chain is used (environment, profile, instance/IRSA role). Only relevant when <span class="inline_code">blobStoreType</span> is <span class="inline_code">s3</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (use default credential chain)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreAccessKeyId="AKIA..."</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_ACCESS_KEY_ID="AKIA..."</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_secret_access_key" class="accordion title"><strong>Blob Store Secret Access Key (S3)</strong></button>
+<div class="panel title">
+    <p>Explicit AWS secret access key for the S3 blob store. Optional — when empty, the default AWS credential chain is used. Only relevant when <span class="inline_code">blobStoreType</span> is <span class="inline_code">s3</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (use default credential chain)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreSecretAccessKey="..."</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_SECRET_ACCESS_KEY="..."</code></pre>
+</div>
+
+<button id="button_configuration_blob_store_project_id" class="accordion title"><strong>Blob Store Project ID (GCS)</strong></button>
+<div class="panel title">
+    <p>The Google Cloud project ID for the GCS blob store. Optional — when empty, the project is inferred from Application Default Credentials. Only relevant when <span class="inline_code">blobStoreType</span> is <span class="inline_code">gcs</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (infer from ADC)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.blobStoreProjectId="my-gcp-project"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BLOB_STORE_PROJECT_ID="my-gcp-project"</code></pre>
 </div>
 
 {% include_subpage _includes/control_plane_authentication_configuration.html %}
