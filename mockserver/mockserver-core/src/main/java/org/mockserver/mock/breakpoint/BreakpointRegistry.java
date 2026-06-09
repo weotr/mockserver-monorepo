@@ -141,13 +141,22 @@ public class BreakpointRegistry {
     }
 
     /**
-     * Clears all held exchanges, auto-continuing each so blocked worker threads
-     * are released. Called on server reset.
+     * Auto-continues all held exchanges so their async continuations fire.
+     * Called on server reset.
+     *
+     * <p>Uses a drain loop (poll until empty) instead of iterating + clear(),
+     * because each {@code complete()} triggers a {@code whenComplete} callback
+     * that removes the entry from {@code held}. An explicit {@code held.clear()}
+     * after the loop would race with entries added mid-reset — the callback
+     * removal handles cleanup correctly.
      */
     public void reset() {
-        for (PausedExchange exchange : held.values()) {
-            exchange.getDecisionFuture().complete(BreakpointDecision.continueOriginal());
+        // Drain: complete each, let the whenComplete callback remove it.
+        // Loop until snapshot is empty to catch entries added during the reset.
+        while (!held.isEmpty()) {
+            for (PausedExchange exchange : held.values()) {
+                exchange.getDecisionFuture().complete(BreakpointDecision.continueOriginal());
+            }
         }
-        held.clear();
     }
 }

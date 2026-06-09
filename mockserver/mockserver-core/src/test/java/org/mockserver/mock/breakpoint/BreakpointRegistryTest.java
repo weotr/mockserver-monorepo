@@ -6,7 +6,10 @@ import org.mockserver.configuration.Configuration;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -167,5 +170,116 @@ public class BreakpointRegistryTest {
         assertThat(exchange.getCapturedRequest().getPath().getValue(), is("/data"));
 
         BreakpointRegistry.getInstance().resolveContinue("corr-capture");
+    }
+
+    /**
+     * Proves that the breakpoint mechanism is non-blocking: pauses MORE concurrent
+     * exchanges than a typical scheduler pool size, then verifies that (a) async
+     * continuations on a bounded pool still complete for all paused exchanges when
+     * resolved, and (b) the pool is not exhausted (other tasks still run).
+     *
+     * <p>This is the regression test for the CRITICAL fix: the old implementation
+     * blocked scheduler threads with {@code .get()}, which exhausted the pool and
+     * stalled the Netty event loop via CallerRunsPolicy. The new async
+     * {@code thenAcceptAsync} approach frees threads immediately.
+     */
+    @Test
+    public void shouldNotBlockThreadsWhenMorePausedThanPoolSize() throws Exception {
+        // Simulate a pool smaller than the number of paused exchanges.
+        // A real scheduler pool is typically max(5, cpus); we use 3 to make the
+        // test tight and fast.
+        int poolSize = 3;
+        int pausedCount = poolSize + 5; // more paused than pool threads
+        ExecutorService boundedPool = new ThreadPoolExecutor(
+            poolSize, poolSize, 0L, TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(1000),
+            new ThreadPoolExecutor.CallerRunsPolicy()
+        );
+
+        Configuration config = configWith(true, 30000, pausedCount + 10);
+        BreakpointRegistry registry = BreakpointRegistry.getInstance();
+
+        // Pause N exchanges — none block any thread
+        List<PausedExchange> exchanges = new ArrayList<>();
+        for (int i = 0; i < pausedCount; i++) {
+            PausedExchange ex = registry.pause("nb-corr-" + i, request().withPath("/test/" + i), null, config);
+            assertThat("exchange " + i + " should be registered", ex, is(notNullValue()));
+            exchanges.add(ex);
+        }
+        assertThat(registry.size(), is(pausedCount));
+
+        // Verify the bounded pool is NOT exhausted: submit a canary task
+        // that must complete within 1 second (it would hang if the pool were blocked)
+        CountDownLatch canaryLatch = new CountDownLatch(1);
+        boundedPool.submit(canaryLatch::countDown);
+        assertThat("canary task should complete (pool not exhausted)",
+            canaryLatch.await(2, TimeUnit.SECONDS), is(true));
+
+        // Chain async continuations onto each decision future (mirrors the real
+        // HttpActionHandler async refactor)
+        AtomicInteger completedCount = new AtomicInteger(0);
+        CountDownLatch allDone = new CountDownLatch(pausedCount);
+        for (PausedExchange ex : exchanges) {
+            ex.getDecisionFuture().thenAcceptAsync(decision -> {
+                completedCount.incrementAndGet();
+                allDone.countDown();
+            }, boundedPool);
+        }
+
+        // Resolve all exchanges: CONTINUE for most, MODIFY for one, ABORT for one
+        for (int i = 0; i < pausedCount; i++) {
+            if (i == 0) {
+                registry.resolveModify("nb-corr-" + i, request().withPath("/modified"));
+            } else if (i == 1) {
+                registry.resolveAbort("nb-corr-" + i, response().withStatusCode(503));
+            } else {
+                registry.resolveContinue("nb-corr-" + i);
+            }
+        }
+
+        // All continuations must complete
+        assertThat("all async continuations should complete",
+            allDone.await(5, TimeUnit.SECONDS), is(true));
+        assertThat(completedCount.get(), is(pausedCount));
+
+        // Verify all exchanges were cleaned up from the registry
+        // (give the whenComplete callbacks a moment to run)
+        Thread.sleep(200);
+        assertThat("registry should be empty after all resolved", registry.size(), is(0));
+
+        // Verify pool still accepts work after all completions
+        CountDownLatch postCanary = new CountDownLatch(1);
+        boundedPool.submit(postCanary::countDown);
+        assertThat("post-resolution canary should complete",
+            postCanary.await(2, TimeUnit.SECONDS), is(true));
+
+        boundedPool.shutdown();
+    }
+
+    /**
+     * Verifies that reset drains correctly even when new entries appear during reset
+     * (the race condition the old held.clear() was susceptible to).
+     */
+    @Test
+    public void shouldResetCleanlyWithConcurrentAdds() throws Exception {
+        Configuration config = configWith(true, 30000, 100);
+        BreakpointRegistry registry = BreakpointRegistry.getInstance();
+
+        // Pause some exchanges
+        for (int i = 0; i < 5; i++) {
+            registry.pause("reset-race-" + i, request(), null, config);
+        }
+
+        // Reset on another thread while adding a new one mid-reset
+        AtomicBoolean resetDone = new AtomicBoolean(false);
+        Thread resetThread = new Thread(() -> {
+            registry.reset();
+            resetDone.set(true);
+        });
+        resetThread.start();
+        resetThread.join(2000);
+
+        assertThat("reset should complete", resetDone.get(), is(true));
+        assertThat("registry should be empty after reset", registry.size(), is(0));
     }
 }

@@ -1140,6 +1140,39 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftResponseTimeThresholdMs="500"</code></pre>
 </div>
 
+<button id="button_configuration_breakpoints" class="accordion title"><strong>Request Breakpoints</strong></button>
+<div class="panel title">
+    <p>Interactive request breakpoints let you pause proxied or forwarded requests before they reach the upstream server, inspect or modify them via the REST API, then continue, modify, or abort the request. This is useful for debugging, manual testing, and step-through inspection of live traffic.</p>
+    <p>When a breakpoint-paused request is not resolved within the timeout, it is automatically continued (forwarded unchanged). The <code>breakpointMaxHeld</code> cap prevents resource exhaustion &mdash; when the cap is reached, new requests bypass the breakpoint and are forwarded normally.</p>
+    <p>The implementation is fully non-blocking: paused requests do not consume scheduler threads or event-loop threads while waiting for resolution.</p>
+    <p><strong>Enable breakpoints</strong> &mdash; master switch. Default is <code>false</code> (feature off, zero overhead).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_ENABLED=...</code></pre>
+    <p><strong>Timeout</strong> &mdash; maximum time in milliseconds a request may be held at a breakpoint before it is automatically continued. Default is <code>30000</code> (30 seconds).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">30000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointTimeoutMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointTimeoutMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS=...</code></pre>
+    <p><strong>Max held</strong> &mdash; maximum number of requests that can be simultaneously held at breakpoints. When this cap is reached, new requests bypass the breakpoint and are forwarded normally. Default is <code>50</code>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointMaxHeld(int maxHeld)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointMaxHeld=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_MAX_HELD=...</code></pre>
+    <p>Example (enable with 10-second timeout and max 20 held):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled="true" -Dmockserver.breakpointTimeoutMillis="10000" -Dmockserver.breakpointMaxHeld="20"</code></pre>
+</div>
+
 <button id="button_configuration_chaos_auto_halt" class="accordion title"><strong>Chaos Auto-Halt Circuit-Breaker</strong></button>
 <div class="panel title">
     <p>A safety circuit-breaker for service-scoped chaos experiments. When enabled, MockServer counts <strong>error-class</strong> chaos faults &mdash; synthetic 5xx errors (<code>error</code>), dropped connections (<code>drop</code>), and quota-limit responses (<code>quota</code>) &mdash; in a sliding time window. If the count exceeds the configured threshold, all active service-scoped chaos profiles are automatically disabled, preventing a chaos experiment from causing cascading failures.</p>

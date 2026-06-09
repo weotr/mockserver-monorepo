@@ -42,6 +42,7 @@ Comprehensive internal documentation is maintained in `docs/`. **Always consult 
 | [docs/code/domain-model.md](docs/code/domain-model.md) | Before modifying domain model, matchers, codecs, or configuration |
 | [docs/code/tls-and-security.md](docs/code/tls-and-security.md) | Before modifying TLS, mTLS, certificates, or authentication |
 | [docs/code/client-and-integrations.md](docs/code/client-and-integrations.md) | Before modifying client library, JUnit rules, or Spring integration |
+| [docs/code/breakpoints.md](docs/code/breakpoints.md) | Before modifying request breakpoints, BreakpointRegistry, PausedExchange, or the /breakpoint endpoints |
 | [docs/code/drift-detection.md](docs/code/drift-detection.md) | Before modifying mock drift detection, DriftAnalyzer, DriftStore, or the /drift endpoint |
 | [docs/code/wasm-rules.md](docs/code/wasm-rules.md) | Before modifying WASM custom rule engine, chicory integration, or WASM REST endpoints |
 | [docs/code/telemetry.md](docs/code/telemetry.md) | Before modifying OpenTelemetry integration, OTLP export, GenAI spans, or W3C trace context propagation |

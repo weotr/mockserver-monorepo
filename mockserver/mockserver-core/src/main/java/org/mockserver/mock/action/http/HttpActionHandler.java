@@ -724,8 +724,11 @@ public class HttpActionHandler {
                             }
                         }
 
-                        // breakpoint intercept: pause the request if breakpoints are enabled (async mode only)
-                        HttpRequest requestToForward = clonedRequest;
+                        // breakpoint intercept: pause the request if breakpoints are enabled (async mode only).
+                        // IMPORTANT: does NOT block any thread — the decision future's continuation runs
+                        // asynchronously on the scheduler executor when the control-plane resolves it (or
+                        // when the timeout auto-completes it). This avoids exhausting the scheduler pool
+                        // and, via CallerRunsPolicy, the Netty event loop.
                         if (!synchronous && Boolean.TRUE.equals(configuration.breakpointEnabled())) {
                             org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
                             org.mockserver.mock.breakpoint.PausedExchange pausedExchange = breakpointRegistry.pause(
@@ -742,38 +745,45 @@ public class HttpActionHandler {
                                             .setArguments(request)
                                     );
                                 }
-                                // block on the decision future (safe: we are on a scheduler worker thread, not the event loop)
-                                org.mockserver.mock.breakpoint.BreakpointDecision decision;
-                                try {
-                                    decision = pausedExchange.getDecisionFuture().get(
-                                        configuration.breakpointTimeoutMillis() + 1000, java.util.concurrent.TimeUnit.MILLISECONDS
-                                    );
-                                } catch (Exception e) {
-                                    decision = org.mockserver.mock.breakpoint.BreakpointDecision.continueOriginal();
-                                }
-                                switch (decision.getAction()) {
-                                    case ABORT:
-                                        HttpResponse abortResponse = decision.getAbortResponse();
-                                        if (abortResponse == null) {
-                                            abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                                // Chain the forward-and-respond continuation onto the decision future
+                                // asynchronously. The current scheduler worker thread returns immediately.
+                                java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                                    ? scheduler.getExecutorService()
+                                    : Runnable::run;
+                                pausedExchange.getDecisionFuture().thenAcceptAsync(decision -> {
+                                    try {
+                                        switch (decision.getAction()) {
+                                            case ABORT:
+                                                HttpResponse abortResponse = decision.getAbortResponse();
+                                                if (abortResponse == null) {
+                                                    abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                                                }
+                                                responseWriter.writeResponse(request, abortResponse, false);
+                                                return;
+                                            case MODIFY:
+                                                HttpRequest modified = decision.getModifiedRequest();
+                                                HttpRequest modifiedToForward = hopByHopHeaderFilter.onRequest(modified)
+                                                    .withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
+                                                adjustHostHeaderForUnmatchedRequest(modifiedToForward, remoteAddress);
+                                                executeUnmatchedForward(modifiedToForward, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                return;
+                                            case CONTINUE:
+                                            default:
+                                                executeUnmatchedForward(clonedRequest, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                return;
                                         }
-                                        responseWriter.writeResponse(request, abortResponse, false);
-                                        return;
-                                    case MODIFY:
-                                        HttpRequest modified = decision.getModifiedRequest();
-                                        requestToForward = hopByHopHeaderFilter.onRequest(modified)
-                                            .withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
-                                        adjustHostHeaderForUnmatchedRequest(requestToForward, remoteAddress);
-                                        break;
-                                    case CONTINUE:
-                                    default:
-                                        // use original clonedRequest
-                                        break;
-                                }
+                                    } catch (SocketCommunicationException sce) {
+                                        returnBadGateway(responseWriter, request, sce.getMessage());
+                                    } catch (Throwable throwable) {
+                                        returnBadGateway(responseWriter, request, "breakpoint continuation failed: " + throwable.getMessage());
+                                    }
+                                }, continuationExecutor);
+                                // Return immediately — do NOT block the scheduler worker thread
+                                return;
                             }
                         }
 
-                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(requestToForward, httpClient.sendRequest(requestToForward, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
+                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
                         if (response == null) {
                             response = badGatewayResponse();
@@ -883,6 +893,129 @@ public class HttpActionHandler {
 
             }
 
+        }
+    }
+
+    /**
+     * Executes the actual HTTP forward for an unmatched proxy request and writes the response.
+     * Extracted so the breakpoint async continuation can reuse the same forward+response logic
+     * without duplicating the streaming/non-streaming/loop-prevention handling.
+     *
+     * @param requestToForward the (possibly modified) request to send upstream
+     * @param originalRequest  the original inbound request (for logging and correlation)
+     * @param remoteAddress    the resolved upstream address
+     * @param potentiallyHttpProxy whether this is an exploratory HTTP proxy request
+     * @param validationEnabled whether validation-proxy mode is active
+     * @param responseWriter   the writer to send the response back to the client
+     */
+    private void executeUnmatchedForward(HttpRequest requestToForward, HttpRequest originalRequest,
+                                         InetSocketAddress remoteAddress, boolean potentiallyHttpProxy,
+                                         boolean validationEnabled, ResponseWriter responseWriter) {
+        try {
+            final HttpForwardActionResult responseFuture = new HttpForwardActionResult(
+                requestToForward,
+                httpClient.sendRequest(requestToForward, remoteAddress,
+                    potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()),
+                null, remoteAddress
+            );
+            HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+            if (response == null) {
+                response = badGatewayResponse();
+            }
+            if (response.containsHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue())) {
+                response.removeHeader(httpStateHandler.getUniqueLoopPreventionHeaderName());
+                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(NO_MATCH_RESPONSE)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setHttpRequest(originalRequest)
+                            .setHttpResponse(notFoundResponse())
+                            .setMessageFormat(NO_MATCH_RESPONSE_NO_EXPECTATION_MESSAGE_FORMAT)
+                            .setArguments(originalRequest, response)
+                    );
+                }
+                responseWriter.writeResponse(originalRequest, response, false);
+            } else if (response.getStreamingBody() != null) {
+                final HttpResponse streamingResponse = response;
+                responseWriter.writeResponse(originalRequest, streamingResponse, false);
+                streamingResponse.getStreamingBody().addCompletionListener(() -> {
+                    HttpResponse logResponse = streamingResponse.clone();
+                    byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
+                    setCapturedStreamingBody(logResponse, captured);
+                    attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                    if (validationEnabled) {
+                        validateProxyResponse(originalRequest, logResponse, true);
+                    }
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(FORWARDED_REQUEST)
+                            .setLogLevel(Level.INFO)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setHttpRequest(originalRequest)
+                            .setHttpResponse(logResponse)
+                            .setExpectation(originalRequest, logResponse)
+                            .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                            .setArguments(logResponse, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                    );
+                });
+            } else {
+                if (validationEnabled) {
+                    response = validateProxyResponse(originalRequest, response, false);
+                }
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(FORWARDED_REQUEST)
+                        .setLogLevel(Level.INFO)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setHttpResponse(response)
+                        .setExpectation(originalRequest, response)
+                        .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
+                        .setArguments(response, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                );
+                responseWriter.writeResponse(originalRequest, response, false);
+            }
+        } catch (SocketCommunicationException sce) {
+            returnBadGateway(responseWriter, originalRequest, sce.getMessage());
+        } catch (Throwable throwable) {
+            if (potentiallyHttpProxy && connectionException(throwable)) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(TRACE)
+                            .setCorrelationId(originalRequest.getLogCorrelationId())
+                            .setMessageFormat("failed to connect to proxied socket due to exploratory HTTP proxy for:{}due to:{}falling back to no proxy")
+                            .setArguments(originalRequest, throwable.getCause())
+                    );
+                }
+                returnBadGateway(responseWriter, originalRequest, "failed to connect to proxied socket due to exploratory HTTP proxy");
+            } else if (sslHandshakeException(throwable)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setMessageFormat("TLS handshake exception while proxying request{}to remote address{}")
+                        .setArguments(originalRequest, remoteAddress)
+                        .setThrowable(throwable)
+                );
+                returnBadGateway(responseWriter, originalRequest, "TLS handshake exception while proxying request to remote address" + remoteAddress);
+            } else if (!connectionClosedException(throwable)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(EXCEPTION)
+                        .setLogLevel(Level.ERROR)
+                        .setCorrelationId(originalRequest.getLogCorrelationId())
+                        .setHttpRequest(originalRequest)
+                        .setMessageFormat(throwable.getMessage())
+                        .setThrowable(throwable)
+                );
+                returnBadGateway(responseWriter, originalRequest, "connection closed while proxying request to remote address" + remoteAddress);
+            } else {
+                returnBadGateway(responseWriter, originalRequest, throwable.getMessage());
+            }
         }
     }
 

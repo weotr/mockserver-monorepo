@@ -3964,14 +3964,18 @@ public class HttpState {
             }
             boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveContinue(id);
             if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
                 return response().withStatusCode(NOT_FOUND.code())
-                    .withBody("{\"error\":\"no paused exchange found with id: " + id.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
             }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "continued");
+            resultNode.put("id", id);
             return response().withStatusCode(OK.code())
-                .withBody("{\"status\":\"continued\",\"id\":\"" + id + "\"}", MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
         } catch (Exception e) {
-            return response().withStatusCode(BAD_REQUEST.code())
-                .withBody("{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+            return breakpointErrorResponse(objectMapper, e);
         }
     }
 
@@ -3996,14 +4000,18 @@ public class HttpState {
             HttpRequest modifiedRequest = getHttpRequestSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpRequest")));
             boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveModify(id, modifiedRequest);
             if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
                 return response().withStatusCode(NOT_FOUND.code())
-                    .withBody("{\"error\":\"no paused exchange found with id: " + id.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
             }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "modified");
+            resultNode.put("id", id);
             return response().withStatusCode(OK.code())
-                .withBody("{\"status\":\"modified\",\"id\":\"" + id + "\"}", MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
         } catch (Exception e) {
-            return response().withStatusCode(BAD_REQUEST.code())
-                .withBody("{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+            return breakpointErrorResponse(objectMapper, e);
         }
     }
 
@@ -4027,14 +4035,34 @@ public class HttpState {
             }
             boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveAbort(id, abortResponse);
             if (!resolved) {
+                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+                errNode.put("error", "no paused exchange found with id: " + id);
                 return response().withStatusCode(NOT_FOUND.code())
-                    .withBody("{\"error\":\"no paused exchange found with id: " + id.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
             }
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "aborted");
+            resultNode.put("id", id);
             return response().withStatusCode(OK.code())
-                .withBody("{\"status\":\"aborted\",\"id\":\"" + id + "\"}", MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
         } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    /**
+     * Builds a safe JSON error response for breakpoint endpoints using Jackson,
+     * avoiding string-concatenation JSON injection.
+     */
+    private HttpResponse breakpointErrorResponse(com.fasterxml.jackson.databind.ObjectMapper objectMapper, Exception e) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
+            errNode.put("error", String.valueOf(e.getMessage()));
             return response().withStatusCode(BAD_REQUEST.code())
-                .withBody("{\"error\":\"" + String.valueOf(e.getMessage()).replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+        } catch (Exception jsonEx) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"internal error building response\"}", MediaType.JSON_UTF_8);
         }
     }
 }

@@ -1577,6 +1577,222 @@ paths:
               $ref: "#/components/schemas/HttpRequest"
         description: the HTTP request to replay to its original upstream target
         required: true
+  /mockserver/breakpoint:
+    get:
+      tags:
+        - control
+      summary: list all currently paused (breakpointed) exchanges
+      description: >-
+        Returns a JSON object listing all requests currently held at a breakpoint, with each entry's
+        correlation id, age, matched expectation id (if any), and a request summary (method + path).
+        Requires breakpointEnabled=true to have any entries.
+      responses:
+        '200':
+          description: list of paused exchanges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pausedExchanges:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        ageMillis:
+                          type: integer
+                        expectationId:
+                          type: string
+                        request:
+                          type: object
+                          properties:
+                            method:
+                              type: string
+                            path:
+                              type: string
+                  count:
+                    type: integer
+    put:
+      tags:
+        - control
+      summary: list all currently paused (breakpointed) exchanges (PUT variant)
+      description: >-
+        Same as GET /mockserver/breakpoint. The PUT variant exists for consistency with other
+        control-plane endpoints that use PUT for idempotent queries.
+      responses:
+        '200':
+          description: list of paused exchanges
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pausedExchanges:
+                    type: array
+                    items:
+                      type: object
+                  count:
+                    type: integer
+  /mockserver/breakpoint/continue:
+    put:
+      tags:
+        - control
+      summary: continue a paused exchange (forward the original request unchanged)
+      description: >-
+        Resolves a breakpointed request as CONTINUE — the original captured request is forwarded
+        to its upstream target unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to continue
+      responses:
+        '200':
+          description: exchange continued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [continued]
+                  id:
+                    type: string
+        '400':
+          description: missing or unparseable body, or missing 'id' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/breakpoint/modify:
+    put:
+      tags:
+        - control
+      summary: modify and continue a paused exchange (forward a replacement request)
+      description: >-
+        Resolves a breakpointed request as MODIFY — the replacement HttpRequest is forwarded
+        to the upstream target instead of the original captured request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+                - httpRequest
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to modify
+                httpRequest:
+                  $ref: "#/components/schemas/HttpRequest"
+      responses:
+        '200':
+          description: exchange modified and forwarded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [modified]
+                  id:
+                    type: string
+        '400':
+          description: missing body, missing 'id' or 'httpRequest' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/breakpoint/abort:
+    put:
+      tags:
+        - control
+      summary: abort a paused exchange (do not forward; return a response to the client)
+      description: >-
+        Resolves a breakpointed request as ABORT — the request is NOT forwarded to the upstream
+        target. Instead, the optional httpResponse is returned to the client (or a 503 if omitted).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+                  description: the correlation id of the paused exchange to abort
+                httpResponse:
+                  $ref: "#/components/schemas/HttpResponse"
+      responses:
+        '200':
+          description: exchange aborted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [aborted]
+                  id:
+                    type: string
+        '400':
+          description: missing or unparseable body, or missing 'id' field
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: no paused exchange found with the given id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
   /mockserver/generateExpectation:
     put:
       tags:
