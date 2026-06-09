@@ -12,8 +12,15 @@ import Button from '@mui/material/Button';
 import Tooltip from '@mui/material/Tooltip';
 import Checkbox from '@mui/material/Checkbox';
 import ToggleButton from '@mui/material/ToggleButton';
+import Alert from '@mui/material/Alert';
+import CircularProgress from '@mui/material/CircularProgress';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
 import SearchIcon from '@mui/icons-material/Search';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
+import ReplayIcon from '@mui/icons-material/Replay';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { useDashboardStore } from '../store';
 import { useConnectionParams } from '../hooks/useConnectionParams';
@@ -32,6 +39,8 @@ import {
 import type { ScriptedTurn } from './ConversationView';
 import type { JsonListItem } from '../types';
 import { isCapturableTraffic } from '../lib/expectationFromCapture';
+import { buildBaseUrl } from '../lib/mcpClient';
+import type { ConnectionParams } from '../hooks/useConnectionParams';
 import {
   summarizeTraffic,
   getModelLabel,
@@ -729,6 +738,92 @@ function TimingWaterfall({ timing }: { timing: RequestTiming }) {
 }
 
 // ---------------------------------------------------------------------------
+// ReplayDialog — replays a request via PUT /mockserver/replay and shows result
+// ---------------------------------------------------------------------------
+
+interface ReplayDialogProps {
+  open: boolean;
+  onClose: () => void;
+  item: JsonListItem;
+  connectionParams: ConnectionParams;
+}
+
+function ReplayDialog({ open, onClose, item, connectionParams }: ReplayDialogProps) {
+  const [loading, setLoading] = useState(false);
+  const [replayResponse, setReplayResponse] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleReplay = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setReplayResponse(null);
+    try {
+      const baseUrl = buildBaseUrl(connectionParams);
+      const httpRequest = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
+      const res = await fetch(`${baseUrl}/mockserver/replay`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(httpRequest),
+      });
+      const text = await res.text();
+      if (res.ok) {
+        try {
+          setReplayResponse(JSON.parse(text));
+        } catch {
+          setReplayResponse({ body: text });
+        }
+      } else {
+        setError(`Replay failed (${res.status}): ${text}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [connectionParams, item]);
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ fontSize: '0.95rem' }}>Replay Request</DialogTitle>
+      <DialogContent dividers>
+        {!replayResponse && !error && !loading && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            Re-issue this request to its original target and view the response.
+          </Typography>
+        )}
+        {loading && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
+            <CircularProgress size={20} />
+            <Typography variant="body2">Sending request...</Typography>
+          </Box>
+        )}
+        {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+        {replayResponse && (
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600, fontSize: '0.8rem' }}>
+              Upstream Response
+            </Typography>
+            <JsonViewer data={replayResponse} collapsed={3} />
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} size="small">Close</Button>
+        <Button
+          onClick={handleReplay}
+          disabled={loading}
+          variant="contained"
+          size="small"
+          startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+        >
+          {replayResponse ? 'Replay Again' : 'Replay'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Detail pane wrapper — single-level, adaptive tab row
 // ---------------------------------------------------------------------------
 
@@ -737,6 +832,7 @@ interface DetailPaneProps {
   summary: TrafficSummary;
   scriptedTurns: ScriptedTurn[];
   onCaptureAsMock?: () => void;
+  onReplay?: () => void;
 }
 
 /** Build the tab list dynamically from the traffic kind. */
@@ -760,7 +856,7 @@ function buildTabs(parsed: ParsedTraffic, hasScriptedTurns: boolean): string[] {
   }
 }
 
-function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPaneProps) {
+function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock, onReplay }: DetailPaneProps) {
   const tabs = buildTabs(summary.parsed, scriptedTurns.length > 0);
   const [detailTab, setDetailTab] = useState(0);
   const canCapture = isCapturableTraffic(summary.parsed);
@@ -775,6 +871,16 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, fontSize: '0.75rem', flexGrow: 1 }}>
             Raw JSON
           </Typography>
+          {onReplay && (
+            <Button
+              size="small"
+              startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+              onClick={onReplay}
+              sx={{ fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0, mr: 0.5 }}
+            >
+              Replay
+            </Button>
+          )}
           {canCapture && onCaptureAsMock && (
             <Button
               size="small"
@@ -814,6 +920,16 @@ function DetailPane({ item, summary, scriptedTurns, onCaptureAsMock }: DetailPan
             <Tab key={label} label={label} />
           ))}
         </Tabs>
+        {onReplay && (
+          <Button
+            size="small"
+            startIcon={<ReplayIcon sx={{ fontSize: '0.875rem' }} />}
+            onClick={onReplay}
+            sx={{ mr: 0.5, fontSize: '0.7rem', textTransform: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            Replay
+          </Button>
+        )}
         {canCapture && onCaptureAsMock && (
           <Button
             size="small"
@@ -892,6 +1008,7 @@ export default function TrafficInspector() {
   const setSelectedKey = useDashboardStore((s) => s.setSelectedTrafficKey);
   const connectionParams = useConnectionParams();
   const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
+  const [replayDialogOpen, setReplayDialogOpen] = useState(false);
 
   // Compare mode: pick two requests from the list and diff them field-by-field via the shared
   // DiffRequestsDialog (PUT /mockserver/diff). compareKeys holds the (max two) selected item keys.
@@ -1114,6 +1231,7 @@ export default function TrafficInspector() {
             summary={selectedEntry.summary}
             scriptedTurns={scriptedTurns}
             onCaptureAsMock={() => setCaptureDialogOpen(true)}
+            onReplay={() => setReplayDialogOpen(true)}
           />
         </Paper>
       )}
@@ -1127,6 +1245,16 @@ export default function TrafficInspector() {
           path={selectedEntry.summary.path ?? ''}
           connectionParams={connectionParams}
           itemValue={selectedEntry.item.value}
+        />
+      )}
+
+      {/* Replay dialog — re-issue a captured request to its original target */}
+      {selectedEntry && (
+        <ReplayDialog
+          open={replayDialogOpen}
+          onClose={() => setReplayDialogOpen(false)}
+          item={selectedEntry.item}
+          connectionParams={connectionParams}
         />
       )}
 

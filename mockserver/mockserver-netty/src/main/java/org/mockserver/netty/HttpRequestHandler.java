@@ -83,6 +83,9 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
         this.metricsHandler = new MetricsHandler(configuration);
         this.openAPISpecHandler = new OpenAPISpecHandler();
         this.configurationSerializer = new ConfigurationSerializer(mockServerLogger);
+        // Wire the replay handler so PUT /mockserver/replay can re-issue
+        // requests using the existing NettyHttpClient (forward/proxy client).
+        httpState.setReplayHandler(req -> httpActionHandler.getHttpClient().sendRequest(req));
     }
 
     private static boolean isProxyingRequest(ChannelHandlerContext ctx) {

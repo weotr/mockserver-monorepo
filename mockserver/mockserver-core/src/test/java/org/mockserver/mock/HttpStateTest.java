@@ -3592,4 +3592,93 @@ public class HttpStateTest {
         assertThat(responseWriter.response.getStatusCode(), is(400));
     }
 
+    // ---- Replay endpoint tests ----
+
+    @Test
+    public void shouldHandleReplayRequestSuccessfully() {
+        // given — wire a fake replay handler that echoes back a fixed response
+        HttpResponse upstreamResponse = response()
+            .withStatusCode(200)
+            .withBody("upstream OK");
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(upstreamResponse));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("upstream OK"));
+    }
+
+    @Test
+    public void shouldReturnBadRequestForEmptyReplayBody() {
+        // given — wire a replay handler (it won't be called)
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(response()));
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("request body must contain an HttpRequest JSON definition"));
+    }
+
+    @Test
+    public void shouldReturn501WhenNoReplayHandlerIsWired() {
+        // given — do NOT set a replay handler (it stays null)
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(501));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("replay is not available"));
+    }
+
+    @Test
+    public void shouldReturnBadGatewayWhenReplayFails() {
+        // given — wire a replay handler that fails
+        httpState.setReplayHandler(req -> {
+            CompletableFuture<HttpResponse> future = new CompletableFuture<>();
+            future.completeExceptionally(new RuntimeException("Connection refused"));
+            return future;
+        });
+
+        HttpRequest replayRequest = request("/mockserver/replay")
+            .withMethod("PUT")
+            .withBody(
+                "{\"method\":\"GET\",\"path\":\"/api/test\",\"headers\":[{\"name\":\"host\",\"values\":[\"example.com\"]}]}"
+            );
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(replayRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(502));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("Connection refused"));
+    }
+
 }

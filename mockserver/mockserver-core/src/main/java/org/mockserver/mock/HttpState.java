@@ -113,6 +113,8 @@ public class HttpState {
     private final MemoryMonitoring memoryMonitoring;
     private OpenAPIConverter openAPIConverter;
     private org.mockserver.serialization.har.HarConverter harConverter;
+    private HttpRequestSerializer httpRequestSerializer;
+    private HttpResponseSerializer httpResponseSerializer;
     private org.mockserver.serialization.curl.HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private AuthenticationHandler controlPlaneAuthenticationHandler;
     private GrpcProtoDescriptorStore grpcDescriptorStore;
@@ -124,6 +126,8 @@ public class HttpState {
     // optional — set by LifeCycle when a runtime LLM backend is configured
     private volatile org.mockserver.llm.client.LlmCompletionService llmCompletionService;
     private volatile org.mockserver.llm.client.LlmBackend llmBackend;
+    // optional — set by the runtime (NettyHttpClient) to enable PUT /mockserver/replay
+    private volatile java.util.function.Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler;
 
     public static void setPort(final HttpRequest request) {
         if (request != null && request.getSocketAddress() != null) {
@@ -282,6 +286,18 @@ public class HttpState {
 
     public void setControlPlaneAuthenticationHandler(AuthenticationHandler controlPlaneAuthenticationHandler) {
         this.controlPlaneAuthenticationHandler = controlPlaneAuthenticationHandler;
+    }
+
+    /**
+     * Install the replay handler that re-issues an {@link HttpRequest} to its
+     * target and returns the upstream response. Called by the runtime (e.g.
+     * {@code HttpRequestHandler} in the Netty module) after construction,
+     * wiring the existing {@code NettyHttpClient} so that
+     * {@code PUT /mockserver/replay} can delegate without core depending on
+     * the client directly.
+     */
+    public void setReplayHandler(java.util.function.Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler) {
+        this.replayHandler = replayHandler;
     }
 
     public Configuration getConfiguration() {
@@ -1994,6 +2010,14 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/replay", "/replay")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    handleReplay(request, responseWriter, canHandle);
+                } else {
+                    canHandle.complete(true);
+                }
+
             } else if (request.matches("PUT", PATH_PREFIX + "/diff", "/diff")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -3438,6 +3462,100 @@ public class HttpState {
         return stateBackend;
     }
 
+    // ---- Replay control-plane ----
+
+    /**
+     * Maximum body size (in bytes) allowed for a replayed request to prevent OOM.
+     * Requests whose body exceeds this cap are rejected with 413 Payload Too Large.
+     */
+    private static final int REPLAY_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    /**
+     * Re-issue a previously recorded/proxied request to its target and return
+     * the upstream response. The payload is a standard {@code HttpRequest} JSON;
+     * the target host/port is resolved from the {@code Host} header or the
+     * explicit {@code socketAddress} field in the JSON (same rules as the
+     * regular forward/proxy path).
+     */
+    private void handleReplay(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
+        try {
+            if (replayHandler == null) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"replay is not available — no HTTP client has been wired\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            String body = controlPlaneRequest.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain an HttpRequest JSON definition\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            HttpRequest requestToReplay = getHttpRequestSerializer().deserialize(body);
+
+            // Safety: enforce body-size cap
+            byte[] requestBody = requestToReplay.getBodyAsRawBytes();
+            if (requestBody != null && requestBody.length > REPLAY_MAX_BODY_SIZE) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(REQUEST_ENTITY_TOO_LARGE.code())
+                    .withBody("{\"error\":\"request body exceeds maximum replay size of " + REPLAY_MAX_BODY_SIZE + " bytes\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            replayHandler.apply(requestToReplay)
+                .orTimeout(configuration.maxSocketTimeoutInMillis(), MILLISECONDS)
+                .whenComplete((upstreamResponse, throwable) -> {
+                    try {
+                        if (throwable != null) {
+                            String errorMessage = throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName();
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.WARN)
+                                    .setHttpRequest(requestToReplay)
+                                    .setMessageFormat("exception replaying request:{}error:{}")
+                                    .setArguments(requestToReplay, errorMessage)
+                                    .setThrowable(throwable)
+                            );
+                            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                                .withStatusCode(BAD_GATEWAY.code())
+                                .withBody("{\"error\":\"replay failed: " + errorMessage.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8)), true);
+                        } else {
+                            // Return the upstream response wrapped in a JSON envelope
+                            // so the dashboard can display it alongside the original request.
+                            HttpResponse replayResponse = upstreamResponse != null ? upstreamResponse : response().withStatusCode(OK.code());
+                            String serializedResponse = getHttpResponseSerializer().serialize(replayResponse);
+                            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                                .withStatusCode(OK.code())
+                                .withBody(serializedResponse, MediaType.JSON_UTF_8)), true);
+                        }
+                    } finally {
+                        canHandle.complete(true);
+                    }
+                });
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setHttpRequest(controlPlaneRequest)
+                    .setMessageFormat("exception handling replay request:{}error:{}")
+                    .setArguments(controlPlaneRequest, e.getMessage())
+                    .setThrowable(e)
+            );
+            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"" + (e.getMessage() != null ? e.getMessage().replace("\"", "'") : "unknown error") + "\"}", MediaType.JSON_UTF_8)), true);
+            canHandle.complete(true);
+        }
+    }
+
+    // ---- Lazy serializer getters ----
+
     private ExpectationIdSerializer getExpectationIdSerializer() {
         if (this.expectationIdSerializer == null) {
             this.expectationIdSerializer = new ExpectationIdSerializer(mockServerLogger);
@@ -3552,6 +3670,20 @@ public class HttpState {
             this.harConverter = new org.mockserver.serialization.har.HarConverter();
         }
         return harConverter;
+    }
+
+    private HttpRequestSerializer getHttpRequestSerializer() {
+        if (this.httpRequestSerializer == null) {
+            this.httpRequestSerializer = new HttpRequestSerializer(mockServerLogger);
+        }
+        return httpRequestSerializer;
+    }
+
+    private HttpResponseSerializer getHttpResponseSerializer() {
+        if (this.httpResponseSerializer == null) {
+            this.httpResponseSerializer = new HttpResponseSerializer(mockServerLogger);
+        }
+        return httpResponseSerializer;
     }
 
     private org.mockserver.serialization.curl.HttpRequestToCurlSerializer getHttpRequestToCurlSerializer() {

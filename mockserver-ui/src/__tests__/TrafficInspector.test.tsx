@@ -472,3 +472,111 @@ describe('TrafficInspector — compare two requests (diff)', () => {
     expect(checkboxes[0]!).toBeEnabled();
   });
 });
+
+describe('TrafficInspector — Replay button', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows Replay button in detail pane for a selected generic request', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-replay',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/test',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: {
+              statusCode: 200,
+              body: { type: 'STRING', string: 'original response' },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+
+    // Click on the row to select it
+    const row = screen.getByText(/\/api\/test/);
+    await user.click(row);
+
+    // The Replay button should be visible in the detail pane
+    expect(screen.getByRole('button', { name: /Replay/i })).toBeInTheDocument();
+  });
+
+  it('opens replay dialog and calls PUT /mockserver/replay on click', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-replay-2',
+          value: {
+            httpRequest: {
+              method: 'POST',
+              path: '/api/submit',
+              headers: [{ name: 'host', values: ['example.com'] }],
+              body: { type: 'JSON', json: '{"data":"test"}' },
+            },
+            httpResponse: {
+              statusCode: 200,
+            },
+          },
+        },
+      ],
+    });
+
+    // Mock fetch to intercept the replay call
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ statusCode: 200, body: 'replayed OK' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    renderTrafficInspector();
+
+    // Select the request
+    const row = screen.getByText(/\/api\/submit/);
+    await user.click(row);
+
+    // Click the Replay button in the detail pane
+    const replayBtn = screen.getByRole('button', { name: /Replay/i });
+    await user.click(replayBtn);
+
+    // The replay dialog should open
+    expect(screen.getByText('Replay Request')).toBeInTheDocument();
+
+    // Click the Replay button inside the dialog
+    const dialogReplayBtn = within(screen.getByRole('dialog')).getByRole('button', { name: /Replay/i });
+    await user.click(dialogReplayBtn);
+
+    // Verify fetch was called with the correct URL and method
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/mockserver/replay'),
+      expect.objectContaining({
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    // The response should be displayed
+    expect(await screen.findByText('Upstream Response')).toBeInTheDocument();
+  });
+});
