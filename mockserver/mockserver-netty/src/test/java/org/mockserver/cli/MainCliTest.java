@@ -603,6 +603,152 @@ public class MainCliTest {
         }
     }
 
+    // ---- Validation proxy flags (--validate-openapi / --validate-enforce) ----
+
+    @Test
+    public void shouldSetValidateOpenApiViaRunSubcommand() {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        String originalSpec = ConfigurationProperties.validateProxyOpenAPISpec();
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort),
+                "--validate-openapi", "https://petstore.swagger.io/v2/swagger.json");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("validateProxyOpenAPISpec should be set",
+                ConfigurationProperties.validateProxyOpenAPISpec(),
+                is("https://petstore.swagger.io/v2/swagger.json"));
+        } finally {
+            ConfigurationProperties.validateProxyOpenAPISpec(originalSpec != null ? originalSpec : "");
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldSetValidateEnforceViaRunSubcommand() {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        boolean originalEnforce = ConfigurationProperties.validateProxyEnforce();
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort), "--validate-enforce");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("validateProxyEnforce should be true",
+                ConfigurationProperties.validateProxyEnforce(), is(true));
+        } finally {
+            ConfigurationProperties.validateProxyEnforce(originalEnforce);
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldSetBothValidateFlagsViaRunSubcommand() {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        String originalSpec = ConfigurationProperties.validateProxyOpenAPISpec();
+        boolean originalEnforce = ConfigurationProperties.validateProxyEnforce();
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort),
+                "--validate-openapi", "./petstore.yaml",
+                "--validate-enforce");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("validateProxyOpenAPISpec should be set",
+                ConfigurationProperties.validateProxyOpenAPISpec(), is("./petstore.yaml"));
+            assertThat("validateProxyEnforce should be true",
+                ConfigurationProperties.validateProxyEnforce(), is(true));
+        } finally {
+            ConfigurationProperties.validateProxyOpenAPISpec(originalSpec != null ? originalSpec : "");
+            ConfigurationProperties.validateProxyEnforce(originalEnforce);
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldSetValidateFlagsViaProxySubcommand() {
+        final int freePort = PortFactory.findFreePort();
+        EchoServer echoServer = new EchoServer(false);
+        echoServer.withNextResponse(response("proxied_validate"));
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        String originalSpec = ConfigurationProperties.validateProxyOpenAPISpec();
+        boolean originalEnforce = ConfigurationProperties.validateProxyEnforce();
+
+        try {
+            Main.main("proxy", "--to", "http://127.0.0.1:" + echoServer.getPort(),
+                "-p", String.valueOf(freePort),
+                "--validate-openapi", "https://petstore.swagger.io/v2/swagger.json",
+                "--validate-enforce");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("validateProxyOpenAPISpec should be set via proxy subcommand",
+                ConfigurationProperties.validateProxyOpenAPISpec(),
+                is("https://petstore.swagger.io/v2/swagger.json"));
+            assertThat("validateProxyEnforce should be true via proxy subcommand",
+                ConfigurationProperties.validateProxyEnforce(), is(true));
+        } finally {
+            ConfigurationProperties.validateProxyOpenAPISpec(originalSpec != null ? originalSpec : "");
+            ConfigurationProperties.validateProxyEnforce(originalEnforce);
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldNotSetValidateDefaultsWithoutFlags() {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        // Reset to known defaults before the test
+        ConfigurationProperties.validateProxyOpenAPISpec("");
+        ConfigurationProperties.validateProxyEnforce(false);
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort));
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("validateProxyOpenAPISpec should be empty by default",
+                ConfigurationProperties.validateProxyOpenAPISpec(), is(""));
+            assertThat("validateProxyEnforce should be false by default",
+                ConfigurationProperties.validateProxyEnforce(), is(false));
+        } finally {
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldListValidateFlagsInRunHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("run", "--help");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("run help should list --validate-openapi",
+                output, containsString("--validate-openapi"));
+            assertThat("run help should list --validate-enforce",
+                output, containsString("--validate-enforce"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldListValidateFlagsInProxyHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("help", "proxy");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("proxy help should list --validate-openapi",
+                output, containsString("--validate-openapi"));
+            assertThat("proxy help should list --validate-enforce",
+                output, containsString("--validate-enforce"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
     // ---- Dev mode (--dev) ----
 
     @Test

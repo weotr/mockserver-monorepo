@@ -585,6 +585,16 @@ public class ExampleSpringTestListenerTestWithPortInjection {
 			<td><a href="/mock_server/configuration_properties.html"><span class="inline_code">mockserver.devMode</span></a></td>
 		</tr>
 		<tr>
+			<td><span class="inline_code">--validate-openapi &lt;spec&gt;</span></td>
+			<td>Validate every forwarded/proxied request and its upstream response against the given OpenAPI spec. Accepts a URL, file path, or inline JSON/YAML payload. Violations are logged as <span class="inline_code">OPENAPI_REQUEST_VALIDATION_FAILED</span> and <span class="inline_code">OPENAPI_RESPONSE_VALIDATION_FAILED</span> events. By default, traffic is not blocked — combine with <span class="inline_code">--validate-enforce</span> to reject non-conformant traffic.</td>
+			<td><a href="/mock_server/configuration_properties.html#button_configuration_validate_proxy_openapi_spec"><span class="inline_code">mockserver.validateProxyOpenAPISpec</span></a></td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-enforce</span></td>
+			<td>When combined with <span class="inline_code">--validate-openapi</span>, reject requests that violate the spec with a <span class="inline_code">400</span> status code, and replace non-conformant upstream responses with a <span class="inline_code">502</span>. Without this flag, violations are report-only (logged but traffic flows unmodified).</td>
+			<td><a href="/mock_server/configuration_properties.html#button_configuration_validate_proxy_enforce"><span class="inline_code">mockserver.validateProxyEnforce</span></a></td>
+		</tr>
+		<tr>
 			<td><span class="inline_code">-h, --help</span></td>
 			<td>Print usage and exit.</td>
 			<td>—</td>
@@ -617,6 +627,16 @@ public class ExampleSpringTestListenerTestWithPortInjection {
 			<td><span class="inline_code">-l, --log-level &lt;level&gt;</span></td>
 			<td>No</td>
 			<td>Log level (see above).</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-openapi &lt;spec&gt;</span></td>
+			<td>No</td>
+			<td>Validate forwarded/proxied traffic against the given OpenAPI spec (URL, file path, or inline payload). Violations are logged; combine with <span class="inline_code">--validate-enforce</span> to block non-conformant traffic.</td>
+		</tr>
+		<tr>
+			<td><span class="inline_code">--validate-enforce</span></td>
+			<td>No</td>
+			<td>When combined with <span class="inline_code">--validate-openapi</span>, block non-conformant traffic (400 for requests, 502 for responses).</td>
 		</tr>
 	</tbody>
 </table>
@@ -676,6 +696,15 @@ public class ExampleSpringTestListenerTestWithPortInjection {
 <pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> --proxy-to https://api.example.com</code></pre>
 
 <p><strong>Note:</strong> a bare hostname such as <span class="inline_code">--proxy-to api.example.com</span> (no port, no scheme) is rejected. Use <span class="inline_code">api.example.com:8080</span> or a scheme URL such as <span class="inline_code">https://api.example.com</span>.</p>
+
+<p>Start MockServer as a validating proxy — log OpenAPI violations without blocking traffic:</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to https://api.example.com -p <span class="numeric_literal">1080</span> \
+    --validate-openapi ./openapi-spec.yaml</code></pre>
+
+<p>Start MockServer as an enforcing validation proxy — reject non-conformant requests (400) and responses (502):</p>
+<pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar proxy --to https://api.example.com -p <span class="numeric_literal">1080</span> \
+    --validate-openapi ./openapi-spec.yaml \
+    --validate-enforce</code></pre>
 
 <p>Start MockServer and pre-load expectations from a JSON file:</p>
 <pre><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar run -p <span class="numeric_literal">1080</span> --init ./expectations.json</code></pre>

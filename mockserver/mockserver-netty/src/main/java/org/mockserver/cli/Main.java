@@ -329,6 +329,12 @@ public class Main {
         @Option(names = "--dev", description = "Enable developer-friendly defaults: reduced memory caps (maxLogEntries=1000, maxExpectations=1000) for laptop/test-suite use. Explicit config (system property, env var, or properties file) overrides dev-mode defaults.")
         boolean dev;
 
+        @Option(names = "--validate-openapi", description = "Validate forwarded/proxied requests and responses against the given OpenAPI spec (URL, file path, or inline payload). Violations are logged; combine with --validate-enforce to block non-conformant traffic.")
+        String validateOpenapi;
+
+        @Option(names = "--validate-enforce", description = "When combined with --validate-openapi, reject requests that violate the spec (400) and replace non-conformant upstream responses (502). Without this flag, violations are report-only.")
+        boolean validateEnforce;
+
         // Legacy hidden flags — exact single-token names so picocli matches them as long options
         @Option(names = "-serverPort", hidden = true)
         String legacyServerPort;
@@ -387,6 +393,14 @@ public class Main {
                     ConfigurationProperties.persistedExpectationsPath(persist);
                 }
 
+                // Wire --validate-openapi / --validate-enforce
+                if (isNotBlank(validateOpenapi)) {
+                    ConfigurationProperties.validateProxyOpenAPISpec(validateOpenapi);
+                }
+                if (validateEnforce) {
+                    ConfigurationProperties.validateProxyEnforce(true);
+                }
+
                 // Validate legacy arguments inline (matching old behavior for error messages)
                 List<String> errorMessages = validateArguments(resolvedPort, resolvedProxyRemotePort,
                     resolvedProxyRemoteHost, resolvedLogLevel);
@@ -434,6 +448,12 @@ public class Main {
         @Option(names = "--dev", description = "Enable developer-friendly defaults.")
         boolean dev;
 
+        @Option(names = "--validate-openapi", description = "Validate forwarded/proxied traffic against the given OpenAPI spec (URL, file path, or inline payload).")
+        String validateOpenapi;
+
+        @Option(names = "--validate-enforce", description = "When combined with --validate-openapi, block non-conformant traffic (400 for requests, 502 for responses).")
+        boolean validateEnforce;
+
         @Override
         public void run() {
             // Delegate to RunCommand logic by building equivalent args
@@ -442,6 +462,8 @@ public class Main {
             runCmd.proxyTo = to;
             runCmd.logLevel = logLevel;
             runCmd.dev = dev;
+            runCmd.validateOpenapi = validateOpenapi;
+            runCmd.validateEnforce = validateEnforce;
             runCmd.run();
         }
     }

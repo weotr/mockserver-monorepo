@@ -61,6 +61,8 @@ flowchart TD
 | `--persist` | — | `mockserver.persistExpectations` = `true` + `mockserver.persistedExpectationsPath` | |
 | `--log-level` | `-l` | `mockserver.logLevel` | |
 | `--dev` | — | `mockserver.devMode` | Developer-friendly defaults: `maxLogEntries=1000`, `maxExpectations=1000`. Explicit config overrides dev defaults. Also available as `MOCKSERVER_DEV_MODE=true` or `-Dmockserver.devMode=true`. |
+| `--validate-openapi` | — | `mockserver.validateProxyOpenAPISpec` | Validate forwarded/proxied requests and responses against the given OpenAPI spec (URL, file path, or inline payload). Violations are logged; combine with `--validate-enforce` to block non-conformant traffic. |
+| `--validate-enforce` | — | `mockserver.validateProxyEnforce` | When combined with `--validate-openapi`, reject requests that violate the spec (400) and replace non-conformant upstream responses (502). Without this flag, violations are report-only. |
 | `-serverPort` | — | same as `--port` | Hidden legacy flag |
 | `-proxyRemotePort` | — | same as `--proxy-to` port part | Hidden legacy flag |
 | `-proxyRemoteHost` | — | same as `--proxy-to` host part | Hidden legacy flag |
@@ -73,6 +75,8 @@ flowchart TD
 | `--to` | — | Required; `host:port`, `https://host[:port]`, or `http://host[:port]`; scheme infers default port (443/80); bare hostname with no port and no scheme is rejected |
 | `--port` | `-p` | |
 | `--log-level` | `-l` | |
+| `--validate-openapi` | — | Validate forwarded/proxied traffic against the given OpenAPI spec |
+| `--validate-enforce` | — | Block non-conformant traffic (400 for requests, 502 for responses) |
 
 ### `openapi` subcommand
 
@@ -141,15 +145,17 @@ The `Arguments` enum is the canonical source of truth for the three property nam
 `--openapi`, `--init`, and `--persist` are wired directly in `RunCommand.run()` before calling `startServer()`:
 
 ```java
-if (isNotBlank(openapi))  ConfigurationProperties.initializationOpenAPIPath(openapi);
-if (isNotBlank(init))     ConfigurationProperties.initializationJsonPath(init);
+if (isNotBlank(openapi))          ConfigurationProperties.initializationOpenAPIPath(openapi);
+if (isNotBlank(init))             ConfigurationProperties.initializationJsonPath(init);
 if (isNotBlank(persist)) {
     ConfigurationProperties.persistExpectations(true);
     ConfigurationProperties.persistedExpectationsPath(persist);
 }
+if (isNotBlank(validateOpenapi))  ConfigurationProperties.validateProxyOpenAPISpec(validateOpenapi);
+if (validateEnforce)              ConfigurationProperties.validateProxyEnforce(true);
 ```
 
-These three calls write into the same `ConfigurationProperties` property store that env vars and `.properties` files write into, so the precedence rule still applies — a `-Dmockserver.initializationJsonPath=...` JVM flag will be overwritten if `--init` is also supplied on the command line (CLI wins).
+These calls write into the same `ConfigurationProperties` property store that env vars and `.properties` files write into, so the precedence rule still applies — a `-Dmockserver.initializationJsonPath=...` JVM flag will be overwritten if `--init` is also supplied on the command line (CLI wins).
 
 `--dev` sets `ConfigurationProperties.devMode(true)`, which applies laptop-friendly defaults for any property the user has not explicitly set (via system property, environment variable, or properties file). Currently this lowers `maxLogEntries` and `maxExpectations` to 1,000 each — enough for local development without consuming the full heap-based default (which can reach 100,000 / 15,000). The same effect is available as `MOCKSERVER_DEV_MODE=true` or `-Dmockserver.devMode=true` for Docker / Compose workloads.
 
