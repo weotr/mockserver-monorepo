@@ -41,14 +41,26 @@ describe('fetchBreakpoints', () => {
     expect(result.pausedExchanges[0]!.id).toBe('abc-123');
   });
 
-  it('returns empty response on non-OK status', async () => {
+  it('throws on non-OK status', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+      statusText: 'Internal Server Error',
+      json: async () => ({ error: 'server is broken' }),
     }));
 
-    const result = await fetchBreakpoints(params);
-    expect(result).toEqual({ pausedExchanges: [], count: 0 });
+    await expect(fetchBreakpoints(params)).rejects.toThrow('server is broken');
+  });
+
+  it('throws with status line when error body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      json: async () => { throw new SyntaxError('not JSON'); },
+    }));
+
+    await expect(fetchBreakpoints(params)).rejects.toThrow('HTTP 503 Service Unavailable');
   });
 
   it('passes the AbortSignal to fetch', async () => {

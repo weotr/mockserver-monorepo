@@ -262,6 +262,25 @@ describe('BreakpointsPanel', () => {
     expect(screen.getByText('Connection refused')).toBeInTheDocument();
   });
 
+  it('shows an error alert when the server returns a non-OK status', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({ error: 'breakpoint registry unavailable' }),
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not load paused exchanges/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('breakpoint registry unavailable')).toBeInTheDocument();
+  });
+
   it('has a Refresh button that triggers a new poll', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

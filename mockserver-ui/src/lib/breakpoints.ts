@@ -45,8 +45,8 @@ export async function fetchBreakpoints(
   signal?: AbortSignal,
 ): Promise<BreakpointListResponse> {
   const res = await fetch(endpoint(params), { signal });
-  if (!res.ok) return { pausedExchanges: [], count: 0 };
-  return res.json();
+  await ensureOk(res);
+  return res.json() as Promise<BreakpointListResponse>;
 }
 
 /** Resume a paused exchange unchanged. */
