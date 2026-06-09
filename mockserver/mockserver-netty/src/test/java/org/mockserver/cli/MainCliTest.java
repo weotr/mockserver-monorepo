@@ -606,11 +606,24 @@ public class MainCliTest {
     // ---- Dev mode (--dev) ----
 
     @Test
-    public void shouldApplyDevModeDefaults() {
+    public void shouldApplyDevModeDefaults() throws Exception {
         final int freePort = PortFactory.findFreePort();
         MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
 
         try {
+            // Clear any explicitly-set maxLogEntries/maxExpectations (cache + system property) that a prior or
+            // parallel test may have leaked into the shared static ConfigurationProperties state. Dev mode only
+            // applies its defaults to properties the user has NOT explicitly set, so a leaked value would make
+            // the assertions below non-deterministic.
+            java.lang.reflect.Field cacheField = ConfigurationProperties.class.getDeclaredField("propertyCache");
+            cacheField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> cache = (java.util.Map<String, String>) cacheField.get(null);
+            cache.remove("mockserver.maxLogEntries");
+            System.clearProperty("mockserver.maxLogEntries");
+            cache.remove("mockserver.maxExpectations");
+            System.clearProperty("mockserver.maxExpectations");
+
             Main.main("run", "-p", String.valueOf(freePort), "--dev");
 
             assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
