@@ -138,6 +138,8 @@ public class Configuration {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private String validateProxyOpenAPISpec;
+    private Boolean validateProxyEnforce;
     private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
@@ -1696,6 +1698,46 @@ public class Configuration {
      */
     public Configuration openAPIResponseValidation(Boolean openAPIResponseValidation) {
         this.openAPIResponseValidation = openAPIResponseValidation;
+        return this;
+    }
+
+    public String validateProxyOpenAPISpec() {
+        if (validateProxyOpenAPISpec == null) {
+            return ConfigurationProperties.validateProxyOpenAPISpec();
+        }
+        return validateProxyOpenAPISpec;
+    }
+
+    /**
+     * <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML, MockServer validates every forwarded/proxied
+     * request and its upstream response against the spec and records violations as log events.</p>
+     *
+     * <p>The default is empty (disabled)</p>
+     *
+     * @param validateProxyOpenAPISpec the OpenAPI spec URL, file path, or inline payload to validate against
+     */
+    public Configuration validateProxyOpenAPISpec(String validateProxyOpenAPISpec) {
+        this.validateProxyOpenAPISpec = validateProxyOpenAPISpec;
+        return this;
+    }
+
+    public Boolean validateProxyEnforce() {
+        if (validateProxyEnforce == null) {
+            return ConfigurationProperties.validateProxyEnforce();
+        }
+        return validateProxyEnforce;
+    }
+
+    /**
+     * <p>When enabled (and {@code validateProxyOpenAPISpec} is set), forwarded requests that violate the OpenAPI spec
+     * are rejected with a 400 status code, and upstream responses that violate the spec are replaced with a 502.</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param validateProxyEnforce if enabled, non-conformant forwarded traffic is blocked
+     */
+    public Configuration validateProxyEnforce(Boolean validateProxyEnforce) {
+        this.validateProxyEnforce = validateProxyEnforce;
         return this;
     }
 

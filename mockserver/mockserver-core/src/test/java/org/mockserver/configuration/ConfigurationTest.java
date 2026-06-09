@@ -1309,6 +1309,58 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetValidateProxyOpenAPISpec() {
+        String original = ConfigurationProperties.validateProxyOpenAPISpec();
+        try {
+            // then - default value
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.validateProxyOpenAPISpec("https://example.com/spec.json");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.validateProxyOpenAPISpec(), equalTo("https://example.com/spec.json"));
+            assertThat(System.getProperty("mockserver.validateProxyOpenAPISpec"), equalTo("https://example.com/spec.json"));
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo("https://example.com/spec.json"));
+            ConfigurationProperties.validateProxyOpenAPISpec(original);
+
+            // when - setter
+            configuration.validateProxyOpenAPISpec("inline-spec");
+
+            // then - getter
+            assertThat(configuration.validateProxyOpenAPISpec(), equalTo("inline-spec"));
+        } finally {
+            ConfigurationProperties.validateProxyOpenAPISpec(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetValidateProxyEnforce() {
+        boolean original = ConfigurationProperties.validateProxyEnforce();
+        try {
+            // then - default value
+            assertThat(configuration.validateProxyEnforce(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.validateProxyEnforce(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.validateProxyEnforce(), equalTo(true));
+            assertThat(System.getProperty("mockserver.validateProxyEnforce"), equalTo("true"));
+            assertThat(configuration.validateProxyEnforce(), equalTo(true));
+            ConfigurationProperties.validateProxyEnforce(original);
+
+            // when - setter
+            configuration.validateProxyEnforce(true);
+
+            // then - getter
+            assertThat(configuration.validateProxyEnforce(), equalTo(true));
+        } finally {
+            ConfigurationProperties.validateProxyEnforce(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetAttachMismatchDiagnosticToResponse() {
         boolean original = ConfigurationProperties.attachMismatchDiagnosticToResponse();
         try {

@@ -1262,6 +1262,38 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIResponseValidation="true"</code></pre>
 </div>
 
+<button id="button_configuration_validate_proxy_openapi_spec" class="accordion title"><strong>Validation Proxy OpenAPI Spec</strong></button>
+<div class="panel title">
+    <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML payload, MockServer validates every forwarded/proxied request and its upstream response against the spec. Violations are recorded as <span class="inline_code">OPENAPI_RESPONSE_VALIDATION_FAILED</span> log events. By default, validation is report-only and does not block traffic. To block non-conformant traffic, also enable <span class="inline_code">validateProxyEnforce</span>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (disabled)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.validateProxyOpenAPISpec(String specUrlOrPayload)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyOpenAPISpec=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.validateProxyOpenAPISpec=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyOpenAPISpec="https://petstore.swagger.io/v2/swagger.json"</code></pre>
+</div>
+
+<button id="button_configuration_validate_proxy_enforce" class="accordion title"><strong>Validation Proxy Enforce</strong></button>
+<div class="panel title">
+    <p>When enabled (and <span class="inline_code">validateProxyOpenAPISpec</span> is set), forwarded requests that violate the OpenAPI spec are rejected with a 400, and upstream responses that violate the spec are replaced with a 502. When disabled (the default), violations are logged but traffic flows unmodified.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.validateProxyEnforce(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyEnforce=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_VALIDATE_PROXY_ENFORCE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.validateProxyEnforce=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateProxyEnforce="true"</code></pre>
+</div>
+
 <button id="button_configuration_generate_realistic_example_values" class="accordion title"><strong>Generate Realistic Example Values</strong></button>
 <div class="panel title">
     <p>When enabled, OpenAPI example responses that have no explicit <span class="inline_code">example</span> value are filled with realistic, format-aware fake data (e.g. plausible emails, dates, UUIDs) instead of static placeholders. The generated values are deterministic (same seed produces the same output).</p>

@@ -574,6 +574,34 @@ The `noProxyHosts` configuration property (comma-separated list) controls which 
 
 Patterns support exact hostnames (`example.com`), wildcard prefixes (`*.internal.corp`), and IP addresses (`192.168.1.1`). Matching is case-insensitive. The shared utility `NoProxyHostsUtils.isHostOnNoProxyList()` is used by both `HttpActionHandler` and `NettyHttpClient`.
 
+### Validation Proxy (OpenAPI Contract Validation on Forwarded Traffic)
+
+When `validateProxyOpenAPISpec` is set (to an OpenAPI spec URL, file path, or inline JSON/YAML), MockServer validates every forwarded/proxied request and its upstream response against the spec. This applies to both the unmatched proxy forward path and the ProxyPass reverse-proxy path. Violations are logged as `OPENAPI_RESPONSE_VALIDATION_FAILED` log entries.
+
+By default, validation is **report-only**: traffic flows unmodified and violations are only logged. When `validateProxyEnforce` is set to `true`, non-conformant requests are rejected with a **400** status code before they reach the upstream, and non-conformant upstream responses are replaced with a **502**.
+
+The validation uses the existing `OpenAPIRequestValidator` (for requests) and `OpenApiTrafficValidator` (for request/response pairs, which delegates to both `OpenAPIRequestValidator` and `OpenAPIResponseValidator`). No new validator code is introduced.
+
+```mermaid
+flowchart TD
+    REQ([Forwarded Request]) --> SPEC_CHECK{"validateProxyOpenAPISpec\nset?"}
+    SPEC_CHECK -->|No| FWD["Forward normally"]
+    SPEC_CHECK -->|Yes| REQ_VAL["Validate request\nagainst spec"]
+    REQ_VAL -->|Valid| FWD
+    REQ_VAL -->|Invalid + enforce=false| LOG_REQ["Log violation"] --> FWD
+    REQ_VAL -->|Invalid + enforce=true| R400["Return 400"]
+    FWD --> UPSTREAM["Upstream response"]
+    UPSTREAM --> RESP_VAL["Validate response\nagainst spec"]
+    RESP_VAL -->|Valid| RETURN["Return response"]
+    RESP_VAL -->|Invalid + enforce=false| LOG_RESP["Log violation"] --> RETURN
+    RESP_VAL -->|Invalid + enforce=true| R502["Return 502"]
+```
+
+| Configuration Property | Type | Default | Description |
+|----------------------|------|---------|-------------|
+| `validateProxyOpenAPISpec` | String | `""` (disabled) | OpenAPI spec URL, file path, or inline payload to validate forwarded traffic against |
+| `validateProxyEnforce` | Boolean | `false` | When true, block non-conformant traffic (400 for bad requests, 502 for bad responses) |
+
 ### Loop Prevention
 
 To prevent infinite forwarding loops (where MockServer forwards to itself), an `x-forwarded-by` header with a unique per-instance value (`MockServer_<UUID>`) is added to forwarded requests. If an incoming request already has this header with the matching value, it is identified as a loop and returned with a 404.

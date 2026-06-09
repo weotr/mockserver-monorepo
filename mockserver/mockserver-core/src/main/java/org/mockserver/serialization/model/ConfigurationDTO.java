@@ -72,6 +72,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private String validateProxyOpenAPISpec;
+    private Boolean validateProxyEnforce;
     private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
 
@@ -196,6 +198,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.initializationOpenAPIPath = configuration.initializationOpenAPIPath();
             this.openAPIContextPathPrefix = configuration.openAPIContextPathPrefix();
             this.openAPIResponseValidation = configuration.openAPIResponseValidation();
+            this.validateProxyOpenAPISpec = configuration.validateProxyOpenAPISpec();
+            this.validateProxyEnforce = configuration.validateProxyEnforce();
             this.generateRealisticExampleValues = configuration.generateRealisticExampleValues();
             this.watchInitializationJson = configuration.watchInitializationJson();
 
@@ -366,6 +370,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.initializationOpenAPIPath(initializationOpenAPIPath);
         configuration.openAPIContextPathPrefix(openAPIContextPathPrefix);
         configuration.openAPIResponseValidation(openAPIResponseValidation);
+        configuration.validateProxyOpenAPISpec(validateProxyOpenAPISpec);
+        configuration.validateProxyEnforce(validateProxyEnforce);
         configuration.generateRealisticExampleValues(generateRealisticExampleValues);
         configuration.watchInitializationJson(watchInitializationJson);
 
@@ -584,6 +590,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (openAPIResponseValidation != null) {
             target.openAPIResponseValidation(openAPIResponseValidation);
+        }
+        if (validateProxyOpenAPISpec != null) {
+            target.validateProxyOpenAPISpec(validateProxyOpenAPISpec);
+        }
+        if (validateProxyEnforce != null) {
+            target.validateProxyEnforce(validateProxyEnforce);
         }
         if (generateRealisticExampleValues != null) {
             target.generateRealisticExampleValues(generateRealisticExampleValues);
@@ -1177,6 +1189,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setOpenAPIResponseValidation(Boolean openAPIResponseValidation) {
         this.openAPIResponseValidation = openAPIResponseValidation;
+        return this;
+    }
+
+    public String getValidateProxyOpenAPISpec() {
+        return validateProxyOpenAPISpec;
+    }
+
+    public ConfigurationDTO setValidateProxyOpenAPISpec(String validateProxyOpenAPISpec) {
+        this.validateProxyOpenAPISpec = validateProxyOpenAPISpec;
+        return this;
+    }
+
+    public Boolean getValidateProxyEnforce() {
+        return validateProxyEnforce;
+    }
+
+    public ConfigurationDTO setValidateProxyEnforce(Boolean validateProxyEnforce) {
+        this.validateProxyEnforce = validateProxyEnforce;
         return this;
     }
 

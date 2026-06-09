@@ -5,6 +5,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.EventLoopGroup;
 import io.netty.handler.codec.base64.Base64;
 import io.netty.util.AttributeKey;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.text.StringEscapeUtils;
 import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
 import org.mockserver.configuration.Configuration;
@@ -20,8 +21,10 @@ import org.mockserver.mock.HttpState;
 import org.mockserver.mock.crud.CrudDispatcher;
 import org.mockserver.model.*;
 import org.mockserver.model.StreamingBody;
+import org.mockserver.openapi.OpenAPIRequestValidator;
 import org.mockserver.openapi.OpenAPIResponseValidator;
 import org.mockserver.openapi.OpenApiRuntimeExpressionResolver;
+import org.mockserver.openapi.OpenApiTrafficValidator;
 import org.mockserver.proxyconfiguration.NoProxyHostsUtils;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
 import org.mockserver.responsewriter.GrpcStreamResponseWriter;
@@ -36,6 +39,8 @@ import org.slf4j.event.Level;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -705,6 +710,15 @@ public class HttpActionHandler {
 
             } else {
 
+                // validation proxy: pre-flight request validation (enforce mode blocks with 400)
+                if (isValidationProxyEnabled()) {
+                    HttpResponse rejectResponse = validateProxyRequest(request);
+                    if (rejectResponse != null) {
+                        responseWriter.writeResponse(request, rejectResponse, false);
+                        return;
+                    }
+                }
+
                 final InetSocketAddress remoteAddress = getRemoteAddressWithFallback(ctx);
                 final HttpRequest clonedRequest = hopByHopHeaderFilter.onRequest(request).withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
                 adjustHostHeaderForUnmatchedRequest(clonedRequest, remoteAddress);
@@ -740,6 +754,10 @@ public class HttpActionHandler {
                                     byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                     setCapturedStreamingBody(logResponse, captured);
                                     attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                    // validation proxy: validate completed streaming response
+                                    if (isValidationProxyEnabled()) {
+                                        validateProxyResponse(request, logResponse);
+                                    }
                                     mockServerLogger.logEvent(
                                         new LogEntry()
                                             .setType(FORWARDED_REQUEST)
@@ -753,6 +771,10 @@ public class HttpActionHandler {
                                     );
                                 });
                             } else {
+                                // validation proxy: validate non-streaming response
+                                if (isValidationProxyEnabled()) {
+                                    response = validateProxyResponse(request, response);
+                                }
                                 mockServerLogger.logEvent(
                                     new LogEntry()
                                         .setType(FORWARDED_REQUEST)
@@ -848,6 +870,15 @@ public class HttpActionHandler {
                     clonedRequest.replaceHeader(new Header("Host", hostHeader));
                 }
 
+                // validation proxy: pre-flight request validation (enforce mode blocks with 400)
+                if (isValidationProxyEnabled()) {
+                    HttpResponse rejectResponse = validateProxyRequest(request);
+                    if (rejectResponse != null) {
+                        responseWriter.writeResponse(request, rejectResponse, false);
+                        return true;
+                    }
+                }
+
                 InetSocketAddress targetAddress = new InetSocketAddress(mapping.getTargetHost(), mapping.getTargetPort());
                 final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, targetAddress), null, targetAddress);
                 scheduler.submit(responseFuture, () -> {
@@ -864,6 +895,10 @@ public class HttpActionHandler {
                                 byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                 setCapturedStreamingBody(logResponse, captured);
                                 attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                // validation proxy: validate completed streaming response
+                                if (isValidationProxyEnabled()) {
+                                    validateProxyResponse(request, logResponse);
+                                }
                                 mockServerLogger.logEvent(
                                     new LogEntry()
                                         .setType(FORWARDED_REQUEST)
@@ -877,6 +912,10 @@ public class HttpActionHandler {
                                 );
                             });
                         } else {
+                            // validation proxy: validate non-streaming response
+                            if (isValidationProxyEnabled()) {
+                                response = validateProxyResponse(request, response);
+                            }
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(FORWARDED_REQUEST)
@@ -2314,6 +2353,115 @@ public class HttpActionHandler {
                 }
             }
         });
+    }
+
+    // -------- validation proxy (OpenAPI contract validation on forwarded traffic) --------
+
+    /**
+     * Returns {@code true} when the validation-proxy mode is enabled: a spec has been configured
+     * via {@code validateProxyOpenAPISpec}.
+     */
+    private boolean isValidationProxyEnabled() {
+        String spec = configuration.validateProxyOpenAPISpec();
+        return spec != null && !spec.isEmpty();
+    }
+
+    /**
+     * Validates the forwarded request against the configured OpenAPI spec before the request is sent upstream.
+     * If violations are found they are logged. In enforce mode a 400 response is returned; otherwise {@code null}
+     * (meaning "proceed normally").
+     *
+     * @return an {@link HttpResponse} to short-circuit with, or {@code null} to proceed
+     */
+    private HttpResponse validateProxyRequest(HttpRequest request) {
+        String spec = configuration.validateProxyOpenAPISpec();
+        if (spec == null || spec.isEmpty()) {
+            return null;
+        }
+        try {
+            List<String> requestErrors = OpenAPIRequestValidator.validate(spec, request, mockServerLogger);
+            if (!requestErrors.isEmpty()) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(OPENAPI_RESPONSE_VALIDATION_FAILED)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setMessageFormat("validation proxy: request does not conform to OpenAPI spec{}errors:{}")
+                        .setArguments(request, String.join("; ", requestErrors))
+                );
+                if (Boolean.TRUE.equals(configuration.validateProxyEnforce())) {
+                    return response()
+                        .withStatusCode(400)
+                        .withBody("OpenAPI request validation failed: " + String.join("; ", requestErrors));
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setMessageFormat("validation proxy: failed to validate request against OpenAPI spec{}due to:{}")
+                        .setArguments(request, e.getMessage())
+                );
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validates the upstream response against the configured OpenAPI spec. Violations are logged.
+     * In enforce mode a 502 response is returned instead of the upstream response; otherwise the
+     * original response is returned unmodified.
+     */
+    private HttpResponse validateProxyResponse(HttpRequest request, HttpResponse response) {
+        String spec = configuration.validateProxyOpenAPISpec();
+        if (spec == null || spec.isEmpty() || response == null) {
+            return response;
+        }
+        try {
+            OpenApiTrafficValidator validator = new OpenApiTrafficValidator(mockServerLogger);
+            List<Pair<HttpRequest, HttpResponse>> pairs = Collections.singletonList(Pair.of(request, response));
+            List<OpenApiTrafficValidator.TrafficValidationResult> results = validator.validate(spec, pairs);
+            if (!results.isEmpty() && !results.get(0).isPassed()) {
+                OpenApiTrafficValidator.TrafficValidationResult result = results.get(0);
+                List<String> allErrors = new ArrayList<>();
+                if (result.getRequestErrors() != null) {
+                    allErrors.addAll(result.getRequestErrors());
+                }
+                if (result.getResponseErrors() != null) {
+                    allErrors.addAll(result.getResponseErrors());
+                }
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(OPENAPI_RESPONSE_VALIDATION_FAILED)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setHttpResponse(response)
+                        .setMessageFormat("validation proxy: forwarded traffic does not conform to OpenAPI spec{}request errors:{}response errors:{}")
+                        .setArguments(request, String.join("; ", result.getRequestErrors()), String.join("; ", result.getResponseErrors()))
+                );
+                if (Boolean.TRUE.equals(configuration.validateProxyEnforce())) {
+                    String errorDetail = String.join("; ", allErrors);
+                    return response()
+                        .withStatusCode(502)
+                        .withBody("OpenAPI validation failed for forwarded traffic: " + errorDetail);
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setMessageFormat("validation proxy: failed to validate forwarded traffic against OpenAPI spec{}due to:{}")
+                        .setArguments(request, e.getMessage())
+                );
+            }
+        }
+        return response;
     }
 
     /**

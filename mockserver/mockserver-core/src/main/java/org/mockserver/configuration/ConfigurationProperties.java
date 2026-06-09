@@ -176,6 +176,8 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_INITIALIZATION_OPENAPI_PATH = "mockserver.initializationOpenAPIPath";
     private static final String MOCKSERVER_OPENAPI_CONTEXT_PATH_PREFIX = "mockserver.openAPIContextPathPrefix";
     private static final String MOCKSERVER_OPENAPI_RESPONSE_VALIDATION = "mockserver.openAPIResponseValidation";
+    private static final String MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC = "mockserver.validateProxyOpenAPISpec";
+    private static final String MOCKSERVER_VALIDATE_PROXY_ENFORCE = "mockserver.validateProxyEnforce";
     private static final String MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES = "mockserver.generateRealisticExampleValues";
     private static final String MOCKSERVER_WATCH_INITIALIZATION_JSON = "mockserver.watchInitializationJson";
 
@@ -2054,6 +2056,40 @@ public class ConfigurationProperties {
      */
     public static void openAPIResponseValidation(boolean enable) {
         setProperty(MOCKSERVER_OPENAPI_RESPONSE_VALIDATION, "" + enable);
+    }
+
+    public static String validateProxyOpenAPISpec() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC, "MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC", "");
+    }
+
+    /**
+     * <p>When set to an OpenAPI spec URL, file path, or inline JSON/YAML, MockServer validates every forwarded/proxied
+     * request and its upstream response against the spec and records violations as log events of type
+     * {@code OPENAPI_RESPONSE_VALIDATION_FAILED}. By default, validation is report-only (traffic is not blocked).</p>
+     *
+     * <p>The default is empty (disabled)</p>
+     *
+     * @param specUrlOrPayload the OpenAPI spec URL, file path, or inline payload to validate against
+     */
+    public static void validateProxyOpenAPISpec(String specUrlOrPayload) {
+        setProperty(MOCKSERVER_VALIDATE_PROXY_OPENAPI_SPEC, specUrlOrPayload);
+    }
+
+    public static boolean validateProxyEnforce() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_VALIDATE_PROXY_ENFORCE, "MOCKSERVER_VALIDATE_PROXY_ENFORCE", "" + false));
+    }
+
+    /**
+     * <p>When enabled (and {@code validateProxyOpenAPISpec} is set), forwarded requests that violate the OpenAPI spec
+     * are rejected with a 400 status code, and upstream responses that violate the spec are replaced with a 502.
+     * When disabled (the default), violations are logged but traffic flows unmodified.</p>
+     *
+     * <p>The default is false</p>
+     *
+     * @param enable if enabled, non-conformant forwarded traffic is blocked
+     */
+    public static void validateProxyEnforce(boolean enable) {
+        setProperty(MOCKSERVER_VALIDATE_PROXY_ENFORCE, "" + enable);
     }
 
     public static boolean generateRealisticExampleValues() {
