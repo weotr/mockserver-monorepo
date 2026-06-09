@@ -10,7 +10,7 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async' | 'get-started';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'metrics' | 'drift' | 'verification' | 'async' | 'breakpoints' | 'get-started';
 
 /** Map legacy/removed ViewMode values to their replacement. */
 const VIEW_MIGRATION: Record<string, ViewMode> = {

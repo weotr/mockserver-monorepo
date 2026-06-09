@@ -24,6 +24,7 @@ import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DriftPanel from './components/DriftPanel';
 import VerificationView from './components/VerificationView';
 import AsyncApiPanel from './components/AsyncApiPanel';
+import BreakpointsPanel from './components/BreakpointsPanel';
 import OnboardingPanel from './components/OnboardingPanel';
 import DebugMismatchDialog from './components/DebugMismatchDialog';
 import GenerateStubDialog from './components/GenerateStubDialog';
@@ -134,6 +135,7 @@ export default function App() {
           {view === 'drift' && <DriftPanel connectionParams={params} />}
           {view === 'verification' && <VerificationView connectionParams={params} />}
           {view === 'async' && <AsyncApiPanel connectionParams={params} />}
+          {view === 'breakpoints' && <BreakpointsPanel connectionParams={params} />}
         </Box>
         <Snackbar
           open={notification !== null}

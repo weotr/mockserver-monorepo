@@ -34,6 +34,7 @@ import SpeedIcon from '@mui/icons-material/Speed';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
+import PanToolIcon from '@mui/icons-material/PanTool';
 import Select from '@mui/material/Select';
 import type { SelectChangeEvent } from '@mui/material/Select';
 import Snackbar from '@mui/material/Snackbar';
@@ -295,6 +296,10 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           <ToggleButton value="async" aria-label="AsyncAPI broker mock view">
             <HubIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
             Async
+          </ToggleButton>
+          <ToggleButton value="breakpoints" aria-label="Breakpoints view">
+            <PanToolIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
+            Breakpoints
           </ToggleButton>
           <ToggleButton value="metrics" aria-label="Metrics view">
             <SpeedIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} />
